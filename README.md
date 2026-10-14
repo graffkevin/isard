@@ -84,7 +84,7 @@ Requires Rust (with the `wasm32-unknown-unknown` target), `wasm-bindgen-cli` at 
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129
 bun install
-bun run dev        # builds, then serves the demo on http://127.0.0.1:5180 (Ctrl+C stops it; PORT to change)
+bun run dev        # builds, then serves the demo on http://127.0.0.1:5180 and the benchmark on /bench/ (Ctrl+C stops it; PORT to change)
 bun run test       # Rust tests: camera, projections, tile selection, 3D Tiles traversal and decoding
 bun run lint       # Biome (TypeScript), clippy pedantic (native and wasm)
 bun run typecheck  # strict TypeScript: package, worker, demo, scripts
@@ -102,12 +102,35 @@ crates/engine/          Rust core (crate geo-render), compiled to WebAssembly
   tests/data/           a tile of the Lille photomesh (MEL open data)
 packages/geo-render/    the npm package: GeoMap, layers, interactions, decoding workers
 apps/demo/              the demo, importing geo-render like any application
+apps/bench/             benchmark: geo-render, iTowns and 3DTilesRendererJS on the same scenario
 scripts/                build and demo server
 ```
 
 Everything is typed end to end: the engine declares the TypeScript types of what it returns (`Camera`, `PickHit`,
 `RasterLayerStats`, `Tiles3dStats`, `TileLoaderLike`…), the package reuses them, the worker is checked against the
 WebWorker library, all under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+
+## Benchmark
+
+`bun run dev`, then open http://127.0.0.1:5180/bench/ (or the "Benchmark" link of the demo) and press **Run the
+benchmark**. The same scenario plays with each engine in turn, in a 1280 × 800 frame:
+
+| Engine | Setup |
+|---|---|
+| geo-render | this repository |
+| iTowns 2.46.1-next.72 | the version of junn-apps, with 3d-tiles-renderer 0.5.3 forced as junn-apps does (`overrides`): with its own 0.4.28 the 3D Tiles queue never starts |
+| 3DTilesRendererJS 0.5.3 | three.js 0.182, ortho through `XYZTilesOverlay` on a `GeneratedSurfacePlugin` ellipsoid, continuous rendering as in its examples |
+
+Same data (Géoplateforme ortho, Lille photomesh), same screen-space error (8 px), same field of view (36.87°), poses
+given as target, distance, tilt and heading and converted for each engine. Phases: view of France until complete,
+6 s flight to Lille, wait until complete, 10 s orbit, wait until complete, 6 s flight back.
+
+Measured per phase on the main thread: frames per second, frame interval (median, 95th and 99th percentiles), share of
+frames over 33 ms, long tasks (over 50 ms), time until the view is complete; and the JavaScript heap.
+
+Run it on a real GPU: in a headless browser rendering on the CPU (SwiftShader), the GPU-heavy engines are penalized
+far beyond reality, and 3DTilesRendererJS sometimes draws a black frame there. Pages can be opened alone, holding a pose
+to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`, `?logdepth=1` for 3DTilesRendererJS).
 
 ## Roadmap
 

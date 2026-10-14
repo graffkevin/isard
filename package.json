@@ -9,7 +9,7 @@
   "scripts": {
     "build": "bun scripts/build.ts",
     "dev": "bun scripts/build.ts && bun scripts/serve.ts",
-    "typecheck": "tsc -p packages/geo-render && tsc -p packages/geo-render/tsconfig.worker.json && tsc -p apps/demo && tsc -p scripts",
+    "typecheck": "tsc -p packages/geo-render && tsc -p packages/geo-render/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p scripts",
     "lint": "biome check . && cargo clippy --all-targets && cargo clippy --target wasm32-unknown-unknown",
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test"
@@ -19,5 +19,8 @@
     "@types/bun": "^1.4.3",
     "binaryen": "^132.0.0",
     "typescript": "~6.0.2"
+  },
+  "overrides": {
+    "3d-tiles-renderer": "0.5.3"
   }
 }

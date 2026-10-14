@@ -19,6 +19,8 @@
         font: inherit;
       }
       button.on { background: #1d2433; border-color: #1d2433; color: #fff; }
+      a.link { flex: 1; padding: 5px 8px; border-radius: 6px; text-align: center; color: #1d2433; background: #e4e8ee; text-decoration: none; }
+      a.link:hover { background: #d5dbe4; }
       #stats { margin-top: 10px; font: 12px/1.6 ui-monospace, monospace; white-space: pre; overflow-x: auto; }
       #label {
         position: fixed; pointer-events: none; transform: translate(14px, -50%); padding: 2px 7px; border-radius: 5px;
@@ -35,6 +37,7 @@
       <div class="row" id="basemaps"></div>
       <div class="row"><button type="button" id="world">World</button><button type="button" id="fly">Fly to IGN</button></div>
       <div class="row"><button type="button" id="lille">Lille 3D (photomesh)</button></div>
+      <div class="row"><a class="link" href="/bench/">Benchmark vs iTowns and 3DTilesRendererJS →</a></div>
       <div id="stats"></div>
     </div>
     <div id="label"></div>

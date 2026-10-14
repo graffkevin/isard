@@ -48,6 +48,8 @@ async function bundle(entry: string, outdir: string): Promise<void> {
 
 await bundle(`${pkg}/src/index.ts`, `${pkg}/dist`);
 await bundle('apps/demo/src/main.ts', 'apps/demo/dist');
+for (const page of ['runner', 'itowns', 'geo-render', 'tiles-renderer'])
+  await bundle(`apps/bench/src/${page}.ts`, 'apps/bench/dist');
 await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
 // The declarations of the package refer to the engine's (Camera, PickHit…): shipped with them
 mkdirSync(join(root, pkg, 'dist/wasm'), { recursive: true });

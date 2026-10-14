@@ -1,0 +1,16 @@
+{
+  "name": "@geo-render/bench",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "geo-render": "workspace:*",
+    "itowns": "2.46.1-next.72",
+    "postprocessing": "6.38.2",
+    "proj4": "^2.20.4",
+    "three": "^0.182.0",
+    "3d-tiles-renderer": "0.5.3"
+  },
+  "devDependencies": {
+    "@types/three": "0.182.0"
+  }
+}
