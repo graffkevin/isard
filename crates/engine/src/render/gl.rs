@@ -162,7 +162,7 @@ impl Grid {
     }
 }
 
-pub fn bytes<T: Copy>(data: &[T]) -> &[u8] {
-    // SAFETY: plain numeric types without padding, viewed as bytes for an upload
-    unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), std::mem::size_of_val(data)) }
+/// Numbers viewed as bytes for an upload (checked at compile time: plain types without padding)
+pub fn bytes<T: bytemuck::NoUninit>(data: &[T]) -> &[u8] {
+    bytemuck::cast_slice(data)
 }

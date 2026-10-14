@@ -5,7 +5,7 @@
  */
 import { BASEMAPS, HILLSHADE, SEA } from './basemaps.ts';
 import { Interaction } from './interaction.ts';
-import { NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
 import type {
   Basemap,
@@ -42,10 +42,22 @@ function rgb(hex: string): [r: number, g: number, b: number] {
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
 }
 
+/** Settings replayed on a new engine after a WebGL context loss */
+interface Settings {
+  zoomRange: [min: number, max: number];
+  globe: boolean;
+  background: [r: number, g: number, b: number];
+  globeColor: [r: number, g: number, b: number];
+}
+
 export class GeoMap implements LayerHost {
   readonly canvas: HTMLCanvasElement;
-  /** @internal */
-  readonly engine: Engine;
+  #engine: Engine;
+  /** Layers in drawing order (bottom first), to recreate them after a context loss */
+  private readonly layers: Layer[] = [];
+  private readonly settings: Settings;
+  /** The WebGL context is lost: nothing is drawn until it is restored */
+  private lost = false;
   private readonly listeners: Listeners = { move: new Set(), hover: new Set(), click: new Set(), render: new Set() };
   private readonly resizeObserver: ResizeObserver;
   private readonly interaction: Interaction | undefined;
@@ -82,16 +94,74 @@ export class GeoMap implements LayerHost {
     this.canvas = document.createElement('canvas');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
     container.append(this.canvas);
-    this.engine = new Engine(this.canvas, () => this.requestRender());
-    this.engine.setZoomRange(options.minZoom ?? 0, options.maxZoom ?? 22);
-    this.engine.setGlobe((options.projection ?? 'globe') === 'globe');
-    this.setBackground(options.background ?? '#f2f2f0');
+    this.settings = {
+      zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
+      globe: (options.projection ?? 'globe') === 'globe',
+      background: rgb(options.background ?? '#f2f2f0'),
+      globeColor: SEA['plan-grey'],
+    };
+    this.#engine = this.createEngine();
+    // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
+    this.canvas.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      this.lost = true;
+      cancelAnimationFrame(this.frameRequest);
+      this.frameRequest = 0;
+    });
+    this.canvas.addEventListener('webglcontextrestored', () => this.restore());
     this.setCamera({ center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0, ...options });
     this.setBasemap(options.basemap ?? 'plan-grey', options.hillshade ?? 0.4);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
     this.interaction = (options.interactive ?? true) ? new Interaction(this) : undefined;
+  }
+
+  /** @internal The engine (replaced after a context loss) */
+  get engine(): Engine {
+    return this.#engine;
+  }
+
+  private createEngine(): Engine {
+    const engine = new Engine(this.canvas, () => this.requestRender());
+    const { zoomRange, globe, background, globeColor } = this.settings;
+    engine.setZoomRange(...zoomRange);
+    engine.setGlobe(globe);
+    engine.setBackground(...background);
+    engine.setGlobeColor(...globeColor);
+    if (this.loader) engine.setTileLoader(this.loader);
+    return engine;
+  }
+
+  /** After a context loss: a new engine with the same camera, settings and layers (same handles, same order) */
+  private restore(): void {
+    const camera = this.getCamera();
+    this.#engine.free();
+    this.#engine = this.createEngine();
+    this.lost = false;
+    this.setCamera(camera);
+    for (const layer of this.layers) layer.attach(this.#engine);
+    this.resize();
+  }
+
+  /** @internal Forgets a removed layer */
+  detach(layer: object): void {
+    const index = this.layers.indexOf(layer as Layer);
+    if (index >= 0) this.layers.splice(index, 1);
+  }
+
+  private add<L extends Layer>(layer: L): L {
+    layer.attach(this.engine);
+    this.layers.push(layer);
+    this.requestRender();
+    return layer;
+  }
+
+  /** Moves a layer under all the others */
+  private toBottom(layer: Layer): void {
+    this.engine.moveLayer(layer.id, 0);
+    this.detach(layer);
+    this.layers.unshift(layer);
   }
 
   // ── Events ──
@@ -147,13 +217,15 @@ export class GeoMap implements LayerHost {
   }
 
   setProjection(projection: Projection): void {
-    this.engine.setGlobe(projection === 'globe');
+    this.settings.globe = projection === 'globe';
+    this.engine.setGlobe(this.settings.globe);
     this.requestRender();
   }
 
   /** Color behind the map, `#rrggbb` */
   setBackground(color: string): void {
-    this.engine.setBackground(...rgb(color));
+    this.settings.background = rgb(color);
+    this.engine.setBackground(...this.settings.background);
     this.requestRender();
   }
 
@@ -187,43 +259,37 @@ export class GeoMap implements LayerHost {
     this.basemap?.remove();
     this.hillshade?.remove();
     this.basemap = basemap === 'none' ? undefined : this.addRaster(BASEMAPS[basemap]);
-    this.engine.setGlobeColor(...SEA[basemap]);
+    this.settings.globeColor = SEA[basemap];
+    this.engine.setGlobeColor(...this.settings.globeColor);
     this.hillshade = hillshade > 0 ? this.addRaster({ ...HILLSHADE, opacity: hillshade }) : undefined;
-    if (this.hillshade) this.engine.moveLayer(this.hillshade.id, 0);
-    if (this.basemap) this.engine.moveLayer(this.basemap.id, 0);
+    if (this.hillshade) this.toBottom(this.hillshade);
+    if (this.basemap) this.toBottom(this.basemap);
   }
 
   /** Raster tiles in Web Mercator ({z}, {x}, {y} URL), over the layers already added */
   addRaster(options: RasterOptions): RasterLayer {
     const { url, minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1 } = options;
-    const id = this.engine.addRaster(url, minZoom, maxZoom, opacity, saturation);
-    this.requestRender();
-    return new RasterLayer(this, id);
+    return this.add(new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation }));
   }
 
   /** Line network colored by a value per node; `layer.setValues` recolors it in one texture upload */
   addNetwork(options: NetworkOptions): NetworkLayer {
     const { nodes, edges, width = 2, max = 1800, contour = 0, opacity = 1 } = options;
-    const id = this.engine.addNetwork(nodes, edges, width, max, contour, opacity);
-    this.requestRender();
-    return new NetworkLayer(this, id, { width, max, contour, opacity });
+    return this.add(new NetworkLayer(this, nodes, edges, { width, max, contour, opacity }));
   }
 
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */
   addTiles3d(options: Tiles3dOptions): Tiles3dLayer {
     const { url, maxScreenSpaceError = 16, opacity = 1 } = options;
-    const id = this.engine.addTiles3d(url, maxScreenSpaceError);
-    this.engine.setTiles3dStyle(id, maxScreenSpaceError, opacity);
-    this.requestRender();
-    return new Tiles3dLayer(this, id, { maxScreenSpaceError, opacity });
+    return this.add(new Tiles3dLayer(this, url, { maxScreenSpaceError, opacity }));
   }
 
   // ── Frames ──
 
   /** Asks for a frame; several calls before the next frame draw it once */
   requestRender(): void {
-    // Changes made by listeners during a frame are drawn by that frame
-    if (this.inFrame) return;
+    // Changes made by listeners during a frame are drawn by that frame; nothing is drawn without a context
+    if (this.inFrame || this.lost) return;
     this.frameRequest ||= requestAnimationFrame((now) => this.frame(now));
   }
 
@@ -265,6 +331,7 @@ export class GeoMap implements LayerHost {
   }
 
   private resize(): void {
+    if (this.lost) return;
     const { clientWidth: width, clientHeight: height } = this.canvas;
     const ratio = window.devicePixelRatio || 1;
     this.canvas.width = Math.round(width * ratio);

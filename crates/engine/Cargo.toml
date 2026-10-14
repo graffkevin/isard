@@ -8,6 +8,7 @@ description = "WebGL2 map engine for large, interactive data layers on Géoplate
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+bytemuck = "1"
 glam = "0.30"
 glow = "0.16"
 serde = { version = "1", features = ["derive"] }

@@ -90,4 +90,6 @@ export interface MapEvents {
 export interface LayerHost {
   readonly engine: Engine;
   requestRender(): void;
+  /** Forgets a removed layer */
+  detach(layer: object): void;
 }

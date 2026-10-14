@@ -5,6 +5,8 @@
 //! ECEF; they are stored in f32 relative to an anchor (the tile's center), exact to the millimetre over tens of
 //! kilometres.
 
+#![forbid(unsafe_code)]
+
 use glam::{DMat4, DQuat, DVec3};
 use serde_json::Value;
 

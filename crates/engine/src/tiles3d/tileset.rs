@@ -5,6 +5,8 @@
 //! parent only once all the visible ones are ready, so a loading area keeps its coarser tile instead of a hole.
 //! Requests are ordered coarse first (the shallow tiles cover the view quickly), then nearest first.
 
+#![forbid(unsafe_code)]
+
 use crate::geo::camera::View;
 use crate::geo::geodesy;
 use glam::{DMat4, DVec3, DVec4};
@@ -315,14 +317,19 @@ impl Traversal<'_> {
             }
             return;
         }
-        // REPLACE: the children take over once all the visible ones can be drawn
-        if self.children_ready(i, 3) {
+        // REPLACE: the children take over once all the visible ones can be drawn, so the parent stands in while they
+        // load (no holes). A parent that cannot be drawn yet does not hold them back: the ready ones show at once
+        // (a slow server tile would otherwise keep the whole area empty)
+        if self.children_ready(i, 3) || state != Readiness::Ready {
+            if state == Readiness::Pending {
+                self.request(i, error, distance);
+            }
             for &c in &node.children {
                 self.visit(c);
             }
             return;
         }
-        self.draw_or_request(i, state, error, distance);
+        self.out.draw.push(i);
         self.load_children(i, 3);
     }
 
@@ -461,6 +468,18 @@ mod tests {
         assert!(!s.request.is_empty() && !s.request.contains(&root));
         // The children being loaded count as visible: their downloads are not aborted
         assert!(s.request.iter().all(|r| s.visible.contains(r)));
+    }
+
+    #[test]
+    fn ready_children_show_while_their_parent_loads() {
+        // The parent is not there yet and one child is slow: the others are drawn right away
+        let (tree, root) = tree();
+        let s = select(&tree, root, &view(16.0), 16.0, &|i| match i {
+            0 | 1 => Readiness::Pending,
+            _ => Readiness::Ready,
+        });
+        assert!(!s.draw.contains(&root) && s.draw.contains(&2), "{s:?}");
+        assert!(s.request.contains(&root) && s.request.contains(&1));
     }
 
     #[test]
