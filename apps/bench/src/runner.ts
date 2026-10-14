@@ -58,14 +58,25 @@ function motion(result: BenchResult, key: 'fps' | 'slowFrames'): number | undefi
 }
 
 /** The few numbers that tell the story, in plain words */
-const SUMMARY: { label: string; unit: string; higher: boolean; value: (r: BenchResult) => number | undefined }[] = [
+const SUMMARY: {
+  label: string;
+  unit: string;
+  higher: boolean;
+  value: (r: BenchResult) => number | undefined;
+  /** Shown when there is no value: by default the event never happened, here the browser does not measure it */
+  missing?: string;
+}[] = [
   { label: 'Smoothness while moving', unit: 'fps', higher: true, value: (r) => motion(r, 'fps') },
   { label: 'Stutter while moving', unit: '% slow frames', higher: false, value: (r) => motion(r, 'slowFrames') },
   {
     label: 'Main thread blocked',
     unit: 'ms',
     higher: false,
-    value: (r) => r.phases.reduce((n, p) => n + p.longTaskMs, 0),
+    value: (r) =>
+      r.phases.every((p) => p.longTaskMs !== undefined)
+        ? r.phases.reduce((n, p) => n + (p.longTaskMs ?? 0), 0)
+        : undefined,
+    missing: 'n/a (Chrome only)',
   },
   { label: 'France basemap shown', unit: 's', higher: false, value: (r) => seconds(phase(r, '1')?.groundAfterMs) },
   {
@@ -76,7 +87,13 @@ const SUMMARY: { label: string; unit: string; higher: boolean; value: (r: BenchR
   },
   { label: '3D mesh half shown (jump)', unit: 's', higher: false, value: (r) => seconds(phase(r, '7')?.meshHalfMs) },
   { label: '3D mesh complete (jump)', unit: 's', higher: false, value: (r) => seconds(phase(r, '7')?.meshAfterMs) },
-  { label: 'JavaScript memory', unit: 'MB', higher: false, value: (r) => r.heapMb },
+  {
+    label: 'JavaScript memory',
+    unit: 'MB',
+    higher: false,
+    value: (r) => r.heapMb,
+    missing: 'n/a (Chrome only)',
+  },
 ];
 
 function seconds(ms: number | undefined): number | undefined {
@@ -84,13 +101,13 @@ function seconds(ms: number | undefined): number | undefined {
 }
 
 /** Cells of a row, the best one highlighted; engines not run yet show a placeholder */
-function cells(values: (number | undefined | null)[], higher: boolean): string {
+function cells(values: (number | undefined | null)[], higher: boolean, missing = 'never'): string {
   const numbers = values.filter((v): v is number => typeof v === 'number');
   const best = higher ? Math.max(...numbers) : Math.min(...numbers);
   return values
     .map((v) => {
       if (v === null) return '<td class="pending">…</td>';
-      return `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? 'never'}</td>`;
+      return `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? missing}</td>`;
     })
     .join('');
 }
@@ -110,6 +127,7 @@ function summaryTable(results: BenchResult[]): string {
       `<tr><td>${m.label} <span class="unit">${m.unit}</span></td>${cells(
         cols.map((r) => (r ? m.value(r) : null)),
         m.higher,
+        m.missing,
       )}</tr>`,
   );
   return `<table class="summary">${head}${rows.join('')}</table>`;

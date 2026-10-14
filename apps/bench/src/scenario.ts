@@ -37,8 +37,8 @@ export interface PhaseResult {
   frameP99: number;
   /** Share of the frames longer than 33 ms (under 30 fps), percent */
   slowFrames: number;
-  /** Main-thread tasks over 50 ms, total duration */
-  longTaskMs: number;
+  /** Main-thread tasks over 50 ms, total duration; undefined where the browser does not report them (Firefox) */
+  longTaskMs?: number;
   /** Settling phases: time until the ground (basemap), the 3D mesh, both, were complete; undefined if never */
   groundAfterMs?: number;
   meshAfterMs?: number;
@@ -90,7 +90,8 @@ const frame = () => new Promise<number>((resolve) => requestAnimationFrame(resol
 
 /** Long tasks of the main thread, collected while the scenario runs */
 const longTasks: { start: number; duration: number }[] = [];
-if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+const longTasksReported = PerformanceObserver.supportedEntryTypes.includes('longtask');
+if (longTasksReported) {
   new PerformanceObserver((list) => {
     for (const e of list.getEntries()) longTasks.push({ start: e.startTime, duration: e.duration });
   }).observe({ type: 'longtask', buffered: true });
@@ -110,9 +111,11 @@ function summary(phase: string, times: number[], start: number, end: number): Ph
     frameP95: Math.round(at(0.95) * 10) / 10,
     frameP99: Math.round(at(0.99) * 10) / 10,
     slowFrames: gaps.length ? Math.round((gaps.filter((g) => g > 33.4).length / gaps.length) * 100) : 0,
-    longTaskMs: Math.round(
-      longTasks.filter((l) => l.start >= start && l.start < end).reduce((s, l) => s + l.duration, 0),
-    ),
+    ...(longTasksReported && {
+      longTaskMs: Math.round(
+        longTasks.filter((l) => l.start >= start && l.start < end).reduce((s, l) => s + l.duration, 0),
+      ),
+    }),
   };
 }
 
