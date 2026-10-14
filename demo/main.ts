@@ -9,7 +9,9 @@ const params = new URLSearchParams(location.search);
 let projection: Projection = params.get('projection') === 'mercator' ? 'mercator' : 'globe';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const map = await GeoMap.create($('map'), { center: [2.5, 46.6], zoom: 2.2, projection, maxZoom: 19.5 });
+// ?workers=0: 3D Tiles decoded on the main thread, to compare
+const workers = params.get('workers') === '0' ? false : undefined;
+const map = await GeoMap.create($('map'), { center: [2.5, 46.6], zoom: 2.2, projection, maxZoom: 19.5, workers });
 // For the console
 (window as unknown as { map: GeoMap }).map = map;
 

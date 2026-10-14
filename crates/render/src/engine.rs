@@ -20,6 +20,9 @@ enum Layer {
 #[wasm_bindgen]
 pub struct Engine {
     gl: glow::Context,
+    raw: web_sys::WebGl2RenderingContext,
+    /// Pool of decoding workers for 3D Tiles (`load`, `abort`), set by the JavaScript side
+    loader: Option<JsValue>,
     camera: Camera,
     pixel_ratio: f64,
     layers: Vec<(u32, Layer)>,
@@ -63,6 +66,8 @@ impl Engine {
             .get_context_with_context_options("webgl2", &attributes)?
             .ok_or("WebGL2 is not available")?
             .dyn_into::<web_sys::WebGl2RenderingContext>()?;
+        // The raw context too: decoded tiles are uploaded straight from JavaScript typed arrays
+        let raw = context.clone();
         let gl = glow::Context::from_webgl2_context(context);
         let redraw: Rc<dyn Fn()> = Rc::new(move || {
             let _ = redraw.call0(&JsValue::NULL);
@@ -72,6 +77,8 @@ impl Engine {
         let raster_pass = RasterPass::new(&gl, &grid)?;
         Ok(Self {
             gl,
+            raw,
+            loader: None,
             camera: Camera::new(2.424_573, 48.845_726, 13.0),
             pixel_ratio: 1.0,
             layers: Vec::new(),
@@ -335,11 +342,19 @@ impl Engine {
         Ok(self.push(Layer::Network(layer)))
     }
 
+    /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
+    /// `load(id, url, transform, yUp) → Promise<{ anchor, primitives }>` and `abort(id)`. Without it, tiles are
+    /// decoded on the main thread. Set it before adding 3D Tiles layers.
+    #[wasm_bindgen(js_name = setTileLoader)]
+    pub fn set_tile_loader(&mut self, loader: JsValue) {
+        self.loader = (!loader.is_null() && !loader.is_undefined()).then_some(loader);
+    }
+
     /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
     /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
     #[wasm_bindgen(js_name = addTiles3d)]
     pub fn add_tiles3d(&mut self, url: String, max_error: f64) -> Result<u32, JsValue> {
-        let layer = Tiles3dLayer::new(&self.gl, url, max_error, &self.redraw)?;
+        let layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
         Ok(self.push(Layer::Tiles3d(layer)))
     }
 
@@ -475,7 +490,7 @@ impl Engine {
         let mut i = 0;
         while i < self.layers.len() {
             if let Layer::Tiles3d(layer) = &mut self.layers[i].1 {
-                loading |= layer.draw(&self.gl, &view, self.frame, &self.redraw);
+                loading |= layer.draw(&self.gl, &self.raw, &view, self.frame, &self.redraw);
                 i += 1;
                 continue;
             }

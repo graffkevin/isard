@@ -13,6 +13,7 @@
  */
 import init, { Engine } from './wasm/geo_render.js';
 import { Interaction } from './interaction.ts';
+import { TileLoader } from './loader.ts';
 
 export type LonLat = [lon: number, lat: number];
 export type Point = [x: number, y: number];
@@ -62,6 +63,11 @@ export interface GeoMapOptions extends Partial<Camera> {
   interactive?: boolean;
   /** Where to load the engine from, when a bundler does not resolve the default URL */
   wasmUrl?: string | URL;
+  /** Workers decoding 3D Tiles off the main thread: a number, or false to decode on the main thread (default:
+   * cores - 1, 1 to 4) */
+  workers?: number | false;
+  /** Where to load the decoding worker from, when a bundler does not resolve the default URL */
+  workerUrl?: string | URL;
 }
 
 export interface RasterOptions {
@@ -144,7 +150,17 @@ const SEA: Record<Basemap, [number, number, number]> = {
 };
 const HILLSHADE = `${GPF}&LAYER=IGNF_ELEVATION.ELEVATIONGRIDCOVERAGE.SHADOW&FORMAT=image/png`;
 
-let ready: Promise<unknown> | undefined;
+/** The engine, compiled once per page and shared with the decoding workers */
+let compiled: Promise<WebAssembly.Module> | undefined;
+
+async function compile(url: string | URL): Promise<WebAssembly.Module> {
+  try {
+    return await WebAssembly.compileStreaming(fetch(url));
+  } catch {
+    // Servers that do not send application/wasm
+    return WebAssembly.compile(await (await fetch(url)).arrayBuffer());
+  }
+}
 
 export class GeoMap {
   readonly canvas: HTMLCanvasElement;
@@ -157,15 +173,25 @@ export class GeoMap {
   private lastCamera = '';
   private animation?: (now: number) => boolean;
   private hoverPoint?: Point;
+  private loader?: TileLoader;
   private basemap?: RasterLayer;
   private hillshade?: RasterLayer;
   private inFrame = false;
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
-    ready ??= init({ module_or_path: options.wasmUrl ?? new URL('./geo_render_bg.wasm', import.meta.url) });
-    await ready;
-    return new GeoMap(container, options);
+    compiled ??= compile(options.wasmUrl ?? new URL('./geo_render_bg.wasm', import.meta.url)).then(async (module) => {
+      await init({ module_or_path: module });
+      return module;
+    });
+    const module = await compiled;
+    const map = new GeoMap(container, options);
+    const workers = options.workers ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+    if (workers && typeof Worker !== 'undefined') {
+      map.loader = new TileLoader(module, options.workerUrl ?? new URL('./decoder.worker.js', import.meta.url), workers);
+      map.engine.setTileLoader(map.loader);
+    }
+    return map;
   }
 
   private constructor(container: HTMLElement, options: GeoMapOptions) {
@@ -384,6 +410,7 @@ export class GeoMap {
     cancelAnimationFrame(this.frameRequest);
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
+    this.loader?.destroy();
     this.engine.free();
     this.canvas.remove();
     this.listeners.clear();

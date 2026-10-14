@@ -22,6 +22,8 @@ mod network;
 mod raster;
 #[cfg(target_arch = "wasm32")]
 mod tiles3d;
+#[cfg(target_arch = "wasm32")]
+mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub use engine::Engine;

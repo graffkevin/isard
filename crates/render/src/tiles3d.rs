@@ -61,7 +61,7 @@ struct GpuMesh {
 
 enum State {
     Unloaded,
-    Loading(web_sys::AbortController),
+    Loading(Loading),
     Ready(GpuMesh),
     /// No drawable content, for good (none, unsupported, grafted external tileset)
     Empty,
@@ -69,13 +69,37 @@ enum State {
     Failed(f64),
 }
 
+/// A request in flight: its number (arrivals of an older request are ignored) and how to cancel it
+struct Loading {
+    id: u32,
+    /// Fetched on this thread; None when a worker of the loader has it
+    controller: Option<web_sys::AbortController>,
+}
+
 enum Arrival {
+    /// Decoded on this thread (no loader)
     Mesh(Mesh, Vec<Option<web_sys::ImageBitmap>>),
+    /// Decoded by a worker: `{ anchor, primitives: [{ vertices, indices, bitmap }] }`
+    Decoded(JsValue),
     Tileset(Vec<u8>, String),
     Failed,
 }
 
-type Inbox = Rc<RefCell<Vec<(usize, Arrival)>>>;
+/// (tile, request number, arrival)
+type Inbox = Rc<RefCell<Vec<(usize, u32, Arrival)>>>;
+
+thread_local! {
+    /// Request numbers, unique across layers (they share the worker pool)
+    static NEXT_REQUEST: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+}
+
+fn next_request() -> u32 {
+    NEXT_REQUEST.with(|n| {
+        let id = n.get();
+        n.set(id.wrapping_add(1).max(1));
+        id
+    })
+}
 
 #[derive(Default, Clone, Copy)]
 pub struct Tiles3dStats {
@@ -92,7 +116,10 @@ pub struct Tiles3dLayer {
     root: Option<usize>,
     states: Vec<State>,
     inbox: Inbox,
-    queue: Vec<(usize, Mesh, Vec<Option<web_sys::ImageBitmap>>)>,
+    /// Arrived, waiting for their upload
+    queue: Vec<(usize, Arrival)>,
+    /// Pool of decoding workers (`load(id, url, transform, yUp) → Promise`, `abort(id)`); None: decoding here
+    loader: Option<JsValue>,
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 4],
     pub max_error: f64,
@@ -104,7 +131,13 @@ pub struct Tiles3dLayer {
 }
 
 impl Tiles3dLayer {
-    pub fn new(gl: &glow::Context, url: String, max_error: f64, redraw: &Rc<dyn Fn()>) -> Result<Self, String> {
+    pub fn new(
+        gl: &glow::Context,
+        url: String,
+        max_error: f64,
+        loader: Option<JsValue>,
+        redraw: &Rc<dyn Fn()>,
+    ) -> Result<Self, String> {
         let program = gl::program(gl, VERTEX, FRAGMENT)?;
         let uniforms = gl::uniforms(gl, program, ["u_matrix", "u_texture", "u_textured", "u_opacity"]);
         let layer = Self {
@@ -114,6 +147,7 @@ impl Tiles3dLayer {
             states: Vec::new(),
             inbox: Rc::default(),
             queue: Vec::new(),
+            loader,
             program,
             uniforms,
             max_error,
@@ -129,73 +163,97 @@ impl Tiles3dLayer {
                 Ok(bytes) => Arrival::Tileset(bytes, url),
                 Err(_) => Arrival::Failed,
             };
-            inbox.borrow_mut().push((usize::MAX, arrival));
+            inbox.borrow_mut().push((usize::MAX, 0, arrival));
             redraw();
         });
         Ok(layer)
     }
 
-    fn receive(&mut self, gl: &glow::Context, frame: u64) {
+    fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64) {
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
-        for (tile, arrival) in arrivals {
+        for (tile, id, arrival) in arrivals {
+            // Only the answer to the current request of a tile counts (not one that was aborted, then asked again)
+            let current = tile < self.states.len() && matches!(&self.states[tile], State::Loading(l) if l.id == id);
             match arrival {
-                Arrival::Tileset(json, url) => {
-                    let parent = (tile != usize::MAX).then_some(tile);
-                    match self.tree.add(&json, &url, parent) {
-                        Ok(root) => {
-                            if parent.is_none() {
-                                self.root = Some(root);
-                            }
-                            if let Some(p) = parent {
-                                self.states[p] = State::Empty;
-                            }
-                            self.states.resize_with(self.tree.nodes.len(), || State::Unloaded);
-                            for (i, node) in self.tree.nodes.iter().enumerate() {
-                                if matches!(self.states[i], State::Unloaded)
-                                    && matches!(node.content, Content::None | Content::Unsupported)
-                                {
-                                    self.states[i] = State::Empty;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles {}: {e}", self.url)));
-                            if let Some(p) = parent {
-                                self.states[p] = State::Empty;
-                            }
-                        }
-                    }
+                Arrival::Tileset(json, url) if tile == usize::MAX || current => self.graft(&json, &url, tile),
+                Arrival::Mesh(_, _) | Arrival::Decoded(_) if current => self.queue.push((tile, arrival)),
+                Arrival::Failed if current => {
+                    self.states[tile] = State::Failed(js_sys::Date::now() + COOLDOWN_MS);
                 }
-                Arrival::Mesh(mesh, images) => {
-                    if tile < self.states.len() && matches!(self.states[tile], State::Loading(_)) {
-                        self.queue.push((tile, mesh, images));
-                    } else {
-                        close(images);
-                    }
-                }
-                Arrival::Failed => {
-                    if tile < self.states.len() {
-                        self.states[tile] = State::Failed(js_sys::Date::now() + COOLDOWN_MS);
-                    }
-                }
+                stale => discard(stale),
             }
         }
         let take = self.queue.len().min(UPLOADS_PER_FRAME);
-        for (tile, mesh, images) in self.queue.drain(..take).collect::<Vec<_>>() {
-            match upload(gl, &mesh, images, frame) {
+        for (tile, arrival) in self.queue.drain(..take).collect::<Vec<_>>() {
+            if !matches!(self.states[tile], State::Loading(_)) {
+                discard(arrival);
+                continue;
+            }
+            let uploaded = match arrival {
+                Arrival::Mesh(mesh, images) => upload(gl, &mesh, images, frame),
+                Arrival::Decoded(tile) => upload_decoded(gl, raw, &tile, frame).map_err(|e| format!("{e:?}")),
+                other => {
+                    discard(other);
+                    continue;
+                }
+            };
+            match uploaded {
                 Ok(gpu) => {
                     self.gpu_bytes += gpu.bytes;
                     self.states[tile] = State::Ready(gpu);
                 }
-                Err(_) => self.states[tile] = State::Failed(js_sys::Date::now() + COOLDOWN_MS),
+                Err(e) => {
+                    web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles upload: {e}")));
+                    self.states[tile] = State::Failed(js_sys::Date::now() + COOLDOWN_MS);
+                }
+            }
+        }
+    }
+
+    /// Adds a tileset: the root one (`tile == usize::MAX`) or an external one under `tile`
+    fn graft(&mut self, json: &[u8], url: &str, tile: usize) {
+        let parent = (tile != usize::MAX).then_some(tile);
+        match self.tree.add(json, url, parent) {
+            Ok(root) => {
+                if parent.is_none() {
+                    self.root = Some(root);
+                }
+                if let Some(p) = parent {
+                    self.states[p] = State::Empty;
+                }
+                self.states.resize_with(self.tree.nodes.len(), || State::Unloaded);
+                for (i, node) in self.tree.nodes.iter().enumerate() {
+                    if matches!(self.states[i], State::Unloaded)
+                        && matches!(node.content, Content::None | Content::Unsupported)
+                    {
+                        self.states[i] = State::Empty;
+                    }
+                }
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles {}: {e}", self.url)));
+                if let Some(p) = parent {
+                    self.states[p] = State::Empty;
+                }
+            }
+        }
+    }
+
+    fn abort(&self, loading: &Loading) {
+        match &loading.controller {
+            Some(controller) => controller.abort(),
+            None => {
+                if let Some(loader) = &self.loader
+                    && let Ok(abort) = js_sys::Reflect::get(loader, &JsValue::from_str("abort"))
+                    && let Ok(abort) = abort.dyn_into::<js_sys::Function>()
+                {
+                    let _ = abort.call1(loader, &JsValue::from(loading.id));
+                }
             }
         }
     }
 
     fn request(&mut self, tile: usize, redraw: &Rc<dyn Fn()>) {
-        let Ok(controller) = web_sys::AbortController::new() else {
-            return;
-        };
         let node = &self.tree.nodes[tile];
         let (url, is_tileset) = match &node.content {
             Content::Mesh(url) => (url.clone(), false),
@@ -203,9 +261,35 @@ impl Tiles3dLayer {
             _ => return,
         };
         let (transform, y_up) = (node.transform, node.y_up);
-        let signal = controller.signal();
-        self.states[tile] = State::Loading(controller);
+        let id = next_request();
         let (inbox, redraw) = (self.inbox.clone(), redraw.clone());
+        // Meshes go to the worker pool when there is one: fetched and decoded off the main thread
+        if !is_tileset
+            && let Some(promise) = self
+                .loader
+                .as_ref()
+                .and_then(|l| load_in_worker(l, id, &url, &transform, y_up))
+        {
+            self.states[tile] = State::Loading(Loading { id, controller: None });
+            wasm_bindgen_futures::spawn_local(async move {
+                let arrival = match JsFuture::from(promise).await {
+                    Ok(decoded) => Arrival::Decoded(decoded),
+                    // Aborted downloads land here too: no warning (the tile is no longer waited for)
+                    Err(_) => Arrival::Failed,
+                };
+                inbox.borrow_mut().push((tile, id, arrival));
+                redraw();
+            });
+            return;
+        }
+        let Ok(controller) = web_sys::AbortController::new() else {
+            return;
+        };
+        let signal = controller.signal();
+        self.states[tile] = State::Loading(Loading {
+            id,
+            controller: Some(controller),
+        });
         wasm_bindgen_futures::spawn_local(async move {
             let arrival = match fetch_bytes(&url, Some(&signal)).await {
                 Ok(bytes) if is_tileset => Arrival::Tileset(bytes, url),
@@ -222,12 +306,10 @@ impl Tiles3dLayer {
                 Err(_) => Arrival::Failed,
             };
             if signal.aborted() {
-                if let Arrival::Mesh(_, images) = arrival {
-                    close(images);
-                }
+                discard(arrival);
                 return;
             }
-            inbox.borrow_mut().push((tile, arrival));
+            inbox.borrow_mut().push((tile, id, arrival));
             redraw();
         });
     }
@@ -242,8 +324,15 @@ impl Tiles3dLayer {
     }
 
     /// Selects, loads and draws; returns true while tiles are loading
-    pub fn draw(&mut self, gl: &glow::Context, view: &View, frame: u64, redraw: &Rc<dyn Fn()>) -> bool {
-        self.receive(gl, frame);
+    pub fn draw(
+        &mut self,
+        gl: &glow::Context,
+        raw: &web_sys::WebGl2RenderingContext,
+        view: &View,
+        frame: u64,
+        redraw: &Rc<dyn Fn()>,
+    ) -> bool {
+        self.receive(gl, raw, frame);
         let Some(root) = self.root else { return true };
         let now = js_sys::Date::now();
         let selection = tileset::select(&self.tree, root, view, self.max_error, &|i| self.readiness(i, now));
@@ -252,12 +341,12 @@ impl Tiles3dLayer {
         for &i in &selection.visible {
             visible[i] = true;
         }
-        for (i, state) in self.states.iter_mut().enumerate() {
-            if let State::Loading(controller) = state
-                && !visible[i]
-            {
-                controller.abort();
-                *state = State::Unloaded;
+        let stale: Vec<usize> = (0..self.states.len())
+            .filter(|&i| !visible[i] && matches!(self.states[i], State::Loading(_)))
+            .collect();
+        for i in stale {
+            if let State::Loading(loading) = std::mem::replace(&mut self.states[i], State::Unloaded) {
+                self.abort(&loading);
             }
         }
         let mut in_flight = self.states.iter().filter(|s| matches!(s, State::Loading(_))).count();
@@ -345,15 +434,15 @@ impl Tiles3dLayer {
     }
 
     pub fn delete(&mut self, gl: &glow::Context) {
-        for state in &mut self.states {
-            match std::mem::replace(state, State::Empty) {
-                State::Loading(controller) => controller.abort(),
+        for i in 0..self.states.len() {
+            match std::mem::replace(&mut self.states[i], State::Empty) {
+                State::Loading(loading) => self.abort(&loading),
                 State::Ready(mesh) => delete_mesh(gl, &mesh),
                 _ => {}
             }
         }
-        for (_, _, images) in self.queue.drain(..) {
-            close(images);
+        for (_, arrival) in self.queue.drain(..) {
+            discard(arrival);
         }
         // SAFETY: the program is owned by this layer, not used afterwards
         unsafe { gl.delete_program(self.program) };
@@ -395,28 +484,8 @@ fn upload(
             total += vertices.len() * 4 + p.indices.len() * 4;
             let texture = match image {
                 Some(bitmap) => {
-                    let texture = gl.create_texture()?;
-                    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                    gl.tex_image_2d_with_image_bitmap(
-                        glow::TEXTURE_2D,
-                        0,
-                        glow::RGBA8 as i32,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        &bitmap,
-                    );
-                    // Mipmaps: no shimmering when the mesh is seen from afar
-                    gl.generate_mipmap(glow::TEXTURE_2D);
-                    gl.tex_parameter_i32(
-                        glow::TEXTURE_2D,
-                        glow::TEXTURE_MIN_FILTER,
-                        glow::LINEAR_MIPMAP_LINEAR as i32,
-                    );
-                    gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                    gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                    gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-                    total += (bitmap.width() * bitmap.height()) as usize * 4 * 4 / 3;
-                    bitmap.close();
+                    let (texture, bytes) = texture(gl, &bitmap)?;
+                    total += bytes;
                     Some(texture)
                 }
                 None => None,
@@ -449,6 +518,133 @@ fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
                 gl.delete_texture(t);
             }
         }
+    }
+}
+
+/// Frees what an arrival holds outside the wasm heap (decoded images)
+fn discard(arrival: Arrival) {
+    match arrival {
+        Arrival::Mesh(_, images) => close(images),
+        Arrival::Decoded(tile) => {
+            for p in get_array(&tile, "primitives").iter() {
+                if let Ok(bitmap) = js_get(&p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
+                    bitmap.close();
+                }
+            }
+        }
+        Arrival::Tileset(..) | Arrival::Failed => {}
+    }
+}
+
+fn js_get(target: &JsValue, key: &str) -> JsValue {
+    js_sys::Reflect::get(target, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+}
+
+fn get_array(target: &JsValue, key: &str) -> js_sys::Array {
+    js_get(target, key).dyn_into().unwrap_or_default()
+}
+
+/// Asks the worker pool for a tile; None if the loader cannot take it
+fn load_in_worker(
+    loader: &JsValue,
+    id: u32,
+    url: &str,
+    transform: &glam::DMat4,
+    y_up: bool,
+) -> Option<js_sys::Promise> {
+    let load: js_sys::Function = js_get(loader, "load").dyn_into().ok()?;
+    let args = js_sys::Array::of4(
+        &JsValue::from(id),
+        &JsValue::from_str(url),
+        &js_sys::Float64Array::from(&transform.to_cols_array()[..]),
+        &JsValue::from_bool(y_up),
+    );
+    load.apply(loader, &args).ok()?.dyn_into().ok()
+}
+
+/// Uploads a tile decoded by a worker, straight from its typed arrays (no copy into the wasm heap)
+fn upload_decoded(
+    gl: &glow::Context,
+    raw: &web_sys::WebGl2RenderingContext,
+    tile: &JsValue,
+    frame: u64,
+) -> Result<GpuMesh, JsValue> {
+    let anchor: js_sys::Float64Array = js_get(tile, "anchor").dyn_into()?;
+    let anchor = anchor.to_vec();
+    let anchor = glam::DVec3::new(anchor[0], anchor[1], anchor[2]);
+    let mut primitives = Vec::new();
+    let mut total = 0;
+    for p in get_array(tile, "primitives").iter() {
+        let vertices: js_sys::Float32Array = js_get(&p, "vertices").dyn_into()?;
+        let indices: js_sys::Uint32Array = js_get(&p, "indices").dyn_into()?;
+        // SAFETY: object creation and uploads on the live context; glow binds, the raw context uploads into the
+        // bound buffers (the same WebGL state)
+        unsafe {
+            let vao = gl.create_vertex_array()?;
+            gl.bind_vertex_array(Some(vao));
+            let vbo = gl.create_buffer()?;
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            raw.buffer_data_with_array_buffer_view(glow::ARRAY_BUFFER, &vertices, glow::STATIC_DRAW);
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, 20, 0);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 20, 12);
+            let ibo = gl.create_buffer()?;
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ibo));
+            raw.buffer_data_with_array_buffer_view(glow::ELEMENT_ARRAY_BUFFER, &indices, glow::STATIC_DRAW);
+            gl.bind_vertex_array(None);
+            total += (vertices.byte_length() + indices.byte_length()) as usize;
+            let texture = match js_get(&p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
+                Ok(bitmap) => {
+                    let (texture, bytes) = texture(gl, &bitmap)?;
+                    total += bytes;
+                    Some(texture)
+                }
+                Err(_) => None,
+            };
+            primitives.push(GpuPrimitive {
+                vao,
+                buffers: [vbo, ibo],
+                count: indices.length() as i32,
+                texture,
+            });
+        }
+    }
+    Ok(GpuMesh {
+        anchor,
+        primitives,
+        bytes: total,
+        used: frame,
+    })
+}
+
+/// Mipmapped texture from a decoded image (closed after the upload); returns it with its GPU size
+fn texture(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) -> Result<(glow::Texture, usize), String> {
+    // SAFETY: texture creation and upload on the live context
+    unsafe {
+        let texture = gl.create_texture()?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        gl.tex_image_2d_with_image_bitmap(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            bitmap,
+        );
+        // Mipmaps: no shimmering when the mesh is seen from afar
+        gl.generate_mipmap(glow::TEXTURE_2D);
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR_MIPMAP_LINEAR as i32,
+        );
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        let bytes = (bitmap.width() * bitmap.height()) as usize * 4 * 4 / 3;
+        bitmap.close();
+        Ok((texture, bytes))
     }
 }
 
@@ -500,8 +696,8 @@ async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>) -> Result
 impl Drop for Tiles3dLayer {
     fn drop(&mut self) {
         for state in &self.states {
-            if let State::Loading(controller) = state {
-                controller.abort();
+            if let State::Loading(loading) = state {
+                self.abort(loading);
             }
         }
     }
