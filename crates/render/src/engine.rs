@@ -5,6 +5,7 @@ use crate::gl::Grid;
 use crate::globe::GlobeBase;
 use crate::network::{NetworkLayer, NetworkStyle};
 use crate::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
+use crate::tiles3d::Tiles3dLayer;
 use glam::DVec2;
 use glow::HasContext;
 use std::rc::Rc;
@@ -13,6 +14,7 @@ use wasm_bindgen::prelude::*;
 enum Layer {
     Raster(RasterSource),
     Network(NetworkLayer),
+    Tiles3d(Tiles3dLayer),
 }
 
 #[wasm_bindgen]
@@ -333,6 +335,45 @@ impl Engine {
         Ok(self.push(Layer::Network(layer)))
     }
 
+    /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
+    /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
+    #[wasm_bindgen(js_name = addTiles3d)]
+    pub fn add_tiles3d(&mut self, url: String, max_error: f64) -> Result<u32, JsValue> {
+        let layer = Tiles3dLayer::new(&self.gl, url, max_error, &self.redraw)?;
+        Ok(self.push(Layer::Tiles3d(layer)))
+    }
+
+    /// Screen-space error threshold and opacity of a 3D Tiles layer
+    #[wasm_bindgen(js_name = setTiles3dStyle)]
+    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32) {
+        if let Some(Layer::Tiles3d(layer)) = self.layer(id) {
+            layer.max_error = max_error;
+            layer.opacity = opacity;
+        }
+    }
+
+    /// Counters of a 3D Tiles layer: [tiles drawn, meshes loaded, requests in flight, GPU MB, tiles known]
+    #[wasm_bindgen(js_name = tiles3dStats)]
+    #[must_use]
+    pub fn tiles3d_stats(&self, id: u32) -> Vec<f64> {
+        self.layers
+            .iter()
+            .find_map(|(i, layer)| match layer {
+                Layer::Tiles3d(layer) if *i == id => {
+                    let s = layer.stats;
+                    Some(vec![
+                        s.drawn as f64,
+                        s.loaded as f64,
+                        s.in_flight as f64,
+                        s.gpu_bytes as f64 / 1_048_576.0,
+                        s.tiles as f64,
+                    ])
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     /// One value per node; negative = unreached
     #[wasm_bindgen(js_name = setNetworkValues)]
     pub fn set_network_values(&mut self, id: u32, values: &[f32]) {
@@ -361,6 +402,7 @@ impl Engine {
             match self.layers.remove(index).1 {
                 Layer::Raster(layer) => layer.delete(&self.gl),
                 Layer::Network(layer) => layer.delete(&self.gl),
+                Layer::Tiles3d(mut layer) => layer.delete(&self.gl),
             }
         }
     }
@@ -432,6 +474,11 @@ impl Engine {
         };
         let mut i = 0;
         while i < self.layers.len() {
+            if let Layer::Tiles3d(layer) = &mut self.layers[i].1 {
+                loading |= layer.draw(&self.gl, &view, self.frame, &self.redraw);
+                i += 1;
+                continue;
+            }
             if matches!(self.layers[i].1, Layer::Network(_)) {
                 if let Layer::Network(layer) = &self.layers[i].1 {
                     // Line quads are built on screen, either way round
@@ -453,7 +500,7 @@ impl Engine {
                 .iter_mut()
                 .filter_map(|(_, layer)| match layer {
                     Layer::Raster(source) => Some(source),
-                    Layer::Network(_) => None,
+                    Layer::Network(_) | Layer::Tiles3d(_) => None,
                 })
                 .collect();
             for source in &mut stack {

@@ -42,6 +42,11 @@ you zoom in.
   whole globe to a street makes 5 times fewer requests and lands with its tiles ready.
 - **Picking at any scale.** `map.pick` draws the network layers once more into an offscreen target, each edge colored
   by its number, clipped to the pixel under the cursor, and reads that pixel back (as deck.gl does).
+- **3D Tiles textured meshes.** `map.addTiles3d({ url })` streams photogrammetry and buildings (3D Tiles 1.0 b3dm, 1.1
+  glb, external tilesets). Traversal by screen-space error, children replacing their parent only once all are ready
+  (no holes), coarse tiles first, downloads aborted when they leave the view, a GPU memory budget, mipmapped textures
+  decoded off the main thread. Vertices stay in f32 around each tile's center and a matrix computed in f64 maps them
+  to the view, on the plane and on the globe. The demo streams the Lille photomesh (MEL 2020, 5 cm).
 - **Globe for free.** The globe is a sphere up to zoom 5, blending into Web Mercator up to zoom 7; above, it costs
   exactly what the flat map costs (tiles are two triangles again). Tiles behind the horizon are never requested.
 
@@ -53,6 +58,7 @@ you zoom in.
 | `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms); returns an unsubscribe function |
 | `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms)` | camera conventions of MapLibre: settings carry over unchanged |
 | `map.project(lonLat)`, `map.unproject(point)` | CSS pixels ↔ degrees |
+| `map.addTiles3d({ url, maxScreenSpaceError, opacity })` | textured meshes from a `tileset.json`; `layer.setStyle(…)`, `layer.stats()`, `layer.remove()` |
 | `map.pick(point)` | `{ layer, index }` of the network edge under a screen point: one pixel of an offscreen picking pass, cheap at any scale |
 | `map.setBasemap(basemap, hillshade)` | swaps the basemap under the other layers |
 | `map.setProjection(projection)` | `'globe'` or `'mercator'` |
@@ -78,14 +84,14 @@ cargo test      # camera, projections and tile selection
 
 | Path | |
 |---|---|
-| `crates/render` | engine: camera and projections, tile selection, WebGL2 layers (`raster`, `network`, `globe` base), the `Engine` exported to JavaScript |
+| `crates/render` | engine: camera and projections, tile selection, WebGL2 layers (`raster`, `network`, `tiles3d`, `globe` base), 3D Tiles tree and decoding (`tileset`, `b3dm`, `geodesy`, pure Rust and tested), the `Engine` exported to JavaScript |
 | `js` | the `geo-render` package: `GeoMap`, interactions, render loop (`bun run build` → `js/dist`) |
 | `demo` | basemaps on the globe, with the tile counters of each layer |
 
 ## Roadmap
 
 1. Vector basemap (PLAN.IGN vector tiles: fills, lines, then labels), to restyle the ground per use case.
-2. Terrain (RGE ALTI) and BD TOPO buildings in 3D, colored by a value per building.
+2. Terrain (RGE ALTI); decoding of 3D Tiles in workers; KTX2 / Draco / meshopt; BD TOPO buildings colored by value.
 3. Field layer: a value grid drawn as a smooth surface (water depth over the terrain for flooding).
 4. Picking (feature under the cursor) and points (stations).
 5. Move geo-reach and geo-flood onto the engine.

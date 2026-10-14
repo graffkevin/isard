@@ -4,8 +4,11 @@
 //! This crate is the WebAssembly core. The `geo-render` JavaScript package wraps it with the interactions (pan, zoom,
 //! rotate, inertia), the resize handling and a typed API.
 
+pub mod b3dm;
 pub mod camera;
+pub mod geodesy;
 pub mod tiles;
+pub mod tileset;
 
 #[cfg(target_arch = "wasm32")]
 mod engine;
@@ -17,6 +20,8 @@ mod globe;
 mod network;
 #[cfg(target_arch = "wasm32")]
 mod raster;
+#[cfg(target_arch = "wasm32")]
+mod tiles3d;
 
 #[cfg(target_arch = "wasm32")]
 pub use engine::Engine;

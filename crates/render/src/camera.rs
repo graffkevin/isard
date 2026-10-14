@@ -11,6 +11,7 @@
 //! Local frame of a view: pixels relative to the center, x east, y south, z up. The sphere touches the plane at the
 //! center, its own center at (0, 0, -radius).
 
+use crate::geodesy;
 use glam::{DMat4, DVec2, DVec3, DVec4};
 use std::f64::consts::PI;
 
@@ -133,6 +134,52 @@ impl View {
         let local = (p - self.sphere_center()) / g.radius;
         let n = g.east * local.x - g.north * local.y + g.up * local.z;
         mercator(n.y.atan2(n.x).to_degrees(), n.z.clamp(-1.0, 1.0).asin().to_degrees())
+    }
+
+    /// Pixels per metre at a latitude (degrees): on the plane, as Web Mercator scales it; on the sphere, its radius
+    /// over the Earth's
+    #[must_use]
+    pub fn pixels_per_metre(&self, lat: f64) -> f64 {
+        let plane = self.world_size / (2.0 * PI * geodesy::A * lat.to_radians().cos().max(1e-6));
+        let sphere = self.globe.radius / geodesy::A;
+        plane + (sphere - plane) * self.globe.factor
+    }
+
+    /// Affine map from ECEF offsets around `anchor` (metres) to the local frame (pixels), linearized at the anchor:
+    /// the anchor is placed like a ground point at its height, the offsets go through its east-north-up axes. Exact
+    /// at the anchor, a tile-sized neighbourhood stays well under a pixel.
+    #[must_use]
+    pub fn ecef_matrix(&self, anchor: DVec3) -> DMat4 {
+        let g = geodesy::from_ecef(anchor);
+        let m = mercator(g.x, g.y);
+        let [east, north, up] = geodesy::enu(g.x, g.y);
+        let k = self.pixels_per_metre(g.y);
+        let shift = -(m.x - self.center.x).round();
+        // Where the anchor goes, and where its east, north and up axes point, blended like `position`
+        let mut origin = self.position(m, shift);
+        let (mut e, mut n, mut u) = (DVec3::X, DVec3::NEG_Y, DVec3::Z);
+        if self.globe.factor > 0.0 {
+            let local = |v: DVec3| DVec3::new(v.dot(self.globe.east), -v.dot(self.globe.north), v.dot(self.globe.up));
+            let f = self.globe.factor;
+            e = e.lerp(local(east), f);
+            n = n.lerp(local(north), f);
+            u = u.lerp(local(up), f);
+        }
+        origin += u * (g.z * k);
+        // Columns: images of the ECEF axes (through east, north, up)
+        let to_local = |axis: DVec3| (e * axis.dot(east) + n * axis.dot(north) + u * axis.dot(up)) * k;
+        DMat4::from_cols(
+            to_local(DVec3::X).extend(0.0),
+            to_local(DVec3::Y).extend(0.0),
+            to_local(DVec3::Z).extend(0.0),
+            origin.extend(1.0),
+        )
+    }
+
+    /// Position in the local frame of an ECEF point
+    #[must_use]
+    pub fn ecef(&self, p: DVec3) -> DVec3 {
+        self.ecef_matrix(p).w_axis.truncate()
     }
 
     /// Whether a position on the sphere faces the camera (in front of the horizon)
@@ -468,6 +515,43 @@ mod tests {
         c.pan(from, to);
         let now = lon_lat(c.ground(&c.view(), to.x, to.y).unwrap());
         assert!((grabbed - now).length() < 1e-6, "{grabbed} → {now}");
+    }
+
+    #[test]
+    fn ecef_points_land_where_the_basemap_puts_them() {
+        // A ground point 300 m east of the center, through the ECEF map, lands where the Mercator plane has it
+        for globe_zoom in [None, Some(3.0), Some(6.0)] {
+            let mut c = camera();
+            if let Some(z) = globe_zoom {
+                c.globe = true;
+                c.zoom = z;
+            }
+            let v = c.view();
+            let center = lon_lat(c.center);
+            let anchor = geodesy::to_ecef(center.x, center.y, 0.0);
+            assert!(v.ecef(anchor).length() < 1e-6, "anchor at the center");
+            let east = geodesy::to_ecef(
+                center.x + 300.0 / (111_320.0 * center.y.to_radians().cos()),
+                center.y,
+                0.0,
+            );
+            let through_matrix = v.ecef_matrix(anchor).transform_point3(east - anchor);
+            let direct = v.position(
+                mercator(center.x + 300.0 / (111_320.0 * center.y.to_radians().cos()), center.y),
+                0.0,
+            );
+            let scale = v.pixels_per_metre(center.y) * 300.0;
+            assert!(
+                (through_matrix - direct).length() < 0.02 * scale + 0.01,
+                "{globe_zoom:?}: {through_matrix} vs {direct}"
+            );
+            // Up is up, scaled like the ground
+            let high = v.ecef(geodesy::to_ecef(center.x, center.y, 100.0));
+            assert!(
+                (high.z - 100.0 * v.pixels_per_metre(center.y)).abs() < 1e-3 * high.z.abs().max(1.0),
+                "{high}"
+            );
+        }
     }
 
     #[test]

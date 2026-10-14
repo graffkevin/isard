@@ -91,6 +91,26 @@ export interface NetworkOptions extends NetworkStyle {
   edges: Uint32Array;
 }
 
+export interface Tiles3dOptions {
+  /** URL of a `tileset.json` (3D Tiles 1.0 b3dm or 1.1 glb meshes, external tilesets) */
+  url: string;
+  /** Screen-space error (CSS pixels) above which a tile is refined: 16 by default, lower is finer and heavier */
+  maxScreenSpaceError?: number;
+  opacity?: number;
+}
+
+export interface Tiles3dStats {
+  /** Tiles drawn in the last frame */
+  drawn: number;
+  /** Meshes held on the GPU */
+  loaded: number;
+  inFlight: number;
+  /** GPU memory of the meshes, MB */
+  gpuMb: number;
+  /** Tiles known in the tree (external tilesets included once loaded) */
+  tiles: number;
+}
+
 export interface PointerEvent {
   point: Point;
   /** Undefined above the horizon */
@@ -293,6 +313,16 @@ export class GeoMap {
     return new NetworkLayer(this, id, s);
   }
 
+  /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */
+  addTiles3d(options: Tiles3dOptions): Tiles3dLayer {
+    const error = options.maxScreenSpaceError ?? 16;
+    const id = this.engine.addTiles3d(options.url, error);
+    const layer = new Tiles3dLayer(this, id, error);
+    if (options.opacity !== undefined) layer.setStyle({ opacity: options.opacity });
+    this.requestRender();
+    return layer;
+  }
+
   // ── Frames ──
 
   /** Asks for a frame; several calls before the next frame draw it once */
@@ -395,6 +425,33 @@ export class NetworkLayer {
     const s = this.style;
     this.map.engine.setNetworkStyle(this.id, s.width, s.max, s.contour, s.opacity);
     this.map.requestRender();
+  }
+
+  remove(): void {
+    this.map.engine.removeLayer(this.id);
+    this.map.requestRender();
+  }
+}
+
+export class Tiles3dLayer {
+  private opacity = 1;
+
+  constructor(
+    private readonly map: GeoMap,
+    readonly id: number,
+    private maxScreenSpaceError: number,
+  ) {}
+
+  setStyle(style: { maxScreenSpaceError?: number; opacity?: number }): void {
+    this.maxScreenSpaceError = style.maxScreenSpaceError ?? this.maxScreenSpaceError;
+    this.opacity = style.opacity ?? this.opacity;
+    this.map.engine.setTiles3dStyle(this.id, this.maxScreenSpaceError, this.opacity);
+    this.map.requestRender();
+  }
+
+  stats(): Tiles3dStats {
+    const [drawn = 0, loaded = 0, inFlight = 0, gpuMb = 0, tiles = 0] = this.map.engine.tiles3dStats(this.id);
+    return { drawn, loaded, inFlight, gpuMb, tiles };
   }
 
   remove(): void {

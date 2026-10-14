@@ -2,7 +2,7 @@
  * Demo of the engine: Géoplateforme basemaps on the globe or in Web Mercator, with the tile counters of each layer
  * to watch loading while zooming. ?projection=mercator starts flat.
  */
-import { type Basemap, GeoMap, type LonLat, type Projection } from '../js/src/index.ts';
+import { type Basemap, GeoMap, type LonLat, type Projection, type Tiles3dLayer } from '../js/src/index.ts';
 
 const IGN: LonLat = [2.424573, 48.845726];
 const params = new URLSearchParams(location.search);
@@ -33,6 +33,13 @@ buttons('projections', ['globe', 'mercator'] as Projection[], projection, (p) =>
 buttons('basemaps', ['plan-grey', 'plan', 'ortho', 'none'] as Basemap[], 'plan-grey', (b) =>
   map.setBasemap(b, b === 'ortho' ? 0 : 0.4),
 );
+// Photomesh of the Métropole Européenne de Lille (2020, 5 cm, open data): a heavy textured 3D Tiles dataset
+const LILLE_MESH = 'https://webimaging.lillemetropole.fr/externe/maillage/2020_mel_5cm/tileset.json';
+let mesh: Tiles3dLayer | undefined;
+$('lille').onclick = () => {
+  mesh ??= map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: 6 });
+  map.easeTo({ center: [3.0632, 50.6369], zoom: 16.5, pitch: 60, bearing: 20 }, 3000);
+};
 $('fly').onclick = () => map.easeTo({ center: IGN, zoom: 15, pitch: 50, bearing: -17 }, 2500);
 $('world').onclick = () => map.easeTo({ center: [2.5, 46.6], zoom: 2.2, pitch: 0, bearing: 0 }, 2500);
 
@@ -76,5 +83,12 @@ setInterval(() => {
     `fps        ${frames.length}`,
     `engine     ${engineMs.toFixed(2)} ms/frame, worst ${worstMs.toFixed(1)}`,
     ...layers,
+    ...(mesh
+      ? [
+          ((m) => `3D tiles   ${m.drawn} drawn, ${m.loaded} kept (${m.gpuMb.toFixed(0)} MB), ${m.inFlight} loading`)(
+            mesh.stats(),
+          ),
+        ]
+      : []),
   ].join('\n');
 }, 250);
