@@ -36,7 +36,9 @@ await benchmark({
   },
   idle() {
     return {
-      ground: map.stats().every((l) => l.inFlight === 0 && l.standIns === 0),
+      // Same criterion as the others: nothing loading or waiting (a tile missing on the server keeps its ancestor as a
+      // stand-in for good)
+      ground: map.stats().every((l) => l.inFlight === 0 && l.queued === 0),
       mesh: (mesh.stats()?.inFlight ?? 0) === 0,
     };
   },

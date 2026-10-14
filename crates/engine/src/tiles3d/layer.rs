@@ -104,7 +104,10 @@ fn next_request() -> u32 {
 pub struct Tiles3dStats {
     pub drawn: usize,
     pub loaded: usize,
+    /// Downloads of tiles in view
     pub in_flight: usize,
+    /// Downloads of siblings out of view, in the background
+    pub prefetching: usize,
     pub gpu_bytes: usize,
     pub tiles: usize,
 }
@@ -399,17 +402,23 @@ impl Tiles3dLayer {
         }
         self.evict(gl, frame);
         self.render(gl, view, &selection.draw, &selection.backfill);
+        let prefetching = selection
+            .prefetch
+            .iter()
+            .filter(|&&i| matches!(self.states[i], State::Loading(_)))
+            .count();
         self.stats = Tiles3dStats {
             drawn: selection.draw.len() + selection.backfill.len(),
             loaded: self.states.iter().filter(|s| matches!(s, State::Ready(_))).count(),
-            in_flight,
+            in_flight: in_flight - prefetching,
+            prefetching,
             gpu_bytes: self.gpu_bytes,
             tiles: self.tree.nodes.len(),
         };
         if !self.queue.is_empty() {
             redraw();
         }
-        in_flight > 0 || !self.queue.is_empty()
+        in_flight > prefetching || !self.queue.is_empty()
     }
 
     /// Frees the least recently drawn meshes beyond the budget

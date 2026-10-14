@@ -58,7 +58,10 @@ export interface Tiles3dStats {
   drawn: number;
   /** Meshes held on the GPU */
   loaded: number;
+  /** Downloads of tiles in view */
   inFlight: number;
+  /** Downloads of tiles just out of view (siblings of refined tiles), in the background */
+  prefetching: number;
   /** GPU memory of the meshes, MB */
   gpuMb: number;
   /** Tiles known in the tree (external tilesets included once loaded) */
@@ -429,6 +432,7 @@ impl Engine {
                         ("drawn", s.drawn.into()),
                         ("loaded", s.loaded.into()),
                         ("inFlight", s.in_flight.into()),
+                        ("prefetching", s.prefetching.into()),
                         ("gpuMb", (s.gpu_bytes as f64 / 1_048_576.0).into()),
                         ("tiles", s.tiles.into()),
                     ]))
