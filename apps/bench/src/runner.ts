@@ -1,5 +1,5 @@
 /** Runner page: plays the scenario with each engine in turn, then compares them phase by phase */
-import type { BenchResult, PhaseResult } from './scenario.ts';
+import { type BenchResult, LILLE_MESH, type PhaseResult } from './scenario.ts';
 
 const ENGINES = ['geo-render', 'itowns', 'tiles-renderer'] as const;
 /** Column names, in the order of `ENGINES` (a result's engine name starts with one) */
@@ -41,8 +41,22 @@ async function freshFrame(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 1000));
 }
 
+/**
+ * Opens the connection to the mesh server before an engine starts: through the IGN proxy, the first tunnel to it after
+ * a while takes ~10 s (its name resolves slowly), and Firefox holds the page's other requests back meanwhile; without
+ * this, whichever engine came first after the proxy forgot the name paid for it
+ */
+async function warmUp(): Promise<void> {
+  try {
+    await fetch(new URL('Data/L11_32.b3dm', LILLE_MESH), { mode: 'no-cors', cache: 'no-store' });
+  } catch {
+    // The engines will meet the same error
+  }
+}
+
 async function once(page: string): Promise<BenchResult> {
   await freshFrame();
+  await warmUp();
   return new Promise((resolve) => {
     const finish = (result: BenchResult) => {
       clearTimeout(timer);
