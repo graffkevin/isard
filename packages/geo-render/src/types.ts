@@ -16,8 +16,10 @@ export interface GeoMapOptions extends Partial<Camera> {
   basemap?: Basemap;
   /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4) */
   hillshade?: number;
-  /** Color behind the map (sky of tilted views, around the globe), `#rrggbb` (default `#f2f2f0`) */
+  /** Color behind the map (sky of tilted flat views), `#rrggbb` (default `#f2f2f0`) */
   background?: string;
+  /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
+  sky?: boolean;
   minZoom?: number;
   maxZoom?: number;
   /** Mouse and touch controls (default true) */

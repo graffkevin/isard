@@ -47,6 +47,8 @@ you zoom in.
   (no holes), coarse tiles first, downloads aborted when they leave the view, a GPU memory budget, mipmapped textures
   decoded off the main thread. Vertices stay in f32 around each tile's center and a matrix computed in f64 maps them
   to the view, on the plane and on the globe. The demo streams the Lille photomesh (MEL 2020, 5 cm).
+- **Space around the globe.** Stars fixed to the Earth's frame (they turn with the globe) and an atmosphere halo,
+  procedural in one full-screen triangle, fading out as the globe turns flat (`sky: false` to turn it off).
 - **Globe for free.** The globe is a sphere up to zoom 5, blending into Web Mercator up to zoom 7; above, it costs
   exactly what the flat map costs (tiles are two triangles again). Tiles behind the horizon are never requested.
 

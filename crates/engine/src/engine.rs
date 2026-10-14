@@ -6,6 +6,7 @@ use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
 use crate::render::network::{NetworkLayer, NetworkStyle};
 use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
+use crate::render::sky::Sky;
 use crate::tiles3d::layer::Tiles3dLayer;
 use glam::DVec2;
 use glow::HasContext;
@@ -85,6 +86,7 @@ pub struct Engine {
     redraw: Rc<dyn Fn()>,
     background: [f32; 3],
     globe: GlobeBase,
+    sky: Sky,
     raster_pass: RasterPass,
     /// Camera of the last frame and when it last changed (ms)
     last_camera: [u64; 5],
@@ -132,6 +134,7 @@ impl Engine {
         let grid = Grid::new(&gl)?;
         let globe = GlobeBase::new(&gl, &grid)?;
         let raster_pass = RasterPass::new(&gl, &grid)?;
+        let sky = Sky::new(&gl)?;
         Ok(Self {
             gl,
             raw,
@@ -144,6 +147,7 @@ impl Engine {
             redraw,
             background: [0.95, 0.95, 0.94],
             globe,
+            sky,
             raster_pass,
             last_camera: [0; 5],
             moved_at: 0.0,
@@ -197,6 +201,12 @@ impl Engine {
     #[wasm_bindgen(js_name = setGlobe)]
     pub fn set_globe(&mut self, globe: bool) {
         self.camera.globe = globe;
+    }
+
+    /// Space behind the globe (stars, atmosphere halo), in the globe projection
+    #[wasm_bindgen(js_name = setSky)]
+    pub fn set_sky(&mut self, enabled: bool) {
+        self.sky.enabled = enabled;
     }
 
     /// Color of the globe under the tiles (polar caps)
@@ -493,6 +503,7 @@ impl Engine {
             camera.height = self.camera.height;
             (*generation, camera.view())
         });
+        self.sky.draw(&self.gl, &view);
         self.globe.draw(&self.gl, &view);
         let ctx = DrawContext {
             view: &view,
