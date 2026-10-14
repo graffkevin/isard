@@ -4,6 +4,7 @@
  * same frame.
  */
 import { BASEMAPS, HILLSHADE, SEA } from './basemaps.ts';
+import { DEFAULT_DECODERS } from './decoders.ts';
 import { Interaction } from './interaction.ts';
 import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
@@ -85,6 +86,8 @@ export class GeoMap implements LayerHost {
         module,
         options.workerUrl ?? new URL('./decoder.worker.js', import.meta.url),
         workers,
+        { ...DEFAULT_DECODERS, ...options.decoders },
+        map.engine.textureFormats(),
       );
       map.engine.setTileLoader(map.loader);
     }

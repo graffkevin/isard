@@ -1,4 +1,5 @@
 /** Public types of the `geo-render` package */
+import type { DecoderUrls } from './decoders.ts';
 import type { Camera, Engine } from './wasm/geo_render.js';
 
 export type LonLat = [lon: number, lat: number];
@@ -31,6 +32,9 @@ export interface GeoMapOptions extends Partial<Camera> {
   workers?: number | false;
   /** Where to load the decoding worker from, when a bundler does not resolve the default URL */
   workerUrl?: string | URL;
+  /** Folders of the Draco and Basis Universal decoders, loaded by the workers on first use (default: the official
+   * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks) */
+  decoders?: Partial<DecoderUrls>;
 }
 
 export interface RasterOptions {

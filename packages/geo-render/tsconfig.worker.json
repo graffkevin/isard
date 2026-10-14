@@ -4,5 +4,5 @@
     "lib": ["ES2022", "WebWorker"],
     "types": []
   },
-  "include": ["src/decoder.worker.ts", "src/protocol.ts"]
+  "include": ["src/decoder.worker.ts", "src/protocol.ts", "src/decoders.ts"]
 }

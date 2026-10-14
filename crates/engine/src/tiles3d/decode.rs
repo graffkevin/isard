@@ -31,12 +31,69 @@ pub struct Mesh {
     pub primitives: Vec<Primitive>,
 }
 
+/// A Draco-compressed primitive (`KHR_draco_mesh_compression`), for an external Draco decoder
+pub struct DracoRequest {
+    pub mesh: usize,
+    pub primitive: usize,
+    /// The compressed geometry
+    pub data: Vec<u8>,
+    /// Draco attribute ids
+    pub position: u32,
+    pub uv: Option<u32>,
+}
+
+/// What a Draco decoder returns for a request: positions and uv as stored (before the node transforms), triangles
+pub struct DracoGeometry {
+    pub mesh: usize,
+    pub primitive: usize,
+    pub positions: Vec<f32>,
+    pub uvs: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
 /// Decodes a `.b3dm` or `.glb` tile. `transform`: the tile's world transform; `y_up`: glTF y-up to 3D Tiles z-up
 /// (always for `.b3dm` of 3D Tiles 1.0, unless the tileset says `gltfUpAxis: Z`).
-pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool) -> Result<Mesh, String> {
+/// Draco primitives are decoded beforehand by the caller (`draco_requests`) and passed in `draco`.
+pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometry]) -> Result<Mesh, String> {
+    let (glb, rtc) = split(bytes)?;
+    decode_glb(glb, transform, y_up, rtc, draco)
+}
+
+/// The Draco-compressed primitives of a tile, to decode before `decode`
+pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
+    let (glb, _) = split(bytes)?;
+    let (json, bin) = parse_glb(glb)?;
+    let gltf = Gltf {
+        json: &json,
+        bin,
+        views: RefCell::default(),
+        draco: &[],
+    };
+    let mut out = Vec::new();
+    for (m, mesh) in json["meshes"].as_array().into_iter().flatten().enumerate() {
+        for (p, primitive) in mesh["primitives"].as_array().into_iter().flatten().enumerate() {
+            let ext = &primitive["extensions"]["KHR_draco_mesh_compression"];
+            if !ext.is_object() {
+                continue;
+            }
+            let view = ext["bufferView"].as_u64().ok_or("Draco extension without bufferView")? as usize;
+            out.push(DracoRequest {
+                mesh: m,
+                primitive: p,
+                data: gltf.view(view)?.to_vec(),
+                position: ext["attributes"]["POSITION"].as_u64().ok_or("Draco without POSITION")? as u32,
+                uv: ext["attributes"]["TEXCOORD_0"].as_u64().map(|v| v as u32),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The glTF binary of a tile and its `RTC_CENTER`
+fn split(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
     match bytes.get(..4) {
-        Some(b"b3dm") => decode_b3dm(bytes, transform, y_up),
-        Some(b"glTF") => decode_glb(bytes, transform, y_up, DVec3::ZERO),
+        Some(b"b3dm") => b3dm_glb(bytes),
+        Some(b"glTF") => Ok((bytes, DVec3::ZERO)),
         _ => Err("unsupported tile content (b3dm and glb only)".into()),
     }
 }
@@ -46,7 +103,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> Result<usize, String> {
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
 }
 
-fn decode_b3dm(bytes: &[u8], transform: &DMat4, y_up: bool) -> Result<Mesh, String> {
+fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
     let feature_json = u32_at(bytes, 12)?;
     let feature_binary = u32_at(bytes, 16)?;
     let batch_json = u32_at(bytes, 20)?;
@@ -64,10 +121,11 @@ fn decode_b3dm(bytes: &[u8], transform: &DMat4, y_up: bool) -> Result<Mesh, Stri
         }
     }
     let glb = 28 + feature_json + feature_binary + batch_json + batch_binary;
-    decode_glb(bytes.get(glb..).ok_or("truncated b3dm")?, transform, y_up, rtc)
+    Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc))
 }
 
-fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result<Mesh, String> {
+/// JSON and binary chunk of a glTF binary
+fn parse_glb(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
     if bytes.get(..4) != Some(b"glTF") || u32_at(bytes, 4)? != 2 {
         return Err("glTF 2.0 binary expected".into());
     }
@@ -83,6 +141,17 @@ fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result
     } else {
         &[]
     };
+    Ok((json, bin))
+}
+
+fn decode_glb(
+    bytes: &[u8],
+    transform: &DMat4,
+    y_up: bool,
+    rtc: DVec3,
+    draco: &[DracoGeometry],
+) -> Result<Mesh, String> {
+    let (json, bin) = parse_glb(bytes)?;
     for required in json["extensionsRequired"].as_array().into_iter().flatten() {
         let name = required.as_str().unwrap_or("");
         if !SUPPORTED.contains(&name) {
@@ -93,6 +162,7 @@ fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result
         json: &json,
         bin,
         views: RefCell::default(),
+        draco,
     };
     // glTF y-up → z-up: +90° about x
     let axis = if y_up {
@@ -133,17 +203,24 @@ fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result
     Ok(Mesh { anchor, primitives })
 }
 
+/// Positions and uv as stored (before the node transforms), triangle indices
+type Geometry = (Vec<f32>, Vec<f32>, Vec<u32>);
+
 /// glTF extensions this decoder handles (a tile requiring another one is refused)
-const SUPPORTED: [&str; 4] = [
+const SUPPORTED: [&str; 6] = [
     "EXT_meshopt_compression",
     "KHR_mesh_quantization",
     "KHR_texture_transform",
     "KHR_materials_unlit",
+    "KHR_draco_mesh_compression",
+    "KHR_texture_basisu",
 ];
 
 struct Gltf<'a> {
     json: &'a Value,
     bin: &'a [u8],
+    /// Draco primitives decoded by the caller
+    draco: &'a [DracoGeometry],
     /// Buffer views decompressed so far (`EXT_meshopt_compression`)
     views: RefCell<HashMap<usize, Rc<[u8]>>>,
 }
@@ -182,12 +259,14 @@ impl Gltf<'_> {
         };
         let world = *parent * local;
         if let Some(mesh) = node["mesh"].as_u64() {
-            for primitive in self.json["meshes"][mesh as usize]["primitives"]
+            let mesh = mesh as usize;
+            for (index, primitive) in self.json["meshes"][mesh]["primitives"]
                 .as_array()
                 .into_iter()
                 .flatten()
+                .enumerate()
             {
-                if let Some(p) = self.primitive(primitive, &world)? {
+                if let Some(p) = self.primitive((mesh, index), primitive, &world)? {
                     out.push(p);
                 }
             }
@@ -203,23 +282,28 @@ impl Gltf<'_> {
         Ok(())
     }
 
-    /// Triangles only (mode 4, the default); other modes are skipped
-    fn primitive(&self, primitive: &Value, world: &DMat4) -> Result<Option<(Primitive, Vec<DVec3>)>, String> {
-        if primitive["mode"].as_u64().unwrap_or(4) != 4 {
-            return Ok(None);
+    /// Geometry of a primitive as stored: from the Draco decoder (`KHR_draco_mesh_compression`) or the accessors
+    fn geometry(&self, (mesh, index): (usize, usize), primitive: &Value) -> Result<Option<Geometry>, String> {
+        if primitive["extensions"]["KHR_draco_mesh_compression"].is_object() {
+            let g = self
+                .draco
+                .iter()
+                .find(|g| g.mesh == mesh && g.primitive == index)
+                .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
+            let count = g.positions.len() / 3;
+            let uvs = if g.uvs.is_empty() {
+                vec![0.0; count * 2]
+            } else {
+                g.uvs.clone()
+            };
+            return Ok(Some((g.positions.clone(), uvs, g.indices.clone())));
         }
         let Some(position) = primitive["attributes"]["POSITION"].as_u64() else {
             return Ok(None);
         };
         let positions = self.accessor(position as usize)?;
         let count = positions.len() / 3;
-        let world_positions: Vec<DVec3> = positions
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(|&[x, y, z]| world.transform_point3(DVec3::new(f64::from(x), f64::from(y), f64::from(z))))
-            .collect();
-        let mut uvs = match primitive["attributes"]["TEXCOORD_0"].as_u64() {
+        let uvs = match primitive["attributes"]["TEXCOORD_0"].as_u64() {
             Some(uv) => self.accessor(uv as usize)?,
             None => vec![0.0; count * 2],
         };
@@ -227,6 +311,29 @@ impl Gltf<'_> {
             Some(i) => self.accessor(i as usize)?.iter().map(|&v| v as u32).collect(),
             None => (0..count as u32).collect(),
         };
+        Ok(Some((positions, uvs, indices)))
+    }
+
+    /// Triangles only (mode 4, the default); other modes are skipped
+    fn primitive(
+        &self,
+        key: (usize, usize),
+        primitive: &Value,
+        world: &DMat4,
+    ) -> Result<Option<(Primitive, Vec<DVec3>)>, String> {
+        if primitive["mode"].as_u64().unwrap_or(4) != 4 {
+            return Ok(None);
+        }
+        let Some((positions, mut uvs, indices)) = self.geometry(key, primitive)? else {
+            return Ok(None);
+        };
+        let count = positions.len() / 3;
+        let world_positions: Vec<DVec3> = positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[x, y, z]| world.transform_point3(DVec3::new(f64::from(x), f64::from(y), f64::from(z))))
+            .collect();
         if uvs.len() != count * 2 || indices.iter().any(|&i| i as usize >= count) {
             return Err("inconsistent glTF primitive".into());
         }
@@ -250,7 +357,14 @@ impl Gltf<'_> {
                 ];
             }
         }
-        let image = texture.and_then(|t| self.image(self.json["textures"][t as usize]["source"].as_u64()?));
+        // KHR_texture_basisu: the KTX2 image first (transcoded by the workers), else the plain one
+        let image = texture.and_then(|t| {
+            let texture = &self.json["textures"][t as usize];
+            let source = texture["extensions"]["KHR_texture_basisu"]["source"]
+                .as_u64()
+                .or(texture["source"].as_u64())?;
+            self.image(source)
+        });
         Ok(Some((
             Primitive {
                 positions: Vec::new(),
@@ -366,7 +480,7 @@ mod tests {
 
     #[test]
     fn decodes_a_lille_tile() {
-        let mesh = decode(LILLE, &DMat4::IDENTITY, true).unwrap();
+        let mesh = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         assert_eq!(mesh.primitives.len(), 1);
         let p = &mesh.primitives[0];
         assert_eq!(p.positions.len(), 59 * 3);
@@ -386,7 +500,7 @@ mod tests {
     #[test]
     fn y_up_puts_the_mesh_on_the_ground() {
         // With the y-up rotation the vertices hug the ellipsoid; without it they would be kilometres off
-        let mesh = decode(LILLE, &DMat4::IDENTITY, true).unwrap();
+        let mesh = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         let p = &mesh.primitives[0].positions;
         for &[x, y, z] in p.as_chunks::<3>().0 {
             let ecef = mesh.anchor + DVec3::new(f64::from(x), f64::from(y), f64::from(z));
@@ -398,7 +512,7 @@ mod tests {
     /// filter (`EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_texture_transform`)
     #[test]
     fn meshopt_variants_decode_like_the_original() {
-        let original = decode(LILLE, &DMat4::IDENTITY, true).unwrap();
+        let original = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         let o = &original.primitives[0];
         for (name, bytes, tolerance) in [
             ("noq", &include_bytes!("../../tests/data/lille_noq.glb")[..], 0.01),
@@ -411,7 +525,7 @@ mod tests {
                 202_047.449_822_138,
                 4_900_910.163_547_64,
             ));
-            let mesh = decode(bytes, &rtc, true).unwrap();
+            let mesh = decode(bytes, &rtc, true, &[]).unwrap();
             let p = &mesh.primitives[0];
             assert_eq!(p.indices.len(), o.indices.len());
             assert!(p.image.is_some());
@@ -448,9 +562,48 @@ mod tests {
         }
     }
 
+    /// The tile compressed with Draco (gltf-pipeline): its geometry is decoded outside (workers), then given back
+    #[test]
+    fn draco_primitives_are_requested_then_used() {
+        let bytes = include_bytes!("../../tests/data/lille_draco.glb");
+        let requests = draco_requests(bytes).unwrap();
+        assert_eq!(requests.len(), 1);
+        let r = &requests[0];
+        assert_eq!((r.mesh, r.primitive, r.position, r.uv), (0, 0, 0, Some(1)));
+        assert!(r.data.len() > 100);
+        // Without the decoded geometry, the tile cannot be built
+        assert!(decode(bytes, &DMat4::IDENTITY, true, &[]).is_err());
+        // With it (here a single triangle standing in for the Draco output), the usual path applies
+        let geometry = DracoGeometry {
+            mesh: 0,
+            primitive: 0,
+            positions: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+        };
+        let mesh = decode(bytes, &DMat4::IDENTITY, true, &[geometry]).unwrap();
+        assert_eq!(mesh.primitives[0].indices, [0, 1, 2]);
+        assert!(mesh.primitives[0].image.is_some());
+    }
+
+    /// The tile with a KTX2 texture (`KHR_texture_basisu`): the KTX2 image is the one handed over
+    #[test]
+    fn basisu_textures_prefer_the_ktx2_image() {
+        let mesh = decode(
+            include_bytes!("../../tests/data/lille_ktx2.glb"),
+            &DMat4::IDENTITY,
+            true,
+            &[],
+        )
+        .unwrap();
+        let (bytes, mime) = mesh.primitives[0].image.as_ref().unwrap();
+        assert_eq!(mime, "image/ktx2");
+        assert_eq!(&bytes[..12], b"\xabKTX 20\xbb\r\n\x1a\n");
+    }
+
     #[test]
     fn rejects_garbage() {
-        assert!(decode(b"nope", &DMat4::IDENTITY, true).is_err());
-        assert!(decode(&LILLE[..40], &DMat4::IDENTITY, true).is_err());
+        assert!(decode(b"nope", &DMat4::IDENTITY, true, &[]).is_err());
+        assert!(decode(&LILLE[..40], &DMat4::IDENTITY, true, &[]).is_err());
     }
 }

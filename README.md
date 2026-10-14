@@ -33,7 +33,8 @@ you zoom in.
 - **No holes, no backlog.** A loading tile is replaced by its nearest loaded ancestor (or its loaded descendants, up
   to three levels, when zooming out); where nothing covers an area yet, a tile two levels coarser is loaded first
   (shallow first, as in 3DTilesRendererJS) and new tiles fade in over their stand-in. Requests for tiles that left
-  the view are aborted, transient errors (network, rate limit, server) are retried with backoff, and a tile the
+  the view are aborted, transient errors (network, rate limit, server) are retried with backoff and past the HTTP
+  cache (the Géoplateforme sends its error answers with a 21-day cache lifetime), and a tile the
   server does not have (404) is covered by its ancestor. Arrived tiles are uploaded a few per frame so a burst never
   stalls a frame. Tilted views load fine tiles near the camera and coarse ones towards the horizon.
 - **Downloads go where the eye is.** Tiles near the screen center load first; while the camera moves, covered
@@ -43,7 +44,9 @@ you zoom in.
 - **Picking at any scale.** `map.pick` draws the network layers once more into an offscreen target, each edge colored
   by its number, clipped to the pixel under the cursor, and reads that pixel back (as deck.gl does).
 - **3D Tiles textured meshes.** `map.addTiles3d({ url })` streams photogrammetry and buildings (3D Tiles 1.0 b3dm, 1.1
-  glb, external tilesets). Traversal by screen-space error, children replacing their parent only once all are ready
+  glb, external tilesets), compressed or not: meshopt and mesh quantization decoded in Rust, Draco geometry and KTX2
+  (Basis Universal) textures decoded in the workers by the official modules, loaded on first use; KTX2 textures stay
+  compressed on the GPU (ASTC, BC7, ETC2 or S3TC, whichever it supports). Traversal by screen-space error, children replacing their parent only once all are ready
   (no holes), coarse tiles first, downloads aborted when they leave the view, a GPU memory budget, mipmapped textures
   decoded off the main thread. Vertices stay in f32 around each tile's center and a matrix computed in f64 maps them
   to the view, on the plane and on the globe. The demo streams the Lille photomesh (MEL 2020, 5 cm).

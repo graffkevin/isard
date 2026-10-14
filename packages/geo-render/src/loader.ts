@@ -2,8 +2,9 @@
  * Pool of decoding workers for 3D Tiles content. The engine calls `load` and `abort` (`TileLoaderLike`); the main
  * thread then only uploads the decoded arrays to the GPU.
  */
+import type { DecoderUrls } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
-import type { DecodedTile, TileLoaderLike } from './wasm/geo_render.js';
+import type { DecodedTile, TextureFormats, TileLoaderLike } from './wasm/geo_render.js';
 
 interface Pending {
   resolve: (tile: DecodedTile) => void;
@@ -21,15 +22,17 @@ export class TileLoader implements TileLoaderLike {
     private readonly module: WebAssembly.Module,
     private readonly workerUrl: string | URL,
     private readonly size: number,
+    private readonly decoders: DecoderUrls,
+    private readonly formats: TextureFormats,
   ) {}
 
   /** Called by the engine: fetch and decode off the main thread, on the least busy worker */
-  load(id: number, url: string, transform: Float64Array, yUp: boolean): Promise<DecodedTile> {
+  load(id: number, url: string, transform: Float64Array, yUp: boolean, reload: boolean): Promise<DecodedTile> {
     const worker = this.leastBusy();
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, worker });
-      this.send(worker, { type: 'load', id, url, transform, yUp });
+      this.send(worker, { type: 'load', id, url, transform, yUp, reload });
     });
   }
 
@@ -52,7 +55,7 @@ export class TileLoader implements TileLoaderLike {
       for (let i = 0; i < this.size; i++) {
         const worker = new Worker(this.workerUrl, { type: 'module' });
         worker.onmessage = (event: MessageEvent<WorkerReply>) => this.receive(worker, event.data);
-        this.send(worker, { type: 'init', module: this.module });
+        this.send(worker, { type: 'init', module: this.module, decoders: this.decoders, formats: this.formats });
         this.workers.push(worker);
         this.busy.set(worker, 0);
       }

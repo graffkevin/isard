@@ -345,6 +345,8 @@ impl RasterSource {
             .replace("{x}", &tile.x.to_string())
             .replace("{y}", &tile.y.to_string());
         let signal = controller.signal();
+        // A tile that failed before is fetched past the HTTP cache (it may hold the error)
+        let retried = self.failed.contains_key(&tile);
         self.in_flight.insert(tile, controller);
         let inbox = self.inbox.clone();
         let redraw = redraw.clone();
@@ -352,7 +354,7 @@ impl RasterSource {
             // Transient errors (network, rate limit, server) are retried; "no tile here" is final
             let mut bitmap = Err(Fetch::Transient);
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
-                match fetch_bitmap(&url, &signal).await {
+                match fetch_bitmap(&url, &signal, retried || attempt > 0).await {
                     Ok(b) => {
                         bitmap = Ok(b);
                         break;
@@ -625,8 +627,12 @@ enum Fetch {
 
 /// Fetches an image and decodes it off the main thread, without premultiplied alpha (the shader blends straight
 /// alpha)
-async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal) -> Result<web_sys::ImageBitmap, Fetch> {
-    let response = fetch_response(url, signal).await.map_err(|_| Fetch::Transient)?;
+/// `reload`: bypass the HTTP cache. The Géoplateforme sends its error answers with a 21-day cache lifetime: a retry
+/// served from the cache would read the same error for weeks; reloading also replaces the cached error.
+async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<web_sys::ImageBitmap, Fetch> {
+    let response = fetch_response(url, signal, reload)
+        .await
+        .map_err(|_| Fetch::Transient)?;
     match response.status() {
         204 | 404 | 410 => return Err(Fetch::Missing),
         200..=299 => {}
@@ -635,10 +641,13 @@ async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal) -> Result<web_sy
     decode(&response).await.map_err(|_| Fetch::Transient)
 }
 
-async fn fetch_response(url: &str, signal: &web_sys::AbortSignal) -> Result<web_sys::Response, JsValue> {
+async fn fetch_response(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<web_sys::Response, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(Some(signal));
+    if reload {
+        init.set_cache(web_sys::RequestCache::Reload);
+    }
     JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await?
         .dyn_into()

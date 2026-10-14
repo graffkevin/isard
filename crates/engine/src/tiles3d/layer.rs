@@ -159,7 +159,7 @@ impl Tiles3dLayer {
         // The root tileset, delivered as the arrival of a virtual tile `usize::MAX`
         let (inbox, redraw) = (layer.inbox.clone(), redraw.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let arrival = match fetch_bytes(&url, None).await {
+            let arrival = match fetch_bytes(&url, None, false).await {
                 Ok(bytes) => Arrival::Tileset(bytes, url),
                 Err(_) => Arrival::Failed,
             };
@@ -261,6 +261,8 @@ impl Tiles3dLayer {
             _ => return,
         };
         let (transform, y_up) = (node.transform, node.y_up);
+        // A tile that failed before is fetched past the HTTP cache (it may hold the error)
+        let reload = matches!(self.states[tile], State::Failed(_));
         let id = next_request();
         let (inbox, redraw) = (self.inbox.clone(), redraw.clone());
         // Meshes go to the worker pool when there is one: fetched and decoded off the main thread
@@ -268,7 +270,7 @@ impl Tiles3dLayer {
             && let Some(promise) = self
                 .loader
                 .as_ref()
-                .and_then(|l| load_in_worker(l, id, &url, &transform, y_up))
+                .and_then(|l| load_in_worker(l, id, &url, &transform, y_up, reload))
         {
             self.states[tile] = State::Loading(Loading { id, controller: None });
             wasm_bindgen_futures::spawn_local(async move {
@@ -291,9 +293,9 @@ impl Tiles3dLayer {
             controller: Some(controller),
         });
         wasm_bindgen_futures::spawn_local(async move {
-            let arrival = match fetch_bytes(&url, Some(&signal)).await {
+            let arrival = match fetch_bytes(&url, Some(&signal), reload).await {
                 Ok(bytes) if is_tileset => Arrival::Tileset(bytes, url),
-                Ok(bytes) => match decode::decode(&bytes, &transform, y_up) {
+                Ok(bytes) => match decode::decode(&bytes, &transform, y_up, &[]) {
                     Ok(mesh) => {
                         let images = decode_images(&mesh).await;
                         Arrival::Mesh(mesh, images)
@@ -551,13 +553,15 @@ fn load_in_worker(
     url: &str,
     transform: &glam::DMat4,
     y_up: bool,
+    reload: bool,
 ) -> Option<js_sys::Promise> {
     let load: js_sys::Function = js_get(loader, "load").dyn_into().ok()?;
-    let args = js_sys::Array::of4(
+    let args = js_sys::Array::of5(
         &JsValue::from(id),
         &JsValue::from_str(url),
         &js_sys::Float64Array::from(&transform.to_cols_array()[..]),
         &JsValue::from_bool(y_up),
+        &JsValue::from_bool(reload),
     );
     load.apply(loader, &args).ok()?.dyn_into().ok()
 }
@@ -594,13 +598,16 @@ fn upload_decoded(
             raw.buffer_data_with_array_buffer_view(glow::ELEMENT_ARRAY_BUFFER, &indices, glow::STATIC_DRAW);
             gl.bind_vertex_array(None);
             total += (vertices.byte_length() + indices.byte_length()) as usize;
-            let texture = match js_get(&p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
-                Ok(bitmap) => {
-                    let (texture, bytes) = texture(gl, &bitmap)?;
-                    total += bytes;
-                    Some(texture)
-                }
-                Err(_) => None,
+            let texture = if let Ok(bitmap) = js_get(&p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
+                let (texture, bytes) = texture(gl, &bitmap)?;
+                total += bytes;
+                Some(texture)
+            } else if js_get(&p, "texture").is_object() {
+                let (texture, bytes) = compressed_texture(gl, raw, &js_get(&p, "texture"))?;
+                total += bytes;
+                Some(texture)
+            } else {
+                None
             };
             primitives.push(GpuPrimitive {
                 vao,
@@ -616,6 +623,65 @@ fn upload_decoded(
         bytes: total,
         used: frame,
     })
+}
+
+/// Texture transcoded by a worker (KTX2): its mip levels uploaded as they are, compressed or RGBA8
+fn compressed_texture(
+    gl: &glow::Context,
+    raw: &web_sys::WebGl2RenderingContext,
+    texture: &JsValue,
+) -> Result<(glow::Texture, usize), JsValue> {
+    let format = js_get(texture, "format")
+        .as_f64()
+        .ok_or("compressed texture without format")? as u32;
+    let levels = get_array(texture, "levels");
+    let mut bytes = 0;
+    // SAFETY: texture creation on the live context; glow binds, the raw context uploads into the bound texture
+    unsafe {
+        let handle = gl.create_texture()?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(handle));
+        for (level, info) in levels.iter().enumerate() {
+            let width = js_get(&info, "width").as_f64().unwrap_or(0.0) as i32;
+            let height = js_get(&info, "height").as_f64().unwrap_or(0.0) as i32;
+            let data: js_sys::Uint8Array = js_get(&info, "data").dyn_into()?;
+            bytes += data.byte_length() as usize;
+            if format == glow::RGBA8 {
+                raw.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
+                    glow::TEXTURE_2D,
+                    level as i32,
+                    glow::RGBA8 as i32,
+                    width,
+                    height,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    Some(&data),
+                )?;
+            } else {
+                raw.compressed_tex_image_2d_with_array_buffer_view(
+                    glow::TEXTURE_2D,
+                    level as i32,
+                    format,
+                    width,
+                    height,
+                    0,
+                    &data,
+                );
+            }
+        }
+        let count = levels.length() as i32;
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, (count - 1).max(0));
+        let min = if count > 1 {
+            glow::LINEAR_MIPMAP_LINEAR
+        } else {
+            glow::LINEAR
+        };
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, min as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        Ok((handle, bytes))
+    }
 }
 
 /// Mipmapped texture from a decoded image (closed after the upload); returns it with its GPU size
@@ -679,10 +745,13 @@ async fn decode_image(bytes: &[u8], mime: &str) -> Result<web_sys::ImageBitmap, 
     bitmap.dyn_into()
 }
 
-async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>) -> Result<Vec<u8>, JsValue> {
+async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>, reload: bool) -> Result<Vec<u8>, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(signal);
+    if reload {
+        init.set_cache(web_sys::RequestCache::Reload);
+    }
     let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await?
         .dyn_into()?;

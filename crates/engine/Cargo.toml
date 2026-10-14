@@ -24,6 +24,7 @@ features = [
   "HtmlCanvasElement",
   "ImageBitmap",
   "Request",
+  "RequestCache",
   "RequestInit",
   "Response",
   "WebGl2RenderingContext",

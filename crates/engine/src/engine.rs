@@ -203,6 +203,19 @@ impl Engine {
         self.camera.globe = globe;
     }
 
+    /// Compressed texture formats of the GPU (their WebGL extensions get enabled), for the KTX2 transcoding
+    #[wasm_bindgen(js_name = textureFormats, unchecked_return_type = "TextureFormats")]
+    #[must_use]
+    pub fn texture_formats(&self) -> JsValue {
+        let has = |names: &[&str]| names.iter().any(|n| self.raw.get_extension(n).ok().flatten().is_some());
+        js::object(&[
+            ("astc", has(&["WEBGL_compressed_texture_astc"]).into()),
+            ("bptc", has(&["EXT_texture_compression_bptc"]).into()),
+            ("etc", has(&["WEBGL_compressed_texture_etc"]).into()),
+            ("s3tc", has(&["WEBGL_compressed_texture_s3tc"]).into()),
+        ])
+    }
+
     /// Space behind the globe (stars, atmosphere halo), in the globe projection
     #[wasm_bindgen(js_name = setSky)]
     pub fn set_sky(&mut self, enabled: bool) {
