@@ -7,8 +7,12 @@
 
 #![forbid(unsafe_code)]
 
-use glam::{DMat4, DQuat, DVec3};
+use crate::tiles3d::meshopt;
+use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 /// One textured triangle mesh
 pub struct Primitive {
@@ -79,10 +83,17 @@ fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result
     } else {
         &[]
     };
-    if json["extensionsRequired"].as_array().is_some_and(|e| !e.is_empty()) {
-        return Err(format!("glTF extensions required: {}", json["extensionsRequired"]));
+    for required in json["extensionsRequired"].as_array().into_iter().flatten() {
+        let name = required.as_str().unwrap_or("");
+        if !SUPPORTED.contains(&name) {
+            return Err(format!("glTF extension {name} unsupported"));
+        }
     }
-    let gltf = Gltf { json: &json, bin };
+    let gltf = Gltf {
+        json: &json,
+        bin,
+        views: RefCell::default(),
+    };
     // glTF y-up → z-up: +90° about x
     let axis = if y_up {
         DMat4::from_rotation_x(std::f64::consts::FRAC_PI_2)
@@ -122,9 +133,19 @@ fn decode_glb(bytes: &[u8], transform: &DMat4, y_up: bool, rtc: DVec3) -> Result
     Ok(Mesh { anchor, primitives })
 }
 
+/// glTF extensions this decoder handles (a tile requiring another one is refused)
+const SUPPORTED: [&str; 4] = [
+    "EXT_meshopt_compression",
+    "KHR_mesh_quantization",
+    "KHR_texture_transform",
+    "KHR_materials_unlit",
+];
+
 struct Gltf<'a> {
     json: &'a Value,
     bin: &'a [u8],
+    /// Buffer views decompressed so far (`EXT_meshopt_compression`)
+    views: RefCell<HashMap<usize, Rc<[u8]>>>,
 }
 
 impl Gltf<'_> {
@@ -198,7 +219,7 @@ impl Gltf<'_> {
             .iter()
             .map(|&[x, y, z]| world.transform_point3(DVec3::new(f64::from(x), f64::from(y), f64::from(z))))
             .collect();
-        let uvs = match primitive["attributes"]["TEXCOORD_0"].as_u64() {
+        let mut uvs = match primitive["attributes"]["TEXCOORD_0"].as_u64() {
             Some(uv) => self.accessor(uv as usize)?,
             None => vec![0.0; count * 2],
         };
@@ -210,7 +231,25 @@ impl Gltf<'_> {
             return Err("inconsistent glTF primitive".into());
         }
         let material = &self.json["materials"][primitive["material"].as_u64().unwrap_or(u64::MAX) as usize];
-        let texture = material["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64();
+        let base_color = &material["pbrMetallicRoughness"]["baseColorTexture"];
+        let texture = base_color["index"].as_u64();
+        // KHR_texture_transform (gltfpack uses it for quantized uv): uv' = offset + rotation · (scale · uv)
+        let transform = &base_color["extensions"]["KHR_texture_transform"];
+        if transform.is_object() {
+            let pair = |key: &str, default: f64| {
+                let v = &transform[key];
+                DVec2::new(v[0].as_f64().unwrap_or(default), v[1].as_f64().unwrap_or(default))
+            };
+            let (offset, scale) = (pair("offset", 0.0), pair("scale", 1.0));
+            let (sin, cos) = transform["rotation"].as_f64().unwrap_or(0.0).sin_cos();
+            for uv in uvs.as_chunks_mut::<2>().0 {
+                let (u, v) = (f64::from(uv[0]) * scale.x, f64::from(uv[1]) * scale.y);
+                *uv = [
+                    (cos * u + sin * v + offset.x) as f32,
+                    (-sin * u + cos * v + offset.y) as f32,
+                ];
+            }
+        }
         let image = texture.and_then(|t| self.image(self.json["textures"][t as usize]["source"].as_u64()?));
         Ok(Some((
             Primitive {
@@ -223,7 +262,46 @@ impl Gltf<'_> {
         )))
     }
 
-    /// Accessor values as f32 (normalized integers mapped to [0, 1], other integers kept as values)
+    /// The bytes of a buffer view: a slice of the binary chunk, or decompressed (`EXT_meshopt_compression`)
+    fn view(&self, index: usize) -> Result<Rc<[u8]>, String> {
+        if let Some(view) = self.views.borrow().get(&index) {
+            return Ok(view.clone());
+        }
+        let view = &self.json["bufferViews"][index];
+        let ext = &view["extensions"]["EXT_meshopt_compression"];
+        let bytes: Rc<[u8]> = if ext.is_object() {
+            let offset = ext["byteOffset"].as_u64().unwrap_or(0) as usize;
+            let length = ext["byteLength"].as_u64().ok_or("meshopt view without byteLength")? as usize;
+            if ext["buffer"].as_u64().unwrap_or(0) != 0 {
+                return Err("meshopt data outside the binary chunk".into());
+            }
+            let decoded = meshopt::decode(&meshopt::View {
+                data: self
+                    .bin
+                    .get(offset..offset + length)
+                    .ok_or("meshopt view out of the binary chunk")?,
+                count: ext["count"].as_u64().ok_or("meshopt view without count")? as usize,
+                stride: ext["byteStride"].as_u64().ok_or("meshopt view without byteStride")? as usize,
+                mode: meshopt::Mode::parse(ext["mode"].as_str().unwrap_or(""))?,
+                filter: meshopt::Filter::parse(ext["filter"].as_str())?,
+            })?;
+            decoded.into()
+        } else {
+            if view["buffer"].as_u64().unwrap_or(0) != 0 {
+                return Err("buffer view outside the binary chunk".into());
+            }
+            let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+            let length = view["byteLength"].as_u64().ok_or("buffer view without byteLength")? as usize;
+            self.bin
+                .get(offset..offset + length)
+                .ok_or("buffer view out of the binary chunk")?
+                .into()
+        };
+        self.views.borrow_mut().insert(index, bytes.clone());
+        Ok(bytes)
+    }
+
+    /// Accessor values as f32 (normalized integers mapped to [0, 1] or [-1, 1], other integers kept as values)
     fn accessor(&self, index: usize) -> Result<Vec<f32>, String> {
         let accessor = &self.json["accessors"][index];
         let count = accessor["count"].as_u64().ok_or("accessor without count")? as usize;
@@ -242,24 +320,27 @@ impl Gltf<'_> {
             _ => return Err(format!("unsupported component type {component_type}")),
         };
         let normalized = accessor["normalized"].as_bool().unwrap_or(false);
-        let view =
-            &self.json["bufferViews"][accessor["bufferView"].as_u64().ok_or("sparse accessors unsupported")? as usize];
-        let offset =
-            view["byteOffset"].as_u64().unwrap_or(0) as usize + accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let stride = view["byteStride"].as_u64().map_or(components * size, |s| s as usize);
+        let view_index = accessor["bufferView"].as_u64().ok_or("sparse accessors unsupported")? as usize;
+        let bytes = self.view(view_index)?;
+        let offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let stride = self.json["bufferViews"][view_index]["byteStride"]
+            .as_u64()
+            .map_or(components * size, |s| s as usize);
         let mut out = Vec::with_capacity(count * components);
         for i in 0..count {
             for c in 0..components {
                 let at = offset + i * stride + c * size;
-                let b = self.bin.get(at..at + size).ok_or("accessor out of the binary chunk")?;
+                let b = bytes.get(at..at + size).ok_or("accessor out of its buffer view")?;
                 out.push(match (component_type, normalized) {
                     (5126, _) => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
                     (5121, true) => f32::from(b[0]) / 255.0,
                     (5121, false) => f32::from(b[0]),
-                    (5120, _) => f32::from(b[0] as i8),
+                    (5120, true) => (f32::from(b[0] as i8) / 127.0).max(-1.0),
+                    (5120, false) => f32::from(b[0] as i8),
                     (5123, true) => f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0,
                     (5123, false) => f32::from(u16::from_le_bytes([b[0], b[1]])),
-                    (5122, _) => f32::from(i16::from_le_bytes([b[0], b[1]])),
+                    (5122, true) => (f32::from(i16::from_le_bytes([b[0], b[1]])) / 32767.0).max(-1.0),
+                    (5122, false) => f32::from(i16::from_le_bytes([b[0], b[1]])),
                     _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32,
                 });
             }
@@ -269,11 +350,9 @@ impl Gltf<'_> {
 
     fn image(&self, index: u64) -> Option<(Vec<u8>, String)> {
         let image = &self.json["images"][index as usize];
-        let view = &self.json["bufferViews"][image["bufferView"].as_u64()? as usize];
-        let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let length = view["byteLength"].as_u64()? as usize;
+        let bytes = self.view(image["bufferView"].as_u64()? as usize).ok()?;
         let mime = image["mimeType"].as_str().unwrap_or("image/jpeg").to_owned();
-        Some((self.bin.get(offset..offset + length)?.to_vec(), mime))
+        Some((bytes.to_vec(), mime))
     }
 }
 
@@ -312,6 +391,60 @@ mod tests {
         for &[x, y, z] in p.as_chunks::<3>().0 {
             let ecef = mesh.anchor + DVec3::new(f64::from(x), f64::from(y), f64::from(z));
             assert!(geodesy::from_ecef(ecef).z.abs() < 500.0);
+        }
+    }
+
+    /// The same tile compressed by gltfpack: meshopt alone, meshopt with 14-bit quantization, with the exponential
+    /// filter (`EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_texture_transform`)
+    #[test]
+    fn meshopt_variants_decode_like_the_original() {
+        let original = decode(LILLE, &DMat4::IDENTITY, true).unwrap();
+        let o = &original.primitives[0];
+        for (name, bytes, tolerance) in [
+            ("noq", &include_bytes!("../../tests/data/lille_noq.glb")[..], 0.01),
+            ("q", &include_bytes!("../../tests/data/lille_q.glb")[..], 0.6),
+            ("vpf", &include_bytes!("../../tests/data/lille_vpf.glb")[..], 0.6),
+        ] {
+            // The glb were extracted from the b3dm without its RTC_CENTER: given back as the tile transform
+            let rtc = DMat4::from_translation(DVec3::new(
+                4_056_896.270_481_2,
+                202_047.449_822_138,
+                4_900_910.163_547_64,
+            ));
+            let mesh = decode(bytes, &rtc, true).unwrap();
+            let p = &mesh.primitives[0];
+            assert_eq!(p.indices.len(), o.indices.len());
+            assert!(p.image.is_some());
+            let shift = mesh.anchor - original.anchor;
+            let at = |positions: &[f32], i: u32| {
+                let i = i as usize * 3;
+                DVec3::new(
+                    f64::from(positions[i]),
+                    f64::from(positions[i + 1]),
+                    f64::from(positions[i + 2]),
+                )
+            };
+            // Every decoded triangle has a counterpart in the original within the quantization step
+            for t in p.indices.as_chunks::<3>().0 {
+                let corners = t.map(|i| at(&p.positions, i) + shift);
+                let matched = o.indices.as_chunks::<3>().0.iter().any(|u| {
+                    corners
+                        .iter()
+                        .all(|c| u.iter().any(|&j| (at(&o.positions, j) - *c).length() < tolerance))
+                });
+                if !matched {
+                    let nearest = corners.map(|c| {
+                        (0..o.positions.len() as u32 / 3)
+                            .map(|j| (at(&o.positions, j) - c).length())
+                            .fold(f64::MAX, f64::min)
+                    });
+                    panic!("{name}: triangle {t:?} without counterpart, nearest original vertices {nearest:?}");
+                }
+            }
+            // Same texture coordinates range once the texture transform is applied
+            let range = |uvs: &[f32]| uvs.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+            let (a, b) = (range(&p.uvs), range(&o.uvs));
+            assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "{a:?} vs {b:?}");
         }
     }
 

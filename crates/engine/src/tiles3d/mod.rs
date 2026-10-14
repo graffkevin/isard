@@ -2,6 +2,7 @@
 //! WebGL layer and the entry point of the decoding workers
 
 pub mod decode;
+pub mod meshopt;
 pub mod tileset;
 
 #[cfg(target_arch = "wasm32")]
