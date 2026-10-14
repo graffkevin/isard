@@ -64,7 +64,13 @@ setInterval(() => {
   const c = map.getCamera();
   const layers = map
     .stats()
-    .map((l) => `layer ${l.id}    ${l.drawn} drawn, ${l.loaded} kept, ${l.inFlight} loading${l.queued ? `, ${l.queued} queued` : ''}`);
+    .map(
+      (l) =>
+        `layer ${l.id}    ${l.drawn} drawn (${l.standIns} blurry), ${l.loaded} kept, ${l.inFlight} loading` +
+        (l.queued ? `, ${l.queued} queued` : '') +
+        (l.cooling ? `, ${l.cooling} retrying` : '') +
+        (l.missing ? `, ${l.missing} missing` : ''),
+    );
   stats.textContent = [
     `zoom       ${c.zoom.toFixed(2)}`,
     `fps        ${frames.length}`,

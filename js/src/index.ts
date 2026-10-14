@@ -41,6 +41,12 @@ export interface LayerStats {
   inFlight: number;
   /** Arrived tiles waiting for their upload */
   queued: number;
+  /** Drawn with an ancestor's texture: the tile itself is not loaded yet */
+  standIns: number;
+  /** Waiting before a new attempt after errors */
+  cooling: number;
+  /** Not served (404), covered by an ancestor */
+  missing: number;
 }
 
 export interface GeoMapOptions extends Partial<Camera> {
@@ -218,8 +224,17 @@ export class GeoMap {
   stats(): LayerStats[] {
     const s = this.engine.stats();
     const out: LayerStats[] = [];
-    for (let i = 0; i < s.length; i += 5) {
-      out.push({ id: s[i], drawn: s[i + 1], loaded: s[i + 2], inFlight: s[i + 3], queued: s[i + 4] });
+    for (let i = 0; i < s.length; i += 8) {
+      out.push({
+        id: s[i],
+        drawn: s[i + 1],
+        loaded: s[i + 2],
+        inFlight: s[i + 3],
+        queued: s[i + 4],
+        standIns: s[i + 5],
+        cooling: s[i + 6],
+        missing: s[i + 7],
+      });
     }
     return out;
   }

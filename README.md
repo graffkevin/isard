@@ -21,8 +21,10 @@ you zoom in.
 - **Geometry uploaded once.** A network layer keeps node positions in a float texture and edges as instances. New
   values are one texture upload (4 bytes per node), then **one draw call** for the whole layer: 2 M segments
   recolor in the same frame as the mouse move.
-- **One draw call per raster layer.** All the tiles of a layer share a texture array (fixed pool, least recently used
-  slots recycled); images are decoded by the browser off the main thread and uploaded straight into their slot.
+- **One draw call for the whole raster stack.** All the tiles of a layer share a texture array (fixed pool, least
+  recently used slots recycled); images are decoded by the browser off the main thread and uploaded straight into
+  their slot. Consecutive raster layers (up to four: basemap, hillshade…) are composited in the fragment shader, as
+  iTowns does: each pixel is shaded once, and a tile fading in is mixed with its stand-in in the same pass.
 - **Frames on demand only.** Nothing runs while the map is idle. Pointer events are coalesced to one per display
   frame, and values computed in a `hover` listener are drawn by that very frame.
 - **f64 on the CPU, f32 relative to the camera on the GPU.** Exact to the centimetre at any zoom, without the

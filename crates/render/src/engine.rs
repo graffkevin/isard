@@ -4,14 +4,14 @@ use crate::camera::{self, Camera};
 use crate::gl::Grid;
 use crate::globe::GlobeBase;
 use crate::network::{NetworkLayer, NetworkStyle};
-use crate::raster::{DrawContext, RasterLayer, RasterOptions};
+use crate::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
 use glam::DVec2;
 use glow::HasContext;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 enum Layer {
-    Raster(RasterLayer),
+    Raster(RasterSource),
     Network(NetworkLayer),
 }
 
@@ -25,8 +25,8 @@ pub struct Engine {
     frame: u64,
     redraw: Rc<dyn Fn()>,
     background: [f32; 3],
-    grid: Grid,
     globe: GlobeBase,
+    raster_pass: RasterPass,
     /// Camera of the last frame and when it last changed (ms)
     last_camera: [u64; 5],
     moved_at: f64,
@@ -67,6 +67,7 @@ impl Engine {
         });
         let grid = Grid::new(&gl)?;
         let globe = GlobeBase::new(&gl, &grid)?;
+        let raster_pass = RasterPass::new(&gl, &grid)?;
         Ok(Self {
             gl,
             camera: Camera::new(2.424_573, 48.845_726, 13.0),
@@ -76,8 +77,8 @@ impl Engine {
             frame: 0,
             redraw,
             background: [0.95, 0.95, 0.94],
-            grid,
             globe,
+            raster_pass,
             last_camera: [0; 5],
             moved_at: 0.0,
             preload: None,
@@ -133,7 +134,8 @@ impl Engine {
         self.globe.color = [r, g, b];
     }
 
-    /// Per raster layer: [id, tiles drawn, tiles loaded, requests in flight, uploads waiting]…
+    /// Per raster layer: [id, tiles drawn, tiles loaded, requests in flight, uploads waiting, stand-ins, cooling,
+    /// missing]…
     #[must_use]
     pub fn stats(&self) -> Vec<f64> {
         let mut out = Vec::new();
@@ -146,6 +148,9 @@ impl Engine {
                     s.loaded as f64,
                     s.in_flight as f64,
                     s.queued as f64,
+                    s.stand_ins as f64,
+                    s.cooling as f64,
+                    s.missing as f64,
                 ]);
             }
         }
@@ -285,9 +290,8 @@ impl Engine {
         opacity: f32,
         saturation: f32,
     ) -> Result<u32, JsValue> {
-        let layer = RasterLayer::new(
+        let layer = RasterSource::new(
             &self.gl,
-            &self.grid,
             RasterOptions {
                 url,
                 min_z,
@@ -419,27 +423,47 @@ impl Engine {
             (*generation, camera.view())
         });
         self.globe.draw(&self.gl, &view);
-        for (_, layer) in &mut self.layers {
-            match layer {
-                Layer::Raster(layer) => {
-                    let ctx = DrawContext {
-                        view: &view,
-                        frame: self.frame,
-                        redraw: &self.redraw,
-                        moving,
-                        preload: preload.as_ref().map(|(generation, v)| (*generation, v)),
-                    };
-                    loading |= layer.draw(&self.gl, &ctx);
-                }
-                Layer::Network(layer) => {
+        let ctx = DrawContext {
+            view: &view,
+            frame: self.frame,
+            redraw: &self.redraw,
+            moving,
+            preload: preload.as_ref().map(|(generation, v)| (*generation, v)),
+        };
+        let mut i = 0;
+        while i < self.layers.len() {
+            if matches!(self.layers[i].1, Layer::Network(_)) {
+                if let Layer::Network(layer) = &self.layers[i].1 {
                     // Line quads are built on screen, either way round
-                    // SAFETY: state change on the live context
+                    // SAFETY: state changes on the live context
                     unsafe { self.gl.disable(glow::CULL_FACE) };
                     layer.draw(&self.gl, &self.camera, &view, self.pixel_ratio);
                     // SAFETY: state change on the live context
                     unsafe { self.gl.enable(glow::CULL_FACE) };
                 }
+                i += 1;
+                continue;
             }
+            // Consecutive raster layers: one composited pass (up to STACK layers)
+            let mut j = i;
+            while j < self.layers.len() && j - i < STACK && matches!(self.layers[j].1, Layer::Raster(_)) {
+                j += 1;
+            }
+            let mut stack: Vec<&mut RasterSource> = self.layers[i..j]
+                .iter_mut()
+                .filter_map(|(_, layer)| match layer {
+                    Layer::Raster(source) => Some(source),
+                    Layer::Network(_) => None,
+                })
+                .collect();
+            for source in &mut stack {
+                loading |= source.prepare(&self.gl, &ctx);
+            }
+            self.raster_pass.draw(&self.gl, &view, &mut stack, self.frame);
+            for source in &stack {
+                source.finish(&self.redraw);
+            }
+            i = j;
         }
         loading
     }
