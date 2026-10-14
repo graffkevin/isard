@@ -348,9 +348,12 @@ export class GeoMap implements LayerHost {
       this.emit('hover', { point, lonLat: this.unproject(point) });
     }
     const t0 = performance.now();
-    this.engine.render();
+    // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
     this.inFrame = false;
+    this.engine.render();
+    this.inFrame = true;
     this.emit('render', { ms: performance.now() - t0 });
+    this.inFrame = false;
     if (this.animation) this.requestRender();
   }
 

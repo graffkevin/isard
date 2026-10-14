@@ -22,7 +22,7 @@ const map = await GeoMap.create(container, {
 });
 const mesh = map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: SSE });
 // For inspection from the console
-Object.assign(window, { benchMap: map });
+Object.assign(window, { benchMap: map, benchMesh: mesh });
 
 await benchmark({
   name: 'geo-render',
