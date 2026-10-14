@@ -239,6 +239,9 @@ pub struct Selection {
     pub backfill: Vec<usize>,
     /// Tiles to load, in priority order
     pub request: Vec<usize>,
+    /// Siblings out of view of refined tiles: loaded when the network has room, so turning the camera finds them
+    /// ready (3DTilesRendererJS's loadSiblings)
+    pub prefetch: Vec<usize>,
     /// Visible tiles (to keep in the cache and their downloads alive)
     pub visible: Vec<usize>,
 }
@@ -331,7 +334,13 @@ impl Traversal<'_> {
             self.out.backfill.push(i);
         }
         for &c in &node.children {
-            self.visit(c);
+            if self.measure(c).is_some() {
+                self.visit(c);
+            } else if (self.ready)(c) == Readiness::Pending {
+                // A sibling out of view: its download is kept, it loads when there is room
+                self.out.visible.push(c);
+                self.out.prefetch.push(c);
+            }
         }
     }
 
@@ -474,6 +483,45 @@ mod tests {
         });
         assert!(!s.draw.contains(&root) && s.draw.contains(&2), "{s:?}");
         assert!(s.request.contains(&root) && s.request.contains(&1));
+    }
+
+    #[test]
+    fn siblings_out_of_view_are_prefetched() {
+        // Close above child 0 (south-west): some of its siblings are out of view but load anyway, apart from the
+        // visible tiles
+        let (tree, root) = tree();
+        let mut c = Camera::new(3.05, 50.62, 18.0);
+        c.width = 1200.0;
+        c.height = 800.0;
+        let view = c.view();
+        let planes = frustum(&view);
+        let culled: Vec<usize> = tree.nodes[root]
+            .children
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let n = &tree.nodes[i];
+                let center = view.ecef(n.center);
+                let radius = n.radius * view.pixels_per_metre(geodesy::from_ecef(n.center).y);
+                planes.iter().any(|p| p.truncate().dot(center) + p.w < -radius)
+            })
+            .collect();
+        assert_ne!(culled, Vec::<usize>::new(), "some children must be out of view");
+        let s = select(&tree, root, &view, 16.0, &|i| {
+            if i == root {
+                Readiness::Ready
+            } else {
+                Readiness::Pending
+            }
+        });
+        assert!(
+            culled.iter().all(|c| s.prefetch.contains(c) && !s.request.contains(c)),
+            "{culled:?} {s:?}"
+        );
+        assert!(
+            s.prefetch.iter().all(|r| s.visible.contains(r)),
+            "their downloads are kept: {s:?}"
+        );
     }
 
     #[test]

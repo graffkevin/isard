@@ -19,6 +19,8 @@ use wasm_bindgen_futures::JsFuture;
 
 /// After an error, a tile is asked again after this delay (ms)
 const COOLDOWN_MS: f64 = 5_000.0;
+/// Downloads of siblings out of view at a time
+const PREFETCH_REQUESTS: usize = 4;
 
 const VERTEX: &str = r"#version 300 es
 uniform mat4 u_matrix;
@@ -359,6 +361,33 @@ impl Tiles3dLayer {
                 break;
             }
             if matches!(self.states[i], State::Unloaded | State::Failed(_)) {
+                self.request(i, redraw);
+                in_flight += 1;
+            }
+        }
+        // Siblings out of view: only with the visible tiles all requested, a few at a time (bandwidth stays for what
+        // is on screen)
+        if selection
+            .request
+            .iter()
+            .all(|&i| !matches!(self.states[i], State::Unloaded | State::Failed(_)))
+        {
+            let prefetching = selection
+                .prefetch
+                .iter()
+                .filter(|&&i| matches!(self.states[i], State::Loading(_)))
+                .count();
+            let free = PREFETCH_REQUESTS
+                .saturating_sub(prefetching)
+                .min(loading.mesh_requests.saturating_sub(in_flight));
+            let next: Vec<usize> = selection
+                .prefetch
+                .iter()
+                .copied()
+                .filter(|&i| matches!(self.states[i], State::Unloaded))
+                .take(free)
+                .collect();
+            for i in next {
                 self.request(i, redraw);
                 in_flight += 1;
             }
