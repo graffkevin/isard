@@ -1,6 +1,6 @@
 /**
- * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), an optional size
- * pass (wasm-opt, when installed), then the `geo-render` package (packages/geo-render/dist: module, decoding worker,
+ * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
+ * pass (wasm-opt), then the `geo-render` package (packages/geo-render/dist: module, decoding worker,
  * type declarations) and the demo (apps/demo/dist, bundled from the package sources).
  */
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -19,9 +19,15 @@ const wasm = `${bindings}/geo_render_bg.wasm`;
 
 await $`cargo build -p geo-render --target wasm32-unknown-unknown --release`;
 await $`wasm-bindgen --target web --out-dir ${bindings} target/wasm32-unknown-unknown/release/geo_render.wasm`;
-if (Bun.which('wasm-opt')) {
-  await $`wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int ${wasm} -o ${wasm}`;
-}
+// Size and speed pass (binaryen, a dev dependency, run by Bun): about a third smaller, without the debug sections
+const features = [
+  '--enable-bulk-memory',
+  '--enable-nontrapping-float-to-int',
+  '--enable-sign-ext',
+  '--enable-mutable-globals',
+];
+const strip = ['--strip-debug', '--strip-producers'];
+await $`bun --bun ${join(root, 'node_modules/.bin/wasm-opt')} -O3 ${features} ${strip} ${wasm} -o ${wasm}`;
 
 /** Bundles entry points with the decoding worker next to them (it is loaded by URL, relative to the bundle) */
 async function bundle(entry: string, outdir: string): Promise<void> {
