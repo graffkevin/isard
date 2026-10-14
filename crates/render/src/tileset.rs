@@ -224,6 +224,8 @@ pub enum Readiness {
     Empty,
     /// Content to load (or loading)
     Pending,
+    /// Failed, waiting before a new attempt: not drawable, and its parent keeps standing in for it
+    Unavailable,
 }
 
 #[derive(Default, Debug)]
@@ -250,7 +252,8 @@ pub fn select(tree: &Tree, root: usize, view: &View, max_error: f64, ready: &dyn
     };
     traversal.visit(root);
     let mut requests = traversal.requests;
-    requests.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.total_cmp(&b.2)));
+    // Largest screen-space error first (as Cesium does): coarse tiles and nearby tiles, the most visible gaps
+    requests.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.total_cmp(&b.2)));
     requests.dedup_by_key(|r| r.0);
     let mut out = traversal.out;
     out.request = requests.into_iter().map(|r| r.0).collect();
@@ -264,8 +267,8 @@ struct Traversal<'a> {
     max_error: f64,
     ready: &'a dyn Fn(usize) -> Readiness,
     out: Selection,
-    /// (tile, depth, distance)
-    requests: Vec<(usize, u32, f64)>,
+    /// (tile, screen-space error, distance)
+    requests: Vec<(usize, f64, f64)>,
 }
 
 impl Traversal<'_> {
@@ -283,10 +286,10 @@ impl Traversal<'_> {
         Some((error, distance))
     }
 
-    fn request(&mut self, i: usize, distance: f64) {
+    fn request(&mut self, i: usize, error: f64, distance: f64) {
         // A requested tile is in view: its download must survive the next frame
         self.out.visible.push(i);
-        self.requests.push((i, self.tree.nodes[i].depth, distance));
+        self.requests.push((i, error, distance));
     }
 
     fn visit(&mut self, i: usize) {
@@ -296,22 +299,17 @@ impl Traversal<'_> {
         self.out.visible.push(i);
         let node = &self.tree.nodes[i];
         let state = (self.ready)(i);
-        let refine = error > self.max_error && !node.children.is_empty();
+        // An empty tile with children (a grafted external tileset, a pure grouping node) cannot stand for its area:
+        // always go down
+        let hollow = state == Readiness::Empty && !node.children.is_empty();
+        let refine = (error > self.max_error || hollow) && !node.children.is_empty();
         if !refine {
-            match state {
-                Readiness::Ready => self.out.draw.push(i),
-                Readiness::Pending => self.request(i, distance),
-                Readiness::Empty => {}
-            }
+            self.draw_or_request(i, state, error, distance);
             return;
         }
         if !node.replace {
             // ADD: the tile and its children together
-            match state {
-                Readiness::Ready => self.out.draw.push(i),
-                Readiness::Pending => self.request(i, distance),
-                Readiness::Empty => {}
-            }
+            self.draw_or_request(i, state, error, distance);
             for &c in &node.children {
                 self.visit(c);
             }
@@ -324,12 +322,16 @@ impl Traversal<'_> {
             }
             return;
         }
+        self.draw_or_request(i, state, error, distance);
+        self.load_children(i, 3);
+    }
+
+    fn draw_or_request(&mut self, i: usize, state: Readiness, error: f64, distance: f64) {
         match state {
             Readiness::Ready => self.out.draw.push(i),
-            Readiness::Pending => self.request(i, distance),
-            Readiness::Empty => {}
+            Readiness::Pending => self.request(i, error, distance),
+            Readiness::Empty | Readiness::Unavailable => {}
         }
-        self.load_children(i, 3);
     }
 
     /// Whether the visible children of a tile can replace it: drawable, or empty with drawable children
@@ -340,7 +342,7 @@ impl Traversal<'_> {
             }
             match (self.ready)(c) {
                 Readiness::Ready => true,
-                Readiness::Pending => false,
+                Readiness::Pending | Readiness::Unavailable => false,
                 Readiness::Empty => {
                     depth > 0 && !self.tree.nodes[c].children.is_empty() && self.children_ready(c, depth - 1)
                         || self.tree.nodes[c].children.is_empty()
@@ -353,9 +355,11 @@ impl Traversal<'_> {
     /// Requests what the visible children need to replace their parent
     fn load_children(&mut self, i: usize, depth: u32) {
         for c in self.tree.nodes[i].children.clone() {
-            let Some((_, distance)) = self.measure(c) else { continue };
+            let Some((error, distance)) = self.measure(c) else {
+                continue;
+            };
             match (self.ready)(c) {
-                Readiness::Pending => self.request(c, distance),
+                Readiness::Pending => self.request(c, error, distance),
                 Readiness::Empty if depth > 0 => self.load_children(c, depth - 1),
                 _ => {}
             }
@@ -464,6 +468,38 @@ mod tests {
         let (tree, root) = tree();
         let s = select(&tree, root, &view(16.0), 16.0, &|_| Readiness::Pending);
         assert_eq!(s.request.first(), Some(&root));
+    }
+
+    #[test]
+    fn grafted_tilesets_are_always_traversed() {
+        // The external tileset node (4) is empty once grafted; its own error is small, but its content is in the
+        // grafted root, which must be drawn (else a hole)
+        let (mut tree, root) = tree();
+        let p = geodesy::to_ecef(3.07, 50.64, 30.0);
+        let sub = format!(
+            r#"{{"asset":{{"version":"1.0"}},"geometricError":2,"root":{{"boundingVolume":{{"sphere":[{},{},{},800]}},"geometricError":1,"content":{{"uri":"x.b3dm"}}}}}}"#,
+            p.x, p.y, p.z
+        );
+        let grafted = tree
+            .add(sub.as_bytes(), "https://example.org/mesh/sub/tileset.json", Some(4))
+            .unwrap();
+        let s = select(&tree, root, &view(16.0), 16.0, &|i| {
+            if i == 4 { Readiness::Empty } else { Readiness::Ready }
+        });
+        assert!(s.draw.contains(&grafted), "{s:?}");
+    }
+
+    #[test]
+    fn a_failed_child_keeps_its_parent() {
+        let (tree, root) = tree();
+        let s = select(&tree, root, &view(16.0), 16.0, &|i| {
+            if i == 2 {
+                Readiness::Unavailable
+            } else {
+                Readiness::Ready
+            }
+        });
+        assert_eq!(s.draw, vec![root], "the parent stands in rather than a hole");
     }
 
     #[test]

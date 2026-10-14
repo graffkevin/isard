@@ -236,7 +236,7 @@ impl Tiles3dLayer {
         match &self.states[tile] {
             State::Ready(_) => Readiness::Ready,
             State::Empty => Readiness::Empty,
-            State::Failed(until) if now < *until => Readiness::Empty,
+            State::Failed(until) if now < *until => Readiness::Unavailable,
             _ => Readiness::Pending,
         }
     }
