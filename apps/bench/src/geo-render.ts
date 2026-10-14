@@ -40,6 +40,7 @@ await benchmark({
       mesh: (mesh.stats()?.inFlight ?? 0) === 0,
     };
   },
+  meshTiles: () => mesh.stats()?.drawn ?? 0,
   info(): string {
     const s = mesh.stats();
     return s ? `3D tiles: ${s.drawn} drawn, ${s.loaded} kept (${s.gpuMb.toFixed(0)} MB)` : '';

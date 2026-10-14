@@ -1,7 +1,16 @@
 /** 3DTilesRendererJS (0.5.3, three.js 0.182) running the benchmark scenario: ortho on a generated ellipsoid surface */
 import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer';
 import { GeneratedSurfacePlugin, XYZTilesOverlay } from '3d-tiles-renderer/plugins';
-import { MathUtils, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
+import {
+  MathUtils,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  PerspectiveCamera,
+  Scene,
+  Vector3,
+  WebGLRenderer,
+} from 'three';
 import { benchmark, FOV, LILLE_MESH, ORTHO, type Pose, SSE } from './scenario.ts';
 
 const found = document.getElementById('view');
@@ -29,6 +38,17 @@ ground.registerPlugin(
 );
 const mesh = new TilesRenderer(LILLE_MESH);
 mesh.errorTarget = SSE;
+// The photomesh declares PBR materials and the scene has no light: they would render black. Like iTowns and
+// geo-render, its textures are shown unlit
+mesh.addEventListener('load-model', ({ scene }) => {
+  scene.traverse((object) => {
+    if (object instanceof Mesh && object.material instanceof MeshStandardMaterial) {
+      const lit = object.material;
+      object.material = new MeshBasicMaterial({ map: lit.map, color: lit.color, side: lit.side });
+      lit.dispose();
+    }
+  });
+});
 for (const tiles of [ground, mesh]) {
   tiles.setCamera(camera);
   tiles.setResolutionFromRenderer(camera, renderer);
@@ -80,5 +100,6 @@ await benchmark({
   name: '3DTilesRendererJS 0.5.3',
   setPose,
   idle: () => ({ ground: ground.loadProgress === 1, mesh: mesh.loadProgress === 1 }),
+  meshTiles: () => mesh.visibleTiles.size,
   info: () => `3D tiles: ${mesh.visibleTiles.size} visible, load ${Math.round(mesh.loadProgress * 100)} %`,
 });

@@ -53,6 +53,7 @@ const engine = {
       mesh: mesh.tilesRenderer.loadProgress === 1,
     };
   },
+  meshTiles: () => mesh.tilesRenderer.visibleTiles.size,
   info(): string {
     const s = mesh.tilesRenderer.stats;
     return `3D tiles: ${s.visible} visible, ${s.downloading} downloading, ${s.parsing} parsing`;

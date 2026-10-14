@@ -27,37 +27,109 @@ function once(page: string): Promise<BenchResult> {
   });
 }
 
-/** Metrics shown per phase, and whether higher is better */
+/** Detailed metrics per phase, and whether higher is better */
 const METRICS: [keyof PhaseResult, string, boolean][] = [
   ['fps', 'fps', true],
-  ['frameP50', 'frame p50 ms', false],
   ['frameP95', 'frame p95 ms', false],
-  ['frameP99', 'frame p99 ms', false],
   ['slowFrames', '% frames > 33 ms', false],
   ['longTaskMs', 'long tasks ms', false],
-  ['groundAfterMs', 'basemap complete after ms', false],
-  ['meshAfterMs', '3D mesh complete after ms', false],
-  ['idleAfterMs', 'all complete after ms', false],
+  ['groundAfterMs', 'basemap complete ms', false],
+  ['meshAfterMs', '3D mesh complete ms', false],
+  ['meshHalfMs', '3D mesh half shown ms', false],
+  ['meshTilesEnd', '3D mesh tiles shown', true],
 ];
 
-function table(results: BenchResult[]): string {
-  const phases = results[0]?.phases.map((p) => p.phase) ?? [];
+const MOTION = ['2 flight to Lille', '4 orbit 360°', '6 back to France'];
+
+function phase(result: BenchResult, name: string): PhaseResult | undefined {
+  return result.phases.find((p) => p.phase.startsWith(name));
+}
+
+/** Frame-weighted average of a metric over the motion phases */
+function motion(result: BenchResult, key: 'fps' | 'slowFrames'): number | undefined {
+  const phases = result.phases.filter((p) => MOTION.includes(p.phase));
+  const frames = phases.reduce((n, p) => n + p.frames, 0);
+  if (!frames) return undefined;
+  if (key === 'fps') {
+    const ms = phases.reduce((n, p) => n + p.durationMs, 0);
+    return Math.round((frames / ms) * 1000);
+  }
+  return Math.round(phases.reduce((n, p) => n + p.slowFrames * p.frames, 0) / frames);
+}
+
+/** The few numbers that tell the story, in plain words */
+const SUMMARY: { label: string; unit: string; higher: boolean; value: (r: BenchResult) => number | undefined }[] = [
+  { label: 'Smoothness while moving', unit: 'fps', higher: true, value: (r) => motion(r, 'fps') },
+  { label: 'Stutter while moving', unit: '% slow frames', higher: false, value: (r) => motion(r, 'slowFrames') },
+  {
+    label: 'Main thread blocked',
+    unit: 'ms',
+    higher: false,
+    value: (r) => r.phases.reduce((n, p) => n + p.longTaskMs, 0),
+  },
+  { label: 'France basemap shown', unit: 's', higher: false, value: (r) => seconds(phase(r, '1')?.groundAfterMs) },
+  {
+    label: 'Lille complete after the flight',
+    unit: 's',
+    higher: false,
+    value: (r) => seconds(phase(r, '3')?.idleAfterMs),
+  },
+  { label: '3D mesh half shown (jump)', unit: 's', higher: false, value: (r) => seconds(phase(r, '7')?.meshHalfMs) },
+  { label: '3D mesh complete (jump)', unit: 's', higher: false, value: (r) => seconds(phase(r, '7')?.meshAfterMs) },
+  { label: 'JavaScript memory', unit: 'MB', higher: false, value: (r) => r.heapMb },
+];
+
+function seconds(ms: number | undefined): number | undefined {
+  return ms === undefined ? undefined : Math.round(ms / 100) / 10;
+}
+
+/** Cells of a row, the best one highlighted; engines not run yet show a placeholder */
+function cells(values: (number | undefined | null)[], higher: boolean): string {
+  const numbers = values.filter((v): v is number => typeof v === 'number');
+  const best = higher ? Math.max(...numbers) : Math.min(...numbers);
+  return values
+    .map((v) => {
+      if (v === null) return '<td class="pending">…</td>';
+      return `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? 'never'}</td>`;
+    })
+    .join('');
+}
+
+/** Engine columns in a fixed order, null while an engine has not run in this round */
+function columns(results: BenchResult[]): (BenchResult | null)[] {
+  return NAMES.map((name) => results.find((r) => r.engine.startsWith(name)) ?? null);
+}
+
+const NAMES = ['geo-render', 'iTowns', '3DTilesRendererJS'];
+
+function summaryTable(results: BenchResult[]): string {
+  const cols = columns(results);
+  const head = `<tr><th></th>${cols.map((r, i) => `<th>${r?.engine ?? NAMES[i]}</th>`).join('')}</tr>`;
+  const rows = SUMMARY.map(
+    (m) =>
+      `<tr><td>${m.label} <span class="unit">${m.unit}</span></td>${cells(
+        cols.map((r) => (r ? m.value(r) : null)),
+        m.higher,
+      )}</tr>`,
+  );
+  return `<table class="summary">${head}${rows.join('')}</table>`;
+}
+
+function detailTable(results: BenchResult[]): string {
   const head = `<tr><th>phase / metric</th>${results.map((r) => `<th>${r.engine}</th>`).join('')}</tr>`;
   const rows: string[] = [];
-  for (const phase of phases) {
+  for (const name of results[0]?.phases.map((p) => p.phase) ?? []) {
     for (const [key, label, higher] of METRICS) {
-      const values = results.map((r) => r.phases.find((p) => p.phase === phase)?.[key]);
+      const values = results.map((r) => r.phases.find((p) => p.phase === name)?.[key]);
       if (values.every((v) => v === undefined)) continue;
-      const numbers = values.filter((v): v is number => typeof v === 'number');
-      const best = higher ? Math.max(...numbers) : Math.min(...numbers);
-      const cells = values.map(
-        (v) => `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? 'never'}</td>`,
+      rows.push(
+        `<tr><td>${name}: ${label}</td>${cells(
+          values.map((v) => (typeof v === 'number' ? v : undefined)),
+          higher,
+        )}</tr>`,
       );
-      rows.push(`<tr><td>${phase}: ${label}</td>${cells.join('')}</tr>`);
     }
   }
-  rows.push(`<tr><td>JS heap MB</td>${results.map((r) => `<td>${r.heapMb ?? '-'}</td>`).join('')}</tr>`);
-  rows.push(`<tr><td>engine info</td>${results.map((r) => `<td>${r.info}</td>`).join('')}</tr>`);
   return `<table>${head}${rows.join('')}</table>`;
 }
 
@@ -73,10 +145,16 @@ button.onclick = async () => {
   ];
   const render = () => {
     output.innerHTML = rounds
-      .filter((r) => r.results.length > 0)
-      .map((r) => `<h2>${r.title}</h2>${table([...r.results].sort((a, b) => a.engine.localeCompare(b.engine)))}`)
+      .map((r) => {
+        const details =
+          r.results.length > 0
+            ? `<details><summary>Details per phase</summary>${detailTable(r.results)}</details>`
+            : '';
+        return `<h2>${r.title}</h2>${summaryTable(r.results)}${details}`;
+      })
       .join('');
   };
+  render();
   for (const round of [...rounds].reverse()) {
     for (const engine of round.order) {
       status.textContent = `${round.title}: running ${engine}…`;
@@ -89,3 +167,8 @@ button.onclick = async () => {
   button.disabled = false;
   (window as Window & { benchResults?: BenchResult[][] }).benchResults = rounds.map((r) => r.results);
 };
+
+// The tables are there from the start, filled in as the engines run
+output.innerHTML = ['Round 2, warm caches (reference)', 'Round 1, cold caches (first visit)']
+  .map((title) => `<h2>${title}</h2>${summaryTable([])}`)
+  .join('');
