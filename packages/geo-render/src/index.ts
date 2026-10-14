@@ -23,6 +23,7 @@ export type {
   Point,
   Projection,
   RasterOptions,
+  TerrainOptions,
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';

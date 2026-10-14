@@ -10,6 +10,10 @@
 //! Consecutive raster layers are composited in the fragment shader, as iTowns does: one instanced draw call for the
 //! whole stack, each pixel shaded once, whatever the number of tiles and layers. A tile fading in is mixed with its
 //! stand-in in the same shader.
+//!
+//! An elevation source (raw altitudes, `image/x-bil;bits=32`, in an R32F pool) gives the relief: the vertex shader
+//! lifts the grid of every tile by the heights read in it, three levels coarser than the imagery (a 16 × 16 grid
+//! needs far fewer samples than 256 px), and a skirt under the tile edges hides the cracks between levels.
 
 use crate::geo::camera::View;
 use crate::geo::tiles::{self, TileId};
@@ -43,11 +47,15 @@ const PRELOAD_TILES: usize = 48;
 /// When nothing covers a tile yet, a tile this many levels coarser is loaded first: it arrives fast and covers the
 /// area while the fine tiles load (shallow tiles first, like 3DTilesRendererJS)
 const COVER_LEVELS: u8 = 2;
-/// Layers composited in one pass (vertex attributes: 3 per layer + 3, within the 16 of WebGL2)
+/// Layers composited in one pass (vertex attributes: 3 per layer + 4, the 16 of WebGL2)
 pub const STACK: usize = 4;
 /// Floats per instance: plane rect (4), Mercator rect (4), then per layer: uv of the tile (4), uv of its stand-in
-/// (4), slots of both and fade (3)
-const INSTANCE: usize = 8 + STACK * 11;
+/// (4), slots of both and fade (3), and the heights: offset (2), scale (1) and slot (1) in the elevation pool
+const INSTANCE: usize = 8 + STACK * 11 + 4;
+/// Elevation tiles are chosen this many times larger on screen than imagery tiles: three levels coarser
+const ELEVATION_SCALE: f64 = 8.0;
+/// Below this, an altitude is the no-data of the server (-99999 on the Géoplateforme)
+const NO_DATA: f32 = -1000.0;
 
 const VERTEX: &str = r"
 uniform mat4 u_matrix;
@@ -67,15 +75,47 @@ layout(location = 11) in vec3 a_slot2;
 layout(location = 12) in vec4 a_uv3;
 layout(location = 13) in vec4 a_back3;
 layout(location = 14) in vec3 a_slot3;
+// Heights: offset and scale of this tile in its elevation tile, slot of that tile (< 0: none)
+layout(location = 15) in vec4 a_height;
+uniform highp sampler2DArray u_heights;
+// Vertical exaggeration; 0: flat
+uniform float u_relief;
 out vec4 v_uv[4];
 flat out vec3 v_slot[4];
-vec4 uv(vec4 front, vec4 back) { return vec4(mix(front.xy, front.zw, a_grid), mix(back.xy, back.zw, a_grid)); }
+vec2 g;
+vec4 uv(vec4 front, vec4 back) { return vec4(mix(front.xy, front.zw, g), mix(back.xy, back.zw, g)); }
+
+// Altitude (metres) at a point of the tile, bilinear between the samples (R32F cannot be filtered)
+float height() {
+  if (u_relief <= 0.0 || a_height.w < 0.0) return 0.0;
+  vec2 p = clamp((a_height.xy + g * a_height.z) * 256.0 - 0.5, 0.0, 255.0);
+  ivec2 i = ivec2(floor(p));
+  ivec2 j = min(i + 1, ivec2(255));
+  vec2 f = p - vec2(i);
+  int s = int(a_height.w);
+  float h00 = texelFetch(u_heights, ivec3(i.x, i.y, s), 0).r;
+  float h10 = texelFetch(u_heights, ivec3(j.x, i.y, s), 0).r;
+  float h01 = texelFetch(u_heights, ivec3(i.x, j.y, s), 0).r;
+  float h11 = texelFetch(u_heights, ivec3(j.x, j.y, s), 0).r;
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y) * u_relief;
+}
+
 void main() {
+  // Skirt vertices come shifted by +2: they hang under the edge, by 5 % of the tile width
+  g = a_grid;
+  float skirt = 0.0;
+  if (g.x > 1.5) {
+    g -= 2.0;
+    skirt = 1.0;
+  }
   v_uv[0] = uv(a_uv0, a_back0); v_slot[0] = a_slot0;
   v_uv[1] = uv(a_uv1, a_back1); v_slot[1] = a_slot1;
   v_uv[2] = uv(a_uv2, a_back2); v_slot[2] = a_slot2;
   v_uv[3] = uv(a_uv3, a_back3); v_slot[3] = a_slot3;
-  vec3 p = project(mix(a_rect.xy, a_rect.zw, a_grid), mix(a_merc.xy, a_merc.zw, a_grid));
+  vec2 merc = mix(a_merc.xy, a_merc.zw, g);
+  float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
+  float width = (a_merc.z - a_merc.x) * 40075016.686 * cos(lat);
+  vec3 p = project_up(mix(a_rect.xy, a_rect.zw, g), merc, height() - skirt * 0.05 * width);
   gl_Position = u_matrix * vec4(p, 1.0);
 }";
 
@@ -117,11 +157,14 @@ void main() {
 }";
 
 pub struct RasterOptions {
+    /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857: west, south, east, north in metres)
     pub url: String,
     pub min_z: u8,
     pub max_z: u8,
     pub opacity: f32,
     pub saturation: f32,
+    /// Raw altitudes (`image/x-bil;bits=32`) rather than images: the relief
+    pub elevation: bool,
 }
 
 /// How tiles load and show: the engine's two profiles
@@ -173,16 +216,36 @@ pub struct DrawContext<'a> {
     pub loading: Loading,
 }
 
+/// Side of the copy of an elevation tile kept on the CPU, to know the altitude under a point
+const CPU_HEIGHTS: usize = 32;
+
 /// A tile held in the pool
 struct Loaded {
     slot: u16,
+    /// Elevation tiles: altitudes subsampled to `CPU_HEIGHTS`², rows from the north
+    heights: Option<Box<[f32]>>,
     /// Last frame it was drawn
     used: u64,
     /// Upload time (ms), for the fade-in
     at: f64,
 }
 
-type Inbox = Rc<RefCell<Vec<(TileId, Result<web_sys::ImageBitmap, Fetch>)>>>;
+/// The content of an arrived tile
+enum Pixels {
+    Image(web_sys::ImageBitmap),
+    /// 256 × 256 altitudes, rows from the north
+    Heights(Vec<f32>),
+}
+
+impl Pixels {
+    fn close(&self) {
+        if let Self::Image(bitmap) = self {
+            bitmap.close();
+        }
+    }
+}
+
+type Inbox = Rc<RefCell<Vec<(TileId, Result<Pixels, Fetch>)>>>;
 
 /// What a source gives to one tile of the pass: texture slots and uv rects of the tile and of its stand-in
 #[derive(Clone, Copy)]
@@ -234,7 +297,7 @@ pub struct RasterSource {
     failed: HashMap<TileId, (f64, u32)>,
     inbox: Inbox,
     /// Arrived, waiting for their upload
-    queue: Vec<(TileId, web_sys::ImageBitmap)>,
+    queue: Vec<(TileId, Pixels)>,
     /// Tiles to draw this frame, when this source is the base of a pass (stand-ins included)
     tiles: Vec<TileId>,
     fading: bool,
@@ -251,10 +314,16 @@ impl RasterSource {
         unsafe {
             let pool = gl.create_texture()?;
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(pool));
-            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, glow::RGBA8, TILE, TILE, SLOTS as i32);
+            // Altitudes are read with texelFetch (R32F cannot be filtered in WebGL2)
+            let (format, filter) = if options.elevation {
+                (glow::R32F, glow::NEAREST)
+            } else {
+                (glow::RGBA8, glow::LINEAR)
+            };
+            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, format, TILE, TILE, SLOTS as i32);
             for (key, value) in [
-                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
-                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MIN_FILTER, filter),
+                (glow::TEXTURE_MAG_FILTER, filter),
                 (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
                 (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
             ] {
@@ -280,12 +349,12 @@ impl RasterSource {
 
     /// Takes the tiles that arrived, uploads a few of them (nearest to `wanted` first)
     fn receive(&mut self, gl: &glow::Context, frame: u64, wanted: &HashSet<TileId>, budget_ms: f64) {
-        for (tile, bitmap) in self.inbox.borrow_mut().drain(..) {
+        for (tile, pixels) in self.inbox.borrow_mut().drain(..) {
             self.in_flight.remove(&tile);
-            match bitmap {
-                Ok(bitmap) => {
+            match pixels {
+                Ok(pixels) => {
                     self.failed.remove(&tile);
-                    self.queue.push((tile, bitmap));
+                    self.queue.push((tile, pixels));
                 }
                 Err(Fetch::Missing) => {
                     self.failed.insert(tile, (f64::INFINITY, 1));
@@ -303,40 +372,60 @@ impl RasterSource {
         let start = js_sys::Date::now();
         let mut uploaded = 0;
         while !self.queue.is_empty() && (uploaded == 0 || js_sys::Date::now() - start < budget_ms) {
-            let (tile, bitmap) = self.queue.remove(0);
+            let (tile, pixels) = self.queue.remove(0);
             uploaded += 1;
             // Already in the pool (a duplicate arrival): installing it again would leak a slot
             if self.slots.contains_key(&tile) {
-                bitmap.close();
+                pixels.close();
                 continue;
             }
             let Some(slot) = self.free.pop().or_else(|| self.evict(frame)) else {
                 // Every slot is on screen: the tile waits for one (the next frame is asked by `finish`)
-                self.queue.insert(0, (tile, bitmap));
+                self.queue.insert(0, (tile, pixels));
                 break;
             };
             // SAFETY: upload into an allocated slot of the pool
             unsafe {
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.pool));
-                gl.tex_sub_image_3d_with_image_bitmap(
-                    glow::TEXTURE_2D_ARRAY,
-                    0,
-                    0,
-                    0,
-                    i32::from(slot),
-                    TILE,
-                    TILE,
-                    1,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    &bitmap,
-                );
+                match &pixels {
+                    Pixels::Image(bitmap) => gl.tex_sub_image_3d_with_image_bitmap(
+                        glow::TEXTURE_2D_ARRAY,
+                        0,
+                        0,
+                        0,
+                        i32::from(slot),
+                        TILE,
+                        TILE,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        bitmap,
+                    ),
+                    Pixels::Heights(heights) => gl.tex_sub_image_3d(
+                        glow::TEXTURE_2D_ARRAY,
+                        0,
+                        0,
+                        0,
+                        i32::from(slot),
+                        TILE,
+                        TILE,
+                        1,
+                        glow::RED,
+                        glow::FLOAT,
+                        glow::PixelUnpackData::Slice(Some(gl::bytes(heights))),
+                    ),
+                }
             }
-            bitmap.close();
+            pixels.close();
+            let heights = match &pixels {
+                Pixels::Heights(heights) => Some(subsample(heights)),
+                Pixels::Image(_) => None,
+            };
             self.slots.insert(
                 tile,
                 Loaded {
                     slot,
+                    heights,
                     used: frame,
                     at: js_sys::Date::now(),
                 },
@@ -348,7 +437,7 @@ impl RasterSource {
     fn update_preload(&mut self, ctx: &DrawContext) {
         match ctx.preload {
             Some((generation, view)) if generation != self.preload.0 => {
-                let tiles = tiles::select(view, self.options.min_z, self.options.max_z, TILE_PX);
+                let tiles = tiles::select(view, self.options.min_z, self.options.max_z, self.tile_px());
                 self.preload = (
                     generation,
                     tiles.into_iter().take(PRELOAD_TILES).map(|s| s.tile).collect(),
@@ -356,6 +445,15 @@ impl RasterSource {
             }
             Some(_) => {}
             None => self.preload = (0, Vec::new()),
+        }
+    }
+
+    /// Target size of a tile on screen: elevation tiles larger (coarser levels)
+    fn tile_px(&self) -> f64 {
+        if self.options.elevation {
+            TILE_PX * ELEVATION_SCALE
+        } else {
+            TILE_PX
         }
     }
 
@@ -382,7 +480,9 @@ impl RasterSource {
             .url
             .replace("{z}", &tile.z.to_string())
             .replace("{x}", &tile.x.to_string())
-            .replace("{y}", &tile.y.to_string());
+            .replace("{y}", &tile.y.to_string())
+            .replace("{bbox}", &bbox(tile));
+        let elevation = self.options.elevation;
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.failed.contains_key(&tile);
@@ -391,15 +491,21 @@ impl RasterSource {
         let redraw = redraw.clone();
         wasm_bindgen_futures::spawn_local(async move {
             // Transient errors (network, rate limit, server) are retried; "no tile here" is final
-            let mut bitmap = Err(Fetch::Transient);
+            let mut pixels = Err(Fetch::Transient);
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
-                match fetch_bitmap(&url, &signal, retried || attempt > 0).await {
-                    Ok(b) => {
-                        bitmap = Ok(b);
+                let reload = retried || attempt > 0;
+                let fetched = if elevation {
+                    fetch_heights(&url, &signal, reload).await.map(Pixels::Heights)
+                } else {
+                    fetch_bitmap(&url, &signal, reload).await.map(Pixels::Image)
+                };
+                match fetched {
+                    Ok(p) => {
+                        pixels = Ok(p);
                         break;
                     }
                     Err(Fetch::Missing) => {
-                        bitmap = Err(Fetch::Missing);
+                        pixels = Err(Fetch::Missing);
                         break;
                     }
                     Err(Fetch::Transient) if attempt + 1 < RETRY_PAUSES_MS.len() && !signal.aborted() => {
@@ -413,8 +519,10 @@ impl RasterSource {
             }
             // An aborted tile was already forgotten; it is not a failure
             if !signal.aborted() {
-                inbox.borrow_mut().push((tile, bitmap));
+                inbox.borrow_mut().push((tile, pixels));
                 redraw();
+            } else if let Ok(pixels) = pixels {
+                pixels.close();
             }
         });
     }
@@ -448,7 +556,7 @@ impl RasterSource {
     /// waiting for their upload
     pub fn prepare(&mut self, gl: &glow::Context, ctx: &DrawContext) -> bool {
         let (view, frame, redraw) = (ctx.view, ctx.frame, ctx.redraw);
-        let wanted = tiles::select(view, self.options.min_z, self.options.max_z, TILE_PX);
+        let wanted = tiles::select(view, self.options.min_z, self.options.max_z, self.tile_px());
         let now = js_sys::Date::now();
         self.update_preload(ctx);
         let mut wanted_set: HashSet<TileId> = wanted.iter().map(|s| s.tile).collect();
@@ -618,6 +726,52 @@ impl RasterSource {
         }
     }
 
+    /// Where the altitudes of `tile` are in the pool: offset (2) and scale (1) of the tile in the deepest loaded
+    /// elevation tile covering it, and its slot (-1: none yet, flat)
+    pub fn heights(&mut self, tile: TileId, frame: u64) -> [f32; 4] {
+        let mut target = tile;
+        while target.z > self.options.max_z {
+            target = target.parent().unwrap_or(target);
+        }
+        let source = if self.slots.contains_key(&target) {
+            Some(target)
+        } else {
+            self.loaded_ancestor(target)
+        };
+        let Some(source) = source else {
+            return [0.0, 0.0, 1.0, -1.0];
+        };
+        let loaded = self.slots.get_mut(&source).expect("loaded tile");
+        loaded.used = frame;
+        let [u0, v0, u1, _] = crop(tile, source);
+        [u0, v0, u1 - u0, f32::from(loaded.slot)]
+    }
+
+    /// Altitude (metres) at a Mercator point, from the finest elevation tile loaded there; None if none is
+    pub fn altitude(&self, m: glam::DVec2) -> Option<f64> {
+        let m = m.clamp(glam::DVec2::ZERO, glam::DVec2::splat(1.0 - 1e-9));
+        for z in (self.options.min_z..=self.options.max_z).rev() {
+            let n = f64::from(1u32 << z);
+            let tile = TileId::new(z, (m.x * n) as u32, (m.y * n) as u32);
+            let Some(heights) = self.slots.get(&tile).and_then(|l| l.heights.as_deref()) else {
+                continue;
+            };
+            // Bilinear, samples at the cell centers
+            let side = CPU_HEIGHTS as f64;
+            let p = ((m * n - glam::DVec2::new(f64::from(tile.x), f64::from(tile.y))) * side - 0.5)
+                .clamp(glam::DVec2::ZERO, glam::DVec2::splat(side - 1.0));
+            let (i, f) = (p.floor(), p - p.floor());
+            let at = |x: f64, y: f64| {
+                let (x, y) = ((x as usize).min(CPU_HEIGHTS - 1), (y as usize).min(CPU_HEIGHTS - 1));
+                f64::from(heights[y * CPU_HEIGHTS + x])
+            };
+            let top = at(i.x, i.y) * (1.0 - f.x) + at(i.x + 1.0, i.y) * f.x;
+            let bottom = at(i.x, i.y + 1.0) * (1.0 - f.x) + at(i.x + 1.0, i.y + 1.0) * f.x;
+            return Some(top * (1.0 - f.y) + bottom * f.y);
+        }
+        None
+    }
+
     fn loaded_ancestor(&self, tile: TileId) -> Option<TileId> {
         let mut ancestor = tile.parent();
         while let Some(a) = ancestor {
@@ -688,6 +842,68 @@ async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) ->
     decode(&response).await.map_err(|_| Fetch::Transient)
 }
 
+/// Altitudes of a tile: a full grid of 256 × 256 little-endian f32. A server error may come as a 200 with an XML
+/// exception: only a grid counts. No-data (outside the coverage) takes the lowest altitude of the tile: neither pit
+/// nor wall at the coast
+async fn fetch_heights(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<Vec<f32>, Fetch> {
+    let response = fetch_response(url, signal, reload)
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    match response.status() {
+        204 | 404 | 410 => return Err(Fetch::Missing),
+        200..=299 => {}
+        _ => return Err(Fetch::Transient),
+    }
+    let buffer = JsFuture::from(response.array_buffer().map_err(|_| Fetch::Transient)?)
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+    if bytes.len() != (TILE * TILE * 4) as usize {
+        return Err(Fetch::Transient);
+    }
+    let mut heights: Vec<f32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&b| f32::from_le_bytes(b))
+        .collect();
+    let lowest = heights
+        .iter()
+        .copied()
+        .filter(|&h| h > NO_DATA)
+        .fold(f32::INFINITY, f32::min);
+    let fill = if lowest.is_finite() { lowest } else { 0.0 };
+    for h in &mut heights {
+        if *h <= NO_DATA || !h.is_finite() {
+            *h = fill;
+        }
+    }
+    Ok(heights)
+}
+
+/// `CPU_HEIGHTS`² altitudes out of a full 256 × 256 grid: the mean of each block
+fn subsample(heights: &[f32]) -> Box<[f32]> {
+    let block = TILE as usize / CPU_HEIGHTS;
+    let mut out = vec![0f32; CPU_HEIGHTS * CPU_HEIGHTS];
+    for (k, value) in out.iter_mut().enumerate() {
+        let (bx, by) = (k % CPU_HEIGHTS * block, k / CPU_HEIGHTS * block);
+        let sum: f32 = (0..block)
+            .flat_map(|y| (0..block).map(move |x| heights[(by + y) * TILE as usize + bx + x]))
+            .sum();
+        *value = sum / (block * block) as f32;
+    }
+    out.into_boxed_slice()
+}
+
+/// Box of a tile in EPSG:3857 metres, `west,south,east,north`, for a WMS `GetMap`
+fn bbox(tile: TileId) -> String {
+    const HALF: f64 = 20_037_508.342_789_244;
+    let (min, max) = tile.bounds();
+    let x = |m: f64| -HALF + m * 2.0 * HALF;
+    let y = |m: f64| HALF - m * 2.0 * HALF;
+    format!("{},{},{},{}", x(min.x), y(max.y), x(max.x), y(min.y))
+}
+
 async fn fetch_response(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<web_sys::Response, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
@@ -739,7 +955,7 @@ fn crop(tile: TileId, source: TileId) -> [f32; 4] {
 /// the others have on its area
 pub struct RasterPass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 8],
+    uniforms: [Option<glow::UniformLocation>; 10],
     projection: Projection,
     vao: glow::VertexArray,
     instances: glow::Buffer,
@@ -761,6 +977,8 @@ impl RasterPass {
                 "u_tiles1",
                 "u_tiles2",
                 "u_tiles3",
+                "u_heights",
+                "u_relief",
             ],
         );
         let projection = Projection::new(gl, program);
@@ -781,6 +999,7 @@ impl RasterPass {
                     (5 + 3 * k, 3, base + 32),
                 ]);
             }
+            attributes.push((15, 4, 32 + STACK as i32 * 44));
             for (location, size, offset) in attributes {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, offset);
@@ -798,12 +1017,14 @@ impl RasterPass {
         }
     }
 
-    /// One draw call for the whole stack (1 to `STACK` sources, prepared for this frame)
+    /// One draw call for the whole stack (1 to `STACK` sources, prepared for this frame), in relief over `terrain`
+    /// (prepared too) when given: `relief` is its vertical exaggeration
     pub fn draw(
         &mut self,
         gl: &glow::Context,
         view: &View,
         sources: &mut [&mut RasterSource],
+        mut terrain: Option<(&mut RasterSource, f32)>,
         frame: u64,
         fade_ms: f64,
     ) {
@@ -830,6 +1051,10 @@ impl RasterPass {
             for _ in n..STACK {
                 Sample::NONE.write(&mut self.data);
             }
+            let heights = terrain
+                .as_mut()
+                .map_or([0.0, 0.0, 1.0, -1.0], |(source, _)| source.heights(tile, frame));
+            self.data.extend_from_slice(&heights);
         }
         sources[0].tiles = tiles;
         let mut opacity = [0f32; STACK];
@@ -839,14 +1064,27 @@ impl RasterPass {
             saturation[k] = source.options.saturation;
         }
         let count = (self.data.len() / INSTANCE) as i32;
+        let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
         // SAFETY: draw with objects owned by this pass and the sources' pools
         unsafe {
             gl.use_program(Some(self.program));
-            let [matrix, count_u, opacity_u, saturation_u, t0, t1, t2, t3] = &self.uniforms;
+            let [
+                matrix,
+                count_u,
+                opacity_u,
+                saturation_u,
+                t0,
+                t1,
+                t2,
+                t3,
+                heights_u,
+                relief_u,
+            ] = &self.uniforms;
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
             gl.uniform_1_i32(count_u.as_ref(), n as i32);
             gl.uniform_1_f32_slice(opacity_u.as_ref(), &opacity);
             gl.uniform_1_f32_slice(saturation_u.as_ref(), &saturation);
+            gl.uniform_1_f32(relief_u.as_ref(), relief);
             self.projection.set(gl, view);
             for (k, unit) in [t0, t1, t2, t3].into_iter().enumerate() {
                 gl.uniform_1_i32(unit.as_ref(), k as i32);
@@ -854,13 +1092,29 @@ impl RasterPass {
                 // Unused units get the base pool, so every sampler has a valid texture
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(sources[if k < n { k } else { 0 }].pool));
             }
+            // Without relief the elevation unit stays empty: the shader never reads it
+            gl.uniform_1_i32(heights_u.as_ref(), STACK as i32);
+            gl.active_texture(glow::TEXTURE0 + STACK as u32);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, terrain.as_ref().map(|(source, _)| source.pool));
             gl.active_texture(glow::TEXTURE0);
             // The shader composites the stack and outputs premultiplied alpha
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            let lifted = relief > 0.0;
+            if lifted {
+                // In relief the ground hides itself (hills) and the 3D layers drawn after; the skirts hang either side
+                gl.enable(glow::DEPTH_TEST);
+                gl.depth_func(glow::LEQUAL);
+                gl.depth_mask(true);
+                gl.disable(glow::CULL_FACE);
+            }
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instances));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, gl::bytes(&self.data), glow::STREAM_DRAW);
-            Grid::draw(gl, view, count);
+            Grid::draw(gl, view, count, lifted);
+            if lifted {
+                gl.disable(glow::DEPTH_TEST);
+                gl.enable(glow::CULL_FACE);
+            }
             gl.bind_vertex_array(None);
             gl.blend_func_separate(
                 glow::SRC_ALPHA,

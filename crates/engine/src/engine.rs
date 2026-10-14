@@ -91,6 +91,8 @@ pub struct Engine {
     globe: GlobeBase,
     sky: Sky,
     raster_pass: RasterPass,
+    /// Relief under the raster layers: the elevation source and its vertical exaggeration
+    terrain: Option<(RasterSource, f32)>,
     /// Camera of the last frame and when it last changed (ms)
     last_camera: [u64; 5],
     moved_at: f64,
@@ -102,6 +104,10 @@ pub struct Engine {
     /// How tiles load and show
     loading: Loading,
 }
+
+/// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
+const TERRAIN_MIN_Z: u8 = 6;
+const TERRAIN_MAX_Z: u8 = 15;
 
 /// Framebuffer of the picking pass, at the size of the canvas
 struct PickTarget {
@@ -156,6 +162,7 @@ impl Engine {
             globe,
             sky,
             raster_pass,
+            terrain: None,
             last_camera: [0; 5],
             moved_at: 0.0,
             preload: None,
@@ -237,6 +244,40 @@ impl Engine {
         self.sky.enabled = enabled;
     }
 
+    /// Relief under the raster layers, from raw altitudes (`image/x-bil;bits=32`, 256 × 256): `url` is a template with
+    /// `{bbox}` (WMS `GetMap` in EPSG:3857) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
+    /// heights (1: true relief)
+    #[wasm_bindgen(js_name = setTerrain)]
+    pub fn set_terrain(&mut self, url: Option<String>, exaggeration: f64) -> Result<(), JsValue> {
+        let exaggeration = exaggeration.max(0.0) as f32;
+        match (url, &mut self.terrain) {
+            (Some(url), Some((source, current))) if source.options.url == url => *current = exaggeration,
+            (Some(url), _) => {
+                let source = RasterSource::new(
+                    &self.gl,
+                    RasterOptions {
+                        url,
+                        min_z: TERRAIN_MIN_Z,
+                        max_z: TERRAIN_MAX_Z,
+                        opacity: 1.0,
+                        saturation: 1.0,
+                        elevation: true,
+                    },
+                )?;
+                if let Some((old, _)) = self.terrain.replace((source, exaggeration)) {
+                    old.delete(&self.gl);
+                }
+            }
+            (None, _) => {
+                if let Some((old, _)) = self.terrain.take() {
+                    old.delete(&self.gl);
+                }
+            }
+        }
+        (self.redraw)();
+        Ok(())
+    }
+
     /// Color of the globe under the tiles (polar caps)
     #[wasm_bindgen(js_name = setGlobeColor)]
     pub fn set_globe_color(&mut self, r: f32, g: f32, b: f32) {
@@ -247,23 +288,27 @@ impl Engine {
     #[must_use]
     #[wasm_bindgen(unchecked_return_type = "RasterLayerStats[]")]
     pub fn stats(&self) -> js_sys::Array {
+        // The relief comes last, with id 0
+        let terrain = self.terrain.as_ref().map(|(source, _)| (0, source));
         self.layers
             .iter()
             .filter_map(|(id, layer)| match layer {
-                Layer::Raster(layer) => {
-                    let s = layer.stats;
-                    Some(js::object(&[
-                        ("id", (*id).into()),
-                        ("drawn", s.drawn.into()),
-                        ("loaded", s.loaded.into()),
-                        ("inFlight", s.in_flight.into()),
-                        ("queued", s.queued.into()),
-                        ("standIns", s.stand_ins.into()),
-                        ("cooling", s.cooling.into()),
-                        ("missing", s.missing.into()),
-                    ]))
-                }
+                Layer::Raster(layer) => Some((*id, layer)),
                 _ => None,
+            })
+            .chain(terrain)
+            .map(|(id, layer)| {
+                let s = layer.stats;
+                js::object(&[
+                    ("id", id.into()),
+                    ("drawn", s.drawn.into()),
+                    ("loaded", s.loaded.into()),
+                    ("inFlight", s.in_flight.into()),
+                    ("queued", s.queued.into()),
+                    ("standIns", s.stand_ins.into()),
+                    ("cooling", s.cooling.into()),
+                    ("missing", s.missing.into()),
+                ])
             })
             .collect()
     }
@@ -359,6 +404,7 @@ impl Engine {
                 max_z,
                 opacity,
                 saturation,
+                elevation: false,
             },
         )?;
         Ok(self.push(Layer::Raster(layer)))
@@ -487,30 +533,20 @@ impl Engine {
     /// Draws a frame; returns true while tiles are still loading (a new frame will be asked through `redraw`)
     pub fn render(&mut self) -> bool {
         self.frame += 1;
+        // The camera turns around the relief under its center (sea level without relief)
+        self.camera.elevation = match &self.terrain {
+            Some((terrain, exaggeration)) => terrain
+                .altitude(self.camera.center)
+                .map_or(self.camera.elevation, |h| h * f64::from(*exaggeration)),
+            None => 0.0,
+        };
         let view = self.camera.view();
         let (w, h) = (
             self.camera.width * self.pixel_ratio,
             self.camera.height * self.pixel_ratio,
         );
         let mut loading = false;
-        // SAFETY: frame setup on the live context
-        unsafe {
-            let gl = &self.gl;
-            gl.viewport(0, 0, w.round() as i32, h.round() as i32);
-            let [r, g, b] = self.background;
-            gl.clear_color(r, g, b, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
-            gl.enable(glow::BLEND);
-            // The far side of the globe faces away: culled
-            gl.enable(glow::CULL_FACE);
-            gl.front_face(glow::CW);
-            gl.blend_func_separate(
-                glow::SRC_ALPHA,
-                glow::ONE_MINUS_SRC_ALPHA,
-                glow::ONE,
-                glow::ONE_MINUS_SRC_ALPHA,
-            );
-        }
+        self.begin_frame(w, h);
         // Camera motion, for the foveated loading
         let key = [
             self.camera.center.x,
@@ -542,6 +578,9 @@ impl Engine {
             preload: preload.as_ref().map(|(generation, v)| (*generation, v)),
             loading: self.loading,
         };
+        if let Some((terrain, _)) = &mut self.terrain {
+            loading |= terrain.prepare(&self.gl, &ctx);
+        }
         let mut i = 0;
         while i < self.layers.len() {
             if let Layer::Tiles3d(layer) = &mut self.layers[i].1 {
@@ -576,18 +615,47 @@ impl Engine {
             for source in &mut stack {
                 loading |= source.prepare(&self.gl, &ctx);
             }
+            let terrain = self
+                .terrain
+                .as_mut()
+                .map(|(source, exaggeration)| (source, *exaggeration));
             self.raster_pass
-                .draw(&self.gl, &view, &mut stack, self.frame, self.loading.fade_ms);
+                .draw(&self.gl, &view, &mut stack, terrain, self.frame, self.loading.fade_ms);
             for source in &stack {
                 source.finish(&self.redraw);
             }
             i = j;
+        }
+        if let Some((terrain, _)) = &self.terrain {
+            terrain.finish(&self.redraw);
         }
         loading
     }
 }
 
 impl Engine {
+    /// Clears the canvas and sets the state every layer starts from
+    fn begin_frame(&self, w: f64, h: f64) {
+        // SAFETY: frame setup on the live context
+        unsafe {
+            let gl = &self.gl;
+            gl.viewport(0, 0, w.round() as i32, h.round() as i32);
+            let [r, g, b] = self.background;
+            gl.clear_color(r, g, b, 1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
+            gl.enable(glow::BLEND);
+            // The far side of the globe faces away: culled
+            gl.enable(glow::CULL_FACE);
+            gl.front_face(glow::CW);
+            gl.blend_func_separate(
+                glow::SRC_ALPHA,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
+        }
+    }
+
     /// Network layer id and edge index under a screen point (see `pick`)
     fn pick_edge(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
         let networks: Vec<(u32, usize)> = self

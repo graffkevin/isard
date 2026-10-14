@@ -70,6 +70,8 @@ pub struct Camera {
     pub max_zoom: f64,
     /// Globe projection (else Web Mercator)
     pub globe: bool,
+    /// Altitude of the center (metres): the camera turns around the ground of the relief, not sea level
+    pub elevation: f64,
 }
 
 /// Sphere of a view, in the local frame
@@ -94,6 +96,8 @@ pub struct View {
     pub eye: DVec3,
     /// Distance from the camera to the center, in pixels
     pub center_distance: f64,
+    /// Altitude of the center in the local frame (pixels): the plane (or sphere) the camera turns around
+    pub lift: f64,
     pub world_size: f64,
     pub center: DVec2,
     pub globe: Globe,
@@ -203,6 +207,7 @@ impl Camera {
             min_zoom: MIN_ZOOM,
             max_zoom: MAX_ZOOM,
             globe: false,
+            elevation: 0.0,
         }
     }
 
@@ -258,13 +263,22 @@ impl Camera {
         if globe.factor > 0.0 {
             far = far.max(center_distance + 2.0 * globe.radius);
         }
+        // Valleys of the relief lie below the center: some margin
+        if self.elevation != 0.0 {
+            far *= 1.25;
+        }
         let near = self.height / 50.0;
         let proj = DMat4::perspective_rh_gl(FOV, self.width / self.height, near, far);
+        // The center stands at its altitude: the local frame goes down under the camera
+        let lat = (PI * (1.0 - 2.0 * self.center.y)).sinh().atan();
+        let plane = self.world_size() / (2.0 * PI * geodesy::A * lat.cos().max(1e-6));
+        let lift = self.elevation * (plane + (globe.radius / geodesy::A - plane) * globe.factor);
         // Local frame (y south, z up) to eye space (y up, looking down -z)
         let view = DMat4::from_translation(DVec3::new(0.0, 0.0, -center_distance))
             * DMat4::from_rotation_x(-pitch)
             * DMat4::from_rotation_z(self.bearing.to_radians())
-            * DMat4::from_scale(DVec3::new(1.0, -1.0, 1.0));
+            * DMat4::from_scale(DVec3::new(1.0, -1.0, 1.0))
+            * DMat4::from_translation(DVec3::new(0.0, 0.0, -lift));
         let view_proj = proj * view;
         let eye = view.inverse().transform_point3(DVec3::ZERO);
         View {
@@ -272,6 +286,7 @@ impl Camera {
             inverse: view_proj.inverse(),
             eye,
             center_distance,
+            lift,
             world_size: self.world_size(),
             center: self.center,
             globe,
@@ -288,8 +303,9 @@ impl Camera {
         };
         let (a, b) = (unproject(-1.0), unproject(1.0));
         // While blending, the surface is closer to the sphere or to the plane
+        // The ground is taken at the altitude of the center (the relief itself is not searched)
         if view.globe.factor >= 0.5 {
-            let (d, c, r) = (b - a, view.sphere_center(), view.globe.radius);
+            let (d, c, r) = (b - a, view.sphere_center(), view.globe.radius + view.lift);
             let (qa, qb, qc) = (d.dot(d), 2.0 * d.dot(a - c), (a - c).length_squared() - r * r);
             let disc = qb * qb - 4.0 * qa * qc;
             if disc < 0.0 {
@@ -298,7 +314,7 @@ impl Camera {
             let t = (-qb - disc.sqrt()) / (2.0 * qa);
             return (t >= 0.0).then(|| view.sphere_to_mercator(a + d * t));
         }
-        let t = a.z / (a.z - b.z);
+        let t = (a.z - view.lift) / (a.z - b.z);
         if !(0.0..=1.0).contains(&t) || b.z >= a.z {
             return None;
         }

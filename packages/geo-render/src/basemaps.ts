@@ -19,6 +19,11 @@ export const HILLSHADE: RasterOptions = {
   maxZoom: 17,
 };
 
+/** IGN terrain model (RGE ALTI and its fill-ins), raw altitudes in metres from the Géoplateforme WMS */
+export const TERRAIN_URL =
+  'https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES' +
+  '&STYLES=&CRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32';
+
 /** Sea color of each basemap, for the globe under the tiles (polar caps), RGB 0-1 */
 export const SEA: Record<Basemap, [r: number, g: number, b: number]> = {
   plan: [0.667, 0.835, 0.914],

@@ -47,44 +47,52 @@ pub fn mat4(m: &glam::DMat4) -> [f32; 16] {
 }
 
 /// GLSL shared by the layers: position in the local frame of a point given on the plane (pixels relative to the
-/// center) and in Mercator, blended between the plane and the sphere like `View::position`
+/// center) and in Mercator, blended between the plane and the sphere like `View::position`; `project_up` lifts it
+/// `h` metres above the ellipsoid (along the vertical of the plane or the normal of the sphere)
 pub const PROJECT: &str = r"
 uniform float u_globe;
 uniform float u_radius;
 uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
+uniform float u_world;
 
-vec3 project(vec2 plane, vec2 merc) {
-  if (u_globe <= 0.0) return vec3(plane, 0.0);
-  float lon = merc.x * 6.2831853 - 3.1415927;
+vec3 project_up(vec2 plane, vec2 merc, float h) {
   float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
+  // Pixels per metre on the plane at this latitude (Web Mercator scale), as View::pixels_per_metre
+  vec3 flat_ = vec3(plane, h * u_world / (40075016.686 * cos(lat)));
+  if (u_globe <= 0.0) return flat_;
+  float lon = merc.x * 6.2831853 - 3.1415927;
   vec3 n = vec3(cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat));
-  vec3 sphere = u_radius * vec3(dot(n, u_east), -dot(n, u_north), dot(n, u_up) - 1.0);
-  return mix(vec3(plane, 0.0), sphere, u_globe);
+  vec3 local = vec3(dot(n, u_east), -dot(n, u_north), dot(n, u_up));
+  vec3 sphere = u_radius * (local + vec3(0.0, 0.0, -1.0)) + local * (h * u_radius / 6378137.0);
+  return mix(flat_, sphere, u_globe);
 }
+
+vec3 project(vec2 plane, vec2 merc) { return project_up(plane, merc, 0.0); }
 ";
 
 /// Uniforms of `PROJECT`
-pub struct Projection([Option<glow::UniformLocation>; 5]);
+pub struct Projection([Option<glow::UniformLocation>; 6]);
 
 impl Projection {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         Self(uniforms(
             gl,
             program,
-            ["u_globe", "u_radius", "u_east", "u_north", "u_up"],
+            ["u_globe", "u_radius", "u_east", "u_north", "u_up", "u_world"],
         ))
     }
 
     /// Call with the program in use
     pub fn set(&self, gl: &glow::Context, view: &crate::geo::camera::View) {
-        let [factor, radius, east, north, up] = &self.0;
+        let [factor, radius, east, north, up, world] = &self.0;
         let g = &view.globe;
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
             gl.uniform_1_f32(radius.as_ref(), g.radius as f32);
+            gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
@@ -95,9 +103,10 @@ impl Projection {
 /// Subdivisions of the tile mesh on the globe
 pub const GRID: u16 = 16;
 
-/// Static mesh of a unit square: (GRID + 1)² vertices (location 0, vec2 in [0, 1]); indices of the full grid
-/// (`GRID² × 6`, for the globe) followed by the 6 indices of the corners only (for the plane). Clockwise on screen,
-/// the front faces (`front_face(CW)`).
+/// Static mesh of a unit square: (GRID + 1)² vertices (location 0, vec2 in [0, 1]), then a copy of the border ones
+/// shifted by +2 (the skirt, hanging under the tile edges in relief: it hides the cracks between tiles of different
+/// levels). Indices: the full grid (`GRID² × 6`), the skirt (both windings), then the 6 indices of the corners only
+/// (for the flat plane). Clockwise on screen, the front faces (`front_face(CW)`).
 pub struct Grid {
     pub vertices: glow::Buffer,
     pub indices: glow::Buffer,
@@ -105,12 +114,14 @@ pub struct Grid {
 
 impl Grid {
     pub const FULL: i32 = (GRID as i32) * (GRID as i32) * 6;
+    /// The skirt: 4 × GRID border segments, two triangles each, both windings
+    pub const SKIRT: i32 = 4 * (GRID as i32) * 12;
     /// Byte offset and count of the corner-only quad
-    pub const CORNERS: (i32, i32) = (Self::FULL * 2, 6);
+    pub const CORNERS: (i32, i32) = ((Self::FULL + Self::SKIRT) * 2, 6);
 
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let n = GRID + 1;
-        let vertices: Vec<f32> = (0..n)
+        let mut vertices: Vec<f32> = (0..n)
             .flat_map(|j| (0..n).flat_map(move |i| [f32::from(i) / f32::from(GRID), f32::from(j) / f32::from(GRID)]))
             .collect();
         let mut indices: Vec<u16> = Vec::new();
@@ -119,6 +130,22 @@ impl Grid {
                 let a = j * n + i;
                 indices.extend_from_slice(&[a, a + 1, a + n, a + 1, a + n + 1, a + n]);
             }
+        }
+        // The border, once around: top, right, bottom, left
+        let mut border: Vec<u16> = Vec::new();
+        border.extend(0..GRID);
+        border.extend((0..GRID).map(|j| j * n + GRID));
+        border.extend((0..GRID).map(|i| GRID * n + GRID - i));
+        border.extend((0..GRID).map(|j| (GRID - j) * n));
+        let skirt = |k: usize| n * n + k as u16;
+        for &b in &border {
+            let (x, y) = (vertices[usize::from(b) * 2], vertices[usize::from(b) * 2 + 1]);
+            vertices.extend_from_slice(&[x + 2.0, y + 2.0]);
+        }
+        for k in 0..border.len() {
+            let next = (k + 1) % border.len();
+            let (a, b, sa, sb) = (border[k], border[next], skirt(k), skirt(next));
+            indices.extend_from_slice(&[a, b, sa, b, sb, sa, a, sa, b, b, sa, sb]);
         }
         let (last, row) = (n * n - 1, GRID);
         indices.extend_from_slice(&[0, row, n * GRID, row, last, n * GRID]);
@@ -148,9 +175,12 @@ impl Grid {
         }
     }
 
-    /// Instanced draw of the mesh: full grid on the globe, two triangles on the plane
-    pub fn draw(gl: &glow::Context, view: &crate::geo::camera::View, instances: i32) {
-        let (offset, count) = if view.globe.factor > 0.0 {
+    /// Instanced draw of the mesh: in relief the full grid and its skirt, else the full grid on the globe and two
+    /// triangles on the plane
+    pub fn draw(gl: &glow::Context, view: &crate::geo::camera::View, instances: i32, relief: bool) {
+        let (offset, count) = if relief {
+            (0, Self::FULL + Self::SKIRT)
+        } else if view.globe.factor > 0.0 {
             (0, Self::FULL)
         } else {
             Self::CORNERS

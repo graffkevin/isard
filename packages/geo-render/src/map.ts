@@ -3,7 +3,7 @@
  * nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are drawn in the
  * same frame.
  */
-import { BASEMAPS, HILLSHADE, SEA } from './basemaps.ts';
+import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
 import { Interaction } from './interaction.ts';
 import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
@@ -19,6 +19,7 @@ import type {
   Point,
   Projection,
   RasterOptions,
+  TerrainOptions,
   Tiles3dOptions,
 } from './types.ts';
 import type { Camera, PickHit, RasterLayerStats } from './wasm/geo_render.js';
@@ -39,6 +40,13 @@ async function compile(url: string | URL): Promise<WebAssembly.Module> {
 }
 
 /** `#rrggbb` to RGB 0-1 */
+/** Relief settings from the option: undefined when off */
+function terrainSettings(terrain: boolean | TerrainOptions | undefined): Settings['terrain'] {
+  if (!terrain) return undefined;
+  const options = terrain === true ? {} : terrain;
+  return { url: options.url ?? TERRAIN_URL, exaggeration: options.exaggeration ?? 1 };
+}
+
 function rgb(hex: string): [r: number, g: number, b: number] {
   const value = Number.parseInt(hex.replace('#', ''), 16);
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
@@ -49,6 +57,7 @@ interface Settings {
   zoomRange: [min: number, max: number];
   globe: boolean;
   sky: boolean;
+  terrain: { url: string; exaggeration: number } | undefined;
   loading: LoadingMode;
   background: [r: number, g: number, b: number];
   globeColor: [r: number, g: number, b: number];
@@ -104,6 +113,7 @@ export class GeoMap implements LayerHost {
       zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
+      terrain: terrainSettings(options.terrain),
       loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? '#f2f2f0'),
       globeColor: SEA['plan-grey'],
@@ -132,10 +142,11 @@ export class GeoMap implements LayerHost {
 
   private createEngine(): Engine {
     const engine = new Engine(this.canvas, () => this.requestRender());
-    const { zoomRange, globe, sky, loading, background, globeColor } = this.settings;
+    const { zoomRange, globe, sky, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setGlobe(globe);
     engine.setSky(sky);
+    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1);
     engine.setImmediateLoading(loading === 'immediate');
     engine.setBackground(...background);
     engine.setGlobeColor(...globeColor);
@@ -243,6 +254,13 @@ export class GeoMap implements LayerHost {
   setSky(enabled: boolean): void {
     this.settings.sky = enabled;
     this.engine.setSky(enabled);
+    this.requestRender();
+  }
+
+  /** Relief under the basemap: true for the IGN terrain model, its options, or false */
+  setTerrain(terrain: boolean | TerrainOptions): void {
+    this.settings.terrain = terrainSettings(terrain);
+    this.engine.setTerrain(this.settings.terrain?.url, this.settings.terrain?.exaggeration ?? 1);
     this.requestRender();
   }
 

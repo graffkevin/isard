@@ -119,8 +119,23 @@ fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
             points[j * n + i] = view.position(min + (max - min) * t, shift);
         }
     }
+    // In relief, the ground is taken at the altitude of the center; it is visible if any of its height range (sea
+    // level to twice the center's: valleys and peaks) is
+    let up = DVec3::new(0.0, 0.0, view.lift);
+    for p in &mut points[..n * n] {
+        *p += up;
+    }
     let points = &points[..n * n];
-    if !in_frustum(view, points) {
+    let visible = if view.lift == 0.0 {
+        in_frustum(view, points)
+    } else {
+        let column: Vec<DVec3> = [-1.0, 0.0, 1.0]
+            .iter()
+            .flat_map(|&k| points.iter().map(move |p| *p + up * k))
+            .collect();
+        in_frustum(view, &column)
+    };
+    if !visible {
         return None;
     }
     if view.globe.factor >= 0.999 && !points.iter().any(|p| view.faces_camera(*p)) {
@@ -167,7 +182,7 @@ fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
     let a = view.position(min, shift);
     let b = view.position(max, shift);
     let nearest = DVec2::new(view.eye.x.clamp(a.x, b.x), view.eye.y.clamp(a.y, b.y));
-    (DVec3::new(nearest.x, nearest.y, 0.0) - view.eye).length()
+    (DVec3::new(nearest.x, nearest.y, view.lift) - view.eye).length()
 }
 
 /// Conservative test of sample points against the frustum: out only if all are beyond the same plane

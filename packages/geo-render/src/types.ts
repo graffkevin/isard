@@ -30,6 +30,9 @@ export interface GeoMapOptions extends Partial<Camera> {
   background?: string;
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
+  /** Relief under the basemap: true for the IGN terrain model (Géoplateforme, RGE ALTI), or its options (default
+   * false) */
+  terrain?: boolean | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;
   /** Mouse and touch controls (default true) */
@@ -44,6 +47,14 @@ export interface GeoMapOptions extends Partial<Camera> {
   /** Folders of the Draco and Basis Universal decoders, loaded by the workers on first use (default: the official
    * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks) */
   decoders?: Partial<DecoderUrls>;
+}
+
+export interface TerrainOptions {
+  /** Raw altitudes, 256 × 256 `image/x-bil;bits=32`: a WMS GetMap URL with {bbox} (EPSG:3857) or a tile URL with {z},
+   * {x} and {y} (default: the Géoplateforme WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES) */
+  url?: string;
+  /** Vertical exaggeration, 1 for the true relief (default 1) */
+  exaggeration?: number;
 }
 
 export interface RasterOptions {

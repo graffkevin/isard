@@ -1,7 +1,7 @@
 /**
  * Demo of the engine: Géoplateforme basemaps on the globe or in Web Mercator, the Lille photomesh in 3D Tiles, and the
- * loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles decoded on the main
- * thread, to compare).
+ * IGN relief, and the loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles
+ * decoded on the main thread, to compare), ?terrain=1 (relief on from the start).
  */
 import { type Basemap, GeoMap, type LonLat, type Projection, type Tiles3dLayer } from 'geo-render';
 
@@ -30,6 +30,7 @@ const map = await GeoMap.create(element('map'), {
   ...WORLD,
   projection,
   maxZoom: 19.5,
+  terrain: params.get('terrain') === '1',
   ...(params.get('workers') === '0' ? { workers: false } : {}),
 });
 window.map = map;
@@ -61,6 +62,22 @@ let mesh: Tiles3dLayer | undefined;
 element('lille').onclick = () => {
   mesh ??= map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: 6 });
   map.easeTo({ center: [3.0632, 50.6369], zoom: 16.5, pitch: 60, bearing: 20 }, 3000);
+};
+
+// Relief: the IGN terrain model under the basemap
+const relief = element('relief');
+let terrain = params.get('terrain') === '1';
+relief.classList.toggle('on', terrain);
+relief.onclick = () => {
+  terrain = !terrain;
+  relief.classList.toggle('on', terrain);
+  map.setTerrain(terrain);
+};
+element('montblanc').onclick = () => {
+  if (!terrain) relief.click();
+  map.setBasemap('ortho', 0);
+  for (const button of element('basemaps').children) button.classList.toggle('on', button.textContent === 'ortho');
+  map.easeTo({ center: [6.87, 45.9], zoom: 12.5, pitch: 72, bearing: 160 }, 3000);
 };
 
 // Pointer position
