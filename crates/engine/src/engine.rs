@@ -122,6 +122,8 @@ impl Engine {
         attributes.set_alpha(false);
         attributes.set_antialias(true);
         attributes.set_depth(true);
+        // 3D Tiles: parents standing in for loading children only fill the pixels no finer tile covers
+        attributes.set_stencil(true);
         attributes.set_power_preference(web_sys::WebGlPowerPreference::HighPerformance);
         let context = canvas
             .get_context_with_context_options("webgl2", &attributes)?
@@ -493,7 +495,7 @@ impl Engine {
             gl.viewport(0, 0, w.round() as i32, h.round() as i32);
             let [r, g, b] = self.background;
             gl.clear_color(r, g, b, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
             gl.enable(glow::BLEND);
             // The far side of the globe faces away: culled
             gl.enable(glow::CULL_FACE);

@@ -131,6 +131,8 @@ async function animate(engine: BenchEngine, phase: string, from: Pose, to: Pose,
 /** Waits until the engine is idle (or `maxMs`), measuring the frames meanwhile; a part counts as complete from the
  * last time it was still busy */
 async function settle(engine: BenchEngine, phase: string, maxMs: number): Promise<PhaseResult> {
+  // For inspection from outside (screenshots at given times of a phase)
+  Object.assign(window, { benchPhase: phase });
   const times: number[] = [];
   const start = await frame();
   let groundBusy = start;

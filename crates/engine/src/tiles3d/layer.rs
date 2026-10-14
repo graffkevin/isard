@@ -363,15 +363,15 @@ impl Tiles3dLayer {
                 in_flight += 1;
             }
         }
-        for &i in &selection.draw {
+        for &i in selection.draw.iter().chain(&selection.backfill) {
             if let State::Ready(mesh) = &mut self.states[i] {
                 mesh.used = frame;
             }
         }
         self.evict(gl, frame);
-        self.render(gl, view, &selection.draw);
+        self.render(gl, view, &selection.draw, &selection.backfill);
         self.stats = Tiles3dStats {
-            drawn: selection.draw.len(),
+            drawn: selection.draw.len() + selection.backfill.len(),
             loaded: self.states.iter().filter(|s| matches!(s, State::Ready(_))).count(),
             in_flight,
             gpu_bytes: self.gpu_bytes,
@@ -409,7 +409,10 @@ impl Tiles3dLayer {
         }
     }
 
-    fn render(&self, gl: &glow::Context, view: &View, tiles: &[usize]) {
+    /// Draws the selected tiles, then the stand-in parents where no finer tile was drawn. The stencil holds the finest
+    /// level drawn at each pixel: 255 for the selected tiles, depth + 1 for a parent, which passes only over coarser
+    /// values (its own fragments included, so its surface still sorts by depth)
+    fn render(&self, gl: &glow::Context, view: &View, tiles: &[usize], backfill: &[usize]) {
         let [matrix, texture, textured, opacity] = &self.uniforms;
         // SAFETY: draws with objects owned by this layer
         unsafe {
@@ -420,8 +423,17 @@ impl Tiles3dLayer {
             gl.enable(glow::DEPTH_TEST);
             gl.depth_func(glow::LEQUAL);
             gl.disable(glow::CULL_FACE);
-            for &i in tiles {
+            gl.enable(glow::STENCIL_TEST);
+            gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
+            gl.stencil_func(glow::ALWAYS, 255, 0xff);
+            let levels = backfill
+                .iter()
+                .map(|&i| (i, Some((self.tree.nodes[i].depth + 1).min(254) as i32)));
+            for (i, level) in tiles.iter().map(|&i| (i, None)).chain(levels) {
                 let State::Ready(mesh) = &self.states[i] else { continue };
+                if let Some(level) = level {
+                    gl.stencil_func(glow::GEQUAL, level, 0xff);
+                }
                 let m = view.view_proj * view.ecef_matrix(mesh.anchor);
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&m));
                 for p in &mesh.primitives {
@@ -432,6 +444,7 @@ impl Tiles3dLayer {
                 }
             }
             gl.bind_vertex_array(None);
+            gl.disable(glow::STENCIL_TEST);
             gl.disable(glow::DEPTH_TEST);
             gl.enable(glow::CULL_FACE);
         }

@@ -234,6 +234,9 @@ pub enum Readiness {
 pub struct Selection {
     /// Tiles to draw
     pub draw: Vec<usize>,
+    /// Parents standing in for children still loading: drawn after `draw`, only where no finer tile covers the
+    /// screen (finest first)
+    pub backfill: Vec<usize>,
     /// Tiles to load, in priority order
     pub request: Vec<usize>,
     /// Visible tiles (to keep in the cache and their downloads alive)
@@ -259,6 +262,7 @@ pub fn select(tree: &Tree, root: usize, view: &View, max_error: f64, ready: &dyn
     requests.dedup_by_key(|r| r.0);
     let mut out = traversal.out;
     out.request = requests.into_iter().map(|r| r.0).collect();
+    out.backfill.sort_by_key(|&i| std::cmp::Reverse(tree.nodes[i].depth));
     out
 }
 
@@ -317,20 +321,18 @@ impl Traversal<'_> {
             }
             return;
         }
-        // REPLACE: the children take over once all the visible ones can be drawn, so the parent stands in while they
-        // load (no holes). A parent that cannot be drawn yet does not hold them back: the ready ones show at once
-        // (a slow server tile would otherwise keep the whole area empty)
-        if self.children_ready(i, 3) || state != Readiness::Ready {
-            if state == Readiness::Pending {
-                self.request(i, error, distance);
-            }
-            for &c in &node.children {
-                self.visit(c);
-            }
-            return;
+        // REPLACE: the children take over; while some visible ones load, the parent fills only the pixels the ready
+        // ones leave (as Cesium does), so neither a hole nor a whole area turning coarse again because one child
+        // entered the view. A parent that cannot be drawn yet does not hold them back either
+        if state == Readiness::Pending {
+            self.request(i, error, distance);
         }
-        self.out.draw.push(i);
-        self.load_children(i, 3);
+        if state == Readiness::Ready && !self.children_ready(i, 3) {
+            self.out.backfill.push(i);
+        }
+        for &c in &node.children {
+            self.visit(c);
+        }
     }
 
     fn draw_or_request(&mut self, i: usize, state: Readiness, error: f64, distance: f64) {
@@ -357,20 +359,6 @@ impl Traversal<'_> {
                 }
             }
         })
-    }
-
-    /// Requests what the visible children need to replace their parent
-    fn load_children(&mut self, i: usize, depth: u32) {
-        for c in self.tree.nodes[i].children.clone() {
-            let Some((error, distance)) = self.measure(c) else {
-                continue;
-            };
-            match (self.ready)(c) {
-                Readiness::Pending => self.request(c, error, distance),
-                Readiness::Empty if depth > 0 => self.load_children(c, depth - 1),
-                _ => {}
-            }
-        }
     }
 }
 
@@ -451,7 +439,10 @@ mod tests {
     fn close_view_refines_when_children_are_ready() {
         let (tree, root) = tree();
         let s = select(&tree, root, &view(16.0), 16.0, &|_| Readiness::Ready);
-        assert!(!s.draw.contains(&root) && !s.draw.is_empty(), "{s:?}");
+        assert!(
+            !s.draw.contains(&root) && !s.draw.is_empty() && s.backfill.is_empty(),
+            "{s:?}"
+        );
     }
 
     #[test]
@@ -464,7 +455,10 @@ mod tests {
                 Readiness::Pending
             }
         });
-        assert_eq!(s.draw, vec![root], "no hole while the children load");
+        assert!(
+            s.draw.is_empty() && s.backfill == vec![root],
+            "no hole while the children load: {s:?}"
+        );
         assert!(!s.request.is_empty() && !s.request.contains(&root));
         // The children being loaded count as visible: their downloads are not aborted
         assert!(s.request.iter().all(|r| s.visible.contains(r)));
@@ -518,7 +512,12 @@ mod tests {
                 Readiness::Ready
             }
         });
-        assert_eq!(s.draw, vec![root], "the parent stands in rather than a hole");
+        // The ready children show, the parent fills the area of the failed one rather than a hole
+        assert_eq!(s.backfill, vec![root], "{s:?}");
+        assert!(
+            s.draw.contains(&1) && s.draw.contains(&3) && !s.draw.contains(&root),
+            "{s:?}"
+        );
     }
 
     #[test]
