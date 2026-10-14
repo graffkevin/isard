@@ -1,0 +1,291 @@
+//! Tile selection: a quadtree walk that keeps the tiles inside the view frustum (and in front of the horizon on the
+//! globe) and refines each one until it covers about `tile_px` CSS pixels on screen. Under a tilted camera, nearby
+//! tiles get fine and the horizon stays coarse.
+//!
+//! Tiles are tested through a grid of sample points projected like the GPU does (plane, sphere or a blend), so the
+//! same code serves both projections.
+
+use crate::camera::View;
+use glam::{DVec2, DVec3, DVec4};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TileId {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+}
+
+impl TileId {
+    #[must_use]
+    pub fn new(z: u8, x: u32, y: u32) -> Self {
+        Self { z, x, y }
+    }
+
+    /// Mercator bounds: (min, max)
+    #[must_use]
+    pub fn bounds(self) -> (DVec2, DVec2) {
+        let n = f64::from(1u32 << self.z);
+        let min = DVec2::new(f64::from(self.x), f64::from(self.y)) / n;
+        (min, min + DVec2::splat(1.0 / n))
+    }
+
+    #[must_use]
+    pub fn parent(self) -> Option<Self> {
+        (self.z > 0).then(|| Self::new(self.z - 1, self.x / 2, self.y / 2))
+    }
+
+    #[must_use]
+    pub fn children(self) -> [Self; 4] {
+        let (z, x, y) = (self.z + 1, self.x * 2, self.y * 2);
+        [
+            Self::new(z, x, y),
+            Self::new(z, x + 1, y),
+            Self::new(z, x, y + 1),
+            Self::new(z, x + 1, y + 1),
+        ]
+    }
+
+    /// Whole worlds to add to x so that the tile is drawn on the copy of the world nearest to the center
+    #[must_use]
+    pub fn shift(self, center: DVec2) -> f64 {
+        let (min, max) = self.bounds();
+        -(f64::midpoint(min.x, max.x) - center.x).round()
+    }
+}
+
+/// Upper bound on the tiles of one selection
+const MAX_TILES: usize = 400;
+/// On the globe, tiles coarser than this are always split (they would be too curved for their mesh)
+const GLOBE_MIN_Z: u8 = 2;
+
+/// Half-angle of the foveated cone around the view axis (radians): tiles inside it load even while the camera moves
+/// (Cesium's foveated loading)
+pub const FOVEA: f64 = crate::camera::FOV * 0.3;
+
+/// A tile to draw, with its loading priority
+#[derive(Clone, Copy, Debug)]
+pub struct Selected {
+    pub tile: TileId,
+    /// Lower loads first: distance to the camera, raised away from the screen center
+    pub priority: f64,
+    /// Inside the foveated cone
+    pub central: bool,
+}
+
+/// Tiles to draw, by priority (screen center and near the camera first). `tile_px`: target size of a tile on screen
+/// (CSS pixels).
+#[must_use]
+pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> {
+    let globe = view.globe.factor > 0.0;
+    let mut out = Vec::new();
+    let mut stack = vec![TileId::new(0, 0, 0)];
+    while let Some(tile) = stack.pop() {
+        let Some((apparent, distance, angle)) = measure(view, tile) else {
+            continue;
+        };
+        let fine_enough = apparent <= tile_px;
+        let refine = if tile.z < min_z {
+            // Below the layer's first level: go down only if that level would be about the right size
+            apparent / f64::from(1u32 << (min_z - tile.z)) > tile_px / 2.0
+        } else {
+            tile.z < max_z && (!fine_enough || (globe && tile.z < GLOBE_MIN_Z))
+        };
+        if refine && out.len() + stack.len() < MAX_TILES {
+            stack.extend(tile.children());
+        } else if tile.z >= min_z {
+            let priority = distance * (1.0 + 3.0 * angle / (crate::camera::FOV / 2.0));
+            out.push(Selected {
+                tile,
+                priority,
+                central: angle <= FOVEA,
+            });
+        }
+    }
+    out.sort_by(|p, q| p.priority.total_cmp(&q.priority));
+    out
+}
+
+/// Size on screen (CSS pixels), distance to the camera and angle from the view axis (radians, of its point nearest
+/// to the axis) of a visible tile; None if out of view
+fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
+    // Coarse tiles are large and curved: more samples
+    let n = if tile.z < 4 { 5 } else { 3 };
+    let (min, max) = tile.bounds();
+    let shift = tile.shift(view.center);
+    let mut points = [DVec3::ZERO; 25];
+    for j in 0..n {
+        for i in 0..n {
+            let t = DVec2::new(i as f64, j as f64) / (n - 1) as f64;
+            points[j * n + i] = view.position(min + (max - min) * t, shift);
+        }
+    }
+    let points = &points[..n * n];
+    if !in_frustum(view, points) {
+        return None;
+    }
+    if view.globe.factor >= 0.999 && !points.iter().any(|p| view.faces_camera(*p)) {
+        return None;
+    }
+    // Longest side between neighbouring samples, scaled to the whole tile
+    let mut side = 0f64;
+    for j in 0..n {
+        for i in 0..n {
+            let p = points[j * n + i];
+            if i + 1 < n {
+                side = side.max(p.distance(points[j * n + i + 1]));
+            }
+            if j + 1 < n {
+                side = side.max(p.distance(points[(j + 1) * n + i]));
+            }
+        }
+    }
+    let distance = points
+        .iter()
+        .map(|p| p.distance(view.eye))
+        .fold(f64::INFINITY, f64::min)
+        .max(1e-9);
+    // The tile's nearest point may be well inside it: the camera can stand right above a large tile
+    let distance = distance.min(nearest_on_plane(view, min, max, shift));
+    let (min_m, max_m) = (min, max);
+    let angle = if (min_m.x..max_m.x).contains(&view.center.x) && (min_m.y..max_m.y).contains(&view.center.y) {
+        0.0
+    } else {
+        let axis = -view.eye.normalize();
+        points
+            .iter()
+            .map(|p| (*p - view.eye).normalize().dot(axis).clamp(-1.0, 1.0).acos())
+            .fold(f64::INFINITY, f64::min)
+    };
+    Some((side * (n - 1) as f64 * view.center_distance / distance, distance, angle))
+}
+
+/// Distance from the camera to the tile's rectangle on the plane (exact for the Mercator plane, a bound otherwise)
+fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
+    if view.globe.factor > 0.0 {
+        return f64::INFINITY;
+    }
+    let a = view.position(min, shift);
+    let b = view.position(max, shift);
+    let nearest = DVec2::new(view.eye.x.clamp(a.x, b.x), view.eye.y.clamp(a.y, b.y));
+    (DVec3::new(nearest.x, nearest.y, 0.0) - view.eye).length()
+}
+
+/// Conservative test of sample points against the frustum: out only if all are beyond the same plane
+fn in_frustum(view: &View, points: &[DVec3]) -> bool {
+    let clip: Vec<DVec4> = points.iter().map(|p| view.view_proj * p.extend(1.0)).collect();
+    let outside = |f: fn(&DVec4) -> bool| clip.iter().all(f);
+    !(outside(|c| c.x < -c.w)
+        || outside(|c| c.x > c.w)
+        || outside(|c| c.y < -c.w)
+        || outside(|c| c.y > c.w)
+        || outside(|c| c.z < -c.w)
+        || outside(|c| c.z > c.w))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::Camera;
+
+    fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<TileId> {
+        super::select(view, min_z, max_z, tile_px)
+            .into_iter()
+            .map(|s| s.tile)
+            .collect()
+    }
+
+    fn camera(zoom: f64, pitch: f64) -> Camera {
+        let mut c = Camera::new(2.424_573, 48.845_726, zoom);
+        c.width = 1600.0;
+        c.height = 900.0;
+        c.pitch = pitch;
+        c
+    }
+
+    #[test]
+    fn flat_view_uses_one_level() {
+        let c = camera(14.0, 0.0);
+        let tiles = select(&c.view(), 0, 19, 362.0);
+        assert!(tiles.iter().all(|t| t.z == 15), "{tiles:?}");
+        // 1600 × 900 px at 256 px per tile: about 7 × 4 tiles, plus the borders
+        assert!((20..=60).contains(&tiles.len()), "{}", tiles.len());
+    }
+
+    #[test]
+    fn tilted_view_coarsens_towards_the_horizon() {
+        let c = camera(15.0, 70.0);
+        let tiles = select(&c.view(), 0, 19, 362.0);
+        let (lo, hi) = (
+            tiles.iter().map(|t| t.z).min().unwrap(),
+            tiles.iter().map(|t| t.z).max().unwrap(),
+        );
+        assert!(hi - lo >= 3, "{lo}..{hi}");
+        assert!(tiles.len() < MAX_TILES);
+        // The screen center first (foveated), not the tile nearest to the camera
+        let (min, max) = tiles[0].bounds();
+        assert!((min.x..max.x).contains(&c.center.x) && (min.y..max.y).contains(&c.center.y));
+    }
+
+    #[test]
+    fn screen_center_loads_first() {
+        let c = camera(14.0, 0.0);
+        let selected = super::select(&c.view(), 0, 19, 362.0);
+        let first = selected[0].tile.bounds();
+        assert!((first.0.x..first.1.x).contains(&c.center.x) && (first.0.y..first.1.y).contains(&c.center.y));
+        assert!(selected[0].central);
+        // The screen corners are outside the fovea
+        assert!(selected.iter().any(|s| !s.central));
+        let central = selected.iter().filter(|s| s.central).count();
+        assert!(central < selected.len() / 2, "{central} of {}", selected.len());
+    }
+
+    #[test]
+    fn max_zoom_caps_the_levels() {
+        let c = camera(20.0, 0.0);
+        assert!(select(&c.view(), 0, 17, 362.0).iter().all(|t| t.z == 17));
+    }
+
+    #[test]
+    fn tiles_cover_the_screen_center() {
+        let c = camera(13.4, 45.0);
+        let tiles = select(&c.view(), 0, 19, 362.0);
+        assert!(tiles.iter().any(|t| {
+            let (min, max) = t.bounds();
+            (min.x..max.x).contains(&c.center.x) && (min.y..max.y).contains(&c.center.y)
+        }));
+    }
+
+    #[test]
+    fn layer_too_fine_for_the_view_is_skipped() {
+        // Hillshade (from zoom 6) on a view of the whole of Europe: nothing rather than hundreds of tiny tiles
+        let c = camera(3.0, 0.0);
+        assert_eq!(select(&c.view(), 6, 17, 362.0).len(), 0);
+        assert_ne!(select(&camera(5.5, 0.0).view(), 6, 17, 362.0).len(), 0);
+    }
+
+    #[test]
+    fn globe_shows_the_near_side_only() {
+        let mut c = camera(1.5, 0.0);
+        c.globe = true;
+        let tiles = select(&c.view(), 0, 19, 362.0);
+        assert!(!tiles.is_empty() && tiles.len() < 64, "{}", tiles.len());
+        assert!(tiles.iter().all(|t| t.z >= GLOBE_MIN_Z));
+        // Nothing on the far side: tropics beyond 125° of longitude from France (near the north pole, every
+        // longitude faces the camera)
+        let far = tiles.iter().filter(|t| {
+            let (min, max) = t.bounds();
+            let (x, y) = (f64::midpoint(min.x, max.x), f64::midpoint(min.y, max.y));
+            !(0.15..0.85).contains(&x) && (0.4..0.6).contains(&y) && t.z >= 3
+        });
+        let far: Vec<_> = far.collect();
+        assert!(far.is_empty(), "{far:?}");
+    }
+
+    #[test]
+    fn globe_and_mercator_agree_when_zoomed_in() {
+        let mut c = camera(12.0, 30.0);
+        let flat = select(&c.view(), 0, 19, 362.0);
+        c.globe = true;
+        assert_eq!(flat, select(&c.view(), 0, 19, 362.0));
+    }
+}

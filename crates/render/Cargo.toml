@@ -1,0 +1,39 @@
+[package]
+name = "geo-render"
+version = "0.1.0"
+edition = "2024"
+description = "WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps, compiled to WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+glam = "0.30"
+glow = "0.16"
+js-sys = "0.3.106"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+
+[dependencies.web-sys]
+version = "0.3.106"
+features = [
+  "Blob",
+  "HtmlCanvasElement",
+  "ImageBitmap",
+  "Request",
+  "RequestInit",
+  "Response",
+  "WebGl2RenderingContext",
+  "WebGlContextAttributes",
+  "WebGlPowerPreference",
+  "ImageBitmapOptions",
+  "PremultiplyAlpha",
+  "ColorSpaceConversion",
+  "Window",
+  "WorkerGlobalScope",
+  "AbortController",
+  "AbortSignal",
+]
+
+[lints]
+workspace = true

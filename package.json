@@ -1,0 +1,15 @@
+{
+  "name": "geo-render-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun scripts/build.ts && bun scripts/serve.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "cargo test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "~6.0.2"
+  }
+}

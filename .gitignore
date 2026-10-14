@@ -1,0 +1,8 @@
+target/
+node_modules/
+js/src/wasm/
+js/dist/
+demo/dist/
+.idea/
+.claude/
+CLAUDE.md

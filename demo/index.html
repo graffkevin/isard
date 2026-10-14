@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>geo-render demo</title>
+    <style>
+      html, body { margin: 0; height: 100%; font: 13px/1.4 system-ui, sans-serif; color: #1d2433; background: #f2f2f0; }
+      #map { position: fixed; inset: 0; }
+      #panel {
+        position: fixed; top: 12px; left: 12px; width: 300px; padding: 12px 14px; border-radius: 10px;
+        background: rgb(255 255 255 / 0.92); box-shadow: 0 2px 12px rgb(0 0 0 / 0.15); backdrop-filter: blur(6px);
+      }
+      #panel h1 { margin: 0 0 4px; font-size: 15px; }
+      #panel p { margin: 0 0 10px; color: #5a6475; }
+      .row { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+      button {
+        flex: 1; padding: 5px 8px; border: 1px solid #c9cfda; border-radius: 6px; background: #fff; cursor: pointer;
+        font: inherit;
+      }
+      button.on { background: #1d2433; border-color: #1d2433; color: #fff; }
+      #stats { margin-top: 10px; font: 12px/1.6 ui-monospace, monospace; white-space: pre; }
+      #label {
+        position: fixed; pointer-events: none; transform: translate(14px, -50%); padding: 2px 7px; border-radius: 5px;
+        background: #1d2433; color: #fff; font-weight: 600; display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="panel">
+      <h1>geo-render</h1>
+      <p>Géoplateforme basemaps on a globe. Drag, wheel, right drag to turn and tilt.</p>
+      <div class="row" id="projections"></div>
+      <div class="row" id="basemaps"></div>
+      <div class="row"><button id="world">World</button><button id="fly">Fly to IGN</button></div>
+      <div id="stats"></div>
+    </div>
+    <div id="label"></div>
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>
