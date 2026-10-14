@@ -79,6 +79,6 @@ renderer.setAnimationLoop(() => {
 await benchmark({
   name: '3DTilesRendererJS 0.5.3',
   setPose,
-  idle: () => ground.loadProgress === 1 && mesh.loadProgress === 1,
+  idle: () => ({ ground: ground.loadProgress === 1, mesh: mesh.loadProgress === 1 }),
   info: () => `3D tiles: ${mesh.visibleTiles.size} visible, load ${Math.round(mesh.loadProgress * 100)} %`,
 });

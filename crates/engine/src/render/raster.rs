@@ -24,10 +24,6 @@ use wasm_bindgen_futures::JsFuture;
 const TILE: i32 = 256;
 /// Texture slots per layer (256 KB each): 256 slots = 64 MB of GPU memory
 const SLOTS: usize = 256;
-/// Requests in flight per layer
-const MAX_REQUESTS: usize = 16;
-/// Texture uploads per frame and layer; the rest waits for the next frames
-const UPLOADS_PER_FRAME: usize = 6;
 /// Target size of a tile on screen, CSS pixels: tiles are shown between 181 and 362 px
 const TILE_PX: f64 = 362.0;
 /// Levels searched below a missing tile for stand-ins
@@ -42,8 +38,6 @@ const RETRY_PAUSES_MS: [i32; 3] = [400, 800, 0];
 const REST_MS: i32 = 120;
 /// Tiles of a flight destination loaded in advance, per layer
 const PRELOAD_TILES: usize = 48;
-/// New tiles fade in over their stand-in during this time (ms)
-const FADE_MS: f64 = 200.0;
 /// When nothing covers a tile yet, a tile this many levels coarser is loaded first: it arrives fast and covers the
 /// area while the fine tiles load (shallow tiles first, like 3DTilesRendererJS)
 const COVER_LEVELS: u8 = 2;
@@ -128,6 +122,43 @@ pub struct RasterOptions {
     pub saturation: f32,
 }
 
+/// How tiles load and show: the engine's two profiles
+#[derive(Clone, Copy, Debug)]
+pub struct Loading {
+    /// New tiles fade in over their stand-in during this time (ms); 0: they show at once
+    pub fade_ms: f64,
+    /// During a camera flight, the levels flown through are skipped (Cesium's skip LOD)
+    pub skip_levels_in_flight: bool,
+    /// While the camera moves, covered tiles off the screen center wait (foveated loading)
+    pub defer_off_center: bool,
+    /// Time spent uploading arrived tiles to the GPU per frame and layer (ms; at least one tile)
+    pub upload_budget_ms: f64,
+    /// Requests in flight per raster layer, and per 3D Tiles layer
+    pub raster_requests: usize,
+    pub mesh_requests: usize,
+}
+
+impl Loading {
+    /// Everything visible loads and shows as soon as it arrives (the default)
+    pub const IMMEDIATE: Self = Self {
+        fade_ms: 0.0,
+        skip_levels_in_flight: false,
+        defer_off_center: false,
+        upload_budget_ms: 8.0,
+        raster_requests: 24,
+        mesh_requests: 20,
+    };
+    /// Fewer downloads while moving, tiles fading in: smoother on slow networks and GPUs
+    pub const SMOOTH: Self = Self {
+        fade_ms: 200.0,
+        skip_levels_in_flight: true,
+        defer_off_center: true,
+        upload_budget_ms: 3.0,
+        raster_requests: 16,
+        mesh_requests: 12,
+    };
+}
+
 /// What a layer needs to draw a frame
 pub struct DrawContext<'a> {
     pub view: &'a View,
@@ -137,6 +168,7 @@ pub struct DrawContext<'a> {
     pub moving: bool,
     /// Destination of a camera flight (generation, view), to load in advance
     pub preload: Option<(u64, &'a View)>,
+    pub loading: Loading,
 }
 
 /// A tile held in the pool
@@ -244,7 +276,7 @@ impl RasterSource {
     }
 
     /// Takes the tiles that arrived, uploads a few of them (nearest to `wanted` first)
-    fn receive(&mut self, gl: &glow::Context, frame: u64, wanted: &HashSet<TileId>) {
+    fn receive(&mut self, gl: &glow::Context, frame: u64, wanted: &HashSet<TileId>, budget_ms: f64) {
         for (tile, bitmap) in self.inbox.borrow_mut().drain(..) {
             self.in_flight.remove(&tile);
             match bitmap {
@@ -264,8 +296,12 @@ impl RasterSource {
         }
         // Tiles of the current view first, the others (stand-ins, tiles that left the view) after
         self.queue.sort_by_key(|(tile, _)| !wanted.contains(tile));
-        let take = self.queue.len().min(UPLOADS_PER_FRAME);
-        for (tile, bitmap) in self.queue.drain(..take).collect::<Vec<_>>() {
+        // Uploads within the frame's time budget (at least one), the rest waits for the next frames
+        let start = js_sys::Date::now();
+        let mut uploaded = 0;
+        while !self.queue.is_empty() && (uploaded == 0 || js_sys::Date::now() - start < budget_ms) {
+            let (tile, bitmap) = self.queue.remove(0);
+            uploaded += 1;
             // Already in the pool (a duplicate arrival): installing it again would leak a slot
             if self.slots.contains_key(&tile) {
                 bitmap.close();
@@ -273,8 +309,8 @@ impl RasterSource {
             }
             let Some(slot) = self.free.pop().or_else(|| self.evict(frame)) else {
                 // Every slot is on screen: the tile waits for one (the next frame is asked by `finish`)
-                self.queue.push((tile, bitmap));
-                continue;
+                self.queue.insert(0, (tile, bitmap));
+                break;
             };
             // SAFETY: upload into an allocated slot of the pool
             unsafe {
@@ -411,14 +447,14 @@ impl RasterSource {
         self.update_preload(ctx);
         let mut wanted_set: HashSet<TileId> = wanted.iter().map(|s| s.tile).collect();
         wanted_set.extend(self.preload.1.iter().copied());
-        self.receive(gl, frame, &wanted_set);
+        self.receive(gl, frame, &wanted_set, ctx.loading.upload_budget_ms);
         self.abort_stale(&wanted_set);
         self.tiles.clear();
         self.fading = false;
         let mut missing = Vec::new();
         let mut cover = Vec::new();
         let mut deferred = false;
-        let flying = ctx.moving && ctx.preload.is_some();
+        let flying = ctx.loading.skip_levels_in_flight && ctx.moving && ctx.preload.is_some();
         for selected in &wanted {
             let tile = selected.tile;
             if self.slots.contains_key(&tile) {
@@ -460,7 +496,7 @@ impl RasterSource {
             }
             // While the camera moves, covered tiles off the screen center wait (foveated loading, as in Cesium):
             // the downloads go where the eye is
-            if ctx.moving && covered && !selected.central {
+            if ctx.loading.defer_off_center && ctx.moving && covered && !selected.central {
                 deferred = true;
                 continue;
             }
@@ -502,7 +538,7 @@ impl RasterSource {
         }
         // Coverage first, then the tiles by priority, then the flight destination
         missing.splice(0..0, cover);
-        self.request_all(&missing, redraw);
+        self.request_all(&missing, redraw, ctx.loading.raster_requests);
         self.stats = RasterStats {
             drawn: self.tiles.len(),
             loaded: self.slots.len(),
@@ -528,7 +564,7 @@ impl RasterSource {
 
     /// What this source draws on the area of `tile`: its texture (or the deepest level it has, enlarged), with the
     /// stand-in to mix while it fades in; or its nearest loaded ancestor alone
-    pub fn sample(&mut self, tile: TileId, frame: u64, now: f64) -> Sample {
+    pub fn sample(&mut self, tile: TileId, frame: u64, now: f64, fade_ms: f64) -> Sample {
         let mut target = tile;
         while target.z > self.options.max_z {
             target = target.parent().unwrap_or(target);
@@ -538,7 +574,12 @@ impl RasterSource {
         }
         let front = self.slots.get_mut(&target).map(|loaded| {
             loaded.used = frame;
-            (loaded.slot, ((now - loaded.at) / FADE_MS).clamp(0.0, 1.0) as f32)
+            let fade = if fade_ms > 0.0 {
+                ((now - loaded.at) / fade_ms).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            (loaded.slot, fade as f32)
         });
         if let Some((slot, fade)) = front
             && fade >= 1.0
@@ -583,9 +624,9 @@ impl RasterSource {
     }
 
     /// Starts the requests, in order, within the in-flight limit
-    fn request_all(&mut self, tiles: &[TileId], redraw: &Rc<dyn Fn()>) {
+    fn request_all(&mut self, tiles: &[TileId], redraw: &Rc<dyn Fn()>, max_requests: usize) {
         for &tile in tiles {
-            if self.in_flight.len() >= MAX_REQUESTS {
+            if self.in_flight.len() >= max_requests {
                 break;
             }
             // Neither loading nor arrived and waiting for its upload
@@ -750,7 +791,14 @@ impl RasterPass {
     }
 
     /// One draw call for the whole stack (1 to `STACK` sources, prepared for this frame)
-    pub fn draw(&mut self, gl: &glow::Context, view: &View, sources: &mut [&mut RasterSource], frame: u64) {
+    pub fn draw(
+        &mut self,
+        gl: &glow::Context,
+        view: &View,
+        sources: &mut [&mut RasterSource],
+        frame: u64,
+        fade_ms: f64,
+    ) {
         let n = sources.len().min(STACK);
         if n == 0 {
             return;
@@ -769,7 +817,7 @@ impl RasterPass {
             self.data
                 .extend_from_slice(&[min.x as f32, min.y as f32, max.x as f32, max.y as f32]);
             for source in sources.iter_mut().take(n) {
-                source.sample(tile, frame, now).write(&mut self.data);
+                source.sample(tile, frame, now, fade_ms).write(&mut self.data);
             }
             for _ in n..STACK {
                 Sample::NONE.write(&mut self.data);

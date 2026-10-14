@@ -12,6 +12,7 @@
       button:disabled { opacity: 0.5; cursor: default; }
       #status { margin-left: 12px; color: #5a6475; }
       iframe { display: block; width: 1280px; height: 800px; border: 0; margin: 12px 0; background: #000; }
+      h2 { font-size: 15px; margin: 16px 0 4px; }
       table { border-collapse: collapse; margin: 12px 0; background: #fff; font: 13px/1.4 ui-monospace, monospace; }
       th, td { padding: 4px 10px; border-bottom: 1px solid #e3e6ea; text-align: right; }
       th:first-child, td:first-child { text-align: left; }
@@ -23,7 +24,8 @@
     <p>
       The same scenario for every engine, one after the other in a 1280 × 800 frame: Géoplateforme ortho on the globe,
       the Lille photomesh (3D Tiles, same screen-space error), view of France, flight to Lille, orbit, back to France.
-      Frame times are main-thread frame intervals; lower is better, except fps.
+      Two rounds: the first warms the servers and caches, the second (reverse order) is the reference. Frame times are
+      main-thread frame intervals; lower is better, except fps. Takes about 10 minutes.
     </p>
     <button type="button" id="run">Run the benchmark</button><span id="status"></span>
     <div id="results"></div>

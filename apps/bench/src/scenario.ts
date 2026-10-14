@@ -19,8 +19,8 @@ export interface Pose {
 export interface BenchEngine {
   readonly name: string;
   setPose(pose: Pose): void;
-  /** Nothing left to load or to refine for the current view */
-  idle(): boolean;
+  /** Nothing left to load or to refine for the current view: the ground (basemap) and the 3D mesh */
+  idle(): { ground: boolean; mesh: boolean };
   /** Engine-specific counters, shown with the results */
   info(): string;
 }
@@ -37,7 +37,9 @@ export interface PhaseResult {
   slowFrames: number;
   /** Main-thread tasks over 50 ms, total duration */
   longTaskMs: number;
-  /** Settling phases: time until the view was complete, undefined if it never was */
+  /** Settling phases: time until the ground (basemap), the 3D mesh, both, were complete; undefined if never */
+  groundAfterMs?: number;
+  meshAfterMs?: number;
   idleAfterMs?: number;
 }
 
@@ -119,27 +121,31 @@ async function animate(engine: BenchEngine, phase: string, from: Pose, to: Pose,
   return summary(phase, times, start, performance.now());
 }
 
-/** Waits until the engine is idle (or `maxMs`), measuring the frames meanwhile */
+/** Waits until the engine is idle (or `maxMs`), measuring the frames meanwhile; a part counts as complete from the
+ * last time it was still busy */
 async function settle(engine: BenchEngine, phase: string, maxMs: number): Promise<PhaseResult> {
   const times: number[] = [];
   const start = await frame();
-  let idleSince: number | undefined;
-  let idleAfterMs: number | undefined;
+  let groundBusy = start;
+  let meshBusy = start;
+  let done = false;
   for (let now = start; now - start < maxMs; now = await frame()) {
     times.push(now);
-    if (engine.idle()) {
-      idleSince ??= now;
-      // Idle for 500 ms: done (a pause between two tile batches does not count)
-      if (now - idleSince > 500) {
-        idleAfterMs = Math.round(idleSince - start);
-        break;
-      }
-    } else {
-      idleSince = undefined;
+    const idle = engine.idle();
+    if (!idle.ground) groundBusy = now;
+    if (!idle.mesh) meshBusy = now;
+    // Both idle for 500 ms: done (a pause between two tile batches does not count)
+    if (now - Math.max(groundBusy, meshBusy) > 500) {
+      done = true;
+      break;
     }
   }
-  const result = summary(phase, times, start, performance.now());
-  if (idleAfterMs !== undefined) result.idleAfterMs = idleAfterMs;
+  const end = performance.now();
+  const result = summary(phase, times, start, end);
+  const after = (busy: number) => Math.round(busy === start ? 0 : busy - start);
+  if (done || end - groundBusy > 500) result.groundAfterMs = after(groundBusy);
+  if (done || end - meshBusy > 500) result.meshAfterMs = after(meshBusy);
+  if (done) result.idleAfterMs = after(Math.max(groundBusy, meshBusy));
   return result;
 }
 

@@ -5,7 +5,7 @@ use crate::js;
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
 use crate::render::network::{NetworkLayer, NetworkStyle};
-use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
+use crate::render::raster::{DrawContext, Loading, RasterOptions, RasterPass, RasterSource, STACK};
 use crate::render::sky::Sky;
 use crate::tiles3d::layer::Tiles3dLayer;
 use glam::DVec2;
@@ -96,6 +96,8 @@ pub struct Engine {
     preload_generation: u64,
     /// Offscreen target of the picking pass, created on the first pick
     pick_target: Option<PickTarget>,
+    /// How tiles load and show
+    loading: Loading,
 }
 
 /// Framebuffer of the picking pass, at the size of the canvas
@@ -154,6 +156,7 @@ impl Engine {
             preload: None,
             preload_generation: 0,
             pick_target: None,
+            loading: Loading::IMMEDIATE,
         })
     }
 
@@ -214,6 +217,13 @@ impl Engine {
             ("etc", has(&["WEBGL_compressed_texture_etc"]).into()),
             ("s3tc", has(&["WEBGL_compressed_texture_s3tc"]).into()),
         ])
+    }
+
+    /// How tiles load and show: `true`, immediately (everything visible loads, no fade, the default); `false`,
+    /// smoothly (levels skipped during flights, off-center tiles waiting while the camera moves, fade-in)
+    #[wasm_bindgen(js_name = setImmediateLoading)]
+    pub fn set_immediate_loading(&mut self, immediate: bool) {
+        self.loading = if immediate { Loading::IMMEDIATE } else { Loading::SMOOTH };
     }
 
     /// Space behind the globe (stars, atmosphere halo), in the globe projection
@@ -524,11 +534,12 @@ impl Engine {
             redraw: &self.redraw,
             moving,
             preload: preload.as_ref().map(|(generation, v)| (*generation, v)),
+            loading: self.loading,
         };
         let mut i = 0;
         while i < self.layers.len() {
             if let Layer::Tiles3d(layer) = &mut self.layers[i].1 {
-                loading |= layer.draw(&self.gl, &self.raw, &view, self.frame, &self.redraw);
+                loading |= layer.draw(&self.gl, &self.raw, &view, self.frame, &self.redraw, self.loading);
                 i += 1;
                 continue;
             }
@@ -559,7 +570,8 @@ impl Engine {
             for source in &mut stack {
                 loading |= source.prepare(&self.gl, &ctx);
             }
-            self.raster_pass.draw(&self.gl, &view, &mut stack, self.frame);
+            self.raster_pass
+                .draw(&self.gl, &view, &mut stack, self.frame, self.loading.fade_ms);
             for source in &stack {
                 source.finish(&self.redraw);
             }

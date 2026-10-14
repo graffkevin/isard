@@ -8,6 +8,7 @@
 
 use crate::geo::camera::View;
 use crate::render::gl::{self, bytes};
+use crate::render::raster::Loading as Profile;
 use crate::tiles3d::decode::{self, Mesh};
 use crate::tiles3d::tileset::{self, Content, Readiness, Tree};
 use glow::HasContext;
@@ -16,10 +17,6 @@ use std::rc::Rc;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
-/// Requests in flight
-const MAX_REQUESTS: usize = 12;
-/// Meshes uploaded per frame
-const UPLOADS_PER_FRAME: usize = 4;
 /// After an error, a tile is asked again after this delay (ms)
 const COOLDOWN_MS: f64 = 5_000.0;
 
@@ -169,7 +166,7 @@ impl Tiles3dLayer {
         Ok(layer)
     }
 
-    fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64) {
+    fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
         for (tile, id, arrival) in arrivals {
             // Only the answer to the current request of a tile counts (not one that was aborted, then asked again)
@@ -183,8 +180,12 @@ impl Tiles3dLayer {
                 stale => discard(stale),
             }
         }
-        let take = self.queue.len().min(UPLOADS_PER_FRAME);
-        for (tile, arrival) in self.queue.drain(..take).collect::<Vec<_>>() {
+        // Uploads within the frame's time budget (at least one), the rest waits for the next frames
+        let start = js_sys::Date::now();
+        let mut uploaded = 0;
+        while !self.queue.is_empty() && (uploaded == 0 || js_sys::Date::now() - start < budget_ms) {
+            let (tile, arrival) = self.queue.remove(0);
+            uploaded += 1;
             if !matches!(self.states[tile], State::Loading(_)) {
                 discard(arrival);
                 continue;
@@ -333,8 +334,9 @@ impl Tiles3dLayer {
         view: &View,
         frame: u64,
         redraw: &Rc<dyn Fn()>,
+        loading: Profile,
     ) -> bool {
-        self.receive(gl, raw, frame);
+        self.receive(gl, raw, frame, loading.upload_budget_ms);
         let Some(root) = self.root else { return true };
         let now = js_sys::Date::now();
         let selection = tileset::select(&self.tree, root, view, self.max_error, &|i| self.readiness(i, now));
@@ -353,7 +355,7 @@ impl Tiles3dLayer {
         }
         let mut in_flight = self.states.iter().filter(|s| matches!(s, State::Loading(_))).count();
         for &i in &selection.request {
-            if in_flight >= MAX_REQUESTS {
+            if in_flight >= loading.mesh_requests {
                 break;
             }
             if matches!(self.states[i], State::Unloaded | State::Failed(_)) {

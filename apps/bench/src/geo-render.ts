@@ -21,6 +21,8 @@ const map = await GeoMap.create(container, {
   interactive: false,
 });
 const mesh = map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: SSE });
+// For inspection from the console
+Object.assign(window, { benchMap: map });
 
 await benchmark({
   name: 'geo-render',
@@ -32,9 +34,11 @@ await benchmark({
       bearing: pose.heading,
     });
   },
-  idle(): boolean {
-    const tiles = mesh.stats();
-    return map.stats().every((l) => l.inFlight === 0 && l.standIns === 0) && (tiles?.inFlight ?? 0) === 0;
+  idle() {
+    return {
+      ground: map.stats().every((l) => l.inFlight === 0 && l.standIns === 0),
+      mesh: (mesh.stats()?.inFlight ?? 0) === 0,
+    };
   },
   info(): string {
     const s = mesh.stats();

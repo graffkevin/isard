@@ -59,7 +59,7 @@ you zoom in.
 
 | | |
 |---|---|
-| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
+| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `loading` (`'immediate'`, `'smooth'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
 | `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms); returns an unsubscribe function |
 | `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms)` | camera conventions of MapLibre: settings carry over unchanged |
 | `map.project(lonLat)`, `map.unproject(point)` | CSS pixels ↔ degrees |
@@ -67,6 +67,7 @@ you zoom in.
 | `map.pick(point)` | `{ layer, index }` of the network edge under a screen point: one pixel of an offscreen picking pass, cheap at any scale |
 | `map.setBasemap(basemap, hillshade)` | swaps the basemap under the other layers |
 | `map.setProjection(projection)` | `'globe'` or `'mercator'` |
+| `map.setLoading(mode)` | `'immediate'` (default): everything visible loads, tiles show as soon as they arrive; `'smooth'`: levels skipped during flights, off-center tiles waiting while the camera moves, fade-in, fewer downloads |
 | `map.setBackground(color)` | `#rrggbb` behind the map |
 | `map.stats()` | tile counters per raster layer: drawn, kept on the GPU, loading, waiting for upload |
 | `map.addRaster({ url, minZoom, maxZoom, opacity, saturation })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`) |
@@ -126,7 +127,11 @@ given as target, distance, tilt and heading and converted for each engine. Phase
 6 s flight to Lille, wait until complete, 10 s orbit, wait until complete, 6 s flight back.
 
 Measured per phase on the main thread: frames per second, frame interval (median, 95th and 99th percentiles), share of
-frames over 33 ms, long tasks (over 50 ms), time until the view is complete; and the JavaScript heap.
+frames over 33 ms, long tasks (over 50 ms), time until the basemap, the 3D mesh and both are complete; and the
+JavaScript heap.
+
+Two rounds, about 10 minutes: the first warms the servers and the browser cache (the Lille mesh server answers a cold
+file in about 15 s, which would penalize whichever engine runs first), the second, in reverse order, is the reference.
 
 Run it on a real GPU: in a headless browser rendering on the CPU (SwiftShader), the GPU-heavy engines are penalized
 far beyond reality, and 3DTilesRendererJS sometimes draws a black frame there. Pages can be opened alone, holding a pose

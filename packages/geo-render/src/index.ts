@@ -14,6 +14,7 @@ export { GeoMap } from './map.ts';
 export type {
   Basemap,
   GeoMapOptions,
+  LoadingMode,
   LonLat,
   MapEvents,
   MapPointerEvent,

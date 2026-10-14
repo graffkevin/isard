@@ -35,7 +35,9 @@ const METRICS: [keyof PhaseResult, string, boolean][] = [
   ['frameP99', 'frame p99 ms', false],
   ['slowFrames', '% frames > 33 ms', false],
   ['longTaskMs', 'long tasks ms', false],
-  ['idleAfterMs', 'complete after ms', false],
+  ['groundAfterMs', 'basemap complete after ms', false],
+  ['meshAfterMs', '3D mesh complete after ms', false],
+  ['idleAfterMs', 'all complete after ms', false],
 ];
 
 function table(results: BenchResult[]): string {
@@ -59,16 +61,31 @@ function table(results: BenchResult[]): string {
   return `<table>${head}${rows.join('')}</table>`;
 }
 
+/**
+ * Two rounds: the first one warms the servers (the Lille mesh server takes ~15 s per cold file) and the browser cache,
+ * which would otherwise penalize whichever engine runs first; the second one, in reverse order, is the reference.
+ */
 button.onclick = async () => {
   button.disabled = true;
-  const results: BenchResult[] = [];
-  for (const engine of ENGINES) {
-    status.textContent = `running ${engine}…`;
-    results.push(await once(engine));
-    output.innerHTML = table(results);
+  const rounds: { title: string; order: readonly string[]; results: BenchResult[] }[] = [
+    { title: 'Round 2, warm caches (reference)', order: [...ENGINES].reverse(), results: [] },
+    { title: 'Round 1, cold caches (first visit)', order: ENGINES, results: [] },
+  ];
+  const render = () => {
+    output.innerHTML = rounds
+      .filter((r) => r.results.length > 0)
+      .map((r) => `<h2>${r.title}</h2>${table([...r.results].sort((a, b) => a.engine.localeCompare(b.engine)))}`)
+      .join('');
+  };
+  for (const round of [...rounds].reverse()) {
+    for (const engine of round.order) {
+      status.textContent = `${round.title}: running ${engine}…`;
+      round.results.push(await once(engine));
+      render();
+    }
   }
   frame.src = 'about:blank';
   status.textContent = 'done';
   button.disabled = false;
-  (window as Window & { benchResults?: BenchResult[] }).benchResults = results;
+  (window as Window & { benchResults?: BenchResult[][] }).benchResults = rounds.map((r) => r.results);
 };

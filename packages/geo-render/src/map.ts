@@ -12,6 +12,7 @@ import type {
   Basemap,
   GeoMapOptions,
   LayerHost,
+  LoadingMode,
   LonLat,
   MapEvents,
   NetworkOptions,
@@ -48,6 +49,7 @@ interface Settings {
   zoomRange: [min: number, max: number];
   globe: boolean;
   sky: boolean;
+  loading: LoadingMode;
   background: [r: number, g: number, b: number];
   globeColor: [r: number, g: number, b: number];
 }
@@ -102,6 +104,7 @@ export class GeoMap implements LayerHost {
       zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
+      loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? '#f2f2f0'),
       globeColor: SEA['plan-grey'],
     };
@@ -129,10 +132,11 @@ export class GeoMap implements LayerHost {
 
   private createEngine(): Engine {
     const engine = new Engine(this.canvas, () => this.requestRender());
-    const { zoomRange, globe, sky, background, globeColor } = this.settings;
+    const { zoomRange, globe, sky, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setGlobe(globe);
     engine.setSky(sky);
+    engine.setImmediateLoading(loading === 'immediate');
     engine.setBackground(...background);
     engine.setGlobeColor(...globeColor);
     if (this.loader) engine.setTileLoader(this.loader);
@@ -225,6 +229,13 @@ export class GeoMap implements LayerHost {
   setProjection(projection: Projection): void {
     this.settings.globe = projection === 'globe';
     this.engine.setGlobe(this.settings.globe);
+    this.requestRender();
+  }
+
+  /** How tiles load and show (see `LoadingMode`) */
+  setLoading(mode: LoadingMode): void {
+    this.settings.loading = mode;
+    this.engine.setImmediateLoading(mode === 'immediate');
     this.requestRender();
   }
 

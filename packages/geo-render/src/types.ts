@@ -7,12 +7,21 @@ export type Point = [x: number, y: number];
 
 export type Basemap = 'plan' | 'plan-grey' | 'ortho' | 'none';
 
+/**
+ * How tiles load and show. 'immediate' (default): everything visible loads, tiles show as soon as they arrive.
+ * 'smooth': during flights the levels flown through are skipped, off-center tiles wait while the camera moves, tiles
+ * fade in; fewer downloads, for slow networks or GPUs.
+ */
+export type LoadingMode = 'immediate' | 'smooth';
+
 /** 'globe': a sphere at low zoom, blending into Web Mercator between zooms 5 and 7 */
 export type Projection = 'globe' | 'mercator';
 
 export interface GeoMapOptions extends Partial<Camera> {
   /** Default 'globe' */
   projection?: Projection;
+  /** Default 'immediate' */
+  loading?: LoadingMode;
   /** Géoplateforme basemap (default 'plan-grey') */
   basemap?: Basemap;
   /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4) */

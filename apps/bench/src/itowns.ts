@@ -45,14 +45,13 @@ const engine = {
       false,
     );
   },
-  idle(): boolean {
+  idle() {
     const loop = view.mainLoop;
-    return (
-      loop.scheduler.commandsWaitingExecutionCount() === 0 &&
+    return {
       // RENDERING_PAUSED (0), not exported by iTowns
-      loop.renderingState === 0 &&
-      mesh.tilesRenderer.loadProgress === 1
-    );
+      ground: loop.scheduler.commandsWaitingExecutionCount() === 0 && loop.renderingState === 0,
+      mesh: mesh.tilesRenderer.loadProgress === 1,
+    };
   },
   info(): string {
     const s = mesh.tilesRenderer.stats;
