@@ -1,38 +1,53 @@
 /**
- * Builds the engine and the package: Rust → WebAssembly (cargo), JavaScript bindings (wasm-bindgen), optional size
- * pass (wasm-opt, when installed), then the `geo-render` package in js/dist and the demo in demo/dist.
+ * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), an optional size
+ * pass (wasm-opt, when installed), then the `geo-render` package (packages/geo-render/dist: module, decoding worker,
+ * type declarations) and the demo (apps/demo/dist, bundled from the package sources).
  */
-import { $ } from 'bun';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { $ } from 'bun';
 
 const root = join(import.meta.dir, '..');
 const bin = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin');
 process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
 $.cwd(root);
 
-await $`cargo build -p geo-render --target wasm32-unknown-unknown --release`;
-await $`wasm-bindgen --target web --out-dir js/src/wasm target/wasm32-unknown-unknown/release/geo_render.wasm`;
-const wasm = 'js/src/wasm/geo_render_bg.wasm';
-if (Bun.which('wasm-opt')) await $`wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int ${wasm} -o ${wasm}`;
+const pkg = 'packages/geo-render';
+const bindings = `${pkg}/src/wasm`;
+const wasm = `${bindings}/geo_render_bg.wasm`;
 
-// The package and the demo, each with the decoding worker next to it (loaded by URL, relative to the bundle)
-for (const [entry, outdir] of [['js/src/index.ts', 'js/dist'], ['demo/main.ts', 'demo/dist']]) {
+await $`cargo build -p geo-render --target wasm32-unknown-unknown --release`;
+await $`wasm-bindgen --target web --out-dir ${bindings} target/wasm32-unknown-unknown/release/geo_render.wasm`;
+if (Bun.which('wasm-opt')) {
+  await $`wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int ${wasm} -o ${wasm}`;
+}
+
+/** Bundles entry points with the decoding worker next to them (it is loaded by URL, relative to the bundle) */
+async function bundle(entry: string, outdir: string): Promise<void> {
   const result = await Bun.build({
-    entrypoints: [join(root, entry), join(root, 'js/src/decoder.worker.ts')],
+    entrypoints: [join(root, entry), join(root, pkg, 'src/decoder.worker.ts')],
     outdir: join(root, outdir),
     naming: '[name].[ext]',
     target: 'browser',
     format: 'esm',
     minify: true,
     sourcemap: 'linked',
+    conditions: ['source'],
   });
   if (!result.success) throw new AggregateError(result.logs, `bundling ${entry} failed`);
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'geo_render_bg.wasm'));
 }
-await $`bunx tsc -p js/tsconfig.json`;
+
+await bundle(`${pkg}/src/index.ts`, `${pkg}/dist`);
+await bundle('apps/demo/src/main.ts', 'apps/demo/dist');
+await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
+// The declarations of the package refer to the engine's (Camera, PickHit…): shipped with them
+mkdirSync(join(root, pkg, 'dist/wasm'), { recursive: true });
+copyFileSync(join(root, bindings, 'geo_render.d.ts'), join(root, pkg, 'dist/wasm/geo_render.d.ts'));
 
 const size = (path: string) => `${(Bun.file(join(root, path)).size / 1024).toFixed(0)} KB`;
-console.log(`engine ${size(wasm)}, package ${size('js/dist/index.js')} + wasm`);
+console.log(
+  `engine ${size(wasm)}, package ${size(`${pkg}/dist/index.js`)} + worker ${size(`${pkg}/dist/decoder.worker.js`)}`,
+);

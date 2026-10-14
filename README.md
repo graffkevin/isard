@@ -54,7 +54,7 @@ you zoom in.
 
 | | |
 |---|---|
-| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
+| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
 | `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms); returns an unsubscribe function |
 | `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms)` | camera conventions of MapLibre: settings carry over unchanged |
 | `map.project(lonLat)`, `map.unproject(point)` | CSS pixels ↔ degrees |
@@ -62,6 +62,7 @@ you zoom in.
 | `map.pick(point)` | `{ layer, index }` of the network edge under a screen point: one pixel of an offscreen picking pass, cheap at any scale |
 | `map.setBasemap(basemap, hillshade)` | swaps the basemap under the other layers |
 | `map.setProjection(projection)` | `'globe'` or `'mercator'` |
+| `map.setBackground(color)` | `#rrggbb` behind the map |
 | `map.stats()` | tile counters per raster layer: drawn, kept on the GPU, loading, waiting for upload |
 | `map.addRaster({ url, minZoom, maxZoom, opacity, saturation })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`) |
 | `map.addNetwork({ nodes, edges, width, max, contour, opacity })` | `layer.setValues(Float32Array)` (negative = unreached), `layer.setStyle(…)`, `layer.remove()` |
@@ -72,21 +73,36 @@ ctrl/shift + drag to rotate and tilt, two fingers to pinch, turn and pan.
 ## Develop
 
 Requires Rust (with the `wasm32-unknown-unknown` target), `wasm-bindgen-cli` at the version pinned in
-`crates/render/Cargo.toml`, and Bun.
+`crates/engine/Cargo.toml`, and Bun.
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129
 bun install
-bun run dev     # builds, then serves the demo on http://127.0.0.1:5180 (?projection=mercator); Ctrl+C stops it
-cargo test      # camera, projections and tile selection
+bun run dev        # builds, then serves the demo on http://127.0.0.1:5180 (Ctrl+C stops it; PORT to change)
+bun run test       # Rust tests: camera, projections, tile selection, 3D Tiles traversal and decoding
+bun run lint       # Biome (TypeScript), clippy pedantic (native and wasm)
+bun run typecheck  # strict TypeScript: package, worker, demo, scripts
+bun run format     # Biome and rustfmt
 ```
 
-| Path | |
-|---|---|
-| `crates/render` | engine: camera and projections, tile selection, WebGL2 layers (`raster`, `network`, `tiles3d`, `globe` base), 3D Tiles tree and decoding (`tileset`, `b3dm`, `geodesy`, pure Rust and tested), the `Engine` exported to JavaScript |
-| `js` | the `geo-render` package: `GeoMap`, interactions, render loop (`bun run build` → `js/dist`) |
-| `demo` | basemaps on the globe, with the tile counters of each layer |
+Demo URL parameters: `?projection=mercator`, `?workers=0` (3D Tiles decoded on the main thread, to compare).
+
+```
+crates/engine/          Rust core (crate geo-render), compiled to WebAssembly
+  src/geo/              camera and projections, WGS 84 geodesy, tile selection        pure, tested natively
+  src/tiles3d/          3D Tiles tree, traversal and decoding (pure, tested); WebGL layer; worker entry point
+  src/render/           WebGL2 layers: raster stack, network, globe base, helpers
+  src/engine.rs         the Engine exported to JavaScript, with its TypeScript types
+  tests/data/           a tile of the Lille photomesh (MEL open data)
+packages/geo-render/    the npm package: GeoMap, layers, interactions, decoding workers
+apps/demo/              the demo, importing geo-render like any application
+scripts/                build and demo server
+```
+
+Everything is typed end to end: the engine declares the TypeScript types of what it returns (`Camera`, `PickHit`,
+`RasterLayerStats`, `Tiles3dStats`, `TileLoaderLike`…), the package reuses them, the worker is checked against the
+WebWorker library, all under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
 
 ## Roadmap
 

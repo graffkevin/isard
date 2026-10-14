@@ -1,0 +1,8 @@
+{
+  "name": "@geo-render/demo",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "geo-render": "workspace:*"
+  }
+}

@@ -1,10 +1,13 @@
-/** Serves the demo on http://127.0.0.1:5180 (127.0.0.1: on the IGN network, localhost goes through the proxy) */
+/**
+ * Serves the demo on http://127.0.0.1:5180 (PORT to change it) (127.0.0.1: on the IGN network, localhost goes through the proxy).
+ * Ctrl+C stops it.
+ */
 import { join, normalize } from 'node:path';
 
-const root = join(import.meta.dir, '../demo');
+const root = join(import.meta.dir, '../apps/demo');
 const server = Bun.serve({
   hostname: '127.0.0.1',
-  port: 5180,
+  port: Number(process.env.PORT ?? 5180),
   async fetch(request) {
     const path = normalize(new URL(request.url).pathname).replace(/^(\.\.[/\\])+/, '');
     const file = Bun.file(join(root, path.endsWith('/') ? `${path}index.html` : path));
