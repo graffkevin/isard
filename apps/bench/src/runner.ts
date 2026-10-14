@@ -2,6 +2,8 @@
 import type { BenchResult, PhaseResult } from './scenario.ts';
 
 const ENGINES = ['geo-render', 'itowns', 'tiles-renderer'] as const;
+/** Column names, in the order of `ENGINES` (a result's engine name starts with one) */
+const NAMES = ['geo-render', 'iTowns', '3DTilesRendererJS'];
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const found = document.getElementById(id);
@@ -11,17 +13,47 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
 
 const button = element('run', HTMLButtonElement);
 const status = element('status', HTMLSpanElement);
-const frame = element('frame', HTMLIFrameElement);
+let frame = element('frame', HTMLIFrameElement);
 const output = element('results', HTMLDivElement);
 
-function once(page: string): Promise<BenchResult> {
+/** An engine stuck this long (a crashed page, a lost GPU) is marked as timed out instead of blocking the run */
+const ENGINE_TIMEOUT_MS = 4 * 60_000;
+
+/**
+ * Frees the GPU of the engine that just ran, then puts a fresh frame in place: browsers (Firefox notably) keep the
+ * WebGL context of a navigated-away page until garbage collection, so the engines would pile up on the GPU
+ */
+async function freshFrame(): Promise<void> {
+  try {
+    for (const canvas of frame.contentDocument?.querySelectorAll('canvas') ?? []) {
+      const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    }
+  } catch {
+    // Nothing to free (an empty or cross-origin frame)
+  }
+  const next = document.createElement('iframe');
+  next.id = frame.id;
+  next.title = frame.title;
+  frame.replaceWith(next);
+  frame = next;
+  // A moment for the browser to release the old page
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+
+async function once(page: string): Promise<BenchResult> {
+  await freshFrame();
   return new Promise((resolve) => {
-    const listener = (event: MessageEvent<{ type?: string; result?: BenchResult }>) => {
-      if (event.data.type === 'bench-result' && event.data.result) {
-        removeEventListener('message', listener);
-        resolve(event.data.result);
-      }
+    const finish = (result: BenchResult) => {
+      clearTimeout(timer);
+      removeEventListener('message', listener);
+      resolve(result);
     };
+    const listener = (event: MessageEvent<{ type?: string; result?: BenchResult }>) => {
+      if (event.data.type === 'bench-result' && event.data.result) finish(event.data.result);
+    };
+    const name = NAMES[ENGINES.indexOf(page as (typeof ENGINES)[number])] ?? page;
+    const timer = setTimeout(() => finish({ engine: `${name} (timed out)`, phases: [], info: '' }), ENGINE_TIMEOUT_MS);
     addEventListener('message', listener);
     frame.src = `./${page}.html?run=${Date.now()}`;
   });
@@ -117,8 +149,6 @@ function columns(results: BenchResult[]): (BenchResult | null)[] {
   return NAMES.map((name) => results.find((r) => r.engine.startsWith(name)) ?? null);
 }
 
-const NAMES = ['geo-render', 'iTowns', '3DTilesRendererJS'];
-
 function summaryTable(results: BenchResult[]): string {
   const cols = columns(results);
   const head = `<tr><th></th>${cols.map((r, i) => `<th>${r?.engine ?? NAMES[i]}</th>`).join('')}</tr>`;
@@ -180,7 +210,7 @@ button.onclick = async () => {
       render();
     }
   }
-  frame.src = 'about:blank';
+  await freshFrame();
   status.textContent = 'done';
   button.disabled = false;
   (window as Window & { benchResults?: BenchResult[][] }).benchResults = rounds.map((r) => r.results);
