@@ -802,6 +802,9 @@ async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>, reload: b
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(signal);
+    // A tileset (or tile) server can be slow (~15 s per cold file in Lille): low priority, so that it never holds the
+    // basemap back
+    crate::js::fetch_priority(&init, "low");
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }

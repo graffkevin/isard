@@ -36,6 +36,8 @@ const COOLDOWN_MAX_MS: f64 = 30_000.0;
 const RETRY_PAUSES_MS: [i32; 3] = [400, 800, 0];
 /// Delay after the camera stops before the deferred (off-center) tiles load (ms)
 const REST_MS: i32 = 120;
+/// Age under which a request no longer needed is let finish rather than aborted (ms)
+const STALE_GRACE_MS: f64 = 300.0;
 /// Tiles of a flight destination loaded in advance, per layer
 const PRELOAD_TILES: usize = 48;
 /// When nothing covers a tile yet, a tile this many levels coarser is loaded first: it arrives fast and covers the
@@ -226,7 +228,8 @@ pub struct RasterSource {
     pool: glow::Texture,
     slots: HashMap<TileId, Loaded>,
     free: Vec<u16>,
-    in_flight: HashMap<TileId, web_sys::AbortController>,
+    /// Requests in flight: their abort handle and start time (ms)
+    in_flight: HashMap<TileId, (web_sys::AbortController, f64)>,
     /// Tiles that could not load: time (ms) they may be asked again (never for a missing tile), failures so far
     failed: HashMap<TileId, (f64, u32)>,
     inbox: Inbox,
@@ -383,7 +386,7 @@ impl RasterSource {
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.failed.contains_key(&tile);
-        self.in_flight.insert(tile, controller);
+        self.in_flight.insert(tile, (controller, js_sys::Date::now()));
         let inbox = self.inbox.clone();
         let redraw = redraw.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -417,7 +420,9 @@ impl RasterSource {
     }
 
     /// Aborts the requests of tiles no longer needed: neither wanted nor an ancestor of a wanted tile (ancestors
-    /// stand in while zooming in)
+    /// stand in while zooming in). A request younger than `STALE_GRACE_MS` is let finish: while the camera moves, the
+    /// tiles of a frame are often gone by the next one, and aborting them at once fired hundreds of requests a second
+    /// that never completed (a burden for the server, and Firefox queued the next ones behind them)
     fn abort_stale(&mut self, wanted: &HashSet<TileId>) {
         let mut keep: HashSet<TileId> = HashSet::with_capacity(wanted.len() * 2);
         for &tile in wanted {
@@ -429,12 +434,13 @@ impl RasterSource {
                 t = a.parent();
             }
         }
-        self.in_flight.retain(|tile, controller| {
-            let needed = keep.contains(tile);
-            if !needed {
+        let now = js_sys::Date::now();
+        self.in_flight.retain(|tile, (controller, started)| {
+            let kept = keep.contains(tile) || now - *started < STALE_GRACE_MS;
+            if !kept {
                 controller.abort();
             }
-            needed
+            kept
         });
     }
 
@@ -651,7 +657,7 @@ impl RasterSource {
     }
 
     pub fn delete(&self, gl: &glow::Context) {
-        for controller in self.in_flight.values() {
+        for (controller, _) in self.in_flight.values() {
             controller.abort();
         }
         // SAFETY: the pool is owned by this source, not used afterwards
@@ -686,6 +692,8 @@ async fn fetch_response(url: &str, signal: &web_sys::AbortSignal, reload: bool) 
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(Some(signal));
+    // The basemap first: it covers the whole screen
+    crate::js::fetch_priority(&init, "high");
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }
