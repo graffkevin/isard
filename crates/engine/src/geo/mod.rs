@@ -6,4 +6,5 @@ pub mod camera;
 pub mod geodesy;
 pub mod geoid;
 pub mod page;
+pub mod pieces;
 pub mod tiles;

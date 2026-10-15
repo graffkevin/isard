@@ -316,8 +316,10 @@ export class GeoMap implements LayerHost {
 
   /** Line network colored by a value per node; `layer.setValues` recolors it in one texture upload */
   addNetwork(options: NetworkOptions): NetworkLayer {
-    const { nodes, edges, width = 2, max = 1800, contour = 0, opacity = 1 } = options;
-    return this.add(new NetworkLayer(this, nodes, edges, { width, max, contour, opacity }));
+    const { nodes, edges, lines, costs, width = 2, max = 1800, contour = 0, opacity = 1 } = options;
+    const { halo = 0, haloOpacity = 0.11 } = options;
+    const style = { width, max, contour, opacity, halo, haloOpacity };
+    return this.add(new NetworkLayer(this, { nodes, edges, lines }, costs, style));
   }
 
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */

@@ -33,6 +33,13 @@ export interface PickHit {
   index: number;
 }
 
+/** Pieces of a network layer: its edges cut along their lines, sorted by square; only the squares in view are drawn */
+export interface NetworkStats {
+  pieces: number;
+  /** Drawn in the last frame */
+  drawn: number;
+}
+
 /** Tile counters of a raster layer */
 export interface RasterLayerStats {
   id: number;
@@ -449,26 +456,62 @@ impl Engine {
         }
     }
 
-    /// Network of `lon_lat.length / 2` nodes (degrees, interleaved) and `edges.length / 2` segments (node index
-    /// pairs, interleaved)
+    /// Network of `mercator.length / 2` nodes (Mercator [0, 1], y towards the south, interleaved: converted by the
+    /// JavaScript side, where `Math.tan` and `Math.log` are much faster than in WebAssembly) and `edges.length / 2`
+    /// edges (node index pairs, interleaved). `line_start` and `line_points`: the line of each edge from A to B, points
+    /// `line_start[e] .. line_start[e + 1]` of `line_points` (Mercator, interleaved; straight if fewer than two). `costs`: per edge, the
+    /// cost of travelling it from A to B then from B to A; without, values are interpolated along the edges.
     #[wasm_bindgen(js_name = addNetwork)]
+    // Optional arrays only cross the boundary owned
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn add_network(
         &mut self,
-        lon_lat: &[f64],
+        mercator: &[f64],
         edges: &[u32],
+        line_start: Option<Box<[u32]>>,
+        line_points: Option<Box<[f64]>>,
+        costs: Option<Box<[f32]>>,
         width: f32,
         max: f32,
         contour: f32,
         opacity: f32,
+        halo: f32,
+        halo_opacity: f32,
     ) -> Result<u32, JsValue> {
         let style = NetworkStyle {
             width,
             max,
             contour,
             opacity,
+            halo,
+            halo_opacity,
         };
-        let layer = NetworkLayer::new(&self.gl, lon_lat, edges, style)?;
+        let lines = line_start.as_deref().zip(line_points.as_deref());
+        let layer = NetworkLayer::new(&self.gl, mercator, edges, lines, costs.as_deref(), style)?;
         Ok(self.push(Layer::Network(Box::new(layer))))
+    }
+
+    /// Costs of a network's edges (see `addNetwork`), when the way it is travelled changes; null: interpolated values
+    #[wasm_bindgen(js_name = setNetworkCosts)]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_network_costs(&mut self, id: u32, costs: Option<Box<[f32]>>) {
+        if let Some(index) = self.layers.iter().position(|(i, _)| *i == id)
+            && let Layer::Network(layer) = &mut self.layers[index].1
+        {
+            layer.set_costs(&self.gl, costs.as_deref());
+        }
+    }
+
+    /// Pieces of a network in all and drawn in the last frame (only the squares in view are)
+    #[wasm_bindgen(js_name = networkStats, unchecked_return_type = "NetworkStats | undefined")]
+    pub fn network_stats(&mut self, id: u32) -> JsValue {
+        match self.layer(id) {
+            Some(Layer::Network(layer)) => {
+                let (pieces, drawn) = layer.counts();
+                js::object(&[("pieces", (pieces as f64).into()), ("drawn", drawn.into())])
+            }
+            _ => JsValue::UNDEFINED,
+        }
     }
 
     /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
@@ -530,13 +573,25 @@ impl Engine {
     }
 
     #[wasm_bindgen(js_name = setNetworkStyle)]
-    pub fn set_network_style(&mut self, id: u32, width: f32, max: f32, contour: f32, opacity: f32) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_network_style(
+        &mut self,
+        id: u32,
+        width: f32,
+        max: f32,
+        contour: f32,
+        opacity: f32,
+        halo: f32,
+        halo_opacity: f32,
+    ) {
         if let Some(Layer::Network(layer)) = self.layer(id) {
             layer.style = NetworkStyle {
                 width,
                 max,
                 contour,
                 opacity,
+                halo,
+                halo_opacity,
             };
         }
     }

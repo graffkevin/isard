@@ -18,9 +18,14 @@ you zoom in.
 
 ## Why it is fast
 
-- **Geometry uploaded once.** A network layer keeps node positions in a float texture and edges as instances. New
-  values are one texture upload (4 bytes per node), then **one draw call** for the whole layer: 2 M segments
-  recolor in the same frame as the mouse move.
+- **Geometry uploaded once, only the view drawn.** A network layer cuts its edges (straight, or along their lines)
+  into pieces, one instance each, sorted by square of a 256 × 256 grid over the network; the nodes and costs of each
+  edge and the values of the nodes live in textures. New values are one texture upload (4 bytes per node), and each
+  frame draws only the squares in view (a quadtree descent against the frustum, a few draw calls for the runs of
+  consecutive squares): of 2 M pieces around Paris, about 18,000 are drawn at zoom 14.
+- **Values worked out per pixel.** With edge costs, a point of an edge takes the quickest way there, min(t(A) + cost
+  from A, t(B) + cost from B), as a travel time does: an edge reached from both ends shows where the two fronts meet,
+  and an unreached node colors nothing. A faint wide halo pass under the lines adds up into a heat map.
 - **One draw call for the whole raster stack.** All the tiles of a layer share a texture array (fixed pool, least
   recently used slots recycled); images are decoded by the browser off the main thread and uploaded straight into
   their slot. Consecutive raster layers (up to four: basemap, hillshade…) are composited in the fragment shader, as
@@ -79,7 +84,7 @@ you zoom in.
 | `map.setBackground(color)` | `#rrggbb` behind the map |
 | `map.stats()` | tile counters per raster layer: drawn, kept on the GPU, loading, waiting for upload |
 | `map.addRaster({ url, minZoom, maxZoom, opacity, saturation })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`) |
-| `map.addNetwork({ nodes, edges, width, max, contour, opacity })` | `layer.setValues(Float32Array)` (negative = unreached), `layer.setStyle(…)`, `layer.remove()` |
+| `map.addNetwork({ nodes, edges, lines, costs, width, max, contour, opacity, halo, haloOpacity })` | `lines`: `{ start, points }`, the line of each edge from A to B; `costs`: per edge, A → B then B → A (Infinity: closed); `layer.setValues(Float32Array)` (negative or 1e30 = unreached), `layer.setCosts(…)` (new profile, geometry kept), `layer.setStyle(…)`, `layer.stats()` (pieces, drawn), `layer.remove()` |
 
 Controls: drag to pan (with inertia), wheel or double click to zoom (shift + double click out), right drag or
 ctrl/shift + drag to rotate and tilt, two fingers to pinch, turn and pan.

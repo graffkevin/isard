@@ -27,4 +27,4 @@ export type {
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
-export type { Camera, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/geo_render.js';
+export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/geo_render.js';

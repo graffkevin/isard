@@ -2,8 +2,8 @@
  * Handles of the layers added to a map. Each one keeps what it needs to be created again: after a WebGL context loss,
  * the map recreates its engine and every layer in order, with the same handle (its id is updated).
  */
-import type { LayerHost, NetworkStyle, RasterOptions, Tiles3dStyle } from './types.ts';
-import type { Engine, Tiles3dStats } from './wasm/geo_render.js';
+import type { LayerHost, NetworkOptions, NetworkStyle, RasterOptions, Tiles3dStyle } from './types.ts';
+import type { Engine, NetworkStats, Tiles3dStats } from './wasm/geo_render.js';
 
 export abstract class Layer {
   #id = -1;
@@ -54,36 +54,80 @@ export class RasterLayer extends Layer {
 /** Line network colored by a value per node (travel time, water depth…) */
 export class NetworkLayer extends Layer {
   private values: Float32Array | undefined;
+  /** Node and line positions in Mercator, kept for a context loss */
+  private mercator: { nodes: Float64Array; lines: Float64Array | undefined } | undefined;
 
   constructor(
     map: LayerHost,
-    private readonly nodes: Float64Array,
-    private readonly edges: Uint32Array,
+    private readonly geometry: { nodes: Float64Array; edges: Uint32Array; lines: NetworkOptions['lines'] | undefined },
+    private costs: Float32Array | undefined,
     private style: NetworkStyle,
   ) {
     super(map);
   }
 
-  /** One value per node, in node order; negative = unreached. Costs one texture upload, drawn next frame. */
+  /** One value per node, in node order; negative (or 1e30 and above) = unreached. Costs one texture upload, drawn
+   * next frame. */
   setValues(values: Float32Array): void {
     this.values = values;
     this.map.engine.setNetworkValues(this.id, values);
     this.map.requestRender();
   }
 
-  setStyle(style: Partial<NetworkStyle>): void {
-    this.style = { ...this.style, ...style };
-    const { width, max, contour, opacity } = this.style;
-    this.map.engine.setNetworkStyle(this.id, width, max, contour, opacity);
+  /** Costs of the edges, A → B then B → A (see `NetworkOptions.costs`), when the way the network is travelled
+   * changes; undefined: values interpolated along the edges. The geometry stays on the graphics card. */
+  setCosts(costs: Float32Array | undefined): void {
+    this.costs = costs;
+    this.map.engine.setNetworkCosts(this.id, costs);
     this.map.requestRender();
   }
 
+  setStyle(style: Partial<NetworkStyle>): void {
+    this.style = { ...this.style, ...style };
+    const { width, max, contour, opacity, halo, haloOpacity } = this.style;
+    this.map.engine.setNetworkStyle(this.id, width, max, contour, opacity, halo, haloOpacity);
+    this.map.requestRender();
+  }
+
+  /** Pieces in all and drawn in the last frame */
+  stats(): NetworkStats | undefined {
+    return this.map.engine.networkStats(this.id);
+  }
+
   protected create(engine: Engine): number {
-    const { width, max, contour, opacity } = this.style;
-    const id = engine.addNetwork(this.nodes, this.edges, width, max, contour, opacity);
+    const { nodes, edges, lines } = this.geometry;
+    const { width, max, contour, opacity, halo, haloOpacity } = this.style;
+    // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
+    this.mercator ??= { nodes: toMercator(nodes), lines: lines && toMercator(lines.points) };
+    const id = engine.addNetwork(
+      this.mercator.nodes,
+      edges,
+      lines?.start,
+      this.mercator.lines,
+      this.costs,
+      width,
+      max,
+      contour,
+      opacity,
+      halo,
+      haloOpacity,
+    );
     if (this.values) engine.setNetworkValues(id, this.values);
     return id;
   }
+}
+
+const MAX_LAT = 85.051128779806589;
+
+/** Longitudes and latitudes (degrees, interleaved) to Mercator [0, 1], y towards the south */
+function toMercator(lonLat: Float64Array): Float64Array {
+  const out = new Float64Array(lonLat.length);
+  for (let i = 0; i < lonLat.length; i += 2) {
+    const lat = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lonLat[i + 1] ?? 0)) * Math.PI) / 180;
+    out[i] = ((lonLat[i] ?? 0) + 180) / 360;
+    out[i + 1] = 0.5 - Math.log(Math.tan(Math.PI / 4 + lat / 2)) / (2 * Math.PI);
+  }
+  return out;
 }
 
 /** Textured meshes in 3D Tiles */

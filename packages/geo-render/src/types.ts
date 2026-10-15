@@ -76,13 +76,25 @@ export interface NetworkStyle {
   /** Darker line every `contour` value units, 0 for none (default 0) */
   contour: number;
   opacity: number;
+  /** Width of the halo drawn under the lines, CSS pixels, 0 for none (default 0): wide and faint, the reached
+   * streets add up into a heat map that fills the blocks */
+  halo: number;
+  /** Opacity of the halo at the middle of a line, fading quadratically to its sides (default 0.11) */
+  haloOpacity: number;
 }
 
 export interface NetworkOptions extends Partial<NetworkStyle> {
   /** Node coordinates in degrees: lon0, lat0, lon1, lat1… */
   nodes: Float64Array;
-  /** Segments as node index pairs: a0, b0, a1, b1… */
+  /** Edges as node index pairs: a0, b0, a1, b1… */
   edges: Uint32Array;
+  /** Line of each edge, from A to B: the points of edge e are `points[start[e] .. start[e + 1]]` (lon, lat pairs,
+   * counted in points); with fewer than two points an edge is straight. Default: all straight. */
+  lines?: { start: Uint32Array; points: Float64Array };
+  /** Per edge, the cost of travelling it from A to B then from B to A, in value units (Infinity: closed that way;
+   * closed both ways: not drawn). A point along an edge then takes the quickest way there, min(value(A) + cost from
+   * A, value(B) + cost from B), as a travel time does. Without costs, values are interpolated along the edges. */
+  costs?: Float32Array;
 }
 
 export interface Tiles3dStyle {

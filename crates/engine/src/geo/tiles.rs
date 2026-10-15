@@ -186,7 +186,7 @@ fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
 }
 
 /// Conservative test of sample points against the frustum: out only if all are beyond the same plane
-fn in_frustum(view: &View, points: &[DVec3]) -> bool {
+pub(crate) fn in_frustum(view: &View, points: &[DVec3]) -> bool {
     let clip: Vec<DVec4> = points.iter().map(|p| view.view_proj * p.extend(1.0)).collect();
     let outside = |f: fn(&DVec4) -> bool| clip.iter().all(f);
     !(outside(|c| c.x < -c.w)
