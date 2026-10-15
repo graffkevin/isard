@@ -71,7 +71,13 @@ export class GeoMap implements LayerHost {
   private readonly settings: Settings;
   /** The WebGL context is lost: nothing is drawn until it is restored */
   private lost = false;
-  private readonly listeners: Listeners = { move: new Set(), hover: new Set(), click: new Set(), render: new Set() };
+  private readonly listeners: Listeners = {
+    move: new Set(),
+    hover: new Set(),
+    click: new Set(),
+    render: new Set(),
+    idle: new Set(),
+  };
   private readonly resizeObserver: ResizeObserver;
   private readonly interaction: Interaction | undefined;
   private loader: TileLoader | undefined;
@@ -81,6 +87,8 @@ export class GeoMap implements LayerHost {
   private hoverPoint: Point | undefined;
   private frameRequest = 0;
   private lastCamera = '';
+  /** The last frame found everything loaded ('idle' sent) */
+  private settled = false;
   private inFrame = false;
 
   /** Loads the engine (once per page) and creates a map filling `container` */
@@ -370,11 +378,18 @@ export class GeoMap implements LayerHost {
     const t0 = performance.now();
     // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
     this.inFrame = false;
-    this.engine.render();
+    const loading = this.engine.render();
     this.inFrame = true;
     this.emit('render', { ms: performance.now() - t0 });
     this.inFrame = false;
     if (this.animation) this.requestRender();
+    // Idle: nothing loading, no animation, no frame asked for (uploads waiting, fades, listeners)
+    if (loading || this.animation || this.frameRequest !== 0) {
+      this.settled = false;
+    } else if (!this.settled) {
+      this.settled = true;
+      this.emit('idle', {});
+    }
   }
 
   private resize(): void {

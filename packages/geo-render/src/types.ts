@@ -123,6 +123,9 @@ export interface MapEvents {
   click: MapPointerEvent;
   /** A frame was drawn; duration of the engine call in milliseconds */
   render: { ms: number };
+  /** Everything in view is loaded and drawn, nothing moves: the end of a load, once after each change (as MapLibre's
+   * `idle`). Tiles requested by the first frame count, so it never fires before they arrive. */
+  idle: Record<string, never>;
 }
 
 /** What a layer handle needs from its map */

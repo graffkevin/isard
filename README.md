@@ -73,7 +73,7 @@ you zoom in.
 | | |
 |---|---|
 | `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `loading` (`'immediate'`, `'smooth'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
-| `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms); returns an unsubscribe function |
+| `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms), `'idle'` (everything in view loaded and drawn: the end of a load); returns an unsubscribe function |
 | `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms)` | camera conventions of MapLibre: settings carry over unchanged |
 | `map.project(lonLat)`, `map.unproject(point)` | CSS pixels ↔ degrees |
 | `map.addTiles3d({ url, maxScreenSpaceError, opacity })` | textured meshes from a `tileset.json`; `layer.setStyle(…)`, `layer.stats()`, `layer.remove()` |
