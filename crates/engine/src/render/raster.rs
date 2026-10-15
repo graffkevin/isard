@@ -15,7 +15,8 @@
 //! lifts the grid of every tile by the heights read in it, three levels coarser than the imagery (a 16 × 16 grid
 //! needs far fewer samples than 256 px), and a skirt under the tile edges hides the cracks between levels.
 
-use crate::geo::camera::View;
+use crate::geo::camera::{View, lon_lat};
+use crate::geo::geoid;
 use crate::geo::tiles::{self, TileId};
 use crate::render::gl::{self, Grid, Projection};
 use glow::HasContext;
@@ -495,7 +496,7 @@ impl RasterSource {
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
                 let reload = retried || attempt > 0;
                 let fetched = if elevation {
-                    fetch_heights(&url, &signal, reload).await.map(Pixels::Heights)
+                    fetch_heights(&url, tile, &signal, reload).await.map(Pixels::Heights)
                 } else {
                     fetch_bitmap(&url, &signal, reload).await.map(Pixels::Image)
                 };
@@ -845,7 +846,12 @@ async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) ->
 /// Altitudes of a tile: a full grid of 256 × 256 little-endian f32. A server error may come as a 200 with an XML
 /// exception: only a grid counts. No-data (outside the coverage) takes the lowest altitude of the tile: neither pit
 /// nor wall at the coast
-async fn fetch_heights(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<Vec<f32>, Fetch> {
+async fn fetch_heights(
+    url: &str,
+    tile: TileId,
+    signal: &web_sys::AbortSignal,
+    reload: bool,
+) -> Result<Vec<f32>, Fetch> {
     let response = fetch_response(url, signal, reload)
         .await
         .map_err(|_| Fetch::Transient)?;
@@ -878,7 +884,22 @@ async fn fetch_heights(url: &str, signal: &web_sys::AbortSignal, reload: bool) -
             *h = fill;
         }
     }
+    to_ellipsoid(tile, &mut heights);
     Ok(heights)
+}
+
+/// Altitudes of a tile to heights above the ellipsoid, those of 3D Tiles: plus the geoid height at each pixel center
+fn to_ellipsoid(tile: TileId, heights: &mut [f32]) {
+    let (min, max) = tile.bounds();
+    let size = TILE as usize;
+    let at = |k: usize, lo: f64, hi: f64| lo + (hi - lo) * (k as f64 + 0.5) / size as f64;
+    let lons: Vec<f64> = (0..size).map(|i| lon_lat(glam::DVec2::new(at(i, min.x, max.x), 0.5)).x).collect();
+    for (row, line) in heights.chunks_exact_mut(size).enumerate() {
+        let lat = lon_lat(glam::DVec2::new(0.5, at(row, min.y, max.y))).y;
+        for (h, &lon) in line.iter_mut().zip(&lons) {
+            *h += geoid::height(lon, lat) as f32;
+        }
+    }
 }
 
 /// `CPU_HEIGHTS`² altitudes out of a full 256 × 256 grid: the mean of each block

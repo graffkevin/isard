@@ -51,7 +51,8 @@ export interface GeoMapOptions extends Partial<Camera> {
 
 export interface TerrainOptions {
   /** Raw altitudes, 256 × 256 `image/x-bil;bits=32`: a WMS GetMap URL with {bbox} (EPSG:3857) or a tile URL with {z},
-   * {x} and {y} (default: the Géoplateforme WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES) */
+   * {x} and {y} (default: the Géoplateforme WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES). Altitudes over mainland
+   * France (NGF-IGN69) are raised by the RAF20 geoid height to meet the ellipsoidal heights of 3D Tiles */
   url?: string;
   /** Vertical exaggeration, 1 for the true relief (default 1) */
   exaggeration?: number;
