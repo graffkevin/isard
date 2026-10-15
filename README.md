@@ -55,6 +55,9 @@ you zoom in.
   ground under the screen center. Altitudes get the RAF20 geoid height, so 3D Tiles meshes (ellipsoidal heights) sit
   on the ground. Network layers are draped: a page table over the network's extent gives each vertex the deepest
   loaded elevation tile, edges are split in pieces that follow the ground, and the hills hide the lines behind them.
+  Picking and dragging work on the relief itself: the ground is drawn once more into the picking target, its depth
+  packed in the color and read back under the cursor; the grabbed point stays under it while the eye moves at a
+  constant height, and when finer relief arrives the orbited point slides to the ground without moving the eye.
 - **Space around the globe.** Stars fixed to the Earth's frame (they turn with the globe) and an atmosphere halo,
   procedural in one full-screen triangle, fading out as the globe turns flat (`sky: false` to turn it off).
 - **Globe for free.** The globe is a sphere up to zoom 5, blending into Web Mercator up to zoom 7; above, it costs
@@ -145,7 +148,7 @@ to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`,
 ## Roadmap
 
 1. Vector basemap (PLAN.IGN vector tiles: fills, lines, then labels), to restyle the ground per use case.
-2. BD TOPO buildings colored by value; picking and dragging on the relief itself.
+2. BD TOPO buildings colored by value.
 3. Field layer: a value grid drawn as a smooth surface (water depth over the terrain for flooding).
 4. Picking (feature under the cursor) and points (stations).
 5. Move geo-reach and geo-flood onto the engine.

@@ -5,7 +5,7 @@ use crate::js;
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
 use crate::render::network::{NetworkLayer, NetworkStyle};
-use crate::render::raster::{DrawContext, Loading, RasterOptions, RasterPass, RasterSource, STACK};
+use crate::render::raster::{DrawContext, Loading, RasterOptions, RasterPass, RasterSource, STACK, unpack_depth};
 use crate::render::sky::Sky;
 use crate::tiles3d::layer::Tiles3dLayer;
 use glam::DVec2;
@@ -103,6 +103,14 @@ pub struct Engine {
     pick_target: Option<PickTarget>,
     /// How tiles load and show
     loading: Loading,
+    /// View of the last frame: what is on screen, for the picking of positions
+    drawn: Option<View>,
+    /// Last drag or zoom point (CSS pixels) and the altitude of the ground grabbed there (metres, exaggeration
+    /// included): the next move from that point keeps the same ground point under the cursor
+    grab: Option<(DVec2, f64)>,
+    /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
+    /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
+    handled: bool,
 }
 
 /// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
@@ -113,6 +121,8 @@ const TERRAIN_MAX_Z: u8 = 15;
 struct PickTarget {
     framebuffer: glow::Framebuffer,
     texture: glow::Texture,
+    /// For the ground's depth (`pick_altitude`)
+    depth: glow::Renderbuffer,
     size: (i32, i32),
 }
 
@@ -169,6 +179,9 @@ impl Engine {
             preload_generation: 0,
             pick_target: None,
             loading: Loading::IMMEDIATE,
+            drawn: None,
+            grab: None,
+            handled: false,
         })
     }
 
@@ -186,6 +199,7 @@ impl Engine {
         self.camera.pitch = pitch;
         self.camera.bearing = bearing;
         self.camera.clamp();
+        self.handled = false;
     }
 
     #[must_use]
@@ -342,14 +356,23 @@ impl Engine {
         })
     }
 
-    /// Drags the ground from one screen point to another (CSS pixels)
+    /// Drags the ground from one screen point to another (CSS pixels); in relief, the ground point grabbed stays
+    /// under the cursor
     pub fn pan(&mut self, x0: f64, y0: f64, x1: f64, y1: f64) {
-        self.camera.pan(DVec2::new(x0, y0), DVec2::new(x1, y1));
+        let (from, to) = (DVec2::new(x0, y0), DVec2::new(x1, y1));
+        let altitude = self.grabbed(from);
+        self.camera.pan_at(from, to, altitude);
+        self.grab = Some((to, altitude));
+        self.handled = true;
     }
 
     #[wasm_bindgen(js_name = zoomAt)]
     pub fn zoom_at(&mut self, delta: f64, x: f64, y: f64) {
-        self.camera.zoom_at(delta, DVec2::new(x, y));
+        let at = DVec2::new(x, y);
+        let altitude = self.grabbed(at);
+        self.camera.zoom_at_altitude(delta, at, altitude);
+        self.grab = Some((at, altitude));
+        self.handled = true;
     }
 
     /// Turns and tilts around the screen center, in degrees
@@ -357,14 +380,15 @@ impl Engine {
         self.camera.bearing += bearing;
         self.camera.pitch += pitch;
         self.camera.clamp();
+        self.handled = true;
     }
 
-    /// Position under a screen point (CSS pixels), undefined above the horizon
-    #[must_use]
+    /// Position under a screen point (CSS pixels), undefined above the horizon; on the relief itself
     #[wasm_bindgen(unchecked_return_type = "[lon: number, lat: number] | undefined")]
-    pub fn ground(&self, x: f64, y: f64) -> JsValue {
+    pub fn ground(&mut self, x: f64, y: f64) -> JsValue {
+        let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
         self.camera
-            .ground(&self.camera.view(), x, y)
+            .ground_at(&self.camera.view(), x, y, altitude)
             .map(camera::lon_lat)
             .map_or(JsValue::UNDEFINED, |p| js::pair(p.x, p.y))
     }
@@ -374,8 +398,15 @@ impl Engine {
     #[wasm_bindgen(unchecked_return_type = "[x: number, y: number] | undefined")]
     pub fn project(&self, lon: f64, lat: f64) -> JsValue {
         let view = self.camera.view();
-        let p = (camera::mercator(lon, lat) - self.camera.center) * view.world_size;
-        let clip = view.view_proj * glam::DVec4::new(p.x, p.y, 0.0, 1.0);
+        let m = camera::mercator(lon, lat);
+        let p = (m - self.camera.center) * view.world_size;
+        // On the relief: its altitude there (from the coarse copy kept on the CPU)
+        let altitude = self
+            .terrain
+            .as_ref()
+            .and_then(|(terrain, exaggeration)| terrain.altitude(m).map(|h| h * f64::from(*exaggeration)))
+            .unwrap_or(0.0);
+        let clip = view.view_proj * glam::DVec4::new(p.x, p.y, altitude * view.vertical, 1.0);
         if clip.w <= 0.0 {
             return JsValue::UNDEFINED;
         }
@@ -534,12 +565,23 @@ impl Engine {
     pub fn render(&mut self) -> bool {
         self.frame += 1;
         // The camera turns around the relief under its center (sea level without relief)
-        self.camera.elevation = match &self.terrain {
-            Some((terrain, exaggeration)) => terrain
-                .altitude(self.camera.center)
-                .map_or(self.camera.elevation, |h| h * f64::from(*exaggeration)),
-            None => 0.0,
-        };
+        let key_of = |c: &Camera| [c.center.x, c.center.y, c.zoom, c.pitch, c.bearing].map(f64::to_bits);
+        if self.terrain.is_none() {
+            self.camera.elevation = 0.0;
+        } else if let Some(h) = ground_elevation(self.terrain.as_ref(), self.camera.center) {
+            if self.handled {
+                // Moved by the user (or finer relief under a camera they moved): the eye stays, the orbited point
+                // comes down to the ground under the center, nothing moves on screen
+                let still = key_of(&self.camera) == self.last_camera;
+                self.camera.settle_elevation(h);
+                if still {
+                    self.last_camera = key_of(&self.camera);
+                }
+            } else {
+                // Set by the application: its center holds, the camera rises and sinks with the ground
+                self.camera.elevation = h;
+            }
+        }
         let view = self.camera.view();
         let (w, h) = (
             self.camera.width * self.pixel_ratio,
@@ -548,14 +590,7 @@ impl Engine {
         let mut loading = false;
         self.begin_frame(w, h);
         // Camera motion, for the foveated loading
-        let key = [
-            self.camera.center.x,
-            self.camera.center.y,
-            self.camera.zoom,
-            self.camera.pitch,
-            self.camera.bearing,
-        ]
-        .map(f64::to_bits);
+        let key = key_of(&self.camera);
         let now = js_sys::Date::now();
         if key != self.last_camera {
             self.last_camera = key;
@@ -568,6 +603,7 @@ impl Engine {
             camera.height = self.camera.height;
             (*generation, camera.view())
         });
+        self.drawn = Some(view.clone());
         self.sky.draw(&self.gl, &view);
         self.globe.draw(&self.gl, &view);
         let ctx = DrawContext {
@@ -652,6 +688,79 @@ impl Engine {
         }
     }
 
+    /// Altitude of the ground grabbed at a screen point: the one grabbed by the last move if it ended there, else
+    /// the relief under the point, else the center's
+    fn grabbed(&mut self, at: DVec2) -> f64 {
+        match self.grab {
+            Some((point, altitude)) if point == at => altitude,
+            _ => self.pick_altitude(at.x, at.y).unwrap_or(self.camera.elevation),
+        }
+    }
+
+    /// Altitude (metres, exaggeration included) of the relief drawn under a screen point (CSS pixels), None without
+    /// relief or off the ground. The ground of the last frame is drawn again into the picking target, its depth
+    /// packed in the color, clipped to that pixel, and the pixel read back.
+    fn pick_altitude(&mut self, x: f64, y: f64) -> Option<f64> {
+        self.terrain.as_ref()?;
+        let view = self.drawn.clone()?;
+        let size = (
+            (self.camera.width * self.pixel_ratio).round() as i32,
+            (self.camera.height * self.pixel_ratio).round() as i32,
+        );
+        let (px, py) = (
+            (x * self.pixel_ratio) as i32,
+            size.1 - 1 - (y * self.pixel_ratio) as i32,
+        );
+        if px < 0 || py < 0 || px >= size.0 || py >= size.1 {
+            return None;
+        }
+        let target = self.pick_target(size).ok()?;
+        let (terrain, _) = self.terrain.as_ref()?;
+        let mut pixel = [0u8; 4];
+        // SAFETY: offscreen pass on the live context, default framebuffer and state restored after
+        unsafe {
+            let gl = &self.gl;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
+            gl.viewport(0, 0, size.0, size.1);
+            gl.enable(glow::SCISSOR_TEST);
+            gl.scissor(px, py, 1, 1);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            gl.disable(glow::BLEND);
+            gl.disable(glow::CULL_FACE);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LESS);
+            gl.depth_mask(true);
+            self.raster_pass.draw_depth(gl, &view, terrain);
+            gl.read_pixels(
+                px,
+                py,
+                1,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixel)),
+            );
+            gl.disable(glow::DEPTH_TEST);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            gl.enable(glow::CULL_FACE);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        if pixel[3] == 0 {
+            return None;
+        }
+        let depth = unpack_depth(pixel);
+        let ndc = glam::DVec4::new(
+            2.0 * x / self.camera.width - 1.0,
+            1.0 - 2.0 * y / self.camera.height,
+            2.0 * depth - 1.0,
+            1.0,
+        );
+        let p = view.inverse * ndc;
+        Some(Camera::altitude_of(&view, p.truncate() / p.w))
+    }
+
     /// Network layer id and edge index under a screen point (see `pick`)
     fn pick_edge(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
         let networks: Vec<(u32, usize)> = self
@@ -729,6 +838,7 @@ impl Engine {
             if let Some(old) = self.pick_target.take() {
                 gl.delete_framebuffer(old.framebuffer);
                 gl.delete_texture(old.texture);
+                gl.delete_renderbuffer(old.depth);
             }
             let texture = gl.create_texture()?;
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -742,10 +852,16 @@ impl Engine {
                 Some(texture),
                 0,
             );
+            let depth = gl.create_renderbuffer()?;
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
+            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT24, size.0, size.1);
+            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
+            gl.bind_renderbuffer(glow::RENDERBUFFER, None);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             self.pick_target = Some(PickTarget {
                 framebuffer,
                 texture,
+                depth,
                 size,
             });
             Ok(framebuffer)
@@ -791,4 +907,11 @@ fn draw_network(
         gl.disable(glow::DEPTH_TEST);
         gl.depth_mask(true);
     }
+}
+
+/// Altitude of the relief at a Mercator point (metres, exaggeration included), from the coarse copy kept on the CPU:
+/// what the camera orbits; None without relief or before its tiles
+fn ground_elevation(terrain: Option<&(RasterSource, f32)>, m: DVec2) -> Option<f64> {
+    let (source, exaggeration) = terrain?;
+    source.altitude(m).map(|h| h * f64::from(*exaggeration))
 }

@@ -88,6 +88,7 @@ pub struct Globe {
 }
 
 /// Matrices of one frame, derived from the camera
+#[derive(Clone, Debug)]
 pub struct View {
     /// Local frame to clip space
     pub view_proj: DMat4,
@@ -100,6 +101,8 @@ pub struct View {
     pub near: f64,
     /// Altitude of the center in the local frame (pixels): the plane (or sphere) the camera turns around
     pub lift: f64,
+    /// Pixels of the local frame per metre of altitude
+    pub vertical: f64,
     pub world_size: f64,
     pub center: DVec2,
     pub globe: Globe,
@@ -133,11 +136,11 @@ impl View {
         DVec3::new(0.0, 0.0, -self.globe.radius)
     }
 
-    /// Mercator point of a position on the sphere (local frame)
+    /// Mercator point of a position on the sphere, or above or under it (local frame)
     #[must_use]
     pub fn sphere_to_mercator(&self, p: DVec3) -> DVec2 {
         let g = &self.globe;
-        let local = (p - self.sphere_center()) / g.radius;
+        let local = (p - self.sphere_center()).normalize_or_zero();
         let n = g.east * local.x - g.north * local.y + g.up * local.z;
         mercator(n.y.atan2(n.x).to_degrees(), n.z.clamp(-1.0, 1.0).asin().to_degrees())
     }
@@ -274,7 +277,8 @@ impl Camera {
         // The center stands at its altitude: the local frame goes down under the camera
         let lat = (PI * (1.0 - 2.0 * self.center.y)).sinh().atan();
         let plane = self.world_size() / (2.0 * PI * geodesy::A * lat.cos().max(1e-6));
-        let lift = self.elevation * (plane + (globe.radius / geodesy::A - plane) * globe.factor);
+        let vertical = plane + (globe.radius / geodesy::A - plane) * globe.factor;
+        let lift = self.elevation * vertical;
         // Local frame (y south, z up) to eye space (y up, looking down -z)
         let view = DMat4::from_translation(DVec3::new(0.0, 0.0, -center_distance))
             * DMat4::from_rotation_x(-pitch)
@@ -290,25 +294,40 @@ impl Camera {
             center_distance,
             near,
             lift,
+            vertical,
             world_size: self.world_size(),
             center: self.center,
             globe,
         }
     }
 
-    /// Ground point (Mercator) under a screen point (CSS pixels from the top left), None off the ground
+    /// Ground point (Mercator) under a screen point (CSS pixels from the top left), None off the ground; the ground is
+    /// taken at the altitude of the center
     #[must_use]
     pub fn ground(&self, view: &View, x: f64, y: f64) -> Option<DVec2> {
+        self.ground_at(view, x, y, self.elevation)
+    }
+
+    /// Ray from the camera through a screen point (CSS pixels): its points on the near and far planes, local frame
+    #[must_use]
+    pub fn ray(&self, view: &View, x: f64, y: f64) -> (DVec3, DVec3) {
         let ndc = DVec2::new(2.0 * x / self.width - 1.0, 1.0 - 2.0 * y / self.height);
         let unproject = |z: f64| {
             let p = view.inverse * DVec4::new(ndc.x, ndc.y, z, 1.0);
             p.truncate() / p.w
         };
-        let (a, b) = (unproject(-1.0), unproject(1.0));
+        (unproject(-1.0), unproject(1.0))
+    }
+
+    /// Point (Mercator) where the ray through a screen point meets the surface at `altitude` (metres, exaggeration
+    /// included), None if it misses it
+    #[must_use]
+    pub fn ground_at(&self, view: &View, x: f64, y: f64, altitude: f64) -> Option<DVec2> {
+        let (a, b) = self.ray(view, x, y);
+        let h = altitude * view.vertical;
         // While blending, the surface is closer to the sphere or to the plane
-        // The ground is taken at the altitude of the center (the relief itself is not searched)
         if view.globe.factor >= 0.5 {
-            let (d, c, r) = (b - a, view.sphere_center(), view.globe.radius + view.lift);
+            let (d, c, r) = (b - a, view.sphere_center(), view.globe.radius + h);
             let (qa, qb, qc) = (d.dot(d), 2.0 * d.dot(a - c), (a - c).length_squared() - r * r);
             let disc = qb * qb - 4.0 * qa * qc;
             if disc < 0.0 {
@@ -317,7 +336,7 @@ impl Camera {
             let t = (-qb - disc.sqrt()) / (2.0 * qa);
             return (t >= 0.0).then(|| view.sphere_to_mercator(a + d * t));
         }
-        let t = (a.z - view.lift) / (a.z - b.z);
+        let t = (a.z - h) / (a.z - b.z);
         if !(0.0..=1.0).contains(&t) || b.z >= a.z {
             return None;
         }
@@ -325,15 +344,32 @@ impl Camera {
         Some(self.center + DVec2::new(p.x, p.y) / view.world_size)
     }
 
+    /// Altitude (metres, exaggeration included) of a point of the local frame
+    #[must_use]
+    pub fn altitude_of(view: &View, p: DVec3) -> f64 {
+        if view.globe.factor >= 0.5 {
+            (p.distance(view.sphere_center()) - view.globe.radius) / view.vertical
+        } else {
+            p.z / view.vertical
+        }
+    }
+
     /// Moves the center so that the ground under `from` comes under `to` (screen points, CSS pixels)
     pub fn pan(&mut self, from: DVec2, to: DVec2) {
-        let Some(grabbed) = self.ground(&self.view(), from.x, from.y) else {
+        self.pan_at(from, to, self.elevation);
+    }
+
+    /// `pan`, the grabbed point being at `altitude` (metres, exaggeration included): it stays under the cursor. The
+    /// eye moves at a constant height: the point it orbits keeps its altitude, and `settle_elevation` brings it down
+    /// to the ground afterwards without moving the eye (like Google Earth)
+    pub fn pan_at(&mut self, from: DVec2, to: DVec2, altitude: f64) {
+        let Some(grabbed) = self.ground_at(&self.view(), from.x, from.y, altitude) else {
             return;
         };
         // On the globe, turning it also turns the local frame: a few corrections keep the grabbed point under the
-        // cursor (like Google Earth)
+        // cursor
         for _ in 0..if self.globe { 4 } else { 1 } {
-            let Some(under) = self.ground(&self.view(), to.x, to.y) else {
+            let Some(under) = self.ground_at(&self.view(), to.x, to.y, altitude) else {
                 return;
             };
             self.shift_center(grabbed, under);
@@ -342,7 +378,13 @@ impl Camera {
 
     /// Zooms by `delta` levels, keeping the ground under the screen point `at` in place
     pub fn zoom_at(&mut self, delta: f64, at: DVec2) {
-        let Some(before) = self.ground(&self.view(), at.x, at.y) else {
+        self.zoom_at_altitude(delta, at, self.elevation);
+    }
+
+    /// `zoom_at`, the ground under `at` being at `altitude` (metres, exaggeration included); as for `pan_at`, the
+    /// orbited point keeps its altitude
+    pub fn zoom_at_altitude(&mut self, delta: f64, at: DVec2, altitude: f64) {
+        let Some(before) = self.ground_at(&self.view(), at.x, at.y, altitude) else {
             self.zoom += delta;
             self.clamp();
             return;
@@ -351,11 +393,42 @@ impl Camera {
         self.clamp();
         // On the globe, moving the center also turns the local frame: a few corrections converge
         for _ in 0..if self.globe { 4 } else { 1 } {
-            let Some(after) = self.ground(&self.view(), at.x, at.y) else {
+            let Some(after) = self.ground_at(&self.view(), at.x, at.y, altitude) else {
                 return;
             };
             self.shift_center(before, after);
         }
+    }
+
+    /// Sets the altitude of the ground under the center without moving the eye: when finer relief arrives under a
+    /// still camera, the point it orbits slides along the view axis to the new ground and the zoom follows the new
+    /// distance, so nothing moves on screen. On the globe (where relief barely shows), or if the new ground would
+    /// come too close to the eye, the altitude is just set.
+    pub fn settle_elevation(&mut self, elevation: f64) {
+        let delta = elevation - self.elevation;
+        let view = self.view();
+        let pitch = self.pitch.to_radians();
+        if delta == 0.0 || view.globe.factor > 0.0 {
+            self.elevation = elevation;
+            return;
+        }
+        // Along the view axis, by `along` metres towards the eye for a rise of `delta`
+        let metres = view.vertical; // pixels per metre
+        let distance = view.center_distance / metres;
+        let along = delta / pitch.cos();
+        if distance - along < distance * 0.1 {
+            self.elevation = elevation;
+            return;
+        }
+        // The eye stands back from the center along the horizontal direction of `eye`
+        let back = DVec2::new(view.eye.x, view.eye.y);
+        if back.length() > 1e-9 {
+            let shift = back.normalize() * delta * pitch.tan() * metres / view.world_size;
+            self.center += shift;
+        }
+        self.zoom += (distance / (distance - along)).log2();
+        self.elevation = elevation;
+        self.clamp();
     }
 
     /// Moves the center by the ground offset from `b` to `a` (Mercator points).
@@ -492,6 +565,100 @@ mod tests {
         let s = v.sphere(m);
         assert!((s.x - 1.0).abs() < 1e-3 && s.y.abs() < 1e-3, "{s}");
         assert!((v.sphere_to_mercator(s) - m).length() < 1e-12);
+    }
+
+    #[test]
+    fn ground_at_an_altitude() {
+        // A point 900 m up seen from a tilted camera standing over a 1000 m relief: back to it through its screen point
+        for globe_on in [false, true] {
+            let mut c = camera();
+            c.globe = globe_on;
+            c.zoom = if globe_on { 4.0 } else { 14.0 };
+            c.pitch = 55.0;
+            c.elevation = 1000.0;
+            let view = c.view();
+            let m = c.center + DVec2::new(0.6, -0.4) / view.world_size * 300.0;
+            let base = view.position(m, 0.0);
+            let up = if view.globe.factor >= 0.5 {
+                (base - view.sphere_center()).normalize()
+            } else {
+                DVec3::Z
+            };
+            let p = base + up * 900.0 * view.vertical;
+            let clip = view.view_proj * p.extend(1.0);
+            let (x, y) = (
+                f64::midpoint(clip.x / clip.w, 1.0) * c.width,
+                (1.0 - clip.y / clip.w) / 2.0 * c.height,
+            );
+            let found = c.ground_at(&view, x, y, 900.0).expect("on the ground");
+            assert!((found - m).length() * view.world_size < 0.01, "{globe_on}: {found} {m}");
+            assert!((Camera::altitude_of(&view, p) - 900.0).abs() < 0.01);
+            // At the center's altitude instead, the ray meets the ground elsewhere (100 m off: visible at zoom 14)
+            if !globe_on {
+                let wrong = c.ground(&view, x, y).expect("on the ground");
+                assert!((wrong - m).length() * view.world_size > 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn grabbed_relief_stays_under_the_cursor() {
+        // A slope rising 2000 m per 0.001 of Mercator y towards the north, the camera tilted over it
+        let slope = |m: DVec2| Some(1000.0 + (0.3384 - m.y) * 2e6);
+        let mut c = camera();
+        c.pitch = 65.0;
+        c.zoom = 13.5;
+        c.elevation = slope(c.center).unwrap();
+        let (from, to) = (DVec2::new(900.0, 250.0), DVec2::new(700.0, 330.0));
+        // The relief under `from`: search the altitude where the ray meets the slope
+        let view = c.view();
+        let mut altitude = c.elevation;
+        for _ in 0..50 {
+            altitude = slope(c.ground_at(&view, from.x, from.y, altitude).unwrap()).unwrap();
+        }
+        let grabbed = c.ground_at(&view, from.x, from.y, altitude).unwrap();
+        for k in 1..=10 {
+            let a = from + (to - from) * f64::from(k - 1) / 10.0;
+            let b = from + (to - from) * f64::from(k) / 10.0;
+            c.pan_at(a, b, altitude);
+            // Each frame brings the orbited point down to the ground under the new center, the eye staying
+            c.settle_elevation(slope(c.center).unwrap());
+        }
+        let under = c.ground_at(&c.view(), to.x, to.y, altitude).unwrap();
+        let error = (under - grabbed).length() * c.view().world_size;
+        assert!(error < 0.05, "{error} px");
+        // The settled center moves too: the next frames converge on the ground, still without moving the grabbed point
+        for _ in 0..20 {
+            c.settle_elevation(slope(c.center).unwrap());
+        }
+        assert!((c.elevation - slope(c.center).unwrap()).abs() < 0.01);
+        let under = c.ground_at(&c.view(), to.x, to.y, altitude).unwrap();
+        assert!((under - grabbed).length() * c.view().world_size < 0.05);
+    }
+
+    #[test]
+    fn finer_relief_does_not_move_the_view() {
+        let mut c = camera();
+        c.pitch = 60.0;
+        c.bearing = 30.0;
+        c.zoom = 14.0;
+        c.elevation = 800.0;
+        let before = c.view();
+        // A ground point 1000 m up, off the center: where it shows before and after the center's altitude changes
+        let p = before.position(c.center + DVec2::new(150.0, -90.0) / before.world_size, 0.0)
+            + DVec3::Z * 1000.0 * before.vertical;
+        let screen = |c: &Camera, view: &View| {
+            let m = c.center + DVec2::new(p.x, p.y) / before.world_size + before.center - c.center;
+            let q = view.position(m, 0.0) + DVec3::Z * 1000.0 * view.vertical;
+            let clip = view.view_proj * q.extend(1.0);
+            DVec2::new(clip.x / clip.w, clip.y / clip.w)
+        };
+        let a = screen(&c, &before);
+        c.settle_elevation(950.0);
+        let after = c.view();
+        let b = screen(&c, &after);
+        assert!((a - b).length() * c.width < 0.05, "{a} {b}");
+        assert!((c.elevation - 950.0).abs() < 1e-9);
     }
 
     #[test]

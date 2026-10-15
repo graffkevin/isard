@@ -157,6 +157,23 @@ void main() {
   color = acc;
 }";
 
+/// Depth of the ground, packed in RGB (24 bits), alpha 1 where there is ground: the picking of positions in relief
+const DEPTH_FRAGMENT: &str = r"#version 300 es
+precision highp float;
+out vec4 color;
+void main() {
+  vec3 e = fract(gl_FragCoord.z * vec3(1.0, 255.0, 65025.0));
+  e -= e.yzz * vec3(1.0 / 255.0, 1.0 / 255.0, 0.0);
+  color = vec4(e, 1.0);
+}";
+
+/// Depth in [0, 1] from an RGBA8 pixel of `DEPTH_FRAGMENT`
+#[must_use]
+pub fn unpack_depth(pixel: [u8; 4]) -> f64 {
+    let [r, g, b, _] = pixel.map(|c| f64::from(c) / 255.0);
+    r + g / 255.0 + b / 65025.0
+}
+
 pub struct RasterOptions {
     /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857: west, south, east, north in metres)
     pub url: String,
@@ -1004,9 +1021,15 @@ pub struct RasterPass {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 10],
     projection: Projection,
+    /// The ground's depth, for picking positions in relief
+    depth: glow::Program,
+    depth_uniforms: [Option<glow::UniformLocation>; 3],
+    depth_projection: Projection,
     vao: glow::VertexArray,
     instances: glow::Buffer,
     data: Vec<f32>,
+    /// Tiles of the last draw (still in `instances`) and its exaggeration
+    last: Option<(i32, f32)>,
 }
 
 impl RasterPass {
@@ -1029,6 +1052,9 @@ impl RasterPass {
             ],
         );
         let projection = Projection::new(gl, program);
+        let depth = gl::program(gl, &format!("#version 300 es\n{}{VERTEX}", gl::PROJECT), DEPTH_FRAGMENT)?;
+        let depth_uniforms = gl::uniforms(gl, depth, ["u_matrix", "u_heights", "u_relief"]);
+        let depth_projection = Projection::new(gl, depth);
         // SAFETY: object creation and state setup on a live WebGL2 context
         unsafe {
             let vao = gl.create_vertex_array()?;
@@ -1057,10 +1083,37 @@ impl RasterPass {
                 program,
                 uniforms,
                 projection,
+                depth,
+                depth_uniforms,
+                depth_projection,
                 vao,
                 instances,
                 data: Vec::new(),
+                last: None,
             })
+        }
+    }
+
+    /// Draws the ground of the last frame again (its tiles, `view` being that frame's) into the bound framebuffer,
+    /// its depth packed by `DEPTH_FRAGMENT`; depth test on, the caller clears and scissors
+    pub fn draw_depth(&self, gl: &glow::Context, view: &View, terrain: &RasterSource) {
+        let Some((count, relief)) = self.last else {
+            return;
+        };
+        let [matrix, heights, relief_u] = &self.depth_uniforms;
+        // SAFETY: draw with objects owned by this pass and the terrain's pool
+        unsafe {
+            gl.use_program(Some(self.depth));
+            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
+            gl.uniform_1_f32(relief_u.as_ref(), relief);
+            self.depth_projection.set(gl, view);
+            gl.uniform_1_i32(heights.as_ref(), STACK as i32);
+            gl.active_texture(glow::TEXTURE0 + STACK as u32);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(terrain.pool));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_vertex_array(Some(self.vao));
+            Grid::draw(gl, view, count, relief > 0.0);
+            gl.bind_vertex_array(None);
         }
     }
 
@@ -1112,6 +1165,7 @@ impl RasterPass {
         }
         let count = (self.data.len() / INSTANCE) as i32;
         let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
+        self.last = Some((count, relief));
         // SAFETY: draw with objects owned by this pass and the sources' pools
         unsafe {
             gl.use_program(Some(self.program));
