@@ -1,6 +1,6 @@
 //! The engine exported to JavaScript
 
-use crate::geo::camera::{self, Camera};
+use crate::geo::camera::{self, Camera, View};
 use crate::js;
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
@@ -71,7 +71,7 @@ export interface Tiles3dStats {
 
 enum Layer {
     Raster(RasterSource),
-    Network(NetworkLayer),
+    Network(Box<NetworkLayer>),
     Tiles3d(Tiles3dLayer),
 }
 
@@ -437,7 +437,7 @@ impl Engine {
             opacity,
         };
         let layer = NetworkLayer::new(&self.gl, lon_lat, edges, style)?;
-        Ok(self.push(Layer::Network(layer)))
+        Ok(self.push(Layer::Network(Box::new(layer))))
     }
 
     /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
@@ -589,13 +589,9 @@ impl Engine {
                 continue;
             }
             if matches!(self.layers[i].1, Layer::Network(_)) {
-                if let Layer::Network(layer) = &self.layers[i].1 {
-                    // Line quads are built on screen, either way round
-                    // SAFETY: state changes on the live context
-                    unsafe { self.gl.disable(glow::CULL_FACE) };
-                    layer.draw(&self.gl, &self.camera, &view, self.pixel_ratio);
-                    // SAFETY: state change on the live context
-                    unsafe { self.gl.enable(glow::CULL_FACE) };
+                if let Layer::Network(layer) = &mut self.layers[i].1 {
+                    let relief = self.terrain.as_ref().map(|(source, e)| (source, *e));
+                    draw_network(&self.gl, layer, &self.camera, &view, self.pixel_ratio, relief);
                 }
                 i += 1;
                 continue;
@@ -695,7 +691,8 @@ impl Engine {
             gl.disable(glow::CULL_FACE);
             for (ordinal, &(_, index)) in networks.iter().enumerate() {
                 if let Layer::Network(layer) = &self.layers[index].1 {
-                    layer.draw_pick(gl, &self.camera, &view, self.pixel_ratio, (ordinal + 1) as u8);
+                    let relief = self.terrain.as_ref().map(|(source, e)| (source, *e));
+                    layer.draw_pick(gl, &self.camera, &view, self.pixel_ratio, (ordinal + 1) as u8, relief);
                 }
             }
             gl.read_pixels(
@@ -764,5 +761,34 @@ impl Engine {
 
     fn layer(&mut self, id: u32) -> Option<&mut Layer> {
         self.layers.iter_mut().find(|(i, _)| *i == id).map(|(_, l)| l)
+    }
+}
+
+/// Draws a network layer; `relief`: the elevation source and its exaggeration
+fn draw_network(
+    gl: &glow::Context,
+    layer: &mut NetworkLayer,
+    camera: &Camera,
+    view: &View,
+    pixel_ratio: f64,
+    relief: Option<(&RasterSource, f32)>,
+) {
+    // Line quads are built on screen, either way round; in relief the hills hide the lines behind them (tested
+    // against the ground's depth, not written)
+    // SAFETY: state changes on the live context
+    unsafe {
+        gl.disable(glow::CULL_FACE);
+        if relief.is_some() {
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(false);
+        }
+    }
+    layer.draw(gl, camera, view, pixel_ratio, relief);
+    // SAFETY: state changes on the live context
+    unsafe {
+        gl.enable(glow::CULL_FACE);
+        gl.disable(glow::DEPTH_TEST);
+        gl.depth_mask(true);
     }
 }

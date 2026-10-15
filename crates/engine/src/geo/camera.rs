@@ -96,6 +96,8 @@ pub struct View {
     pub eye: DVec3,
     /// Distance from the camera to the center, in pixels
     pub center_distance: f64,
+    /// Near plane distance, in pixels
+    pub near: f64,
     /// Altitude of the center in the local frame (pixels): the plane (or sphere) the camera turns around
     pub lift: f64,
     pub world_size: f64,
@@ -286,6 +288,7 @@ impl Camera {
             inverse: view_proj.inverse(),
             eye,
             center_distance,
+            near,
             lift,
             world_size: self.world_size(),
             center: self.center,

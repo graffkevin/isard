@@ -3,10 +3,12 @@
 //! The geometry is uploaded once: node positions in a float texture, edges as one instance each (two node
 //! indices). A new set of values is a single texture upload of 4 bytes per node, then one draw call: millions of
 //! segments recolor at every mouse move. Lines are expanded to quads on the GPU, with a constant width in pixels
-//! and antialiased edges.
+//! and antialiased edges. In relief, the nodes stand on the ground (`drape`) and the hills hide the lines behind them.
 
 use crate::geo::camera::{self, Camera, View};
+use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::gl::{self, Projection, bytes as as_bytes};
+use crate::render::raster::RasterSource;
 use glam::DVec2;
 use glow::HasContext;
 
@@ -16,11 +18,14 @@ const WIDTH: usize = 4096;
 const VERTEX: &str = r"
 uniform mat4 u_matrix;
 // Node offsets are Mercator, relative to the network origin: on the plane, in pixels from the camera center
+// (u_world, pixels per world, comes with PROJECT)
 uniform vec2 u_plane_origin;
-uniform float u_world;
 uniform vec2 u_origin;
 uniform vec2 u_viewport;
 uniform float u_width;
+// Pulls the lines towards the camera in relief (clip space), so that they win over the ground they lie on
+uniform float u_depth_bias;
+uniform int u_segments;
 uniform highp sampler2D u_positions;
 uniform highp sampler2D u_values;
 layout(location = 0) in uvec2 a_edge;
@@ -33,28 +38,43 @@ flat out float v_half;
 
 ivec2 texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
 
-vec4 clip(uint node) {
-  vec2 offset = texelFetch(u_positions, texel(node), 0).xy;
-  return u_matrix * vec4(project(u_plane_origin + offset * u_world, u_origin + offset), 1.0);
+vec2 offset_a;
+vec2 offset_b;
+
+// Clip position of the point at `t` along the edge, standing on the ground in relief
+vec4 clip(float t) {
+  vec2 offset = mix(offset_a, offset_b, t);
+  vec2 merc = u_origin + offset;
+  vec4 c = u_matrix * vec4(project_up(u_plane_origin + offset * u_world, merc, altitude(merc)), 1.0);
+  c.z -= u_depth_bias;
+  return c;
 }
 
 void main() {
-  int end = gl_VertexID >> 1;
+  // The edge is a strip of `u_segments` pieces (1 on flat ground; in relief each piece follows the ground)
+  int k = gl_VertexID >> 1;
   float side = float(gl_VertexID & 1) * 2.0 - 1.0;
-  vec4 ca = clip(a_edge.x);
-  vec4 cb = clip(a_edge.y);
-  if (ca.w <= 0.0 || cb.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  vec2 sa = ca.xy / ca.w * u_viewport;
-  vec2 sb = cb.xy / cb.w * u_viewport;
-  vec2 dir = sb - sa;
+  float step = 1.0 / float(u_segments);
+  float t = float(k) * step;
+  offset_a = texelFetch(u_positions, texel(a_edge.x), 0).xy;
+  offset_b = texelFetch(u_positions, texel(a_edge.y), 0).xy;
+  vec4 c = clip(t);
+  vec4 prev = k > 0 ? clip(t - step) : c;
+  vec4 next = k < u_segments ? clip(t + step) : c;
+  if (c.w <= 0.0 || prev.w <= 0.0 || next.w <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 s = c.xy / c.w * u_viewport;
+  vec2 dir = next.xy / next.w * u_viewport - prev.xy / prev.w * u_viewport;
   dir = length(dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
   vec2 normal = vec2(-dir.y, dir.x);
   // Half width plus one pixel for the antialiasing ramp; caps extended by the same amount
   float half_width = u_width * 0.5 + 1.0;
-  vec4 c = end == 0 ? ca : cb;
-  vec2 s = (end == 0 ? sa : sb) + normal * side * half_width + dir * (float(end) * 2.0 - 1.0) * half_width * 0.5;
+  float cap = k == 0 ? -1.0 : k == u_segments ? 1.0 : 0.0;
+  s += normal * side * half_width + dir * cap * half_width * 0.5;
   gl_Position = vec4(s / u_viewport * c.w, c.z, c.w);
-  v_value = texelFetch(u_values, texel(end == 0 ? a_edge.x : a_edge.y), 0).r;
+  float va = texelFetch(u_values, texel(a_edge.x), 0).r;
+  float vb = texelFetch(u_values, texel(a_edge.y), 0).r;
+  // Unreached (negative) ends stay unreached along the edge
+  v_value = k == 0 ? va : k == u_segments ? vb : (va < 0.0 || vb < 0.0 ? -1.0 : mix(va, vb, t));
   v_across = side * half_width;
   v_half = half_width;
 #ifdef PICK
@@ -114,18 +134,26 @@ void main() {
 /// Extra width of the lines in the picking pass, CSS pixels: thin lines stay easy to hover
 const PICK_SLOP: f64 = 6.0;
 
+/// Lines in relief are pulled towards the camera by this fraction of their distance: the ground under them is
+/// interpolated between the vertices of its mesh and can rise a little above the line
+const DEPTH_BIAS: f64 = 0.002;
+
+/// Pieces of each edge in relief: a straight edge would cut through the bumps of the ground between its nodes
+const RELIEF_SEGMENTS: i32 = 8;
+
 /// A program with its uniforms
 struct Pass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 12],
+    uniforms: [Option<glow::UniformLocation>; 14],
     projection: Projection,
+    drape: DrapeUniforms,
 }
 
 impl Pass {
     fn new(gl: &glow::Context, defines: &str, fragment: &str) -> Result<Self, String> {
         let program = gl::program(
             gl,
-            &format!("#version 300 es\n{defines}{}{VERTEX}", gl::PROJECT),
+            &format!("#version 300 es\n{defines}{}{}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
             fragment,
         )?;
         let uniforms = gl::uniforms(
@@ -144,12 +172,15 @@ impl Pass {
                 "u_world",
                 "u_origin",
                 "u_layer",
+                "u_depth_bias",
+                "u_segments",
             ],
         );
         Ok(Self {
             program,
             uniforms,
             projection: Projection::new(gl, program),
+            drape: DrapeUniforms::new(gl, program),
         })
     }
 }
@@ -174,6 +205,9 @@ pub struct NetworkLayer {
     values: glow::Texture,
     /// Mercator origin of the node positions
     origin: DVec2,
+    /// Mercator extent of the nodes
+    extent: (DVec2, DVec2),
+    drape: Drape,
     nodes: usize,
     edge_count: usize,
 }
@@ -237,6 +271,8 @@ impl NetworkLayer {
                 positions: positions_texture,
                 values,
                 origin,
+                extent: (min, max),
+                drape: Drape::new(),
                 nodes,
                 edge_count: edges.len() / 2,
             };
@@ -262,21 +298,52 @@ impl NetworkLayer {
         }
     }
 
-    pub fn draw(&self, gl: &glow::Context, camera: &Camera, view: &View, pixel_ratio: f64) {
-        self.render(gl, &self.shaded, camera, view, pixel_ratio, 0.0);
+    /// Draws the lines; `relief`: the elevation source and its exaggeration, to stand the nodes on the ground
+    pub fn draw(
+        &mut self,
+        gl: &glow::Context,
+        camera: &Camera,
+        view: &View,
+        pixel_ratio: f64,
+        relief: Option<(&RasterSource, f32)>,
+    ) {
+        if let Some((source, _)) = relief
+            && self.nodes > 0
+        {
+            self.drape.update(gl, self.extent.0, self.extent.1, source);
+        }
+        self.render(gl, &self.shaded, camera, view, pixel_ratio, 0.0, relief);
     }
 
     /// Picking pass into the bound framebuffer: edge number + 1 in RGB, `layer` in alpha
-    pub fn draw_pick(&self, gl: &glow::Context, camera: &Camera, view: &View, pixel_ratio: f64, layer: u8) {
+    pub fn draw_pick(
+        &self,
+        gl: &glow::Context,
+        camera: &Camera,
+        view: &View,
+        pixel_ratio: f64,
+        layer: u8,
+        relief: Option<(&RasterSource, f32)>,
+    ) {
         // SAFETY: uniform on the picking program
         unsafe {
             gl.use_program(Some(self.pick.program));
             gl.uniform_1_f32(self.pick.uniforms[11].as_ref(), f32::from(layer));
         }
-        self.render(gl, &self.pick, camera, view, pixel_ratio, PICK_SLOP);
+        self.render(gl, &self.pick, camera, view, pixel_ratio, PICK_SLOP, relief);
     }
 
-    fn render(&self, gl: &glow::Context, pass: &Pass, camera: &Camera, view: &View, pixel_ratio: f64, slop: f64) {
+    #[allow(clippy::too_many_arguments)]
+    fn render(
+        &self,
+        gl: &glow::Context,
+        pass: &Pass,
+        camera: &Camera,
+        view: &View,
+        pixel_ratio: f64,
+        slop: f64,
+        relief: Option<(&RasterSource, f32)>,
+    ) {
         let [
             matrix,
             viewport,
@@ -290,6 +357,8 @@ impl NetworkLayer {
             world,
             origin,
             _,
+            depth_bias,
+            segments,
         ] = &pass.uniforms;
         let shift = -(self.origin.x - camera.center.x).round();
         let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
@@ -301,6 +370,12 @@ impl NetworkLayer {
             gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
             gl.uniform_2_f32(origin.as_ref(), self.origin.x as f32, self.origin.y as f32);
             pass.projection.set(gl, view);
+            self.drape.bind(gl, &pass.drape, relief);
+            // About 0.2 % of the distance: in clip space a constant (2 × near × fraction)
+            let bias = if relief.is_some() { 2.0 * view.near * DEPTH_BIAS } else { 0.0 };
+            gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
+            let pieces = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+            gl.uniform_1_i32(segments.as_ref(), pieces);
             let (w, h) = (camera.width * pixel_ratio / 2.0, camera.height * pixel_ratio / 2.0);
             gl.uniform_2_f32(viewport.as_ref(), w as f32, h as f32);
             let line = (f64::from(self.style.width) + slop) * pixel_ratio;
@@ -315,7 +390,7 @@ impl NetworkLayer {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.values));
             gl.uniform_1_i32(values.as_ref(), 2);
             gl.bind_vertex_array(Some(self.vao));
-            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, self.edge_count as i32);
+            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 2 * (pieces + 1), self.edge_count as i32);
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);
         }
@@ -331,6 +406,7 @@ impl NetworkLayer {
             gl.delete_texture(self.positions);
             gl.delete_texture(self.values);
         }
+        self.drape.delete(gl);
     }
 }
 

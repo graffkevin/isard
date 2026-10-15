@@ -31,7 +31,7 @@ export interface GeoMapOptions extends Partial<Camera> {
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
   /** Relief under the basemap: true for the IGN terrain model (Géoplateforme, RGE ALTI), or its options (default
-   * false) */
+   * false). Network layers are draped on it */
   terrain?: boolean | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;

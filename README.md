@@ -50,6 +50,11 @@ you zoom in.
   (no holes), coarse tiles first, downloads aborted when they leave the view, a GPU memory budget, mipmapped textures
   decoded off the main thread. Vertices stay in f32 around each tile's center and a matrix computed in f64 maps them
   to the view, on the plane and on the globe. The demo streams the Lille photomesh (MEL 2020, 5 cm).
+- **Relief.** `terrain: true` lifts the ground with the IGN terrain model (Géoplateforme WMS, raw float altitudes),
+  three levels coarser than the imagery, in the vertex shader, with skirts against cracks; the camera orbits the
+  ground under the screen center. Altitudes get the RAF20 geoid height, so 3D Tiles meshes (ellipsoidal heights) sit
+  on the ground. Network layers are draped: a page table over the network's extent gives each vertex the deepest
+  loaded elevation tile, edges are split in pieces that follow the ground, and the hills hide the lines behind them.
 - **Space around the globe.** Stars fixed to the Earth's frame (they turn with the globe) and an atmosphere halo,
   procedural in one full-screen triangle, fading out as the globe turns flat (`sky: false` to turn it off).
 - **Globe for free.** The globe is a sphere up to zoom 5, blending into Web Mercator up to zoom 7; above, it costs
@@ -140,7 +145,7 @@ to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`,
 ## Roadmap
 
 1. Vector basemap (PLAN.IGN vector tiles: fills, lines, then labels), to restyle the ground per use case.
-2. Terrain (RGE ALTI); decoding of 3D Tiles in workers; KTX2 / Draco / meshopt; BD TOPO buildings colored by value.
+2. BD TOPO buildings colored by value; picking and dragging on the relief itself.
 3. Field layer: a value grid drawn as a smooth surface (water depth over the terrain for flooding).
 4. Picking (feature under the cursor) and points (stations).
 5. Move geo-reach and geo-flood onto the engine.

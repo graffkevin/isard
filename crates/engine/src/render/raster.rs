@@ -306,7 +306,16 @@ pub struct RasterSource {
     wake: Rc<std::cell::Cell<bool>>,
     /// Flight destination: generation and its tiles
     preload: (u64, Vec<TileId>),
+    /// Changes whenever a tile enters the pool (unique across sources): what reads the pool knows when to look again
+    generation: u64,
     pub stats: RasterStats,
+}
+
+/// Source of `RasterSource::generation`
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_generation() -> u64 {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
 impl RasterSource {
@@ -343,6 +352,7 @@ impl RasterSource {
                 fading: false,
                 wake: Rc::default(),
                 preload: (0, Vec::new()),
+                generation: next_generation(),
                 stats: RasterStats::default(),
             })
         }
@@ -431,7 +441,23 @@ impl RasterSource {
                     at: js_sys::Date::now(),
                 },
             );
+            self.generation = next_generation();
         }
+    }
+
+    /// The texture array of the pool
+    pub fn pool(&self) -> glow::Texture {
+        self.pool
+    }
+
+    /// Changes whenever the pool content changes (a tile entered it, maybe in the slot of an evicted one)
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Tiles in the pool and their slots
+    pub fn loaded(&self) -> impl Iterator<Item = (TileId, u16)> + '_ {
+        self.slots.iter().map(|(&tile, loaded)| (tile, loaded.slot))
     }
 
     /// Tiles of the flight destination, computed once per destination
