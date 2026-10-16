@@ -6,6 +6,7 @@ pub(crate) mod features;
 pub(crate) mod fills;
 pub(crate) mod gl;
 pub(crate) mod globe;
+pub(crate) mod ground;
 pub(crate) mod lines;
 pub(crate) mod network;
 pub(crate) mod raster;

@@ -19,7 +19,7 @@ import {
   lineStyle,
 } from './features.ts';
 import { Interaction } from './interaction.ts';
-import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+import { GroundLayer, type GroundOptions, type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
 import { injectStyle } from './style.ts';
@@ -617,6 +617,11 @@ export class GeoMap implements LayerHost {
   /** Filled polygons from GeoJSON (holes included), styled per feature; over the relief they lie on the ground */
   addFills<P = Record<string, unknown>>(options: FillOptions<P>): FillLayer<P> {
     return this.place(new FillLayer<P>(this, options.data, fillStyle(options)), options.before);
+  }
+
+  /** The application's fragment shader over the ground (see `GroundOptions`); under `before` if given */
+  addGround(options: GroundOptions & { before?: Layer }): GroundLayer {
+    return this.place(new GroundLayer(this, options), options.before);
   }
 
   /** Adds a layer, under `before` if given */

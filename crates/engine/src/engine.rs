@@ -644,6 +644,8 @@ impl Engine {
             redraw: &self.redraw,
             loading: self.loading,
             relief: self.terrain.as_ref().map(|(source, e)| (source, *e)),
+            ground: &self.raster_pass,
+            fog: self.sky.atmosphere.map(|a| a.fog(view)),
         }
     }
 

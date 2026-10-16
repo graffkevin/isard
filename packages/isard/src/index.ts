@@ -41,7 +41,8 @@ export type {
   Styled,
 } from './features.ts';
 export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
-export { Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+export type { GroundOptions, GroundTexture } from './layers.ts';
+export { GroundLayer, Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 export { GeoMap } from './map.ts';
 export {
   type Anchor,

@@ -3,7 +3,7 @@
 //! implements it, with its own JavaScript API in its own module (`#[wasm_bindgen] impl Engine`), and the engine itself
 //! does not change.
 
-use crate::render::raster::RasterSource;
+use crate::render::raster::{RasterPass, RasterSource};
 use geo::camera::{Camera, View};
 use std::any::Any;
 use std::rc::Rc;
@@ -60,6 +60,10 @@ pub struct Frame<'a> {
     pub loading: Loading,
     /// The relief, if any: its elevation source and vertical exaggeration
     pub relief: Option<(&'a RasterSource, f32)>,
+    /// The ground drawn so far this frame: its tiles can be drawn again (`RasterPass::redraw`)
+    pub ground: &'a RasterPass,
+    /// Fog of the atmosphere: color and range (see `Atmosphere::fog`)
+    pub fog: Option<([f32; 3], [f32; 2])>,
 }
 
 /// A layer drawn over the ground. The frame starts with blending on, back faces culled, no depth test: a layer that

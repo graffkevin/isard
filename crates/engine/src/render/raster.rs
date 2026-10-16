@@ -59,7 +59,10 @@ const ELEVATION_SCALE: f64 = 8.0;
 /// Below this, an altitude is the no-data of the server (-99999 on the Géoplateforme)
 const NO_DATA: f32 = -1000.0;
 
-const VERTEX: &str = r"
+/// The ground's vertex shader, shared by the raster pass, its depth pass and the ground layers (`render::ground`):
+/// invariant, so that they all put the ground at the same depth
+pub const VERTEX: &str = r"
+invariant gl_Position;
 uniform mat4 u_matrix;
 layout(location = 0) in vec2 a_grid;
 layout(location = 1) in vec4 a_rect;
@@ -86,6 +89,8 @@ uniform vec3 u_eye;
 out vec4 v_uv[4];
 flat out vec3 v_slot[4];
 out float v_distance;
+// Position on the plane (pixels from the camera center): the ground layers find the Mercator position from it
+out vec2 v_plane;
 vec2 g;
 vec4 uv(vec4 front, vec4 back) { return vec4(mix(front.xy, front.zw, g), mix(back.xy, back.zw, g)); }
 
@@ -119,7 +124,8 @@ void main() {
   vec2 merc = mix(a_merc.xy, a_merc.zw, g);
   float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
   float width = (a_merc.z - a_merc.x) * 40075016.686 * cos(lat);
-  vec3 p = project_up(mix(a_rect.xy, a_rect.zw, g), merc, height() - skirt * 0.05 * width);
+  v_plane = mix(a_rect.xy, a_rect.zw, g);
+  vec3 p = project_up(v_plane, merc, height() - skirt * 0.05 * width);
   v_distance = distance(p, u_eye);
   gl_Position = u_matrix * vec4(p, 1.0);
 }";
@@ -1011,6 +1017,8 @@ pub struct RasterPass {
     data: Vec<f32>,
     /// Tiles of the last draw (still in `instances`) and its exaggeration
     last: Option<(i32, f32)>,
+    /// Mercator bounds of those tiles, in instance order
+    last_tiles: Vec<(glam::DVec2, glam::DVec2)>,
 }
 
 impl RasterPass {
@@ -1074,7 +1082,61 @@ impl RasterPass {
                 instances,
                 data: Vec::new(),
                 last: None,
+                last_tiles: Vec::new(),
             })
+        }
+    }
+
+    /// Draws again the tiles of the last draw that `keep` accepts (by their Mercator bounds), with the program in use:
+    /// a ground layer's (it uses `VERTEX`, and has set its uniforms). Returns the exaggeration of that draw (0: flat),
+    /// None if nothing was drawn yet
+    pub fn redraw(
+        &self,
+        gl: &glow::Context,
+        view: &View,
+        keep: impl Fn(glam::DVec2, glam::DVec2) -> bool,
+    ) -> Option<f32> {
+        let (count, relief) = self.last?;
+        // Runs of consecutive accepted tiles
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for (i, &(min, max)) in self.last_tiles.iter().enumerate().take(count as usize) {
+            if !keep(min, max) {
+                continue;
+            }
+            match ranges.last_mut() {
+                Some(last) if last.1 == i => last.1 = i + 1,
+                _ => ranges.push((i, i + 1)),
+            }
+        }
+        // SAFETY: draws with the vertex array and instances owned by this pass; the pointers are set back after
+        unsafe {
+            gl.bind_vertex_array(Some(self.vao));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instances));
+            for &(first, end) in &ranges {
+                Self::point_at(gl, first);
+                Grid::draw(gl, view, (end - first) as i32, relief > 0.0);
+            }
+            Self::point_at(gl, 0);
+            gl.bind_vertex_array(None);
+        }
+        Some(relief)
+    }
+
+    /// Points the instance attributes at instance `first` (WebGL2 has no base instance)
+    unsafe fn point_at(gl: &glow::Context, first: usize) {
+        let stride = (INSTANCE * 4) as i32;
+        let base = first as i32 * stride;
+        let mut attributes = vec![(1, 4, 0), (2, 4, 16)];
+        for k in 0..STACK as u32 {
+            let at = 32 + k as i32 * 44;
+            attributes.extend([(3 + 3 * k, 4, at), (4 + 3 * k, 4, at + 16), (5 + 3 * k, 3, at + 32)]);
+        }
+        attributes.push((15, 4, 32 + STACK as i32 * 44));
+        // SAFETY: the caller bound the vertex array and the instance buffer
+        unsafe {
+            for (location, size, offset) in attributes {
+                gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, base + offset);
+            }
         }
     }
 
@@ -1122,6 +1184,8 @@ impl RasterPass {
         let now = js_sys::Date::now();
         self.data.clear();
         let tiles = std::mem::take(&mut sources[0].tiles);
+        self.last_tiles.clear();
+        self.last_tiles.extend(tiles.iter().map(|t| t.bounds()));
         for &tile in &tiles {
             let (min, max) = tile.bounds();
             let shift = tile.shift(view.center);

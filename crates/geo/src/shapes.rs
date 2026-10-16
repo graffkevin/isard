@@ -265,7 +265,9 @@ mod tests {
     /// Points of the prism in 3D (z = level), and its triangles
     fn faces(mesh: &Mesh, range: std::ops::Range<usize>) -> Vec<[DVec3; 3]> {
         mesh.indices[range]
-            .as_chunks::<3>().0.iter()
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 [t[0], t[1], t[2]].map(|i| {
                     let v = mesh.vertices[i as usize];
