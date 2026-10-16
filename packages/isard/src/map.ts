@@ -6,6 +6,7 @@
 import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
+import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './extrusions.ts';
 import {
   CircleLayer,
   type CircleOptions,
@@ -521,7 +522,10 @@ export class GeoMap implements LayerHost {
     const hit = this.pick(point, options.radius ?? 0);
     const layer = hit && this.layers.find((l) => l.id === hit.layer);
     if (!hit || !layer || (options.layers && !options.layers.includes(layer))) return undefined;
-    const feature = 'features' in layer ? (layer.features as readonly Feature[])[hit.index] : undefined;
+    const feature =
+      'featureAt' in layer && typeof layer.featureAt === 'function'
+        ? (layer.featureAt(hit.index) as Feature | undefined)
+        : undefined;
     return { layer, index: hit.index, feature };
   }
 
@@ -622,6 +626,11 @@ export class GeoMap implements LayerHost {
   /** The application's fragment shader over the ground (see `GroundOptions`); under `before` if given */
   addGround(options: GroundOptions & { before?: Layer }): GroundLayer {
     return this.place(new GroundLayer(this, options), options.before);
+  }
+
+  /** Polygons raised into blocks with depth (buildings), styled per feature; tiles of them come with `setTile` */
+  addExtrusions<P = Record<string, unknown>>(options: ExtrusionOptions<P> = {}): ExtrusionLayer<P> {
+    return this.place(new ExtrusionLayer<P>(this, options.data, extrusionStyle(options)), options.before);
   }
 
   /** Adds a layer, under `before` if given */

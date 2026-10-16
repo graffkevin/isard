@@ -481,6 +481,11 @@ impl Engine {
                 Slot::Raster(layer) => layer.delete(&self.gl),
                 Slot::Layer(mut layer) => layer.delete(&self.gl),
             }
+            for (_, slot) in &mut self.layers {
+                if let Slot::Layer(layer) = slot {
+                    layer.forget(id);
+                }
+            }
         }
     }
 

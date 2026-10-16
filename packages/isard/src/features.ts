@@ -147,7 +147,7 @@ export function parseColor(color: string): [r: number, g: number, b: number, a: 
 }
 
 /** 256 RGBA texels of a ramp over its value range, and that range */
-function rampTexels(ramp: Ramp): { rgba: Uint8Array; min: number; max: number } {
+export function rampTexels(ramp: Ramp): { rgba: Uint8Array; min: number; max: number } {
   const stops = ramp.map(([v, c]) => [v, parseColor(c)] as const).sort((a, b) => a[0] - b[0]);
   const min = stops[0]?.[0] ?? 0;
   const max = stops.at(-1)?.[0] ?? 1;
@@ -166,8 +166,12 @@ function rampTexels(ramp: Ramp): { rgba: Uint8Array; min: number; max: number } 
 }
 
 /** Up to four stops as zooms then values, constant if a number */
-function stops(size: Size): [number, number, number, number, number, number, number, number] {
-  if (typeof size === 'number') return [0, 0, 0, 0, size, size, size, size];
+export function stops(size: Size): [number, number, number, number, number, number, number, number] {
+  if (!Array.isArray(size)) {
+    // A style function may return nothing for a feature without the property: 0
+    const v = Number.isFinite(size) ? size : 0;
+    return [0, 0, 0, 0, v, v, v, v];
+  }
   // More than four: resampled at four zooms over their range
   let s = size;
   if (s.length > 4) {
@@ -196,7 +200,7 @@ export function interpolate(size: Size, zoom: number): number {
   return size.at(-1)?.[1] ?? 0;
 }
 
-function evaluate<T, P>(value: Styled<T, P>, properties: P, index: number): T {
+export function evaluate<T, P>(value: Styled<T, P>, properties: P, index: number): T {
   return typeof value === 'function' ? (value as (p: P, i: number) => T)(properties, index) : value;
 }
 
@@ -278,7 +282,7 @@ function pointGeometry(features: Feature<unknown>[]) {
   return { points: points.done(), feature: feature.done() };
 }
 
-function polygonGeometry(features: Feature<unknown>[]) {
+export function polygonGeometry(features: Feature<unknown>[]) {
   const points = new Grow(new Float64Array(1024));
   const ringStart = new Grow(new Uint32Array(64));
   const polygonStart = new Grow(new Uint32Array(64));
@@ -310,7 +314,7 @@ function polygonGeometry(features: Feature<unknown>[]) {
 // ── Layers ──
 
 /** Floats per feature in the engine's style (see `setFeatureStyle`) */
-const FLOATS = 32;
+export const FLOATS = 32;
 
 /** What every feature layer shares: its data, its style in the engine, values, filter */
 export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends Layer {
@@ -329,6 +333,11 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   /** The features, in the order of the data (their index is what `pick` returns) */
   get features(): readonly Feature<P>[] {
     return this.list;
+  }
+
+  /** The feature of a picked index */
+  featureAt(index: number): Feature<P> | undefined {
+    return this.list[index];
   }
 
   /** Replaces the features; the style is evaluated again for them */

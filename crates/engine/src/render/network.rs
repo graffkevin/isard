@@ -405,6 +405,11 @@ impl NetworkLayer {
         }
     }
 
+    /// The node values (R32F, 4096 wide, node `i` at (i % 4096, i / 4096)), read by layers colored by them
+    pub fn values_texture(&self) -> glow::Texture {
+        self.values
+    }
+
     /// Pieces in all, and drawn in the last frame
     pub fn counts(&self) -> (usize, u32) {
         (self.piece_count, self.drawn.get())

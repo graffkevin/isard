@@ -87,6 +87,9 @@ pub trait Layer: Any {
         None
     }
 
+    /// Layer `id` was removed: references to it (a network coloring buildings) are dropped
+    fn forget(&mut self, _id: u32) {}
+
     /// Frees its GPU objects and stops its downloads; the layer is dropped right after
     fn delete(&mut self, gl: &glow::Context);
 }

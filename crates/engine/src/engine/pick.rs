@@ -151,7 +151,8 @@ impl Engine {
             gl.enable(glow::SCISSOR_TEST);
             gl.scissor(x0, y0, w, h);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+            // Depth too: the blocks of extrusion layers hide one another
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
             gl.disable(glow::BLEND);
             gl.disable(glow::CULL_FACE);
             let frame = self.frame_state(&view);

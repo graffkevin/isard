@@ -361,9 +361,123 @@ mod tests {
     }
 
     #[test]
+    fn extruded_blocks_have_a_roof_and_walls() {
+        let (points, ring_start, polygon_start) = square_with_hole(1e-4);
+        let polygons = Polygons {
+            points: &points,
+            ring_start: &ring_start,
+            polygon_start: &polygon_start,
+        };
+        let b = extrude(&polygons, DVec2::new(0.5, 0.33));
+        // 8 roof triangles (a square ring around a hole), 8 walls of 2 triangles
+        assert_eq!(b.indices.len(), 8 * 3 + 8 * 6);
+        let walls: Vec<_> = b.vertices.iter().filter(|v| v.level == 0.0).collect();
+        assert_eq!(walls.len(), 16);
+        // The walls facing north and west are lit, the others not (outside and in the hole: 4 walls, 2 feet each)
+        let lit = b.vertices.iter().filter(|v| v.level == 0.0 && v.shade > 0.75).count();
+        assert_eq!(lit, 8);
+    }
+
+    #[test]
     fn positions_keep_the_f64_precision() {
         let p = DVec2::new(0.512_345_678_901_234, 0.354_321_098_765_432);
         let v = Vertex::new(p, 0, 1.0);
         assert!(v.position().distance(p) < 1e-14);
     }
+}
+
+/// A vertex of an extruded polygon (32 bytes): its position and its polygon's centroid relative to the layer origin,
+/// its polygon, its level (0: foot of a wall, 1: roof) and its shade (the light on its face)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Block {
+    pub offset: [f32; 2],
+    pub centroid: [f32; 2],
+    pub polygon: u32,
+    pub level: f32,
+    pub shade: f32,
+    pub pad: f32,
+}
+
+/// Extruded polygons: roofs then walls, as indexed triangles
+#[derive(Default)]
+pub struct Blocks {
+    pub vertices: Vec<Block>,
+    pub indices: Vec<u32>,
+}
+
+/// Light on the walls: from the north-west and above (x east, y south)
+const LIGHT: DVec2 = DVec2::new(-std::f64::consts::FRAC_1_SQRT_2, -std::f64::consts::FRAC_1_SQRT_2);
+
+/// Extrudes polygons (buildings): a roof per polygon (earcut, holes included) and a wall along every edge of its
+/// rings, shaded by the side it faces. Positions relative to `origin`.
+#[must_use]
+pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
+    let mut out = Blocks::default();
+    let mut earcut = earcut::Earcut::new();
+    let (mut flat, mut holes, mut triangles): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    let f32s = |p: DVec2| [p.x as f32, p.y as f32];
+    for p in 0..polygons.polygon_start.len().saturating_sub(1) {
+        let (first, last) = (
+            polygons.polygon_start[p] as usize,
+            (polygons.polygon_start[p + 1] as usize).min(polygons.ring_start.len().saturating_sub(1)),
+        );
+        let rings: Vec<&[DVec2]> = (first..last)
+            .map(|r| ring(polygons, r))
+            .filter(|r| r.len() >= 3)
+            .collect();
+        let Some(outer) = rings.first() else {
+            continue;
+        };
+        let centroid = outer.iter().sum::<DVec2>() / outer.len() as f64;
+        let c = f32s(centroid - origin);
+        let vertex = |m: DVec2, level: f32, shade: f32| Block {
+            offset: f32s(m - origin),
+            centroid: c,
+            polygon: p as u32,
+            level,
+            shade,
+            pad: 0.0,
+        };
+        // Roof
+        flat.clear();
+        holes.clear();
+        let mut all: Vec<DVec2> = Vec::new();
+        for (k, r) in rings.iter().enumerate() {
+            if k > 0 {
+                holes.push(all.len() as u32);
+            }
+            all.extend_from_slice(r);
+        }
+        let base = all[0];
+        flat.extend(all.iter().map(|&q| (q - base).to_array()));
+        earcut.earcut(flat.iter().copied(), &holes, &mut triangles);
+        let start = out.vertices.len() as u32;
+        out.vertices.extend(all.iter().map(|&m| vertex(m, 1.0, 1.0)));
+        out.indices.extend(triangles.iter().map(|&i| start + i));
+        // Walls, each with its own vertices (flat shading)
+        for (k, r) in rings.iter().enumerate() {
+            // Outward normal: the inside is on the left of a counterclockwise outer ring and of a clockwise hole
+            let sign = if (area(r) > 0.0) == (k == 0) { 1.0 } else { -1.0 };
+            for i in 0..r.len() {
+                let (a, b) = (r[i], r[(i + 1) % r.len()]);
+                let d = b - a;
+                if d.length_squared() == 0.0 {
+                    continue;
+                }
+                let normal = DVec2::new(d.y, -d.x).normalize() * sign;
+                let shade = (0.72 + 0.2 * normal.dot(LIGHT).max(0.0)) as f32;
+                let s = out.vertices.len() as u32;
+                out.vertices.extend([
+                    vertex(a, 0.0, shade),
+                    vertex(b, 0.0, shade),
+                    vertex(b, 1.0, shade),
+                    vertex(a, 1.0, shade),
+                ]);
+                out.indices.extend([s, s + 1, s + 2, s, s + 2, s + 3]);
+            }
+        }
+    }
+    out
 }

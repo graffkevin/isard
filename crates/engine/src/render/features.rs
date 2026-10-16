@@ -13,6 +13,7 @@
 
 use crate::engine::Engine;
 use crate::render::circles::CircleLayer;
+use crate::render::extrusions::ExtrusionLayer;
 use crate::render::fills::FillLayer;
 use crate::render::lines::LineLayer;
 use glow::HasContext;
@@ -376,69 +377,78 @@ pub fn index_texture(gl: &glow::Context, entries: &[f32]) -> Result<glow::Textur
 }
 
 impl Engine {
-    /// The feature textures of a line, circle or fill layer, with the context
-    fn features_mut(&mut self, id: u32) -> Option<(&mut Features, &glow::Context)> {
-        if self.layer::<LineLayer>(id).is_some() {
-            return self.layer_mut::<LineLayer>(id).map(|(l, gl)| (&mut l.features, gl));
+    /// Runs `f` on the feature textures of a line, circle or fill layer, or of the batch `key` of an extrusion layer
+    /// (all its batches without a key)
+    fn with_features(&mut self, id: u32, key: Option<u32>, mut f: impl FnMut(&mut Features, &glow::Context)) {
+        if let Some((l, gl)) = self.layer_mut::<LineLayer>(id) {
+            f(&mut l.features, gl);
+        } else if let Some((l, gl)) = self.layer_mut::<CircleLayer>(id) {
+            f(&mut l.features, gl);
+        } else if let Some((l, gl)) = self.layer_mut::<FillLayer>(id) {
+            f(&mut l.features, gl);
+        } else if let Some((l, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
+            for features in l.features(key) {
+                f(features, gl);
+            }
         }
-        if self.layer::<CircleLayer>(id).is_some() {
-            return self.layer_mut::<CircleLayer>(id).map(|(l, gl)| (&mut l.features, gl));
-        }
-        self.layer_mut::<FillLayer>(id).map(|(l, gl)| (&mut l.features, gl))
     }
 }
 
 #[wasm_bindgen]
 impl Engine {
-    /// Style of the features of a line, circle or fill layer: 32 floats per feature, its color (RGBA 0-1), its
-    /// second color (a circle's stroke), then two sizes as zoom stops (four zooms, four values each: a line's width;
-    /// a circle's radius and stroke width), CSS pixels
+    /// Style of the features of a line, circle, fill or extrusion layer (batch `key` of the latter): 32 floats per
+    /// feature, its color (RGBA 0-1), its second color (a circle's stroke), then two sizes as zoom stops (four zooms,
+    /// four values each): a line's width; a circle's radius and stroke width, CSS pixels; a block's height and base
+    /// height, metres
     #[wasm_bindgen(js_name = setFeatureStyle)]
-    pub fn set_feature_style(&mut self, id: u32, style: &[f32]) {
-        if let Some((features, gl)) = self.features_mut(id) {
-            features.set_style(gl, style);
-        }
+    pub fn set_feature_style(&mut self, id: u32, style: &[f32], key: Option<u32>) {
+        self.with_features(id, key, |features, gl| features.set_style(gl, style));
     }
 
     /// One value per feature, colored through the layer's ramp (`setFeatureRamp`); 1e30 or NaN: its own color
     #[wasm_bindgen(js_name = setFeatureValues)]
-    pub fn set_feature_values(&mut self, id: u32, values: &[f32]) {
-        if let Some((features, gl)) = self.features_mut(id) {
-            features.set_values(gl, values);
-        }
+    pub fn set_feature_values(&mut self, id: u32, values: &[f32], key: Option<u32>) {
+        self.with_features(id, key, |features, gl| features.set_values(gl, values));
     }
 
     /// One byte per feature, 0 hiding it (the filter)
     #[wasm_bindgen(js_name = setFeatureMask)]
-    pub fn set_feature_mask(&mut self, id: u32, mask: &[u8]) {
-        if let Some((features, gl)) = self.features_mut(id) {
-            features.set_mask(gl, mask);
-        }
+    pub fn set_feature_mask(&mut self, id: u32, mask: &[u8], key: Option<u32>) {
+        self.with_features(id, key, |features, gl| features.set_mask(gl, mask));
     }
 
     /// Colors of the values `min` to `max`, 256 RGBA texels (1024 bytes); undefined: none
     #[wasm_bindgen(js_name = setFeatureRamp)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_feature_ramp(&mut self, id: u32, rgba: Option<Box<[u8]>>, min: f32, max: f32) {
-        if let Some((features, gl)) = self.features_mut(id) {
-            features.set_ramp(gl, rgba.as_deref().map(|r| (r, min, max)));
+        let ramp = rgba.as_deref().map(|r| (r, min, max));
+        if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
+            layer.set_ramp(gl, ramp);
+            return;
         }
+        self.with_features(id, None, |features, gl| features.set_ramp(gl, ramp));
     }
 
-    /// Layer-wide style of a line, circle or fill layer: opacity as zoom stops (four zooms then four values), the
-    /// zoom range it shows in (`min_zoom` included, `max_zoom` excluded), whether it shows at all
+    /// Layer-wide style of a feature layer: opacity as zoom stops (four zooms then four values), the zoom range it
+    /// shows in (`min_zoom` included, `max_zoom` excluded), whether it shows at all
     #[wasm_bindgen(js_name = setFeatureLayer)]
     pub fn set_feature_layer(&mut self, id: u32, opacity: &[f32], min_zoom: f64, max_zoom: f64, visible: bool) {
-        if let Some((features, _)) = self.features_mut(id) {
-            if let (Some(zooms), Some(values)) = (opacity.get(..4), opacity.get(4..8)) {
-                features.layer.opacity = [
-                    [zooms[0], zooms[1], zooms[2], zooms[3]],
-                    [values[0], values[1], values[2], values[3]],
-                ];
-            }
-            features.layer.min_zoom = min_zoom;
-            features.layer.max_zoom = max_zoom;
-            features.layer.visible = visible;
+        let mut style = LayerStyle {
+            min_zoom,
+            max_zoom,
+            visible,
+            ..LayerStyle::default()
+        };
+        if let (Some(zooms), Some(values)) = (opacity.get(..4), opacity.get(4..8)) {
+            style.opacity = [
+                [zooms[0], zooms[1], zooms[2], zooms[3]],
+                [values[0], values[1], values[2], values[3]],
+            ];
         }
+        if let Some((layer, _)) = self.layer_mut::<ExtrusionLayer>(id) {
+            layer.layer = style;
+            return;
+        }
+        self.with_features(id, None, |features, _| features.layer = style);
     }
 }

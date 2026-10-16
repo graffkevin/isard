@@ -2,6 +2,7 @@
 
 pub(crate) mod circles;
 pub(crate) mod drape;
+pub(crate) mod extrusions;
 pub(crate) mod features;
 pub(crate) mod fills;
 pub(crate) mod gl;
