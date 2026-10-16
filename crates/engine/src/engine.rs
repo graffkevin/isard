@@ -400,14 +400,20 @@ impl Engine {
     pub fn project(&self, lon: f64, lat: f64) -> JsValue {
         let view = self.camera.view();
         let m = camera::mercator(lon, lat);
-        let p = (m - self.camera.center) * view.world_size;
         // On the relief: its altitude there (from the coarse copy kept on the CPU)
         let altitude = self
             .terrain
             .as_ref()
             .and_then(|(terrain, exaggeration)| terrain.altitude(m).map(|h| h * f64::from(*exaggeration)))
             .unwrap_or(0.0);
-        let clip = view.view_proj * glam::DVec4::new(p.x, p.y, altitude * view.vertical, 1.0);
+        // On the plane or the sphere, on the copy of the world nearest to the center; past the horizon of the
+        // globe, hidden by the Earth
+        let shift = -(m.x - self.camera.center.x).round();
+        let p = view.position(m, shift);
+        if view.globe.factor > 0.0 && !view.faces_camera(p) {
+            return JsValue::UNDEFINED;
+        }
+        let clip = view.view_proj * glam::DVec4::new(p.x, p.y, p.z + altitude * view.vertical, 1.0);
         if clip.w <= 0.0 {
             return JsValue::UNDEFINED;
         }

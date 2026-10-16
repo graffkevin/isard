@@ -50,7 +50,11 @@ export class Interaction {
       map.hover(undefined);
       map.emit('leave', {});
     });
-    listen('wheel', (e) => this.onWheel(e), { passive: false });
+    // On the container, the wheel zooms over markers and popups too
+    const container = map.getContainer();
+    const wheel = (e: WheelEvent) => this.onWheel(e);
+    container.addEventListener('wheel', wheel, { passive: false });
+    this.cleanup.push(() => container.removeEventListener('wheel', wheel));
     listen('dblclick', (e) => this.zoomBy(e.shiftKey ? -1 : 1, this.local(e)));
     listen('contextmenu', (e) => e.preventDefault());
   }
