@@ -16,7 +16,9 @@
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test",
     "release": "bun scripts/release.ts",
-    "release:dry": "bun scripts/release.ts --dry-run"
+    "release:dry": "bun scripts/release.ts --dry-run",
+    "docs:dev": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs dev",
+    "docs:build": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

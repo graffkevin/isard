@@ -34,7 +34,9 @@
     "docs": {
       "name": "@isard/docs",
       "devDependencies": {
+        "@vue/server-renderer": "^3.5.44",
         "vitepress": "^1.6.3",
+        "vue": "^3.5.44",
       },
     },
     "examples": {

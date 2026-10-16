@@ -8,3 +8,7 @@ packages/isard/src/wasm/
 packages/isard/README.md
 packages/isard/CHANGELOG.md
 packages/isard/LICENSE
+# Built by the documentation
+docs/public/live/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

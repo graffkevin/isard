@@ -1,6 +1,11 @@
 # Isard
 
 [![npm](https://img.shields.io/npm/v/@ign-junn/isard)](https://www.npmjs.com/package/@ign-junn/isard)
+[![Documentation](https://img.shields.io/badge/docs-graffkevin.github.io%2Fisard-2f6fd1)](https://graffkevin.github.io/isard/)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+
+**[Documentation](https://graffkevin.github.io/isard/)** · **[Examples](https://graffkevin.github.io/isard/examples/)** ·
+**[API](https://graffkevin.github.io/isard/api)** · [examples/](examples/)
 
 **A WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps.** Rust core compiled to
 WebAssembly, small TypeScript API. Built for maps where millions of features change at every mouse move
@@ -146,9 +151,14 @@ bun run test       # Rust tests: camera, projections, tile selection, 3D Tiles t
 bun run lint       # Biome (TypeScript), clippy pedantic (native and wasm)
 bun run typecheck  # strict TypeScript: package, worker, demo, scripts
 bun run format     # Biome and rustfmt
+bun run docs:dev   # the documentation site, with the examples live
 ```
 
-Demo URL parameters: `?projection=mercator`, `?workers=0` (3D Tiles decoded on the main thread, to compare).
+The root holds the two workspaces side by side: Rust (`Cargo.toml`, the crates; `rustfmt.toml`) and TypeScript
+(`package.json`, the package, apps, examples and docs; `biome.json`, `tsconfig.base.json`). `bun run build` drives
+both: cargo and wasm-bindgen for the engine, then the bundles.
+
+The examples are served on http://127.0.0.1:5180/examples/. Demo URL parameters: `?projection=mercator`, `?workers=0` (3D Tiles decoded on the main thread, to compare).
 
 ```
 crates/geo/             camera and projections, WGS 84 geodesy, RAF20 geoid, tile selection    no WebGL, tested natively
@@ -163,7 +173,9 @@ crates/engine/          WebAssembly core (crate isard), on the two above
 packages/isard/         the npm package @ign-junn/isard: GeoMap, layers, overlays, workers (3D Tiles, vector tiles)
 apps/demo/              the demo, importing @ign-junn/isard like any application
 apps/bench/             benchmark: isard, iTowns and 3DTilesRendererJS on the same scenario
-scripts/                build, demo server, release
+examples/               one page per example (index.html and main.ts), as an application would write it
+docs/                   the documentation site (VitePress), the examples live in it
+scripts/                build, dev server, docs, release
 ```
 
 Everything is typed end to end: the engine declares the TypeScript types of what it returns (`Camera`, `PickHit`,
