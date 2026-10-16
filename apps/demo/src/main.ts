@@ -74,7 +74,7 @@ function buttons<T extends string>(parent: string, options: readonly T[], initia
 }
 
 const projections: readonly Projection[] = ['globe', 'mercator'];
-const basemaps: readonly Basemap[] = ['plan-grey', 'plan', 'ortho', 'none'];
+const basemaps: readonly Basemap[] = ['plan-grey', 'plan', 'plan-grey-vector', 'ortho', 'none'];
 buttons('projections', projections, projection, (p) => map.setProjection(p));
 buttons('basemaps', basemaps, 'plan-grey', (b) => map.setBasemap(b, b === 'ortho' ? 0 : 0.4));
 element('fly').onclick = () => map.easeTo({ center: IGN, zoom: 15, pitch: 50, bearing: -17 }, 2500);
