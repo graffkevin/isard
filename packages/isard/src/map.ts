@@ -43,6 +43,7 @@ import type {
   TerrainOptions,
   Tiles3dOptions,
 } from './types.ts';
+import { VECTOR_BASEMAPS, VectorTiles, type VectorTilesOptions } from './vectortiles.ts';
 import type { Camera, PickHit, RasterLayerStats } from './wasm/isard.js';
 import init, { Engine } from './wasm/isard.js';
 
@@ -135,7 +136,12 @@ const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-le
 export class GeoMap implements LayerHost {
   readonly canvas: HTMLCanvasElement;
   #glyphs: Glyphs | undefined;
+  /** Layers new layers go under */
+  private readonly onTop = new Set<Layer>();
+  /** The vector basemap, if any: its tiles' workers and its labels */
+  private vector: { tiles: VectorTiles; labels: SymbolLayer<unknown> } | undefined;
   private readonly glyphsUrl: string | undefined;
+  private readonly basemapWorkerUrl: string | URL | undefined;
   private readonly container: HTMLElement;
   /** Markers and popups, over the canvas */
   private readonly overlay: HTMLDivElement;
@@ -200,6 +206,7 @@ export class GeoMap implements LayerHost {
 
   private constructor(container: HTMLElement, options: GeoMapOptions) {
     this.glyphsUrl = options.glyphs;
+    this.basemapWorkerUrl = options.basemapWorkerUrl;
     this.container = container;
     this.canvas = document.createElement('canvas');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
@@ -304,8 +311,16 @@ export class GeoMap implements LayerHost {
   private add<L extends Layer>(layer: L): L {
     layer.attach(this.engine);
     this.layers.push(layer);
+    // Under the layers kept on top (the basemap's labels)
+    const top = this.layers.find((l) => this.onTop.has(l) && l !== layer);
+    if (top) this.moveLayer(layer, top);
     this.requestRender();
     return layer;
+  }
+
+  /** @internal Keeps a layer above the layers added after it (they go under it), as the labels of a basemap */
+  keepOnTop(layer: Layer): void {
+    this.onTop.add(layer);
   }
 
   /** @internal Moves a layer under `before`, or on top of all */
@@ -592,7 +607,23 @@ export class GeoMap implements LayerHost {
   setBasemap(basemap: Basemap, hillshade = 0.4): void {
     this.basemap?.remove();
     this.hillshade?.remove();
-    this.basemap = basemap === 'none' ? undefined : this.addRaster(BASEMAPS[basemap]);
+    if (this.vector) {
+      this.onTop.delete(this.vector.labels as Layer);
+      this.vector.labels.remove();
+      this.vector.tiles.destroy();
+      this.vector = undefined;
+    }
+    const vector = VECTOR_BASEMAPS[basemap as keyof typeof VECTOR_BASEMAPS];
+    if (vector) {
+      const tiles = new VectorTiles(this, {
+        style: vector,
+        ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
+      });
+      this.basemap = tiles.raster();
+      this.vector = { tiles, labels: tiles.labels() as SymbolLayer<unknown> };
+    } else {
+      this.basemap = basemap === 'none' ? undefined : this.addRaster(BASEMAPS[basemap as keyof typeof BASEMAPS]);
+    }
     this.settings.globeColor = SEA[basemap];
     this.engine.setGlobeColor(...this.settings.globeColor);
     this.hillshade = hillshade > 0 ? this.addRaster({ ...HILLSHADE, opacity: hillshade }) : undefined;
@@ -652,6 +683,17 @@ export class GeoMap implements LayerHost {
       this.#glyphs.attach(this.engine);
     }
     return this.#glyphs;
+  }
+
+  /**
+   * Vector tiles with a MapLibre style (PLAN.IGN grey by default): `tiles.raster(…)` draws its fills and lines (or a
+   * subset) as a raster layer, `tiles.labels(…)` its labels. `setBasemap('plan-grey-vector')` does both for the basemap.
+   */
+  vectorTiles(options: VectorTilesOptions = {}): VectorTiles {
+    return new VectorTiles(this, {
+      ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
+      ...options,
+    });
   }
 
   /** Adds a layer, under `before` if given */
@@ -751,6 +793,7 @@ export class GeoMap implements LayerHost {
 
   destroy(): void {
     cancelAnimationFrame(this.frameRequest);
+    this.vector?.tiles.destroy();
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
     this.loader?.destroy();

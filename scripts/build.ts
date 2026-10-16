@@ -29,10 +29,14 @@ const features = [
 const strip = ['--strip-debug', '--strip-producers'];
 await $`bun --bun ${join(root, 'node_modules/.bin/wasm-opt')} -O3 ${features} ${strip} ${wasm} -o ${wasm}`;
 
-/** Bundles entry points with the decoding worker next to them (it is loaded by URL, relative to the bundle) */
+/** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle) */
 async function bundle(entry: string, outdir: string): Promise<void> {
   const result = await Bun.build({
-    entrypoints: [join(root, entry), join(root, pkg, 'src/decoder.worker.ts')],
+    entrypoints: [
+      join(root, entry),
+      join(root, pkg, 'src/decoder.worker.ts'),
+      join(root, pkg, 'src/basemap.worker.ts'),
+    ],
     outdir: join(root, outdir),
     naming: '[name].[ext]',
     target: 'browser',

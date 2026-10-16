@@ -28,7 +28,7 @@ export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 
   /** The text: a string (`\n` breaks lines) or runs with their own scale and font; empty: no label */
   text: Styled<string | TextPart[], P>;
   /** Font of the Géoplateforme (default `Source Sans Pro Regular`; also Bold, Italic, Semibold) */
-  font: string;
+  font: Styled<string, P>;
   /** CSS pixels, or zoom stops (default 12) */
   size: Styled<Size, P>;
   /** `'point'` (default): horizontal text; `'line'`: along the line at its middle, kept upright */
@@ -38,16 +38,16 @@ export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 
   /** CSS pixels (default 0) */
   haloWidth: Styled<number, P>;
   /** Side of the text at the anchor (default `'center'`) */
-  anchor: Anchor;
+  anchor: Styled<Anchor, P>;
   /** Shift, ems (default [0, 0]) */
-  offset: [x: number, y: number];
+  offset: Styled<[x: number, y: number], P>;
   /** Wrapping width, ems (default 10) */
-  maxWidth: number;
+  maxWidth: Styled<number, P>;
   /** Ems (default 1.2) */
-  lineHeight: number;
+  lineHeight: Styled<number, P>;
   /** Shown even where it overlaps other labels, and hiding none (MapLibre's allow-overlap and ignore-placement)
    * (default false) */
-  overlap: boolean;
+  overlap: Styled<boolean, P>;
 }
 
 export interface SymbolOptions<P = Properties> extends Partial<SymbolStyle<P>>, Placement {
@@ -177,11 +177,13 @@ export class SymbolLayer<P = Properties> extends Layer {
     const parts = this.list.map((f, i): TextPart[] => {
       if (filter && !filter(f.properties, i)) return [];
       const t = evaluate(text, f.properties, i);
-      return typeof t === 'string' ? [{ text: t }] : t;
+      const own = evaluate(font, f.properties, i);
+      // Each run in its font, the feature's by default
+      return (typeof t === 'string' ? [{ text: t }] : t).map((p) => ({ ...p, font: p.font ?? own }));
     });
     const byFont = new Map<string, Set<number>>();
     for (const p of parts.flat()) {
-      const key = p.font ?? font;
+      const key = p.font ?? 'Source Sans Pro Regular';
       const set = byFont.get(key) ?? new Set<number>();
       for (const code of codes([p])) set.add(code);
       byFont.set(key, set);
@@ -213,7 +215,14 @@ export class SymbolLayer<P = Properties> extends Layer {
       const s0 = evaluate(size, f.properties, i);
       const shaped = typeof s0 === 'number' ? s0 : Math.max(...s0.map(([, v]) => v), 1);
       const scale: Size = typeof s0 === 'number' ? 1 : s0.map(([z, v]): [number, number] => [z, v / shaped]);
-      const s = shape(text, (name) => loaded.get(name), { font, size: shaped, maxWidth, lineHeight, anchor, offset });
+      const s = shape(text, (name) => loaded.get(name), {
+        font: evaluate(font, f.properties, i),
+        size: shaped,
+        maxWidth: evaluate(maxWidth, f.properties, i),
+        lineHeight: evaluate(lineHeight, f.properties, i),
+        anchor: evaluate(anchor, f.properties, i),
+        offset: evaluate(offset, f.properties, i),
+      });
       if (!s.quads.length) return;
       const halo = evaluate(haloWidth, f.properties, i);
       const fill = parseColor(evaluate(color, f.properties, i));
@@ -232,7 +241,14 @@ export class SymbolLayer<P = Properties> extends Layer {
         // The collision box: the ink, with the halo and a little room
         const pad = halo + 1;
         boxes.push(s.box[0] - pad, s.box[1] - pad, s.box[2] + pad, s.box[3] + pad);
-        styles.push(...fill, ...haloRgba, halo, overlap ? 1 : 0, ...direction, ...stops(scale));
+        styles.push(
+          ...fill,
+          ...haloRgba,
+          halo,
+          evaluate(overlap, f.properties, i) ? 1 : 0,
+          ...direction,
+          ...stops(scale),
+        );
         for (const q of s.quads) quads.push(label, ...q);
       }
     });

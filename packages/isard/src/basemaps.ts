@@ -6,7 +6,7 @@ const WMTS =
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
 const PLAN = `${WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&FORMAT=image/png`;
 
-export const BASEMAPS: Record<Exclude<Basemap, 'none'>, RasterOptions> = {
+export const BASEMAPS: Record<Exclude<Basemap, 'none' | 'plan-vector' | 'plan-grey-vector'>, RasterOptions> = {
   plan: { url: PLAN, maxZoom: 19 },
   'plan-grey': { url: PLAN, maxZoom: 19, saturation: 0 },
   ortho: { url: `${WMTS}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&FORMAT=image/jpeg`, maxZoom: 19 },
@@ -28,6 +28,8 @@ export const TERRAIN_URL =
 export const SEA: Record<Basemap, [r: number, g: number, b: number]> = {
   plan: [0.667, 0.835, 0.914],
   'plan-grey': [0.792, 0.792, 0.792],
+  'plan-vector': [0.667, 0.835, 0.914],
+  'plan-grey-vector': [0.792, 0.792, 0.792],
   ortho: [0.039, 0.231, 0.349],
   none: [0.85, 0.85, 0.83],
 };

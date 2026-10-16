@@ -76,4 +76,7 @@ export type {
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
+export type { Style, StyleLayer } from './vectorstyle.ts';
+export type { VectorTilesOptions } from './vectortiles.ts';
+export { PLAN_STYLES, VectorTiles } from './vectortiles.ts';
 export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';

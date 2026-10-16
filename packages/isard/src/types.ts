@@ -7,7 +7,9 @@ import type { Camera, Engine } from './wasm/isard.js';
 export type LonLat = [lon: number, lat: number];
 export type Point = [x: number, y: number];
 
-export type Basemap = 'plan' | 'plan-grey' | 'ortho' | 'none';
+/** Géoplateforme basemaps: rasters (`plan`, `plan-grey`, `ortho`), or vector tiles with their labels above the
+ * other layers (`plan-vector`, `plan-grey-vector`, the PLAN.IGN styles) */
+export type Basemap = 'plan' | 'plan-grey' | 'plan-vector' | 'plan-grey-vector' | 'ortho' | 'none';
 
 /**
  * How tiles load and show. 'immediate' (default): everything visible loads, tiles show as soon as they arrive.
@@ -46,6 +48,8 @@ export interface GeoMapOptions extends Partial<Camera> {
   interactive?: boolean;
   /** Where to load the engine from, when a bundler does not resolve the default URL */
   wasmUrl?: string | URL;
+  /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
+  basemapWorkerUrl?: string | URL;
   /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default the
    * Géoplateforme's fonts) */
   glyphs?: string;
