@@ -1,6 +1,6 @@
 /** Messages between the main thread and the decoding workers */
 import type { DecoderUrls } from './decoders.ts';
-import type { DecodedTile, TextureFormats } from './wasm/geo_render.js';
+import type { DecodedTile, TextureFormats } from './wasm/isard.js';
 
 export type WorkerRequest =
   | { type: 'init'; module: WebAssembly.Module; decoders: DecoderUrls; formats: TextureFormats }

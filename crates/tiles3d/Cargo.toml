@@ -1,11 +1,11 @@
 [package]
-name = "geo-render-tiles3d"
+name = "isard-tiles3d"
 version = "0.1.0"
 edition = "2024"
-description = "3D Tiles tileset tree, traversal and b3dm / glb decoding of geo-render"
+description = "3D Tiles tileset tree, traversal and b3dm / glb decoding of isard"
 
 [dependencies]
-geo = { package = "geo-render-geo", path = "../geo" }
+geo = { package = "isard-geo", path = "../geo" }
 glam = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

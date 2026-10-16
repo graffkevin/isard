@@ -3,7 +3,7 @@
  * Cesium use): Draco geometry (`KHR_draco_mesh_compression`) and KTX2 / Basis Universal textures (`KHR_texture_basisu`),
  * transcoded to the best compressed format the GPU supports.
  */
-import type { CompressedTexture, DracoGeometry, DracoRequest, TextureFormats } from './wasm/geo_render.js';
+import type { CompressedTexture, DracoGeometry, DracoRequest, TextureFormats } from './wasm/isard.js';
 
 /** Base URLs of the decoders (each ending with `/`) */
 export interface DecoderUrls {

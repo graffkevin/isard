@@ -1,9 +1,9 @@
 {
-  "name": "@geo-render/bench",
+  "name": "@isard/bench",
   "private": true,
   "type": "module",
   "dependencies": {
-    "geo-render": "workspace:*",
+    "isard": "workspace:*",
     "itowns": "2.46.1-next.72",
     "postprocessing": "6.38.2",
     "proj4": "^2.20.4",

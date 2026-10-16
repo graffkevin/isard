@@ -3,7 +3,7 @@
  * IGN relief, and the loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles
  * decoded on the main thread, to compare), ?terrain=1 (relief on from the start).
  */
-import { type Basemap, GeoMap, type LonLat, type Projection, type Tiles3dLayer } from 'geo-render';
+import { type Basemap, GeoMap, type LonLat, type Projection, type Tiles3dLayer } from 'isard';
 
 declare global {
   interface Window {

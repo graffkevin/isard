@@ -1,7 +1,7 @@
 target/
 node_modules/
 **/dist/
-packages/geo-render/src/wasm/
+packages/isard/src/wasm/
 .idea/
 .claude/
 CLAUDE.md

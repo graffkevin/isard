@@ -1,6 +1,6 @@
 /**
  * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
- * pass (wasm-opt), then the `geo-render` package (packages/geo-render/dist: module, decoding worker,
+ * pass (wasm-opt), then the `isard` package (packages/isard/dist: module, decoding worker,
  * type declarations) and the demo (apps/demo/dist, bundled from the package sources).
  */
 import { copyFileSync, mkdirSync } from 'node:fs';
@@ -13,12 +13,12 @@ const bin = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin');
 process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
 $.cwd(root);
 
-const pkg = 'packages/geo-render';
+const pkg = 'packages/isard';
 const bindings = `${pkg}/src/wasm`;
-const wasm = `${bindings}/geo_render_bg.wasm`;
+const wasm = `${bindings}/isard_bg.wasm`;
 
-await $`cargo build -p geo-render --target wasm32-unknown-unknown --release`;
-await $`wasm-bindgen --target web --out-dir ${bindings} target/wasm32-unknown-unknown/release/geo_render.wasm`;
+await $`cargo build -p isard --target wasm32-unknown-unknown --release`;
+await $`wasm-bindgen --target web --out-dir ${bindings} target/wasm32-unknown-unknown/release/isard.wasm`;
 // Size and speed pass (binaryen, a dev dependency, run by Bun): about a third smaller, without the debug sections
 const features = [
   '--enable-bulk-memory',
@@ -43,17 +43,17 @@ async function bundle(entry: string, outdir: string): Promise<void> {
   });
   if (!result.success) throw new AggregateError(result.logs, `bundling ${entry} failed`);
   mkdirSync(join(root, outdir), { recursive: true });
-  copyFileSync(join(root, wasm), join(root, outdir, 'geo_render_bg.wasm'));
+  copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
 }
 
 await bundle(`${pkg}/src/index.ts`, `${pkg}/dist`);
 await bundle('apps/demo/src/main.ts', 'apps/demo/dist');
-for (const page of ['runner', 'itowns', 'geo-render', 'tiles-renderer'])
+for (const page of ['runner', 'itowns', 'isard', 'tiles-renderer'])
   await bundle(`apps/bench/src/${page}.ts`, 'apps/bench/dist');
 await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
 // The declarations of the package refer to the engine's (Camera, PickHit…): shipped with them
 mkdirSync(join(root, pkg, 'dist/wasm'), { recursive: true });
-copyFileSync(join(root, bindings, 'geo_render.d.ts'), join(root, pkg, 'dist/wasm/geo_render.d.ts'));
+copyFileSync(join(root, bindings, 'isard.d.ts'), join(root, pkg, 'dist/wasm/isard.d.ts'));
 
 const size = (path: string) => `${(Bun.file(join(root, path)).size / 1024).toFixed(0)} KB`;
 console.log(

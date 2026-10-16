@@ -3,7 +3,7 @@
  * the map recreates its engine and every layer in order, with the same handle (its id is updated).
  */
 import type { LayerHost, NetworkOptions, NetworkStyle, RasterOptions, Tiles3dStyle } from './types.ts';
-import type { Engine, NetworkStats, Tiles3dStats } from './wasm/geo_render.js';
+import type { Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
 
 export abstract class Layer {
   #id = -1;

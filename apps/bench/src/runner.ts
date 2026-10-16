@@ -1,9 +1,9 @@
 /** Runner page: plays the scenario with each engine in turn, then compares them phase by phase */
 import { type BenchResult, LILLE_MESH, type PhaseResult } from './scenario.ts';
 
-const ENGINES = ['geo-render', 'itowns', 'tiles-renderer'] as const;
+const ENGINES = ['isard', 'itowns', 'tiles-renderer'] as const;
 /** Column names, in the order of `ENGINES` (a result's engine name starts with one) */
-const NAMES = ['geo-render', 'iTowns', '3DTilesRendererJS'];
+const NAMES = ['isard', 'iTowns', '3DTilesRendererJS'];
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
   const found = document.getElementById(id);

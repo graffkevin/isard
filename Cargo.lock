@@ -59,39 +59,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "geo-render"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "geo-render-geo",
- "geo-render-tiles3d",
- "glam",
- "glow",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "geo-render-geo"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "glam",
-]
-
-[[package]]
-name = "geo-render-tiles3d"
-version = "0.1.0"
-dependencies = [
- "geo-render-geo",
- "glam",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "glam"
 version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -107,6 +74,39 @@ dependencies = [
  "slotmap",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "isard"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "glow",
+ "isard-geo",
+ "isard-tiles3d",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "isard-geo"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+]
+
+[[package]]
+name = "isard-tiles3d"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "isard-geo",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

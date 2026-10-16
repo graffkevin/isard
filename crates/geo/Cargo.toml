@@ -1,8 +1,8 @@
 [package]
-name = "geo-render-geo"
+name = "isard-geo"
 version = "0.1.0"
 edition = "2024"
-description = "Camera and projections (Web Mercator, globe), WGS 84 geodesy, the French geoid and tile selection of geo-render"
+description = "Camera and projections (Web Mercator, globe), WGS 84 geodesy, the French geoid and tile selection of isard"
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }

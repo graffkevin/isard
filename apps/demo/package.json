@@ -1,8 +1,8 @@
 {
-  "name": "@geo-render/demo",
+  "name": "@isard/demo",
   "private": true,
   "type": "module",
   "dependencies": {
-    "geo-render": "workspace:*"
+    "isard": "workspace:*"
   }
 }

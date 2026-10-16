@@ -1,7 +1,7 @@
-//! geo-render: a WebGL2 map engine built for large, interactive data layers (accessibility, flooding, 3D meshes) on
+//! isard: a WebGL2 map engine built for large, interactive data layers (accessibility, flooding, 3D meshes) on
 //! Géoplateforme basemaps. Rendering only happens on demand: an idle map costs nothing.
 //!
-//! This crate is the WebAssembly core. The `geo-render` JavaScript package wraps it with the interactions (pan, zoom,
+//! This crate is the WebAssembly core. The `isard` JavaScript package wraps it with the interactions (pan, zoom,
 //! rotate, inertia), the resize handling, the decoding workers and a typed API. What needs neither WebGL nor the
 //! browser lives in crates of its own, tested natively: `geo` (camera, projections, geodesy, tile selection) and
 //! `tiles3d` (3D Tiles tree, traversal and decoding).

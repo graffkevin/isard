@@ -1,6 +1,6 @@
-/** Public types of the `geo-render` package */
+/** Public types of the `isard` package */
 import type { DecoderUrls } from './decoders.ts';
-import type { Camera, Engine } from './wasm/geo_render.js';
+import type { Camera, Engine } from './wasm/isard.js';
 
 export type LonLat = [lon: number, lat: number];
 export type Point = [x: number, y: number];

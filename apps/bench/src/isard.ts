@@ -1,5 +1,5 @@
-/** geo-render running the benchmark scenario */
-import { GeoMap } from 'geo-render';
+/** isard running the benchmark scenario */
+import { GeoMap } from 'isard';
 import { benchmark, FOV, LILLE_MESH, type Pose, SSE, START } from './scenario.ts';
 
 const found = document.getElementById('view');
@@ -25,7 +25,7 @@ const mesh = map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: SSE });
 Object.assign(window, { benchMap: map, benchMesh: mesh });
 
 await benchmark({
-  name: 'geo-render',
+  name: 'isard',
   setPose(pose: Pose): void {
     map.setCamera({
       center: [pose.lon, pose.lat],

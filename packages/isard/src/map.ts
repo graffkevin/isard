@@ -22,8 +22,8 @@ import type {
   TerrainOptions,
   Tiles3dOptions,
 } from './types.ts';
-import type { Camera, PickHit, RasterLayerStats } from './wasm/geo_render.js';
-import init, { Engine } from './wasm/geo_render.js';
+import type { Camera, PickHit, RasterLayerStats } from './wasm/isard.js';
+import init, { Engine } from './wasm/isard.js';
 
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
@@ -93,7 +93,7 @@ export class GeoMap implements LayerHost {
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
-    compiled ??= compile(options.wasmUrl ?? new URL('./geo_render_bg.wasm', import.meta.url)).then(async (module) => {
+    compiled ??= compile(options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url)).then(async (module) => {
       await init({ module_or_path: module });
       return module;
     });

@@ -1,5 +1,5 @@
 [package]
-name = "geo-render"
+name = "isard"
 version = "0.1.0"
 edition = "2024"
 description = "WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps, compiled to WebAssembly"
@@ -9,10 +9,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck = "1"
-geo = { package = "geo-render-geo", path = "../geo" }
+geo = { package = "isard-geo", path = "../geo" }
 glam = "0.30"
 glow = "0.16"
-tiles3d = { package = "geo-render-tiles3d", path = "../tiles3d" }
+tiles3d = { package = "isard-tiles3d", path = "../tiles3d" }
 js-sys = "0.3.106"
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4"

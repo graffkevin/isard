@@ -4,7 +4,7 @@
  */
 import type { DecoderUrls } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
-import type { DecodedTile, TextureFormats, TileLoaderLike } from './wasm/geo_render.js';
+import type { DecodedTile, TextureFormats, TileLoaderLike } from './wasm/isard.js';
 
 interface Pending {
   resolve: (tile: DecodedTile) => void;

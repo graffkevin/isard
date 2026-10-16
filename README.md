@@ -1,11 +1,11 @@
-# geo-render
+# Isard
 
 **A WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps.** Rust core compiled to
 WebAssembly, small TypeScript API. Built for maps where millions of features change at every mouse move
 (accessibility, flooding), where a general-purpose map library spends its time on things these maps do not need.
 
 ```ts
-import { GeoMap } from 'geo-render';
+import { GeoMap } from 'isard';
 
 const map = await GeoMap.create(document.getElementById('map')!, { center: [2.4246, 48.8457], zoom: 14 });
 const network = map.addNetwork({ nodes, edges, max: 1800, contour: 300 }); // lon/lat pairs, node index pairs
@@ -111,15 +111,15 @@ Demo URL parameters: `?projection=mercator`, `?workers=0` (3D Tiles decoded on t
 crates/geo/             camera and projections, WGS 84 geodesy, RAF20 geoid, tile selection    no WebGL, tested natively
 crates/tiles3d/         3D Tiles tree, traversal and decoding                                 no WebGL, tested natively
   tests/data/           a tile of the Lille photomesh (MEL open data)
-crates/engine/          WebAssembly core (crate geo-render), on the two above
+crates/engine/          WebAssembly core (crate isard), on the two above
   src/engine.rs         the Engine exported to JavaScript: camera, ground (raster layers over the relief), frame loop
   src/engine/pick.rs    picking: features and ground under a screen point
   src/layer.rs          the Layer trait: what is drawn over the ground (networks, 3D Tiles…)
   src/render/           WebGL2 layers and helpers; each Layer exports its own methods of Engine, next to it
   src/worker.rs         entry points of the 3D Tiles decoding workers
-packages/geo-render/    the npm package: GeoMap, layers, interactions, decoding workers
-apps/demo/              the demo, importing geo-render like any application
-apps/bench/             benchmark: geo-render, iTowns and 3DTilesRendererJS on the same scenario
+packages/isard/         the npm package: GeoMap, layers, interactions, decoding workers
+apps/demo/              the demo, importing isard like any application
+apps/bench/             benchmark: isard, iTowns and 3DTilesRendererJS on the same scenario
 scripts/                build and demo server
 ```
 
@@ -134,7 +134,7 @@ benchmark**. The same scenario plays with each engine in turn, in a 1280 × 800 
 
 | Engine | Setup |
 |---|---|
-| geo-render | this repository |
+| isard | this repository |
 | iTowns 2.46.1-next.72 | the version of junn-apps, with 3d-tiles-renderer 0.5.3 forced as junn-apps does (`overrides`): with its own 0.4.28 the 3D Tiles queue never starts |
 | 3DTilesRendererJS 0.5.3 | three.js 0.182, ortho through `XYZTilesOverlay` on a `GeneratedSurfacePlugin` ellipsoid, continuous rendering as in its examples |
 

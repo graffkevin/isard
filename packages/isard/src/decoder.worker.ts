@@ -5,8 +5,8 @@
  */
 import { DEFAULT_DECODERS, type DecoderUrls, decodeDraco, transcodeKtx2 } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
-import type { DecodedPrimitive, TextureFormats } from './wasm/geo_render.js';
-import init, { decodeTile, dracoRequests } from './wasm/geo_render.js';
+import type { DecodedPrimitive, TextureFormats } from './wasm/isard.js';
+import init, { decodeTile, dracoRequests } from './wasm/isard.js';
 
 let ready: Promise<unknown> | undefined;
 let decoders: DecoderUrls = DEFAULT_DECODERS;

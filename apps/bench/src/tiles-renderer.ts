@@ -39,7 +39,7 @@ ground.registerPlugin(
 const mesh = new TilesRenderer(LILLE_MESH);
 mesh.errorTarget = SSE;
 // The photomesh declares PBR materials and the scene has no light: they would render black. Like iTowns and
-// geo-render, its textures are shown unlit
+// isard, its textures are shown unlit
 mesh.addEventListener('load-model', ({ scene }) => {
   scene.traverse((object) => {
     if (object instanceof Mesh && object.material instanceof MeshStandardMaterial) {

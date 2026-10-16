@@ -1,5 +1,5 @@
 {
-  "name": "geo-render-workspace",
+  "name": "isard-workspace",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -9,7 +9,7 @@
   "scripts": {
     "build": "bun scripts/build.ts",
     "dev": "bun scripts/build.ts && bun scripts/serve.ts",
-    "typecheck": "tsc -p packages/geo-render && tsc -p packages/geo-render/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p scripts",
+    "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p scripts",
     "lint": "biome check . && cargo clippy --all-targets && cargo clippy --target wasm32-unknown-unknown",
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test"

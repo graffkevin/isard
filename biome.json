@@ -48,7 +48,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/geo-render/src/index.ts"],
+      "includes": ["packages/isard/src/index.ts"],
       "linter": {
         "rules": {
           "performance": {

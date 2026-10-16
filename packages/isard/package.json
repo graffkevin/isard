@@ -1,5 +1,5 @@
 {
-  "name": "geo-render",
+  "name": "isard",
   "version": "0.1.0",
   "description": "WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps (Rust core in WebAssembly)",
   "type": "module",
@@ -12,7 +12,7 @@
       "default": "./dist/index.js"
     },
     "./decoder.worker.js": "./dist/decoder.worker.js",
-    "./geo_render_bg.wasm": "./dist/geo_render_bg.wasm"
+    "./isard_bg.wasm": "./dist/isard_bg.wasm"
   },
   "files": [
     "dist"

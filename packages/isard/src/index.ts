@@ -1,8 +1,8 @@
 /**
- * geo-render: WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps.
+ * isard: WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps.
  *
  * ```ts
- * import { GeoMap } from 'geo-render';
+ * import { GeoMap } from 'isard';
  * const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 13 });
  * const network = map.addNetwork({ nodes, edges, max: 1800, contour: 300 });
  * map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat)));
@@ -27,4 +27,4 @@ export type {
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
-export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/geo_render.js';
+export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';
