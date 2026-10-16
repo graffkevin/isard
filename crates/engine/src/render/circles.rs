@@ -7,17 +7,13 @@ use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
-use crate::render::gl::{self, Projection, bytes};
+use crate::render::gl::{self, Objects, Projection, bytes};
+use crate::render::overlay::{self, ANCHOR, Anchor};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
 const VERTEX: &str = r"
-uniform mat4 u_matrix;
-uniform vec2 u_plane_origin;
-uniform vec2 u_origin;
-uniform vec2 u_viewport;
-uniform float u_depth_bias;
 // 1: lying on the ground; 0: facing the screen
 uniform float u_on_ground;
 uniform float u_slop;
@@ -49,10 +45,10 @@ void main() {
   vec4 c;
   if (u_on_ground > 0.5) {
     // Pixels at the camera's scale, laid on the ground around the point
-    vec2 offset = a_point * u_world + corner * extent / u_pixel_ratio;
-    c = u_matrix * vec4(project_up(u_plane_origin + offset, merc, h), 1.0);
+    vec2 plane = plane_of(a_point) + corner * extent / u_pixel_ratio;
+    c = u_matrix * vec4(project_up(plane, merc, h), 1.0);
   } else {
-    c = u_matrix * vec4(project_up(u_plane_origin + a_point * u_world, merc, h), 1.0);
+    c = u_matrix * vec4(project_up(plane_of(a_point), merc, h), 1.0);
     c.xy += corner * extent / u_viewport * c.w;
   }
   c.z -= u_depth_bias;
@@ -87,22 +83,14 @@ void main() {
   color = vec4(c.rgb, c.a * (1.0 - outside));
 }";
 
-const UNIFORMS: [&str; 9] = [
-    "u_matrix",
-    "u_plane_origin",
-    "u_origin",
-    "u_viewport",
-    "u_depth_bias",
-    "u_on_ground",
-    "u_layer",
-    "u_pick",
-    "u_slop",
-];
+const UNIFORMS: [&str; 4] = ["u_on_ground", "u_layer", "u_pick", "u_slop"];
 
 /// Circles in relief are pulled towards the camera by this fraction of their distance
 const DEPTH_BIAS: f64 = 0.003;
 /// Extra radius in the picking pass, device pixels
 const PICK_SLOP: f32 = 4.0;
+/// Margin around the points when culling the layer, CSS pixels: the circles reach that far out of their centers
+const CULL_MARGIN: f64 = 128.0;
 /// Bytes per point: offset (2 × f32), feature
 const STRIDE: i32 = 12;
 
@@ -118,7 +106,8 @@ pub struct CircleLayer {
     /// Lying on the ground rather than facing the screen
     pub on_ground: bool,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 9],
+    uniforms: [Option<glow::UniformLocation>; 4],
+    anchor: Anchor,
     projection: Projection,
     drape_uniforms: DrapeUniforms,
     feature_uniforms: FeatureUniforms,
@@ -133,15 +122,21 @@ pub struct CircleLayer {
 
 impl CircleLayer {
     pub fn new(gl: &glow::Context, points: &[f64], feature: &[u32], feature_count: usize) -> Result<Self, String> {
-        let program = gl::program(
-            gl,
-            &format!("#version 300 es\n{}{}{FEATURES}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
+        overlay::pick_ids_fit(feature_count, "circle layer");
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let program = objects.program(
+            &format!(
+                "#version 300 es\n{}{}{ANCHOR}{FEATURES}{VERTEX}",
+                gl::PROJECT,
+                drape::ALTITUDE
+            ),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
-        // SAFETY: object creation on a live context
-        let (vao, buffer) = unsafe {
-            let vao = gl.create_vertex_array()?;
-            let buffer = gl.create_buffer()?;
+        let vao = objects.vertex_array()?;
+        let buffer = objects.buffer()?;
+        // SAFETY: state setup of objects just created on a live context
+        unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             gl.enable_vertex_attrib_array(0);
@@ -151,13 +146,15 @@ impl CircleLayer {
             gl.vertex_attrib_pointer_i32(1, 1, glow::UNSIGNED_INT, STRIDE, 8);
             gl.vertex_attrib_divisor(1, 1);
             gl.bind_vertex_array(None);
-            (vao, buffer)
-        };
+        }
+        let features = Features::new(gl, feature_count)?;
+        objects.keep();
         let mut layer = Self {
-            features: Features::new(gl, feature_count)?,
+            features,
             on_ground: false,
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
+            anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
             feature_uniforms: FeatureUniforms::new(gl, program),
@@ -175,19 +172,9 @@ impl CircleLayer {
 
     /// Replaces the points (Mercator, interleaved) and their features
     pub fn set_geometry(&mut self, gl: &glow::Context, points: &[f64], feature: &[u32]) {
-        let merc: Vec<DVec2> = points
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&[x, y]| DVec2::new(x, y))
-            .collect();
+        let merc = overlay::points(points);
         let n = merc.len().min(feature.len());
-        let (min, max) = merc[..n]
-            .iter()
-            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-                (a.min(p), b.max(p))
-            });
-        (self.min, self.max) = if n == 0 { (DVec2::ZERO, DVec2::ZERO) } else { (min, max) };
+        (self.min, self.max) = overlay::bounds(&merc[..n]).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         self.origin = (self.min + self.max) / 2.0;
         let data: Vec<Point> = merc[..n]
             .iter()
@@ -227,36 +214,13 @@ impl CircleLayer {
             relief,
             ..
         } = frame;
-        let [
-            matrix,
-            plane_origin,
-            origin,
-            viewport,
-            depth_bias,
-            on_ground,
-            layer,
-            pick_u,
-            slop,
-        ] = &self.uniforms;
-        let shift = -(self.origin.x - camera.center.x).round();
-        let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
+        let [on_ground, layer, pick_u, slop] = &self.uniforms;
         // SAFETY: draw with objects owned by this layer
         unsafe {
             gl.use_program(Some(self.program));
-            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
-            gl.uniform_2_f32(plane_origin.as_ref(), plane.x as f32, plane.y as f32);
-            gl.uniform_2_f32(origin.as_ref(), self.origin.x as f32, self.origin.y as f32);
-            gl.uniform_2_f32(
-                viewport.as_ref(),
-                (camera.width * pixel_ratio / 2.0) as f32,
-                (camera.height * pixel_ratio / 2.0) as f32,
-            );
-            let bias = if relief.is_some() {
-                2.0 * view.near * DEPTH_BIAS
-            } else {
-                0.0
-            };
-            gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
+            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+            self.anchor.set_view(gl, view, viewport, relief.is_some(), DEPTH_BIAS);
+            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_f32(on_ground.as_ref(), if self.on_ground { 1.0 } else { 0.0 });
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
@@ -270,8 +234,14 @@ impl CircleLayer {
         }
     }
 
+    /// Whether the layer has anything to draw at this zoom, in view
     fn shows(&self, frame: &Frame) -> bool {
-        self.count > 0 && self.features.layer.shows(frame.camera.zoom)
+        if self.count == 0 || !self.features.layer.shows(frame.camera.zoom) {
+            return false;
+        }
+        let pad = DVec2::splat(CULL_MARGIN / frame.view.world_size);
+        let heights = overlay::heights(frame.view, frame.relief);
+        overlay::in_view(frame.view, self.min - pad, self.max + pad, heights)
     }
 }
 

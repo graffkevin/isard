@@ -6,7 +6,7 @@
 //! same code serves both projections.
 
 use crate::camera::View;
-use glam::{DVec2, DVec3, DVec4};
+use glam::{DVec2, DVec3};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileId {
@@ -55,6 +55,8 @@ impl TileId {
 
 /// Upper bound on the tiles of one selection
 const MAX_TILES: usize = 400;
+/// Finest level a selection reaches
+const MAX_Z: u8 = 30;
 /// On the globe, tiles coarser than this are always split (they would be too curved for their mesh)
 const GLOBE_MIN_Z: u8 = 2;
 
@@ -76,6 +78,8 @@ pub struct Selected {
 /// (CSS pixels).
 #[must_use]
 pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> {
+    // Tile coordinates are u32: levels past 30 do not exist
+    let (min_z, max_z) = (min_z.min(MAX_Z), max_z.min(MAX_Z));
     let globe = view.globe.factor > 0.0;
     let mut out = Vec::new();
     let mut stack = vec![TileId::new(0, 0, 0)];
@@ -86,7 +90,7 @@ pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> 
         let fine_enough = apparent <= tile_px;
         let refine = if tile.z < min_z {
             // Below the layer's first level: go down only if that level would be about the right size
-            apparent / f64::from(1u32 << (min_z - tile.z)) > tile_px / 2.0
+            apparent / 2f64.powi(i32::from(min_z - tile.z)) > tile_px / 2.0
         } else {
             tile.z < max_z && (!fine_enough || (globe && tile.z < GLOBE_MIN_Z))
         };
@@ -129,11 +133,13 @@ fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
     let visible = if view.lift == 0.0 {
         in_frustum(view, points)
     } else {
-        let column: Vec<DVec3> = [-1.0, 0.0, 1.0]
-            .iter()
-            .flat_map(|&k| points.iter().map(move |p| *p + up * k))
-            .collect();
-        in_frustum(view, &column)
+        let mut column = [DVec3::ZERO; 75];
+        for (k, layer) in [-1.0, 0.0, 1.0].into_iter().zip(column.chunks_exact_mut(points.len())) {
+            for (q, p) in layer.iter_mut().zip(points) {
+                *q = *p + up * k;
+            }
+        }
+        in_frustum(view, &column[..points.len() * 3])
     };
     if !visible {
         return None;
@@ -187,14 +193,22 @@ fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
 
 /// Conservative test of sample points against the frustum: out only if all are beyond the same plane
 pub(crate) fn in_frustum(view: &View, points: &[DVec3]) -> bool {
-    let clip: Vec<DVec4> = points.iter().map(|p| view.view_proj * p.extend(1.0)).collect();
-    let outside = |f: fn(&DVec4) -> bool| clip.iter().all(f);
-    !(outside(|c| c.x < -c.w)
-        || outside(|c| c.x > c.w)
-        || outside(|c| c.y < -c.w)
-        || outside(|c| c.y > c.w)
-        || outside(|c| c.z < -c.w)
-        || outside(|c| c.z > c.w))
+    // One bit per plane, kept while every point is beyond it
+    let mut outside = 0b11_1111u8;
+    for p in points {
+        let c = view.view_proj * p.extend(1.0);
+        let bits = u8::from(c.x < -c.w)
+            | u8::from(c.x > c.w) << 1
+            | u8::from(c.y < -c.w) << 2
+            | u8::from(c.y > c.w) << 3
+            | u8::from(c.z < -c.w) << 4
+            | u8::from(c.z > c.w) << 5;
+        outside &= bits;
+        if outside == 0 {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -294,6 +308,17 @@ mod tests {
         });
         let far: Vec<_> = far.collect();
         assert!(far.is_empty(), "{far:?}");
+    }
+
+    #[test]
+    fn levels_past_31_do_not_overflow() {
+        let c = camera(3.0, 0.0);
+        assert_eq!(select(&c.view(), 40, 255, 362.0), Vec::<TileId>::new());
+        assert!(
+            select(&camera(25.0, 0.0).view(), 0, 255, 362.0)
+                .iter()
+                .all(|t| t.z <= MAX_Z)
+        );
     }
 
     #[test]

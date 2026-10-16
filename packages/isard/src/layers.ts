@@ -9,7 +9,13 @@ import type { Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
 export abstract class Layer {
   #id = -1;
 
-  constructor(protected readonly map: LayerHost) {}
+  /** @internal */
+  protected readonly map: LayerHost;
+
+  /** @internal */
+  constructor(map: LayerHost) {
+    this.map = map;
+  }
 
   /** Id of the layer in the engine */
   get id(): number {
@@ -21,6 +27,7 @@ export abstract class Layer {
     this.#id = this.create(engine);
   }
 
+  /** @internal */
   protected abstract create(engine: Engine): number;
 
   remove(): void {
@@ -37,6 +44,7 @@ export abstract class Layer {
 
 /** Raster tiles (basemaps, overlays) */
 export class RasterLayer extends Layer {
+  /** @internal */
   constructor(
     map: LayerHost,
     private readonly options: Required<Omit<RasterOptions, 'size' | 'loader'>> & {
@@ -54,6 +62,7 @@ export class RasterLayer extends Layer {
     this.map.requestRender();
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const { url, minZoom, maxZoom, opacity, saturation, size, loader } = this.options;
     return engine.addRaster(url, minZoom, maxZoom, opacity, saturation, size, loader);
@@ -67,6 +76,7 @@ export class NetworkLayer extends Layer {
    * across a region, half the memory of f64) */
   private kept: { origin: [number, number]; nodes: Float32Array; lines: Float32Array | undefined } | undefined;
 
+  /** @internal */
   constructor(
     map: LayerHost,
     private geometry: { nodes: Float64Array; edges: Uint32Array; lines: NetworkOptions['lines'] | undefined },
@@ -114,6 +124,7 @@ export class NetworkLayer extends Layer {
     return this.map.engine.networkStats(this.id);
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const { nodes, edges, lines } = this.geometry;
     let mercator: { nodes: Float64Array; lines: Float64Array | undefined };
@@ -198,6 +209,7 @@ function toMercator(lonLat: Float64Array): Float64Array {
 
 /** Textured meshes in 3D Tiles */
 export class Tiles3dLayer extends Layer {
+  /** @internal */
   constructor(
     map: LayerHost,
     private readonly url: string,
@@ -217,6 +229,7 @@ export class Tiles3dLayer extends Layer {
     return this.map.engine.tiles3dStats(this.id);
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError);
     engine.setTiles3dStyle(id, this.style.maxScreenSpaceError, this.style.opacity);
@@ -263,6 +276,7 @@ export class GroundLayer extends Layer {
   private readonly uniforms = new Map<string, number[]>();
   private visible = true;
 
+  /** @internal */
   constructor(
     map: LayerHost,
     private readonly options: GroundOptions,
@@ -318,6 +332,7 @@ export class GroundLayer extends Layer {
     engine.setGroundTexture(id, name, t.format, t.width, t.height, t.depth ?? 0, t.linear ?? false, data);
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const [ax, ay] = mercatorPoint(this.options.anchor);
     const id = engine.addGround(

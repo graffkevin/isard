@@ -36,7 +36,7 @@ General-purpose map libraries spend their time on things these maps do not need.
   exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
 - 🏙️ **Buildings and 3D Tiles.** Buildings colored by a value or by a network's travel times, photomeshes and city
   models in 3D Tiles (Draco, meshopt, KTX2).
-- 🦀 **Small and exact.** 280 KB of WebAssembly gzipped, f64 on the CPU and f32 relative to the camera on the GPU
+- 🦀 **Small and exact.** 320 KB of WebAssembly gzipped, f64 on the CPU and f32 relative to the camera on the GPU
   (centimetres at any zoom), frames on demand only, strict TypeScript types end to end.
 
 ## Quick start

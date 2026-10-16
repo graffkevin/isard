@@ -17,27 +17,38 @@ docs/              this site (VitePress)
 scripts/           build, dev server, release
 ```
 
-`crates/geo` and `crates/tiles3d` have no WebGL and no I/O: they are tested natively.
+`crates/geo` and `crates/tiles3d` have no WebGL and no I/O; `crates/engine` keeps its WebGL and browser calls apart
+from its logic (raster cache, 3D Tiles state, styles, placement): all three are tested natively. The package's pure
+modules (MVT, style expressions, colors, glyphs) are tested by `bun test`.
 
 ## Commands
 
-Requires Rust with the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` at the version pinned in
-`crates/engine/Cargo.toml`, and Bun.
+Requires Rust (the version of `rust-toolchain.toml`, which rustup installs with its components and the
+`wasm32-unknown-unknown` target), `wasm-bindgen-cli` at the version of the `wasm-bindgen` crate in `Cargo.lock` (the
+build stops with the command to install it otherwise), and Bun.
 
 ```sh
 bun install
-bun run dev        # builds, then serves the demo on :5180, the benchmark on /bench/, the examples on /examples/
-bun run test       # Rust tests
-bun run lint       # Biome, clippy pedantic (native and wasm)
-bun run typecheck  # strict TypeScript
-bun run docs:dev   # this site, with the examples live
+bun run dev          # builds, then serves the demo on :5180, the benchmark on /bench/, the examples on /examples/
+bun run build        # the engine, the package, the demo and the examples; build:bench adds the benchmark
+bun run test         # Rust tests, then the package's (bun test)
+bun run lint         # Biome, rustfmt, clippy pedantic (native and wasm), warnings as errors
+bun run typecheck    # strict TypeScript
+bun run docs:dev     # this site, with the examples live and the API reference generated
+bun run docs:check   # the API reference: every type a public signature uses is exported
 ```
+
+The checks run on every push and pull request; the site is deployed once they pass on `main`.
 
 ## Release
 
+Set the version in `packages/isard/package.json` and in the three `crates/*/Cargo.toml`, and describe it in
+`CHANGELOG.md` first.
+
 ```sh
-bun run release:dry   # lint, types, tests, build, the package packed: its file list
-bun run release       # the same, then published on npm (NPM_TOKEN in .env)
+bun run release:dry   # the release checked, lint, types, tests, build, the package packed: its file list
+bun run release       # the same on a clean main, then published on npm (NPM_TOKEN in .env) and tagged v<version>
 ```
 
-Set the version in `packages/isard/package.json` and describe it in `CHANGELOG.md` first.
+The release stops before anything is published if the tree is not clean, the branch is not `main`, the changelog
+does not describe the version, a crate has another version, or the version is already tagged.

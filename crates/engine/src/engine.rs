@@ -79,6 +79,8 @@ pub struct Engine {
     frame: u64,
     pub(crate) redraw: Rc<dyn Fn()>,
     background: [f32; 3],
+    /// The tile mesh shared by the ground and the globe base
+    grid: Grid,
     globe: GlobeBase,
     sky: Sky,
     raster_pass: RasterPass,
@@ -104,6 +106,8 @@ pub struct Engine {
     /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
     /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
     handled: bool,
+    /// The collision grid of the labels, kept from frame to frame
+    label_grid: Option<geo::collision::Grid>,
 }
 
 /// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
@@ -134,14 +138,22 @@ impl Engine {
             .dyn_into::<web_sys::WebGl2RenderingContext>()?;
         // The raw context too: decoded tiles are uploaded straight from JavaScript typed arrays
         let raw = context.clone();
-        let gl = glow::Context::from_webgl2_context(context);
+        let gl = crate::render::gl::context(context)?;
         let redraw: Rc<dyn Fn()> = Rc::new(move || {
             let _ = redraw.call0(&JsValue::NULL);
         });
+        // What was created is deleted again if a step fails
         let grid = Grid::new(&gl)?;
-        let globe = GlobeBase::new(&gl, &grid)?;
-        let raster_pass = RasterPass::new(&gl, &grid)?;
-        let sky = Sky::new(&gl)?;
+        let globe = GlobeBase::new(&gl, &grid).inspect_err(|_| grid.delete(&gl))?;
+        let raster_pass = RasterPass::new(&gl, &grid).inspect_err(|_| {
+            globe.delete(&gl);
+            grid.delete(&gl);
+        })?;
+        let sky = Sky::new(&gl).inspect_err(|_| {
+            raster_pass.delete(&gl);
+            globe.delete(&gl);
+            grid.delete(&gl);
+        })?;
         Ok(Self {
             gl,
             raw,
@@ -153,6 +165,7 @@ impl Engine {
             frame: 0,
             redraw,
             background: [0.95, 0.95, 0.94],
+            grid,
             globe,
             sky,
             raster_pass,
@@ -167,6 +180,7 @@ impl Engine {
             grab: None,
             glyphs: None,
             handled: false,
+            label_grid: None,
         })
     }
 
@@ -372,7 +386,14 @@ impl Engine {
     #[wasm_bindgen(js_name = zoomAt)]
     pub fn zoom_at(&mut self, delta: f64, x: f64, y: f64) {
         let at = DVec2::new(x, y);
-        let altitude = self.grabbed(at);
+        // The relief kept on the CPU first: a wheel notch never waits for the GPU (a read back stalls it)
+        let altitude = match self.grab {
+            Some((point, altitude)) if point == at => altitude,
+            _ => match self.cpu_altitude(x, y) {
+                Some(altitude) => altitude,
+                None => self.grabbed(at),
+            },
+        };
         self.camera.zoom_at_altitude(delta, at, altitude);
         self.grab = Some((at, altitude));
         self.handled = true;
@@ -564,14 +585,17 @@ impl Engine {
         self.drawn = Some(view.clone());
         self.sky.draw(&self.gl, &view);
         self.globe.draw(&self.gl, &view);
+        let redraw = self.redraw.clone();
         let ctx = DrawContext {
             view: &view,
             frame: self.frame,
-            redraw: &self.redraw,
+            redraw: &redraw,
             moving,
             preload: preload.as_ref().map(|(generation, v)| (*generation, v)),
             loading: self.loading,
+            now,
         };
+        self.raster_pass.begin_frame();
         if let Some((terrain, _)) = &mut self.terrain {
             loading |= terrain.prepare(&self.gl, &ctx);
         }
@@ -611,6 +635,7 @@ impl Engine {
                 &mut stack,
                 terrain,
                 self.frame,
+                now,
                 self.loading.fade_ms,
                 fog,
             );
@@ -660,13 +685,36 @@ impl Engine {
     }
 
     /// Places the labels before drawing, from the top layer down: a label shows only where none placed before it does
-    fn place_labels(&self, layers: &mut [(u32, Slot)], view: &View) {
-        let mut grid = geo::collision::Grid::new(self.camera.width, self.camera.height);
-        for (_, slot) in layers.iter_mut().rev() {
-            if let Slot::Layer(layer) = slot {
-                layer.place(&self.frame_state(view), &mut grid);
+    fn place_labels(&mut self, layers: &mut [(u32, Slot)], view: &View) {
+        let (width, height) = (self.camera.width, self.camera.height);
+        let mut grid = self
+            .label_grid
+            .take()
+            .unwrap_or_else(|| geo::collision::Grid::new(width, height));
+        grid.reset(width, height);
+        {
+            let frame = self.frame_state(view);
+            for (_, slot) in layers.iter_mut().rev() {
+                if let Slot::Layer(layer) = slot {
+                    layer.place(&frame, &mut grid);
+                }
             }
         }
+        self.label_grid = Some(grid);
+    }
+
+    /// Altitude (metres, exaggeration included) of the relief under a screen point from the copy kept on the CPU,
+    /// without the GPU: the ground point under the ray at an altitude, the altitude there, and again. None without
+    /// relief tiles there
+    fn cpu_altitude(&self, x: f64, y: f64) -> Option<f64> {
+        self.terrain.as_ref()?;
+        let view = self.camera.view();
+        let mut altitude = self.camera.elevation;
+        for _ in 0..3 {
+            let m = self.camera.ground_at(&view, x, y, altitude)?;
+            altitude = ground_elevation(self.terrain.as_ref(), m)?;
+        }
+        Some(altitude)
     }
 
     /// What a layer gets to draw a frame of this view (`Layer::draw`, `Layer::draw_pick`)
@@ -678,7 +726,6 @@ impl Engine {
             view,
             pixel_ratio: self.pixel_ratio,
             number: self.frame,
-            redraw: &self.redraw,
             loading: self.loading,
             relief: self.terrain.as_ref().map(|(source, e)| (source, *e)),
             ground: &self.raster_pass,
@@ -718,6 +765,36 @@ impl Engine {
 
     fn slot(&mut self, id: u32) -> Option<&mut Slot> {
         self.layers.iter_mut().find(|(i, _)| *i == id).map(|(_, slot)| slot)
+    }
+}
+
+impl Drop for Engine {
+    /// Frees every GPU object of the engine and its layers (`free()` from JavaScript): deleting on a lost context is
+    /// harmless. The downloads stop as the sources drop
+    fn drop(&mut self) {
+        let gl = &self.gl;
+        for (_, slot) in self.layers.drain(..) {
+            match slot {
+                Slot::Raster(layer) => layer.delete(gl),
+                Slot::Layer(mut layer) => layer.delete(gl),
+            }
+        }
+        if let Some((terrain, _)) = self.terrain.take() {
+            terrain.delete(gl);
+        }
+        self.raster_pass.delete(gl);
+        self.globe.delete(gl);
+        self.sky.delete(gl);
+        self.grid.delete(gl);
+        // SAFETY: objects owned by the engine, not used afterwards
+        unsafe {
+            if let Some(target) = self.pick_target.take() {
+                target.delete(gl);
+            }
+            if let Some(atlas) = self.glyphs.take() {
+                gl.delete_texture(atlas.texture);
+            }
+        }
     }
 }
 

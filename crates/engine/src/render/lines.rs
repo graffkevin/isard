@@ -11,26 +11,17 @@ use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{self, FEATURES, FeatureUniforms, Features};
-use crate::render::gl::{self, Projection, bytes};
-use crate::render::raster::RasterSource;
-use geo::camera::View;
+use crate::render::gl::{self, Objects, Projection, bytes};
+use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
 use geo::pieces::{self, Grid, Lines};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
 const VERTEX: &str = r"
-uniform mat4 u_matrix;
-uniform vec2 u_plane_origin;
-uniform vec2 u_origin;
-uniform vec2 u_viewport;
-uniform float u_depth_bias;
-uniform int u_segments;
 uniform float u_slop;
 // Per line: its feature and its length (Mercator)
 uniform highp sampler2D u_lines;
-layout(location = 0) in vec4 a_piece;
-layout(location = 1) in vec2 a_fractions;
 layout(location = 2) in uint a_line;
 flat out vec4 v_color;
 flat out float v_half;
@@ -41,16 +32,6 @@ out float v_along;
 // Distance along the line, in line widths (the dashes)
 out float v_dash;
 
-vec4 clip(float t) {
-  vec2 offset = mix(a_piece.xy, a_piece.zw, t);
-  vec2 merc = u_origin + offset;
-  vec4 c = u_matrix * vec4(project_up(u_plane_origin + offset * u_world, merc, altitude(merc)), 1.0);
-  c.z -= u_depth_bias;
-  return c;
-}
-
-void hide() { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
-
 void main() {
   vec2 line = texelFetch(u_lines, feature_texel(a_line), 0).xy;
   uint f = uint(line.x);
@@ -58,32 +39,18 @@ void main() {
   v_color = feature_color(f, 0u);
   v_color.a *= layer_opacity();
   if (!feature_visible(f) || width <= 0.0 || v_color.a <= 0.0) { hide(); return; }
-  int k = gl_VertexID >> 1;
-  float side = float(gl_VertexID & 1) * 2.0 - 1.0;
-  float step = 1.0 / float(u_segments);
-  float t = float(k) * step;
-  vec4 c = clip(t);
-  vec4 prev = k > 0 ? clip(t - step) : c;
-  vec4 next = k < u_segments ? clip(t + step) : c;
-  vec4 c0 = clip(0.0);
-  vec4 c1 = clip(1.0);
-  if (c.w <= 0.0 || prev.w <= 0.0 || next.w <= 0.0 || c0.w <= 0.0 || c1.w <= 0.0) { hide(); return; }
-  vec2 s = c.xy / c.w * u_viewport;
-  vec2 dir = next.xy / next.w * u_viewport - prev.xy / prev.w * u_viewport;
-  dir = length(dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
-  vec2 normal = vec2(-dir.y, dir.x);
-  // Half width plus one pixel of antialiasing; both ends pushed out by as much, room for the round caps
-  float half_width = width * 0.5 + 1.0;
-  float cap = k == 0 ? -1.0 : k == u_segments ? 1.0 : 0.0;
-  s += normal * side * half_width + dir * cap * half_width;
-  gl_Position = vec4(s / u_viewport * c.w, c.z, c.w);
-  // Device pixels, as `s`
+  vec4 c0 = piece_clip(0.0);
+  vec4 c1 = piece_clip(1.0);
+  StripVertex v;
+  // Both ends pushed out by a half width: room for the round caps
+  if (c0.w <= 0.0 || c1.w <= 0.0 || !strip_vertex(width, 1.0, v)) { hide(); return; }
+  // Device pixels, as the strip
   float len = length(c1.xy / c1.w * u_viewport - c0.xy / c0.w * u_viewport);
   v_length = len;
-  v_along = cap < 0.0 ? -half_width : cap > 0.0 ? len + half_width : t * len;
-  v_across = side * half_width;
+  v_along = v.cap < 0.0 ? -v.half_width : v.cap > 0.0 ? len + v.half_width : v.t * len;
+  v_across = v.side * v.half_width;
   v_half = width;
-  v_dash = mix(a_fractions.x, a_fractions.y, t) * line.y * u_world * u_pixel_ratio / max(width, 1e-3);
+  v_dash = mix(a_fractions.x, a_fractions.y, v.t) * line.y * u_world * u_pixel_ratio / max(width, 1e-3);
   v_id = f + 1u;
 }";
 
@@ -120,32 +87,11 @@ void main() {
   color = vec4(v_color.rgb, v_color.a * alpha);
 }";
 
-/// Uniforms of the pass, by name
-const UNIFORMS: [&str; 12] = [
-    "u_matrix",
-    "u_plane_origin",
-    "u_origin",
-    "u_viewport",
-    "u_depth_bias",
-    "u_segments",
-    "u_lines",
-    "u_dash",
-    "u_layer",
-    "u_pick",
-    "u_slop",
-    "u_world",
-];
+/// Uniforms of the pass, by name (besides `Anchor`'s)
+const UNIFORMS: [&str; 6] = ["u_segments", "u_lines", "u_dash", "u_layer", "u_pick", "u_slop"];
 
-/// Lines in relief are pulled towards the camera by this fraction of their distance (as the network's)
-const DEPTH_BIAS: f64 = 0.002;
-/// Parts of each piece in relief
-const RELIEF_SEGMENTS: i32 = 8;
-/// Altitudes the lines may stand at in relief (metres, before exaggeration), to bound the squares in view
-const RELIEF_RANGE: (f64, f64) = (-200.0, 5000.0);
 /// Extra width in the picking pass, device pixels
 const PICK_SLOP: f32 = 8.0;
-/// Bytes per piece
-const STRIDE: i32 = 28;
 /// Texture unit of the line table
 const LINES_UNIT: u32 = 1;
 
@@ -164,7 +110,8 @@ pub struct LineLayer {
     /// Dash and gap lengths, in line widths; 0: solid
     pub dash: [f32; 2],
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 12],
+    uniforms: [Option<glow::UniformLocation>; 6],
+    anchor: Anchor,
     projection: Projection,
     drape_uniforms: DrapeUniforms,
     feature_uniforms: FeatureUniforms,
@@ -180,15 +127,22 @@ pub struct LineLayer {
 
 impl LineLayer {
     pub fn new(gl: &glow::Context, geometry: &Polylines, feature_count: usize) -> Result<Self, String> {
-        let program = gl::program(
-            gl,
-            &format!("#version 300 es\n{}{}{FEATURES}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
+        overlay::pick_ids_fit(feature_count, "line layer");
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let program = objects.program(
+            &format!(
+                "#version 300 es\n{}{}{ANCHOR}{LINE}{FEATURES}{VERTEX}",
+                gl::PROJECT,
+                drape::ALTITUDE
+            ),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
-        // SAFETY: object creation on a live context
-        let (vao, buffer, lines) = unsafe {
-            let vao = gl.create_vertex_array()?;
-            let buffer = gl.create_buffer()?;
+        let vao = objects.vertex_array()?;
+        let buffer = objects.buffer()?;
+        let lines = objects.texture()?;
+        // SAFETY: state setup of objects just created on a live context
+        unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             for location in 0..3 {
@@ -196,13 +150,15 @@ impl LineLayer {
                 gl.vertex_attrib_divisor(location, 1);
             }
             gl.bind_vertex_array(None);
-            (vao, buffer, gl.create_texture()?)
-        };
+        }
+        let features = Features::new(gl, feature_count)?;
+        objects.keep();
         let mut layer = Self {
-            features: Features::new(gl, feature_count)?,
+            features,
             dash: [0.0, 0.0],
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
+            anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
             feature_uniforms: FeatureUniforms::new(gl, program),
@@ -220,19 +176,16 @@ impl LineLayer {
             drape: Drape::new(),
             pieces: 0,
         };
-        layer.set_geometry(gl, geometry)?;
+        if let Err(e) = layer.set_geometry(gl, geometry) {
+            layer.delete(gl);
+            return Err(e);
+        }
         Ok(layer)
     }
 
     /// Replaces the lines (the styles stay, by feature)
     pub fn set_geometry(&mut self, gl: &glow::Context, geometry: &Polylines) -> Result<(), String> {
-        let points: Vec<DVec2> = geometry
-            .points
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&[x, y]| DVec2::new(x, y))
-            .collect();
+        let points = overlay::points(geometry.points);
         let count = geometry.start.len().saturating_sub(1).min(geometry.feature.len());
         // Each line is an edge from its first point to its last, along its points
         let mut nodes = Vec::with_capacity(count * 2);
@@ -254,16 +207,7 @@ impl LineLayer {
             let length: f64 = line.windows(2).map(|w| w[0].distance(w[1])).sum();
             table.extend([geometry.feature[l] as f32, length as f32]);
         }
-        let (min, max) = points
-            .iter()
-            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-                (a.min(p), b.max(p))
-            });
-        self.origin = if points.is_empty() {
-            DVec2::ZERO
-        } else {
-            (min + max) / 2.0
-        };
+        self.origin = overlay::bounds(&points).map_or(DVec2::ZERO, |(min, max)| (min + max) / 2.0);
         let lines = Lines {
             start: &geometry.start[..=count],
             points: &points,
@@ -285,15 +229,6 @@ impl LineLayer {
         Ok(())
     }
 
-    fn visible(&self, view: &View, relief: Option<(&RasterSource, f32)>) -> Vec<(u32, u32)> {
-        let heights = relief.map_or((0.0, 0.0), |(_, e)| {
-            let k = view.vertical * f64::from(e);
-            (RELIEF_RANGE.0 * k, RELIEF_RANGE.1 * k)
-        });
-        let shift = -(self.origin.x - view.center.x).round();
-        pieces::visible(&self.grid, &self.start, view, heights, shift)
-    }
-
     /// Draws the pieces of `ranges`; `pick`: the picking pass, with this layer number
     fn render(&self, frame: &Frame, ranges: &[(u32, u32)], pick: Option<u8>) {
         let &Frame {
@@ -304,41 +239,15 @@ impl LineLayer {
             relief,
             ..
         } = frame;
-        let [
-            matrix,
-            plane_origin,
-            origin,
-            viewport,
-            depth_bias,
-            segments,
-            lines,
-            dash,
-            layer,
-            pick_u,
-            slop,
-            world,
-        ] = &self.uniforms;
-        let shift = -(self.origin.x - camera.center.x).round();
-        let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
+        let [segments, lines, dash, layer, pick_u, slop] = &self.uniforms;
         let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
         // SAFETY: draw with objects owned by this layer
         unsafe {
             gl.use_program(Some(self.program));
-            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
-            gl.uniform_2_f32(plane_origin.as_ref(), plane.x as f32, plane.y as f32);
-            gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
-            gl.uniform_2_f32(origin.as_ref(), self.origin.x as f32, self.origin.y as f32);
-            gl.uniform_2_f32(
-                viewport.as_ref(),
-                (camera.width * pixel_ratio / 2.0) as f32,
-                (camera.height * pixel_ratio / 2.0) as f32,
-            );
-            let bias = if relief.is_some() {
-                2.0 * view.near * DEPTH_BIAS
-            } else {
-                0.0
-            };
-            gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
+            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+            self.anchor
+                .set_view(gl, view, viewport, relief.is_some(), LINE_DEPTH_BIAS);
+            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_i32(segments.as_ref(), parts);
             gl.uniform_2_f32(dash.as_ref(), self.dash[0], self.dash[1]);
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
@@ -385,7 +294,7 @@ impl Layer for LineLayer {
             return false;
         }
         self.update_drape(frame);
-        let ranges = self.visible(frame.view, frame.relief);
+        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, frame.view, frame.relief);
         let gl = frame.gl;
         // Translucent: each pixel blended once (the joins overlap)
         let translucent = self.features.layer.opacity[1].iter().any(|&o| o < 1.0);
@@ -424,7 +333,7 @@ impl Layer for LineLayer {
         if !self.shows(frame) {
             return;
         }
-        let ranges = self.visible(frame.view, frame.relief);
+        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, frame.view, frame.relief);
         self.render(frame, &ranges, Some(layer));
     }
 

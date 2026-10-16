@@ -125,8 +125,19 @@ export class Glyphs {
   private readonly fonts = new Map<string, Map<number, Glyph>>();
   private readonly ranges = new Map<string, Promise<void>>();
   private engine: Engine | undefined;
+  /** Rows of the atlas changed since the last upload: first, end */
+  private dirty: [number, number] | undefined;
+  /** The atlas is full at its largest size: new glyphs stay blank */
+  private full = false;
+  private readonly maxSize: number;
 
-  constructor(private readonly url = GLYPHS_URL) {}
+  /** `maxSize`: the largest atlas, the GPU's texture size limit if known (at most 4096) */
+  constructor(
+    private readonly url = GLYPHS_URL,
+    maxSize = 4096,
+  ) {
+    this.maxSize = Math.max(512, Math.min(4096, maxSize));
+  }
 
   /** Sends the whole atlas to an engine (a new one after a context loss) */
   attach(engine: Engine): void {
@@ -164,6 +175,8 @@ export class Glyphs {
             }
             glyphs.set(id, glyph);
           }
+          // One upload for the range
+          this.flush();
         })
         .catch((error: unknown) => {
           // A missing range is not retried this session; its characters stay blank
@@ -174,7 +187,15 @@ export class Glyphs {
     return pending;
   }
 
-  /** Places a bitmap in the atlas (growing it if full) and sends it to the engine */
+  /** Sends the rows changed since the last upload to the engine */
+  private flush(): void {
+    if (!this.dirty) return;
+    const [y0, y1] = this.dirty;
+    this.dirty = undefined;
+    this.engine?.updateGlyphAtlas(0, y0, this.size, y1 - y0, this.atlas.subarray(y0 * this.size, y1 * this.size));
+  }
+
+  /** Places a bitmap in the atlas (growing it if full, up to its largest size); `flush` sends it to the engine */
   private pack(glyph: Glyph, bitmap: Uint8Array): void {
     const w = glyph.width + 2 * BUFFER;
     const h = glyph.height + 2 * BUFFER;
@@ -184,6 +205,12 @@ export class Glyphs {
       const last = this.shelves.at(-1);
       const y = last ? last.y + last.height + 1 : 0;
       if (y + h > this.size) {
+        if (this.size * 2 > this.maxSize) {
+          // Full: the glyph takes its room in the text but is not drawn
+          if (!this.full) console.warn(`isard: the glyph atlas is full (${this.size} × ${this.size})`);
+          this.full = true;
+          return;
+        }
         this.grow();
         this.pack(glyph, bitmap);
         return;
@@ -197,7 +224,7 @@ export class Glyphs {
     for (let row = 0; row < h; row += 1) {
       this.atlas.set(bitmap.subarray(row * w, row * w + w), (glyph.y + row) * this.size + glyph.x);
     }
-    this.engine?.updateGlyphAtlas(glyph.x, glyph.y, w, h, bitmap.subarray(0, w * h));
+    this.dirty = [Math.min(this.dirty?.[0] ?? glyph.y, glyph.y), Math.max(this.dirty?.[1] ?? 0, glyph.y + h)];
   }
 
   /** Doubles the atlas; the glyphs keep their places (texel coordinates) */
@@ -209,6 +236,8 @@ export class Glyphs {
     }
     this.size = size;
     this.atlas = atlas;
+    // The whole atlas is sent with what it holds so far
+    this.dirty = undefined;
     this.engine?.setGlyphAtlas(size, size, atlas);
   }
 }

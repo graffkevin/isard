@@ -13,8 +13,9 @@ use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{FEATURES, FeatureUniforms, Features, LayerStyle};
-use crate::render::gl::{self, Projection, bytes};
+use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::network::NetworkLayer;
+use crate::render::overlay::{self, ANCHOR, Anchor};
 use geo::shapes::{self, Polygons};
 use glam::DVec2;
 use glow::HasContext;
@@ -22,9 +23,6 @@ use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
 
 const VERTEX: &str = r"
-uniform mat4 u_matrix;
-uniform vec2 u_plane_origin;
-uniform vec2 u_origin;
 uniform uint u_pick_base;
 // Colored by a network's node values: two nodes and the costs to reach the block from them (RGBA32F per feature)
 uniform bool u_linked;
@@ -71,7 +69,7 @@ void main() {
   vec2 merc = u_origin + a_offset;
   // The foot on the ground under it, the roof over the ground at the centroid
   float h = a_level > 0.5 ? altitude(u_origin + a_centroid) + height : altitude(merc) + base;
-  gl_Position = u_matrix * vec4(project_up(u_plane_origin + a_offset * u_world, merc, h), 1.0);
+  gl_Position = u_matrix * vec4(project_up(plane_of(a_offset), merc, h), 1.0);
   v_shade = a_shade;
   v_level = a_level;
   v_id = u_pick_base + f + 1u;
@@ -96,10 +94,7 @@ void main() {
   color = vec4(v_color.rgb * v_shade * gradient, v_color.a);
 }";
 
-const UNIFORMS: [&str; 10] = [
-    "u_matrix",
-    "u_plane_origin",
-    "u_origin",
+const UNIFORMS: [&str; 7] = [
     "u_pick_base",
     "u_linked",
     "u_anchors",
@@ -108,6 +103,9 @@ const UNIFORMS: [&str; 10] = [
     "u_layer",
     "u_pick",
 ];
+
+/// Highest block above its ground, metres, to bound the batches in view (the tallest towers are lower)
+const MAX_HEIGHT: f64 = 1000.0;
 
 /// Texture units of the anchors and the network values (the features take 8 to 11, the drape 6 and 7)
 const ANCHORS_UNIT: u32 = 1;
@@ -144,7 +142,8 @@ impl Batch {
 
 pub struct ExtrusionLayer {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 10],
+    uniforms: [Option<glow::UniformLocation>; 7],
+    anchor: Anchor,
     projection: Projection,
     drape_uniforms: DrapeUniforms,
     feature_uniforms: FeatureUniforms,
@@ -160,12 +159,17 @@ impl ExtrusionLayer {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let program = gl::program(
             gl,
-            &format!("#version 300 es\n{}{}{FEATURES}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
+            &format!(
+                "#version 300 es\n{}{}{ANCHOR}{FEATURES}{VERTEX}",
+                gl::PROJECT,
+                drape::ALTITUDE
+            ),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
         Ok(Self {
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
+            anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
             feature_uniforms: FeatureUniforms::new(gl, program),
@@ -185,29 +189,29 @@ impl ExtrusionLayer {
         feature: &[u32],
         feature_count: usize,
     ) -> Result<(), String> {
-        let (min, max) = polygons
-            .points
+        let others: usize = self
+            .batches
             .iter()
-            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-                (a.min(p), b.max(p))
-            });
-        let (min, max) = if polygons.points.is_empty() {
-            (DVec2::ZERO, DVec2::ZERO)
-        } else {
-            (min, max)
-        };
+            .filter(|(k, _)| **k != key)
+            .map(|(_, b)| b.features.count)
+            .sum();
+        overlay::pick_ids_fit(others + feature_count, "extrusion layer");
+        let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         let origin = (min + max) / 2.0;
         let mut blocks = shapes::extrude(polygons, origin);
         for v in &mut blocks.vertices {
             v.polygon = feature.get(v.polygon as usize).copied().unwrap_or(u32::MAX);
         }
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let vao = objects.vertex_array()?;
+        let vertices = objects.buffer()?;
+        let indices = objects.buffer()?;
         let mut features = Features::new(gl, feature_count)?;
+        objects.keep();
         features.set_ramp(gl, self.ramp.as_ref().map(|(rgba, lo, hi)| (rgba.as_slice(), *lo, *hi)));
-        // SAFETY: object creation and uploads on the live context
+        // SAFETY: state setup and uploads of objects just created on the live context
         let batch = unsafe {
-            let vao = gl.create_vertex_array()?;
-            let vertices = gl.create_buffer()?;
-            let indices = gl.create_buffer()?;
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&blocks.vertices), glow::STATIC_DRAW);
@@ -277,36 +281,20 @@ impl ExtrusionLayer {
             return Ok(());
         };
         let n = batch.features.count;
-        let mut padded = vec![0f32; n.div_ceil(4096).max(1) * 4096 * 4];
+        let mut padded = vec![0f32; n * 4];
         for (i, a) in anchors.as_chunks::<4>().0.iter().take(n).enumerate() {
             padded[i * 4..i * 4 + 4].copy_from_slice(a);
         }
-        // SAFETY: texture creation and upload on the live context
-        unsafe {
-            let texture = if let Some(texture) = batch.anchors {
-                texture
-            } else {
-                let texture = gl.create_texture()?;
-                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA32F, 4096, n.div_ceil(4096).max(1) as i32);
-                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-                batch.anchors = Some(texture);
-                texture
-            };
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                4096,
-                n.div_ceil(4096).max(1) as i32,
-                glow::RGBA,
-                glow::FLOAT,
-                glow::PixelUnpackData::Slice(Some(bytes(&padded))),
-            );
-        }
+        let texture = if let Some(texture) = batch.anchors {
+            texture
+        } else {
+            let texture = gl::table_texture(gl, glow::RGBA32F, n)?;
+            batch.anchors = Some(texture);
+            texture
+        };
+        // SAFETY: binding the anchors texture owned by this batch, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(texture)) };
+        gl::upload_table(gl, bytes(&padded), n, glow::RGBA, glow::FLOAT, 16);
         Ok(())
     }
 
@@ -319,22 +307,18 @@ impl ExtrusionLayer {
             relief,
             ..
         } = frame;
-        let [
-            matrix,
-            plane_origin,
-            origin,
-            pick_base,
-            linked,
-            anchors,
-            network,
-            linked_max,
-            layer,
-            pick_u,
-        ] = &self.uniforms;
+        let [pick_base, linked, anchors, network, linked_max, layer, pick_u] = &self.uniforms;
+        // Batches out of view are skipped (their features still count for the picking ids)
+        let (low, high) = overlay::heights(view, relief);
+        let heights = (
+            low,
+            high + MAX_HEIGHT * view.vertical * f64::from(relief.map_or(1.0, |(_, e)| e)),
+        );
         // SAFETY: draws with objects owned by this layer (and the linked network's values texture)
         unsafe {
             gl.use_program(Some(self.program));
-            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
+            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+            self.anchor.set_view(gl, view, viewport, false, 0.0);
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
             gl.uniform_1_i32(anchors.as_ref(), ANCHORS_UNIT as i32);
@@ -345,11 +329,13 @@ impl ExtrusionLayer {
             self.projection.set(gl, view);
             let mut base = 0u32;
             for batch in self.batches.values() {
-                let shift = -(batch.origin.x - camera.center.x).round();
-                let plane = (DVec2::new(batch.origin.x + shift, batch.origin.y) - camera.center) * view.world_size;
-                gl.uniform_2_f32(plane_origin.as_ref(), plane.x as f32, plane.y as f32);
-                gl.uniform_2_f32(origin.as_ref(), batch.origin.x as f32, batch.origin.y as f32);
-                gl.uniform_1_u32(pick_base.as_ref(), base);
+                let first = base;
+                base = base.wrapping_add(batch.features.count as u32);
+                if batch.count == 0 || !overlay::in_view(view, batch.min, batch.max, heights) {
+                    continue;
+                }
+                self.anchor.set_origin(gl, view, batch.origin);
+                gl.uniform_1_u32(pick_base.as_ref(), first);
                 let is_linked = self.link.is_some() && batch.anchors.is_some();
                 gl.uniform_1_i32(linked.as_ref(), i32::from(is_linked));
                 gl.active_texture(glow::TEXTURE0 + ANCHORS_UNIT);
@@ -361,7 +347,6 @@ impl ExtrusionLayer {
                     .bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
                 gl.bind_vertex_array(Some(batch.vao));
                 gl.draw_elements(glow::TRIANGLES, batch.count, glow::UNSIGNED_INT, 0);
-                base += batch.features.count as u32;
             }
             gl.bind_vertex_array(None);
         }
@@ -469,12 +454,7 @@ impl Engine {
         feature: &[u32],
         feature_count: usize,
     ) -> Result<(), JsValue> {
-        let points: Vec<DVec2> = points
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&[x, y]| DVec2::new(x, y))
-            .collect();
+        let points = overlay::points(points);
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
             let polygons = Polygons {
                 points: &points,

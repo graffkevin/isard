@@ -3,6 +3,33 @@
 Every notable change of `@ign-junn/isard`. The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- 3D Tiles: implicit tiling (quadtree and octree, binary or JSON subtrees), several contents per tile, sparse and
+  zero-filled accessors, `texCoord` sets, content recognized by its bytes; horizon culling on the globe.
+- Style expressions of vector basemaps: arithmetic, `format`, conversions, `coalesce`, `length`, `at`… (an unknown
+  operator is warned about once and evaluates to `null`).
+- Every CSS color wherever a color is given (`#rgb`, `rgb()`, `hsl()`, named colors).
+- Exported types used by the API: `AnimationOptions`, `FlyToOptions`, `AtmosphereOptions`, `DecoderUrls`,
+  `LabelCandidate`, `Json`, `TileKey`; an API reference in the documentation.
+
+### Fixed
+
+- A listener that throws no longer stops the map from drawing; a failed engine download can be retried.
+- Workers that fail to load reject their requests with an explanation instead of leaving them pending.
+- 3D Tiles content and network arrays that are malformed are errors instead of a crash of the engine; a tileset whose
+  root fails no longer prevents `idle`, and is retried.
+- Negative integer properties of vector tiles; vector tiles spread evenly over the workers.
+- Destroying a map stops its downloads and workers and frees its GPU memory; the device pixel ratio is followed.
+- Lines, circles, labels and networks no longer jitter at high zoom over large layers.
+
+### Changed
+
+- Fewer GPU readbacks (zoom anchored on the relief from the CPU), labels placed only when something moved, layers
+  out of view not drawn, an LRU for raster tiles.
+
 ## [0.1.1] - 2026-10-16
 
 ### Fixed

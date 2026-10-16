@@ -12,3 +12,4 @@ packages/isard/LICENSE
 docs/public/live/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+docs/reference/

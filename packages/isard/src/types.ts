@@ -30,7 +30,7 @@ export interface GeoMapOptions extends Partial<Camera> {
   basemap?: Basemap;
   /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4) */
   hillshade?: number;
-  /** Color behind the map (sky of tilted flat views), `#rrggbb` (default `#f2f2f0`) */
+  /** Color behind the map (sky of tilted flat views), a CSS color (default `#f2f2f0`) */
   background?: string;
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
@@ -59,7 +59,8 @@ export interface GeoMapOptions extends Partial<Camera> {
   /** Where to load the decoding worker from, when a bundler does not resolve the default URL */
   workerUrl?: string | URL;
   /** Folders of the Draco and Basis Universal decoders, loaded by the workers on first use (default: the official
-   * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks) */
+   * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks). They run through
+   * `new Function`: a Content Security Policy needs `'unsafe-eval'` (see `DecoderUrls`) */
   decoders?: Partial<DecoderUrls>;
   /** Credits at the bottom right: false for none, or its options (default true: the Géoplateforme credits, compact
    * on maps narrower than 640 px) */
@@ -82,7 +83,7 @@ export interface TerrainOptions {
 
 /** Sky, horizon and fog over the plane, with the names and meanings of MapLibre's `setSky` */
 export interface AtmosphereOptions {
-  /** `#rrggbb` (default `#9cc7ec`) */
+  /** A CSS color (default `#9cc7ec`) */
   skyColor?: string;
   /** (default `#e8f1f8`) */
   horizonColor?: string;

@@ -12,8 +12,9 @@
 //! - `render`: the WebGL2 layers (raster stack, network, 3D Tiles, globe base, sky) and their helpers; each layer
 //!   over the ground exports its own methods of `Engine`
 //! - `worker`: the entry points of the 3D Tiles decoding workers
-
-#![cfg(target_arch = "wasm32")]
+//!
+//! The crate also compiles natively, for the unit tests of its pure logic: what needs the browser (the WebGL2
+//! context, image uploads) is behind `cfg(target_arch = "wasm32")` in `render::gl`.
 
 mod engine;
 mod js;

@@ -133,6 +133,7 @@ export class SymbolLayer<P = Properties> extends Layer {
     | { anchors: Float64Array; boxes: Float32Array; styles: Float32Array; quads: Float32Array; feature: number[] }
     | undefined;
 
+  /** @internal */
   constructor(
     private readonly host: GlyphHost,
     data: FeatureData<P>,
@@ -276,6 +277,7 @@ export class SymbolLayer<P = Properties> extends Layer {
     );
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addSymbols();
     if (this.labels) this.send(engine, id);

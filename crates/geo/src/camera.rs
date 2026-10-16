@@ -197,7 +197,51 @@ impl View {
     /// Position in the local frame of an ECEF point
     #[must_use]
     pub fn ecef(&self, p: DVec3) -> DVec3 {
-        self.ecef_matrix(p).w_axis.truncate()
+        self.geodetic(geodesy::from_ecef(p))
+    }
+
+    /// Position in the local frame of a longitude, latitude (degrees) and ellipsoidal height (m): the origin of
+    /// `ecef_matrix`, without the rest of the matrix
+    #[must_use]
+    pub fn geodetic(&self, g: DVec3) -> DVec3 {
+        let m = mercator(g.x, g.y);
+        let k = self.pixels_per_metre(g.y);
+        let shift = -(m.x - self.center.x).round();
+        let mut u = DVec3::Z;
+        if self.globe.factor > 0.0 {
+            let up = geodesy::enu(g.x, g.y)[2];
+            let local = DVec3::new(
+                up.dot(self.globe.east),
+                -up.dot(self.globe.north),
+                up.dot(self.globe.up),
+            );
+            u = u.lerp(local, self.globe.factor);
+        }
+        self.position(m, shift) + u * (g.z * k)
+    }
+
+    /// Whether a sphere (local frame, radius in pixels) lies wholly behind the globe as the camera sees it: inside the
+    /// cone of the globe's shadow, beyond its horizon. Only on the sphere (`globe.factor` near 1), false otherwise.
+    /// The occluder is the globe shrunk by 1 km, for ground below the ellipsoid.
+    #[must_use]
+    pub fn behind_horizon(&self, center: DVec3, radius: f64) -> bool {
+        if self.globe.factor < 0.999 {
+            return false;
+        }
+        let r = self.globe.radius * (1.0 - 1e3 / geodesy::A);
+        let to_globe = self.sphere_center() - self.eye;
+        let d = to_globe.length();
+        let to_tile = center - self.eye;
+        let l = to_tile.length();
+        if !(d > r && l > radius && radius.is_finite()) {
+            return false;
+        }
+        // Beyond the plane of the horizon circle
+        let beyond = (center - self.sphere_center()).dot(-to_globe / d) + radius < r * r / d;
+        // Inside the tangent cone
+        let cone = (r / d).asin();
+        let angle = (to_tile.dot(to_globe) / (l * d)).clamp(-1.0, 1.0).acos();
+        beyond && angle + (radius / l).asin() <= cone
     }
 
     /// Whether a position on the sphere faces the camera (in front of the horizon)
@@ -679,6 +723,14 @@ mod tests {
         let antipode = DVec2::new((v.center.x + 0.5).rem_euclid(1.0), 1.0 - v.center.y);
         assert!(v.faces_camera(v.sphere(v.center)));
         assert!(!v.faces_camera(v.sphere(antipode)));
+        // Spheres: the antipode hidden, the center and a huge sphere around the antipode not
+        let k = v.globe.radius / geodesy::A;
+        assert!(v.behind_horizon(v.sphere(antipode), 1000.0 * k));
+        assert!(!v.behind_horizon(v.sphere(v.center), 1000.0 * k));
+        assert!(!v.behind_horizon(v.sphere(antipode), 8e6 * k));
+        // The ECEF position without the matrix is the matrix's origin
+        let p = geodesy::to_ecef(3.06, 50.63, 120.0);
+        assert!((v.ecef(p) - v.ecef_matrix(p).w_axis.truncate()).length() < 1e-9);
     }
 
     #[test]

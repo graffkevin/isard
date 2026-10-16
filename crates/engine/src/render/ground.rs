@@ -94,6 +94,33 @@ fn format(name: &str) -> Option<(u32, u32, u32, usize, bool)> {
     })
 }
 
+/// The numbers of a uniform, in its type
+enum Values {
+    Float(Vec<f32>),
+    Int(Vec<i32>),
+    Uint(Vec<u32>),
+}
+
+impl Values {
+    /// `values` for a uniform of GL type `kind` (booleans as integers)
+    fn of(kind: u32, values: &[f64]) -> Self {
+        match kind {
+            glow::INT
+            | glow::BOOL
+            | glow::INT_VEC2
+            | glow::BOOL_VEC2
+            | glow::INT_VEC3
+            | glow::BOOL_VEC3
+            | glow::INT_VEC4
+            | glow::BOOL_VEC4 => Self::Int(values.iter().map(|&v| v as i32).collect()),
+            glow::UNSIGNED_INT | glow::UNSIGNED_INT_VEC2 | glow::UNSIGNED_INT_VEC3 | glow::UNSIGNED_INT_VEC4 => {
+                Self::Uint(values.iter().map(|&v| v as u32).collect())
+            }
+            _ => Self::Float(values.iter().map(|&v| v as f32).collect()),
+        }
+    }
+}
+
 struct Texture {
     handle: glow::Texture,
     unit: u32,
@@ -109,8 +136,9 @@ pub struct GroundLayer {
     projection: Projection,
     /// The application's uniforms: location, type and array size
     custom: HashMap<String, (glow::UniformLocation, u32, i32)>,
-    /// Values set before a draw, replayed each draw (the program is shared by nothing else)
-    values: HashMap<String, Vec<f64>>,
+    /// Values set before a draw, converted once to the uniform's type, replayed each draw (the program is shared by
+    /// nothing else)
+    values: HashMap<String, Values>,
     textures: HashMap<String, Texture>,
     /// Mercator anchor of the offsets, and bounds (Mercator)
     anchor: DVec2,
@@ -163,12 +191,12 @@ impl GroundLayer {
 
     /// A uniform of the application's code; numbers for any type (booleans 0 or 1, matrices column major)
     pub fn set_uniform(&mut self, name: &str, values: &[f64]) -> Result<(), String> {
-        if !self.custom.contains_key(name) {
+        let Some(&(_, kind, _)) = self.custom.get(name) else {
             return Err(format!(
                 "no uniform {name} in the ground shader (unused uniforms are removed by the compiler)"
             ));
-        }
-        self.values.insert(name.to_owned(), values.to_vec());
+        };
+        self.values.insert(name.to_owned(), Values::of(kind, values));
         Ok(())
     }
 
@@ -203,7 +231,11 @@ impl GroundLayer {
                 MAX_UNITS - FIRST_UNIT
             ));
         }
-        let expected = width as usize * height as usize * depth.max(1) as usize * bytes;
+        let expected = gl::area(width, height)
+            .and_then(|texels| texels.checked_mul(usize::try_from(depth.max(1)).ok()?))
+            .and_then(|texels| texels.checked_mul(bytes))
+            .filter(|_| width > 0 && height > 0)
+            .ok_or_else(|| format!("texture {name}: bad size {width} × {height} × {depth}"))?;
         if data.is_some_and(|d| d.len() < expected) {
             return Err(format!(
                 "texture {name}: {} bytes, {expected} expected",
@@ -295,8 +327,14 @@ impl GroundLayer {
     ) -> Result<(), String> {
         let t = self.textures.get(name).ok_or_else(|| format!("no texture {name}"))?;
         let (_, pixel_format, kind, bytes, _) = t.format;
-        let expected = width as usize * height as usize * bytes;
-        if data.len() < expected || x + width > t.size.0 || y + height > t.size.1 || layer >= t.size.2.max(1) {
+        let expected = gl::area(width, height)
+            .and_then(|texels| texels.checked_mul(bytes))
+            .unwrap_or(usize::MAX);
+        if data.len() < expected
+            || !gl::region_fits(x, y, width, height, (t.size.0, t.size.1))
+            || layer < 0
+            || layer >= t.size.2.max(1)
+        {
             return Err(format!("texture {name}: region out of its bounds or too few bytes"));
         }
         // SAFETY: upload inside the texture's storage
@@ -320,27 +358,24 @@ impl GroundLayer {
             let Some((location, kind, _)) = self.custom.get(name) else {
                 continue;
             };
-            let f: Vec<f32> = values.iter().map(|&v| v as f32).collect();
-            let i: Vec<i32> = values.iter().map(|&v| v as i32).collect();
-            let u: Vec<u32> = values.iter().map(|&v| v as u32).collect();
             let l = Some(location);
             // SAFETY: uniform uploads on the program in use, sizes from the slices
             unsafe {
-                match *kind {
-                    glow::FLOAT => gl.uniform_1_f32_slice(l, &f),
-                    glow::FLOAT_VEC2 => gl.uniform_2_f32_slice(l, &f),
-                    glow::FLOAT_VEC3 => gl.uniform_3_f32_slice(l, &f),
-                    glow::FLOAT_VEC4 => gl.uniform_4_f32_slice(l, &f),
-                    glow::FLOAT_MAT3 => gl.uniform_matrix_3_f32_slice(l, false, &f),
-                    glow::FLOAT_MAT4 => gl.uniform_matrix_4_f32_slice(l, false, &f),
-                    glow::INT | glow::BOOL => gl.uniform_1_i32_slice(l, &i),
-                    glow::INT_VEC2 | glow::BOOL_VEC2 => gl.uniform_2_i32_slice(l, &i),
-                    glow::INT_VEC3 | glow::BOOL_VEC3 => gl.uniform_3_i32_slice(l, &i),
-                    glow::INT_VEC4 | glow::BOOL_VEC4 => gl.uniform_4_i32_slice(l, &i),
-                    glow::UNSIGNED_INT => gl.uniform_1_u32_slice(l, &u),
-                    glow::UNSIGNED_INT_VEC2 => gl.uniform_2_u32_slice(l, &u),
-                    glow::UNSIGNED_INT_VEC3 => gl.uniform_3_u32_slice(l, &u),
-                    glow::UNSIGNED_INT_VEC4 => gl.uniform_4_u32_slice(l, &u),
+                match (values, *kind) {
+                    (Values::Float(f), glow::FLOAT) => gl.uniform_1_f32_slice(l, f),
+                    (Values::Float(f), glow::FLOAT_VEC2) => gl.uniform_2_f32_slice(l, f),
+                    (Values::Float(f), glow::FLOAT_VEC3) => gl.uniform_3_f32_slice(l, f),
+                    (Values::Float(f), glow::FLOAT_VEC4) => gl.uniform_4_f32_slice(l, f),
+                    (Values::Float(f), glow::FLOAT_MAT3) => gl.uniform_matrix_3_f32_slice(l, false, f),
+                    (Values::Float(f), glow::FLOAT_MAT4) => gl.uniform_matrix_4_f32_slice(l, false, f),
+                    (Values::Int(i), glow::INT | glow::BOOL) => gl.uniform_1_i32_slice(l, i),
+                    (Values::Int(i), glow::INT_VEC2 | glow::BOOL_VEC2) => gl.uniform_2_i32_slice(l, i),
+                    (Values::Int(i), glow::INT_VEC3 | glow::BOOL_VEC3) => gl.uniform_3_i32_slice(l, i),
+                    (Values::Int(i), glow::INT_VEC4 | glow::BOOL_VEC4) => gl.uniform_4_i32_slice(l, i),
+                    (Values::Uint(u), glow::UNSIGNED_INT) => gl.uniform_1_u32_slice(l, u),
+                    (Values::Uint(u), glow::UNSIGNED_INT_VEC2) => gl.uniform_2_u32_slice(l, u),
+                    (Values::Uint(u), glow::UNSIGNED_INT_VEC3) => gl.uniform_3_u32_slice(l, u),
+                    (Values::Uint(u), glow::UNSIGNED_INT_VEC4) => gl.uniform_4_u32_slice(l, u),
                     _ => {}
                 }
             }
@@ -535,5 +570,24 @@ impl Engine {
             ground.update_texture(gl, name, x, y, layer, width, height, data)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniform_values_take_the_uniform_type() {
+        assert!(matches!(Values::of(glow::FLOAT_VEC2, &[0.5, 1.5]), Values::Float(f) if f == [0.5, 1.5]));
+        assert!(matches!(Values::of(glow::BOOL, &[1.0]), Values::Int(i) if i == [1]));
+        assert!(matches!(Values::of(glow::UNSIGNED_INT_VEC2, &[3.0, 4.0]), Values::Uint(u) if u == [3, 4]));
+    }
+
+    #[test]
+    fn texture_formats_are_known_by_name() {
+        assert_eq!(format("r32f").map(|f| f.3), Some(4));
+        assert_eq!(format("rgba8ui").map(|f| f.4), Some(true));
+        assert!(format("rgb565").is_none());
     }
 }

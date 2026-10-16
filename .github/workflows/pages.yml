@@ -1,9 +1,11 @@
-# The documentation on GitHub Pages: the engine, the package and the examples built, then the site (VitePress) with
-# the examples live in it
+# The documentation on GitHub Pages, once the checks pass on main: the engine, the package and the examples built,
+# then the site (VitePress) with the examples live in it
 name: Documentation
 
 on:
-  push:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -18,17 +20,20 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          # The commit the checks passed on, not the head of main at this time
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # The version pinned in crates/engine/Cargo.toml
+      - id: versions
+        run: echo "wasm-bindgen=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.129
+          tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run docs:build

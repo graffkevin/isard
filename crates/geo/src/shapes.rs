@@ -66,10 +66,16 @@ pub struct Mesh {
     pub max: DVec2,
 }
 
-/// Points of a ring without its closing point
+/// Points of a ring without its closing point; empty if its bounds are off or a point is not finite
 fn ring<'a>(polygons: &Polygons<'a>, r: usize) -> &'a [DVec2] {
-    let (s, e) = (polygons.ring_start[r] as usize, polygons.ring_start[r + 1] as usize);
-    let points = &polygons.points[s.min(e)..e.min(polygons.points.len())];
+    let (Some(&s), Some(&e)) = (polygons.ring_start.get(r), polygons.ring_start.get(r + 1)) else {
+        return &[];
+    };
+    let e = (e as usize).min(polygons.points.len());
+    let points = &polygons.points[(s as usize).min(e)..e];
+    if !points.iter().all(|p| p.is_finite()) {
+        return &[];
+    }
     match points {
         [first, .., last] if first == last => &points[..points.len() - 1],
         _ => points,
@@ -109,12 +115,24 @@ fn clip(polygon: &[DVec2], lo: DVec2, hi: DVec2) -> Vec<DVec2> {
     out
 }
 
-/// Grid squares (`[lo, hi]` corners) a box touches
+/// Most grid squares one triangle may cover (16 worlds): beyond, coordinates are garbage and the triangle is dropped
+const MAX_SQUARES: i64 = 1 << 18;
+/// Most grid lines one wall may cross (beyond, it is left whole)
+const MAX_CROSSINGS: f64 = 4096.0;
+
+/// Grid squares (`[lo, hi]` corners) a box touches; none for a non-finite or absurdly large box
 fn squares(min: DVec2, max: DVec2) -> impl Iterator<Item = (DVec2, DVec2)> {
     let (i0, i1) = ((min.x / SQUARE).floor() as i64, (max.x / SQUARE).ceil() as i64);
     let (j0, j1) = ((min.y / SQUARE).floor() as i64, (max.y / SQUARE).ceil() as i64);
-    (j0..j1.max(j0 + 1)).flat_map(move |j| {
-        (i0..i1.max(i0 + 1)).map(move |i| {
+    let (w, h) = (i1.saturating_sub(i0).max(1), j1.saturating_sub(j0).max(1));
+    let sane = min.is_finite() && max.is_finite() && w.saturating_mul(h) <= MAX_SQUARES;
+    let (j1, i1) = if sane {
+        (j1.max(j0 + 1), i1.max(i0 + 1))
+    } else {
+        (j0, i0)
+    };
+    (j0..j1).flat_map(move |j| {
+        (i0..i1).map(move |i| {
             let lo = DVec2::new(i as f64, j as f64) * SQUARE;
             (lo, lo + SQUARE)
         })
@@ -130,6 +148,9 @@ fn crossings(a: DVec2, b: DVec2) -> Vec<f64> {
             continue;
         }
         let (lo, hi) = (p.min(q), p.max(q));
+        if !(lo.is_finite() && hi.is_finite()) || (hi - lo) / SQUARE > MAX_CROSSINGS {
+            continue;
+        }
         let mut k = (lo / SQUARE).floor() + 1.0;
         while k * SQUARE < hi {
             t.push((k * SQUARE - p) / (q - p));
@@ -376,6 +397,38 @@ mod tests {
         // The walls facing north and west are lit, the others not (outside and in the hole: 4 walls, 2 feet each)
         let lit = b.vertices.iter().filter(|v| v.level == 0.0 && v.shade > 0.75).count();
         assert_eq!(lit, 8);
+    }
+
+    #[test]
+    fn malformed_polygons_do_not_panic_or_hang() {
+        let huge = DVec2::new(1e300, 1e300);
+        let points = [
+            DVec2::ZERO,
+            huge,
+            DVec2::new(0.0, 1e300),
+            DVec2::new(f64::NAN, 0.0),
+            DVec2::new(f64::INFINITY, 1.0),
+            DVec2::new(0.1, 0.1),
+        ];
+        // A huge triangle, a ring with NaN and infinity, rings whose starts point past the points
+        for (ring_start, polygon_start) in [
+            (vec![0, 3], vec![0, 1]),
+            (vec![2, 6], vec![0, 1]),
+            (vec![10, 4], vec![0, 1]),
+            (vec![9, 20], vec![0, 1]),
+            (vec![0, 3], vec![0, 5]),
+        ] {
+            let polygons = Polygons {
+                points: &points,
+                ring_start: &ring_start,
+                polygon_start: &polygon_start,
+            };
+            let _ = triangulate(&polygons);
+            let _ = extrude(&polygons, DVec2::ZERO);
+        }
+        assert_eq!(squares(DVec2::ZERO, huge).count(), 0);
+        assert_eq!(squares(DVec2::NAN, DVec2::ONE).count(), 0);
+        assert_eq!(crossings(DVec2::ZERO, huge), [0.0, 1.0]);
     }
 
     #[test]

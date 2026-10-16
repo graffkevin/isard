@@ -5,6 +5,7 @@
 
 use super::{Engine, Slot};
 use crate::js;
+use crate::render::gl::Objects;
 use crate::render::raster::unpack_depth;
 use geo::camera::Camera;
 use glow::HasContext;
@@ -35,6 +36,18 @@ impl Engine {
         hit.map_or(JsValue::UNDEFINED, |(layer, index)| {
             js::object(&[("layer", layer.into()), ("index", index.into())])
         })
+    }
+}
+
+impl PickTarget {
+    /// Call with the target's context
+    pub(super) unsafe fn delete(&self, gl: &glow::Context) {
+        // SAFETY: objects owned by the target, not used afterwards
+        unsafe {
+            gl.delete_framebuffer(self.framebuffer);
+            gl.delete_texture(self.texture);
+            gl.delete_renderbuffer(self.depth);
+        }
     }
 }
 
@@ -103,8 +116,15 @@ impl Engine {
         Some(Camera::altitude_of(&view, p.truncate() / p.w))
     }
 
-    /// Fill under a screen point: the topmost layer whose polygons hold the ground position there
+    /// Fill under a screen point: the topmost layer whose polygons hold the ground position there. The ground's depth
+    /// is read back only when there is a fill layer to test
     fn pick_fill(&mut self, x: f64, y: f64, only: Option<&[u32]>) -> Option<(u32, u32)> {
+        let any = self.layers.iter().any(|(id, slot)| {
+            matches!(slot, Slot::Layer(layer) if layer.picks_ground()) && only.is_none_or(|o| o.contains(id))
+        });
+        if !any {
+            return None;
+        }
         let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
         let m = self.camera.ground_at(&self.camera.view(), x, y, altitude)?;
         let zoom = self.camera.zoom;
@@ -207,18 +227,21 @@ impl Engine {
         {
             return Ok(target.framebuffer);
         }
-        // SAFETY: object creation on the live context; the previous target is deleted
+        if let Some(old) = self.pick_target.take() {
+            // SAFETY: the previous target, replaced
+            unsafe { old.delete(&self.gl) };
+        }
+        let gl = &self.gl;
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let texture = objects.texture()?;
+        let framebuffer = objects.framebuffer()?;
+        let depth = objects.renderbuffer()?;
+        objects.keep();
+        // SAFETY: storage and attachments of objects just created on the live context
         unsafe {
-            let gl = &self.gl;
-            if let Some(old) = self.pick_target.take() {
-                gl.delete_framebuffer(old.framebuffer);
-                gl.delete_texture(old.texture);
-                gl.delete_renderbuffer(old.depth);
-            }
-            let texture = gl.create_texture()?;
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, size.0, size.1);
-            let framebuffer = gl.create_framebuffer()?;
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
             gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
@@ -227,7 +250,6 @@ impl Engine {
                 Some(texture),
                 0,
             );
-            let depth = gl.create_renderbuffer()?;
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
             gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT24, size.0, size.1);
             gl.framebuffer_renderbuffer(
@@ -238,13 +260,13 @@ impl Engine {
             );
             gl.bind_renderbuffer(glow::RENDERBUFFER, None);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            self.pick_target = Some(PickTarget {
-                framebuffer,
-                texture,
-                depth,
-                size,
-            });
-            Ok(framebuffer)
         }
+        self.pick_target = Some(PickTarget {
+            framebuffer,
+            texture,
+            depth,
+            size,
+        });
+        Ok(framebuffer)
     }
 }

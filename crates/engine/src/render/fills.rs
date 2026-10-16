@@ -13,7 +13,8 @@
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
-use crate::render::gl::{self, Projection, bytes};
+use crate::render::gl::{self, Objects, Projection, bytes};
+use crate::render::overlay;
 use geo::shapes::{self, Mesh, Polygons};
 use glam::DVec2;
 use glow::HasContext;
@@ -102,20 +103,24 @@ pub struct FillLayer {
     top: i32,
     all: i32,
     shapes: Vec<Shape>,
+    /// Bounds of the polygons (Mercator), to skip the layer out of view
+    min: DVec2,
+    max: DVec2,
 }
 
 impl FillLayer {
     pub fn new(gl: &glow::Context, polygons: &Polygons, feature: &[u32], feature_count: usize) -> Result<Self, String> {
-        let program = gl::program(
-            gl,
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let program = objects.program(
             &format!("#version 300 es\n{}{FEATURES}{VERTEX}", gl::PROJECT),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
-        // SAFETY: object creation on a live context
-        let (vao, vertices, indices) = unsafe {
-            let vao = gl.create_vertex_array()?;
-            let vertices = gl.create_buffer()?;
-            let indices = gl.create_buffer()?;
+        let vao = objects.vertex_array()?;
+        let vertices = objects.buffer()?;
+        let indices = objects.buffer()?;
+        // SAFETY: state setup of objects just created on a live context
+        unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
             let stride = size_of::<shapes::Vertex>() as i32;
@@ -129,10 +134,11 @@ impl FillLayer {
             gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
             gl.bind_vertex_array(None);
-            (vao, vertices, indices)
-        };
+        }
+        let features = Features::new(gl, feature_count)?;
+        objects.keep();
         let mut layer = Self {
-            features: Features::new(gl, feature_count)?,
+            features,
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
             projection: Projection::new(gl, program),
@@ -143,6 +149,8 @@ impl FillLayer {
             top: 0,
             all: 0,
             shapes: Vec::new(),
+            min: DVec2::ZERO,
+            max: DVec2::ZERO,
         };
         layer.set_geometry(gl, polygons, feature);
         Ok(layer)
@@ -180,6 +188,7 @@ impl FillLayer {
                 }
             })
             .collect();
+        (self.min, self.max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         // SAFETY: uploads into buffers owned by this layer
         unsafe {
             gl.bind_vertex_array(Some(self.vao));
@@ -203,11 +212,7 @@ impl FillLayer {
             ..
         } = frame;
         let [matrix, center_hi, center_lo, heights, volume_u] = &self.uniforms;
-        let split = |x: f64| {
-            let hi = x as f32;
-            (hi, (x - f64::from(hi)) as f32)
-        };
-        let ((xh, xl), (yh, yl)) = (split(camera.center.x), split(camera.center.y));
+        let ((xh, xl), (yh, yl)) = (overlay::split(camera.center.x), overlay::split(camera.center.y));
         let exaggeration = relief.map_or(1.0, |(_, e)| e);
         // SAFETY: uniforms on the program in use
         unsafe {
@@ -233,8 +238,16 @@ impl Layer for FillLayer {
         if self.all == 0 || !self.features.layer.shows(frame.camera.zoom) {
             return false;
         }
-        let gl = frame.gl;
         let volume = frame.relief.is_some();
+        // Out of view: nothing to draw (the prisms of a volume reach from `BOTTOM` to `TOP`)
+        let heights = frame.relief.map_or((0.0, 0.0), |(_, e)| {
+            let k = frame.view.vertical * f64::from(e.max(1.0));
+            (f64::from(BOTTOM) * k, f64::from(TOP) * k)
+        });
+        if !overlay::in_view(frame.view, self.min, self.max, heights) {
+            return false;
+        }
+        let gl = frame.gl;
         self.set_uniforms(frame, volume);
         // SAFETY: state changes and draws on the live context, set back at the end
         unsafe {
@@ -269,6 +282,10 @@ impl Layer for FillLayer {
         false
     }
 
+    fn picks_ground(&self) -> bool {
+        self.all > 0
+    }
+
     fn pick_ground(&self, m: DVec2, zoom: f64) -> Option<u32> {
         if !self.features.layer.shows(zoom) {
             return None;
@@ -289,16 +306,6 @@ impl Layer for FillLayer {
     }
 }
 
-/// Mercator points of interleaved coordinates
-fn points(points: &[f64]) -> Vec<DVec2> {
-    points
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|&[x, y]| DVec2::new(x, y))
-        .collect()
-}
-
 #[wasm_bindgen]
 impl Engine {
     /// Fill layer of `feature_count` features: polygons given by their points (Mercator [0, 1], interleaved), the first
@@ -313,7 +320,7 @@ impl Engine {
         feature: &[u32],
         feature_count: usize,
     ) -> Result<u32, JsValue> {
-        let points = self::points(points);
+        let points = overlay::points(points);
         let polygons = Polygons {
             points: &points,
             ring_start,
@@ -326,7 +333,7 @@ impl Engine {
     /// New polygons for a fill layer (same arguments as `addFills`, the same features)
     #[wasm_bindgen(js_name = setFills)]
     pub fn set_fills(&mut self, id: u32, points: &[f64], ring_start: &[u32], polygon_start: &[u32], feature: &[u32]) {
-        let points = self::points(points);
+        let points = overlay::points(points);
         if let Some((layer, gl)) = self.layer_mut::<FillLayer>(id) {
             let polygons = Polygons {
                 points: &points,
@@ -335,5 +342,31 @@ impl Engine {
             };
             layer.set_geometry(gl, &polygons, feature);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shapes_hold_their_inside_holes_cut_out() {
+        let square = |o: f64, s: f64| {
+            vec![
+                DVec2::new(o, o),
+                DVec2::new(o + s, o),
+                DVec2::new(o + s, o + s),
+                DVec2::new(o, o + s),
+            ]
+        };
+        let shape = Shape {
+            feature: 7,
+            rings: vec![square(0.0, 1.0), square(0.25, 0.5)],
+            min: DVec2::ZERO,
+            max: DVec2::ONE,
+        };
+        assert!(shape.contains(DVec2::new(0.1, 0.1)));
+        assert!(!shape.contains(DVec2::new(0.5, 0.5)));
+        assert!(!shape.contains(DVec2::new(1.5, 0.5)));
     }
 }

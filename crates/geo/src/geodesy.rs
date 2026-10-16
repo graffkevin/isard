@@ -21,7 +21,7 @@ pub fn to_ecef(lon: f64, lat: f64, h: f64) -> DVec3 {
     )
 }
 
-/// ECEF to longitude, latitude (degrees) and ellipsoidal height (m): Bowring's method, refined twice (sub-millimetre
+/// ECEF to longitude, latitude (degrees) and ellipsoidal height (m): Bowring's method, refined three times (sub-millimetre
 /// near the surface)
 #[must_use]
 pub fn from_ecef(p: DVec3) -> DVec3 {

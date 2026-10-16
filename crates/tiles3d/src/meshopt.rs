@@ -52,8 +52,16 @@ impl Filter {
     }
 }
 
-/// Decodes a view into `count * stride` bytes
+/// Decodes a view into `count * stride` bytes. The sizes are checked against the stream before anything is allocated:
+/// attributes take a stride multiple of 4 up to 256, triangles and indices a stride of 2 or 4 (16- or 32-bit indices),
+/// filters apply to attributes only.
 pub fn decode(view: &View) -> Result<Vec<u8>, String> {
+    if view.filter != Filter::None && view.mode != Mode::Attributes {
+        return Err("meshopt filters apply to attributes only".into());
+    }
+    if view.mode != Mode::Attributes && view.stride != 2 && view.stride != 4 {
+        return Err("meshopt indices: stride 2 or 4".into());
+    }
     let mut out = match view.mode {
         Mode::Attributes => vertex_buffer(view.data, view.count, view.stride)?,
         Mode::Triangles => index_buffer(view.data, view.count, view.stride)?,
@@ -86,7 +94,7 @@ impl Reader<'_> {
     }
 
     fn bytes(&mut self, n: usize) -> Result<&[u8], String> {
-        if self.at + n > self.end {
+        if n > self.end.saturating_sub(self.at) {
             return Err(CORRUPT.into());
         }
         let out = &self.data[self.at..self.at + n];
@@ -122,13 +130,24 @@ fn vertex_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, St
     if data.len() < 1 + tail {
         return Err(CORRUPT.into());
     }
-    let mut last: Vec<u8> = data[data.len() - stride..].to_vec();
+    let mut last = [0u8; 256];
+    last[..stride].copy_from_slice(&data[data.len() - stride..]);
     let mut reader = Reader {
         data,
         at: 1,
         end: data.len() - tail,
     };
     let max_block = ((8192 / stride) & !15).min(256);
+    // Smallest stream for `count` elements (each byte of a block has a header of 2 bits per group of 16): bounds the
+    // output before allocating it
+    let header = |block: usize| block.div_ceil(16).div_ceil(4);
+    let smallest = (count / max_block)
+        .checked_mul(header(max_block))
+        .and_then(|n| n.checked_add(header(count % max_block)))
+        .and_then(|n| n.checked_mul(stride));
+    if smallest.is_none_or(|n| n > reader.end - reader.at) {
+        return Err(CORRUPT.into());
+    }
     let mut out = vec![0u8; count * stride];
     let mut deltas = [0u8; 256];
     let mut offset = 0;
@@ -137,7 +156,8 @@ fn vertex_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, St
         let groups = block.div_ceil(16);
         for byte in 0..stride {
             // Header: 2 bits per group, least significant first
-            let header = reader.bytes(groups.div_ceil(4))?.to_vec();
+            let mut header = [0u8; 4];
+            header[..groups.div_ceil(4)].copy_from_slice(reader.bytes(groups.div_ceil(4))?);
             for group in 0..groups {
                 let bits = (header[group / 4] >> ((group % 4) * 2)) & 3;
                 group_deltas(&mut reader, bits, &mut deltas[group * 16..group * 16 + 16])?;
@@ -166,7 +186,8 @@ fn group_deltas(reader: &mut Reader, bits: u8, out: &mut [u8]) -> Result<(), Str
         _ => {
             let width = if bits == 1 { 2 } else { 4 };
             let sentinel = (1u8 << width) - 1;
-            let packed = reader.bytes(16 * width / 8)?.to_vec();
+            let mut packed = [0u8; 8];
+            packed[..2 * width].copy_from_slice(reader.bytes(2 * width)?);
             for (i, slot) in out.iter_mut().enumerate() {
                 // Most significant bits first inside each byte
                 let bit = i * width;
@@ -218,7 +239,7 @@ fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, Str
             let pushed = match low {
                 0 => {
                     c = next;
-                    next += 1;
+                    next = next.wrapping_add(1);
                     true
                 }
                 1..=0xc => {
@@ -260,14 +281,14 @@ fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, Str
             a = if code == 0xff {
                 decode_index(&mut extra, &mut last)?
             } else {
-                next += 1;
-                next - 1
+                next = next.wrapping_add(1);
+                next.wrapping_sub(1)
             };
             let mut pick = |field: u8, extra: &mut Reader| -> Result<(u32, bool), String> {
                 Ok(match field {
                     0 => {
-                        next += 1;
-                        (next - 1, true)
+                        next = next.wrapping_add(1);
+                        (next.wrapping_sub(1), true)
                     }
                     0xf if explicit => (decode_index(extra, &mut last)?, true),
                     _ => (vertex(&vertices, vertex_at, usize::from(field) - 1), false),
@@ -305,7 +326,8 @@ fn index_sequence(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, S
     if data.first() != Some(&0xd1) {
         return Err("meshopt indices: unsupported header".into());
     }
-    if data.len() < 1 + 4 {
+    // Each index takes at least a byte
+    if data.len() < 1 + 4 || count > data.len() - 5 {
         return Err(CORRUPT.into());
     }
     let mut reader = Reader {
@@ -328,6 +350,7 @@ fn index_sequence(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, S
     Ok(write_indices(&out, stride))
 }
 
+/// Indices as 16-bit (stride 2) or 32-bit (stride 4) little-endian integers
 fn write_indices(indices: &[u32], stride: usize) -> Vec<u8> {
     if stride == 2 {
         indices.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
@@ -477,5 +500,175 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    /// Encodes one group of 16 deltas in the given mode (0: zeros, 1: 2-bit, 2: 4-bit, 3: raw)
+    fn encode_group(deltas: &[u8], bits: u8, out: &mut Vec<u8>) {
+        match bits {
+            0 => {}
+            3 => out.extend_from_slice(deltas),
+            _ => {
+                let width = if bits == 1 { 2 } else { 4 };
+                let sentinel = (1u8 << width) - 1;
+                let mut packed = vec![0u8; 2 * width];
+                let mut extra = Vec::new();
+                for (i, &d) in deltas.iter().enumerate() {
+                    let v = if d >= sentinel {
+                        extra.push(d);
+                        sentinel
+                    } else {
+                        d
+                    };
+                    let bit = i * width;
+                    packed[bit / 8] |= v << (8 - width - bit % 8);
+                }
+                out.extend(packed);
+                out.extend(extra);
+            }
+        }
+    }
+
+    /// A reference encoder of the attribute stream (the decoder read backwards), each group in its smallest mode
+    fn encode_vertices(data: &[u8], count: usize, stride: usize) -> Vec<u8> {
+        let mut out = vec![0xa0];
+        let max_block = ((8192 / stride) & !15).min(256);
+        let mut last = data[..stride].to_vec();
+        let mut offset = 0;
+        while offset < count {
+            let block = max_block.min(count - offset);
+            let groups = block.div_ceil(16);
+            for byte in 0..stride {
+                let mut deltas = vec![0u8; groups * 16];
+                let mut previous = last[byte];
+                for i in 0..block {
+                    let value = data[(offset + i) * stride + byte];
+                    let delta = value.wrapping_sub(previous) as i8;
+                    // Zigzag
+                    deltas[i] = ((delta << 1) ^ (delta >> 7)) as u8;
+                    previous = value;
+                }
+                last[byte] = previous;
+                let mut header = vec![0u8; groups.div_ceil(4)];
+                let mut body = Vec::new();
+                for (group, chunk) in deltas.chunks(16).enumerate() {
+                    let bits = (0..4u8)
+                        .min_by_key(|&bits| {
+                            if bits == 0 && chunk.iter().any(|&d| d != 0) {
+                                return usize::MAX;
+                            }
+                            let mut v = Vec::new();
+                            encode_group(chunk, bits, &mut v);
+                            v.len()
+                        })
+                        .unwrap();
+                    header[group / 4] |= bits << ((group % 4) * 2);
+                    encode_group(chunk, bits, &mut body);
+                }
+                out.extend(header);
+                out.extend(body);
+            }
+            offset += block;
+        }
+        // Tail: the baseline, padded to 32 bytes
+        out.extend(std::iter::repeat_n(0, stride.max(32) - stride));
+        out.extend_from_slice(&data[..stride]);
+        out
+    }
+
+    #[test]
+    fn attributes_over_several_blocks_round_trip() {
+        // 1000 vertices of 12 bytes (blocks of 256): smooth values (small deltas), noise (raw groups), constants
+        let (count, stride) = (1000, 12);
+        let mut r = 12_345u32;
+        let data: Vec<u8> = (0..count * stride)
+            .map(|i| {
+                r = r.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                match i % stride {
+                    0..4 => (i / stride / 3) as u8,
+                    4..8 => (r >> 16) as u8,
+                    _ => 7,
+                }
+            })
+            .collect();
+        let encoded = encode_vertices(&data, count, stride);
+        let view = |data: &[u8], count: usize| {
+            decode(&View {
+                data,
+                count,
+                stride,
+                mode: Mode::Attributes,
+                filter: Filter::None,
+            })
+        };
+        assert_eq!(view(&encoded, count).unwrap(), data);
+        // Far more vertices than encoded: errors, never a huge allocation
+        assert!(view(&encoded, usize::MAX / 2).is_err());
+        assert!(view(&encoded, 1 << 40).is_err());
+        // Truncated or flipped streams: errors or garbage, never a panic
+        for cut in (0..encoded.len()).step_by(7) {
+            let _ = view(&encoded[..cut], count);
+            let mut flipped = encoded.clone();
+            flipped[cut] ^= 0x5a;
+            let _ = view(&flipped, count);
+        }
+    }
+
+    #[test]
+    fn octahedral_filter() {
+        // 8-bit: +z, +x and -z (folded corner); 16-bit: +y
+        let mut data = vec![0, 0, 127, 0, 127, 0, 127, 0, 127, 127, 127, 0];
+        octahedral(&mut data, 4).unwrap();
+        let signed: Vec<i8> = data.iter().map(|&b| b as i8).collect();
+        assert_eq!(signed, [0, 0, 127, 0, 127, 0, 0, 0, 0, 0, -127, 0]);
+        let mut data: Vec<u8> = [0i16, 32767, 32767, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        octahedral(&mut data, 8).unwrap();
+        let values: Vec<i16> = data.as_chunks::<2>().0.iter().map(|&c| i16::from_le_bytes(c)).collect();
+        assert_eq!(values, [0, 32767, 0, 0]);
+        assert!(octahedral(&mut [0; 12], 12).is_err());
+    }
+
+    #[test]
+    fn quaternion_filter() {
+        // Identity, then 90° about z, the largest component (w, index 3) dropped; scale 32767 in the high bits
+        let one = 32767i16;
+        let w = one | 3;
+        let mut data: Vec<u8> = [0, 0, 0, w, 0, 0, one, w]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        quaternion(&mut data, 8).unwrap();
+        let values: Vec<i16> = data.as_chunks::<2>().0.iter().map(|&c| i16::from_le_bytes(c)).collect();
+        assert_eq!(values[..4], [0, 0, 0, 32767]);
+        let h = (std::f32::consts::FRAC_1_SQRT_2 * 32767.0).round() as i16;
+        assert_eq!(values[4..], [0, 0, h, h]);
+        // The dropped component is the first one: the others shift
+        let mut data: Vec<u8> = [0i16, 0, 0, (one & !3)].iter().flat_map(|v| v.to_le_bytes()).collect();
+        quaternion(&mut data, 8).unwrap();
+        let values: Vec<i16> = data.as_chunks::<2>().0.iter().map(|&c| i16::from_le_bytes(c)).collect();
+        assert_eq!(values, [32767, 0, 0, 0]);
+    }
+
+    #[test]
+    fn index_strides_and_filters_are_checked() {
+        // Deltas +1, +2, +3 on baseline 0
+        let data = [0xd1, 4, 8, 12, 0, 0, 0, 0];
+        let view = |stride: usize, filter: Filter, count: usize| {
+            decode(&View {
+                data: &data,
+                count,
+                stride,
+                mode: Mode::Indices,
+                filter,
+            })
+        };
+        // 16-bit output for stride 2
+        assert_eq!(view(2, Filter::None, 3).unwrap(), [1, 0, 3, 0, 6, 0]);
+        assert_eq!(view(4, Filter::None, 3).unwrap().len(), 12);
+        assert!(view(3, Filter::None, 3).is_err());
+        assert!(view(8, Filter::None, 3).is_err());
+        assert!(view(4, Filter::Exponential, 3).is_err());
+        // More indices than the stream can hold
+        assert!(view(4, Filter::None, 1 << 40).is_err());
+        assert!(index_buffer(&[0xe1; 20], 1 << 40, 4).is_err());
     }
 }

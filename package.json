@@ -10,15 +10,17 @@
   ],
   "scripts": {
     "build": "bun scripts/build.ts",
-    "dev": "bun scripts/build.ts && bun scripts/serve.ts",
-    "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p examples && tsc -p scripts",
-    "lint": "biome check . && cargo clippy --all-targets && cargo clippy --target wasm32-unknown-unknown",
+    "build:bench": "bun scripts/build.ts --bench",
+    "dev": "bun scripts/build.ts --bench && bun scripts/serve.ts",
+    "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p packages/isard/tsconfig.test.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p examples && tsc -p scripts",
+    "lint": "biome check . && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo clippy --target wasm32-unknown-unknown -- -D warnings",
     "format": "biome check --write . && cargo fmt",
-    "test": "cargo test",
+    "test": "cargo test && bun test packages/isard",
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",
     "docs:dev": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs dev",
-    "docs:build": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs build"
+    "docs:build": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs build",
+    "docs:check": "bun --filter @isard/docs check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

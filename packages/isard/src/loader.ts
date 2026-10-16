@@ -17,6 +17,8 @@ export class TileLoader implements TileLoaderLike {
   /** Requests in flight per worker */
   private readonly busy = new Map<Worker, number>();
   private readonly pending = new Map<number, Pending>();
+  /** Every worker failed: why */
+  private failed: Error | undefined;
 
   constructor(
     private readonly module: WebAssembly.Module,
@@ -28,6 +30,7 @@ export class TileLoader implements TileLoaderLike {
 
   /** Called by the engine: fetch and decode off the main thread, on the least busy worker */
   load(id: number, url: string, transform: Float64Array, yUp: boolean, reload: boolean): Promise<DecodedTile> {
+    if (this.failed) return Promise.reject(this.failed);
     const worker = this.leastBusy();
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
     return new Promise((resolve, reject) => {
@@ -55,6 +58,13 @@ export class TileLoader implements TileLoaderLike {
       for (let i = 0; i < this.size; i++) {
         const worker = new Worker(this.workerUrl, { type: 'module' });
         worker.onmessage = (event: MessageEvent<WorkerReply>) => this.receive(worker, event.data);
+        // A worker that fails to load (a bundler serving it from elsewhere) or to read a message fails its requests
+        worker.onerror = (event) => {
+          event.preventDefault();
+          this.fail(worker, `the decoding worker ${this.workerUrl} failed${event.message ? `: ${event.message}` : ''}`);
+        };
+        worker.onmessageerror = () =>
+          this.fail(worker, `the decoding worker ${this.workerUrl} sent an unreadable message`);
         this.send(worker, { type: 'init', module: this.module, decoders: this.decoders, formats: this.formats });
         this.workers.push(worker);
         this.busy.set(worker, 0);
@@ -77,6 +87,24 @@ export class TileLoader implements TileLoaderLike {
     if (!pending) return;
     this.pending.delete(reply.id);
     if (reply.type === 'tile') pending.resolve(reply.tile);
+    else if (reply.aborted) pending.reject(new DOMException(`tile ${reply.id} aborted`, 'AbortError'));
     else pending.reject(new Error(reply.error));
+  }
+
+  /** Rejects the requests of a failed worker */
+  private fail(worker: Worker, message: string): void {
+    const error = new Error(
+      `isard: ${message}. If a bundler moves the worker, give its URL in the \`workerUrl\` option (see "With a bundler" in the guide)`,
+    );
+    for (const [id, pending] of this.pending) {
+      if (pending.worker !== worker) continue;
+      this.pending.delete(id);
+      pending.reject(error);
+    }
+    // Out of the pool: when none is left, the next requests fail at once
+    worker.terminate();
+    this.workers = this.workers.filter((w) => w !== worker);
+    this.busy.delete(worker);
+    if (this.workers.length === 0) this.failed = error;
   }
 }

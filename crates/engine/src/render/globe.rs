@@ -37,12 +37,15 @@ pub struct GlobeBase {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 6],
     vao: glow::VertexArray,
+    patches: glow::Buffer,
     pub color: [f32; 3],
 }
 
 impl GlobeBase {
     pub fn new(gl: &glow::Context, grid: &Grid) -> Result<Self, String> {
-        let program = gl::program(gl, VERTEX, FRAGMENT)?;
+        // Everything created is deleted again if a step fails
+        let mut objects = gl::Objects::new(gl);
+        let program = objects.program(VERTEX, FRAGMENT)?;
         let uniforms = gl::uniforms(
             gl,
             program,
@@ -57,12 +60,13 @@ impl GlobeBase {
                 patches.extend_from_slice(&[lon(i), lat(j), lon(i + 1), lat(j + 1)]);
             }
         }
-        // SAFETY: object creation on a live context
+        let vao = objects.vertex_array()?;
+        let buffer = objects.buffer()?;
+        objects.keep();
+        // SAFETY: state setup of objects just created on a live context
         unsafe {
-            let vao = gl.create_vertex_array()?;
             gl.bind_vertex_array(Some(vao));
             grid.bind(gl);
-            let buffer = gl.create_buffer()?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, gl::bytes(&patches), glow::STATIC_DRAW);
             gl.enable_vertex_attrib_array(1);
@@ -73,8 +77,18 @@ impl GlobeBase {
                 program,
                 uniforms,
                 vao,
+                patches: buffer,
                 color: [0.80, 0.86, 0.90],
             })
+        }
+    }
+
+    pub fn delete(&self, gl: &glow::Context) {
+        // SAFETY: objects owned by the base, not used afterwards
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_vertex_array(self.vao);
+            gl.delete_buffer(self.patches);
         }
     }
 

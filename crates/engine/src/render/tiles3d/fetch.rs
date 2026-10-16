@@ -1,0 +1,85 @@
+//! The downloads of a 3D Tiles layer: files fetched here, images decoded by the browser, tiles handed to the worker
+//! pool; reading the objects the workers deliver
+
+use tiles3d::decode::Mesh;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
+
+pub fn js_get(target: &JsValue, key: &str) -> JsValue {
+    js_sys::Reflect::get(target, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+}
+
+pub fn get_array(target: &JsValue, key: &str) -> js_sys::Array {
+    js_get(target, key).dyn_into().unwrap_or_default()
+}
+
+/// Asks the worker pool for a tile; None if the loader cannot take it
+pub fn load_in_worker(
+    loader: &JsValue,
+    id: u32,
+    url: &str,
+    transform: &glam::DMat4,
+    y_up: bool,
+    reload: bool,
+) -> Option<js_sys::Promise> {
+    let load: js_sys::Function = js_get(loader, "load").dyn_into().ok()?;
+    let args = js_sys::Array::of5(
+        &JsValue::from(id),
+        &JsValue::from_str(url),
+        &js_sys::Float64Array::from(&transform.to_cols_array()[..]),
+        &JsValue::from_bool(y_up),
+        &JsValue::from_bool(reload),
+    );
+    load.apply(loader, &args).ok()?.dyn_into().ok()
+}
+
+pub fn close(images: Vec<Option<web_sys::ImageBitmap>>) {
+    for image in images.into_iter().flatten() {
+        image.close();
+    }
+}
+
+/// Decodes the images of a mesh off the main thread (`createImageBitmap`)
+pub async fn decode_images(mesh: &Mesh) -> Vec<Option<web_sys::ImageBitmap>> {
+    let mut out = Vec::new();
+    for p in &mesh.primitives {
+        out.push(match &p.image {
+            Some((bytes, mime)) => decode_image(bytes, mime).await.ok(),
+            None => None,
+        });
+    }
+    out
+}
+
+async fn decode_image(bytes: &[u8], mime: &str) -> Result<web_sys::ImageBitmap, JsValue> {
+    let window = web_sys::window().ok_or("no window")?;
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)?;
+    let bitmap_options = web_sys::ImageBitmapOptions::new();
+    bitmap_options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
+    let bitmap =
+        JsFuture::from(window.create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &bitmap_options)?).await?;
+    bitmap.dyn_into()
+}
+
+pub async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>, reload: bool) -> Result<Vec<u8>, JsValue> {
+    let window = web_sys::window().ok_or("no window")?;
+    let init = web_sys::RequestInit::new();
+    init.set_signal(signal);
+    // A tileset (or tile) server can be slow (~15 s per cold file in Lille): low priority, so that it never holds the
+    // basemap back
+    crate::js::fetch_priority(&init, "low");
+    if reload {
+        init.set_cache(web_sys::RequestCache::Reload);
+    }
+    let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
+        .await?
+        .dyn_into()?;
+    if !response.ok() {
+        return Err(JsValue::from(response.status()));
+    }
+    let buffer = JsFuture::from(response.array_buffer()?).await?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}

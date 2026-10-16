@@ -4,13 +4,16 @@
 //! Positions go through the glTF node transforms, the y-up to z-up rotation, `RTC_CENTER` and the tile transform, to
 //! ECEF; they are stored in f32 relative to an anchor (the tile's center), exact to the millimetre over tens of
 //! kilometres.
+//!
+//! Content comes from the network: every size and offset is checked (overflow included) before it is used or
+//! allocated, so a malformed tile is an error, never a panic.
 
 #![forbid(unsafe_code)]
 
 use crate::meshopt;
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -63,12 +66,7 @@ pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometr
 pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
     let (glb, _) = split(bytes)?;
     let (json, bin) = parse_glb(glb)?;
-    let gltf = Gltf {
-        json: &json,
-        bin,
-        views: RefCell::default(),
-        draco: &[],
-    };
+    let gltf = Gltf::new(&json, bin, &[]);
     let mut out = Vec::new();
     for (m, mesh) in json["meshes"].as_array().into_iter().flatten().enumerate() {
         for (p, primitive) in mesh["primitives"].as_array().into_iter().flatten().enumerate() {
@@ -76,13 +74,14 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
             if !ext.is_object() {
                 continue;
             }
-            let view = ext["bufferView"].as_u64().ok_or("Draco extension without bufferView")? as usize;
+            let view = index(&ext["bufferView"]).ok_or("Draco extension without bufferView")?;
+            let attribute = |name: &str| ext["attributes"][name].as_u64().and_then(|v| u32::try_from(v).ok());
             out.push(DracoRequest {
                 mesh: m,
                 primitive: p,
                 data: gltf.view(view)?.to_vec(),
-                position: ext["attributes"]["POSITION"].as_u64().ok_or("Draco without POSITION")? as u32,
-                uv: ext["attributes"]["TEXCOORD_0"].as_u64().map(|v| v as u32),
+                position: attribute("POSITION").ok_or("Draco without POSITION")?,
+                uv: attribute(&format!("TEXCOORD_{}", uv_set(&json, primitive))),
             });
         }
     }
@@ -94,13 +93,30 @@ fn split(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
     match bytes.get(..4) {
         Some(b"b3dm") => b3dm_glb(bytes),
         Some(b"glTF") => Ok((bytes, DVec3::ZERO)),
+        _ if bytes.trim_ascii_start().starts_with(b"{") => {
+            Err("a JSON document (external tileset?), not a mesh".into())
+        }
         _ => Err("unsupported tile content (b3dm and glb only)".into()),
     }
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> Result<usize, String> {
-    let b = bytes.get(offset..offset + 4).ok_or("truncated tile")?;
+    let b = slice(bytes, offset, 4).ok_or("truncated tile")?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+}
+
+/// `length` bytes from `start`, None if out of `bytes` (overflow included)
+fn slice(bytes: &[u8], start: usize, length: usize) -> Option<&[u8]> {
+    bytes.get(start..start.checked_add(length)?)
+}
+
+/// A JSON chunk without the padding some writers leave (spaces, zeros)
+fn trim_padding(text: &[u8]) -> &[u8] {
+    let end = text
+        .iter()
+        .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
+        .map_or(0, |i| i + 1);
+    &text[..end]
 }
 
 fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
@@ -110,38 +126,98 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
     let batch_binary = u32_at(bytes, 24)?;
     let mut rtc = DVec3::ZERO;
     if feature_json > 0 {
-        let text = bytes.get(28..28 + feature_json).ok_or("truncated feature table")?;
-        let table: Value = serde_json::from_slice(text).map_err(|e| e.to_string())?;
-        if let Some([x, y, z]) = table["RTC_CENTER"].as_array().map(Vec::as_slice) {
+        let text = slice(bytes, 28, feature_json).ok_or("truncated feature table")?;
+        let table: Value = serde_json::from_slice(trim_padding(text)).map_err(|e| e.to_string())?;
+        let center = &table["RTC_CENTER"];
+        if let Some([x, y, z]) = center.as_array().map(Vec::as_slice) {
             rtc = DVec3::new(
                 x.as_f64().unwrap_or(0.0),
                 y.as_f64().unwrap_or(0.0),
                 z.as_f64().unwrap_or(0.0),
             );
+        } else if !center.is_null() {
+            // In the feature table's binary body: three f32
+            let binary = slice(bytes, 28 + feature_json, feature_binary).ok_or("truncated feature table")?;
+            let b = index(&center["byteOffset"])
+                .and_then(|offset| slice(binary, offset, 12))
+                .ok_or("RTC_CENTER out of the feature table")?;
+            let f = |i: usize| f64::from(f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]));
+            rtc = DVec3::new(f(0), f(4), f(8));
         }
     }
-    let glb = 28 + feature_json + feature_binary + batch_json + batch_binary;
+    let glb = [feature_json, feature_binary, batch_json, batch_binary]
+        .into_iter()
+        .try_fold(28usize, usize::checked_add)
+        .ok_or("bad b3dm header")?;
     Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc))
 }
+
+/// Chunk types of a glTF binary
+const JSON_CHUNK: usize = 0x4E4F_534A;
+const BIN_CHUNK: usize = 0x004E_4942;
 
 /// JSON and binary chunk of a glTF binary
 fn parse_glb(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
     if bytes.get(..4) != Some(b"glTF") || u32_at(bytes, 4)? != 2 {
         return Err("glTF 2.0 binary expected".into());
     }
+    // The declared length bounds the chunks (trailing bytes are not part of it)
+    let bytes = &bytes[..u32_at(bytes, 8)?.min(bytes.len())];
     let json_length = u32_at(bytes, 12)?;
-    let json: Value =
-        serde_json::from_slice(bytes.get(20..20 + json_length).ok_or("truncated glTF")?).map_err(|e| e.to_string())?;
+    if u32_at(bytes, 16)? != JSON_CHUNK {
+        return Err("glTF binary without its JSON chunk".into());
+    }
+    let text = slice(bytes, 20, json_length).ok_or("truncated glTF")?;
+    let json: Value = serde_json::from_slice(trim_padding(text)).map_err(|e| e.to_string())?;
     let bin_start = 20 + json_length;
-    let bin = if bytes.len() > bin_start + 8 {
-        let length = u32_at(bytes, bin_start)?;
-        bytes
-            .get(bin_start + 8..bin_start + 8 + length)
-            .ok_or("truncated glTF binary")?
-    } else {
-        &[]
+    // The binary chunk, if any, comes second; another chunk type there is not it
+    let bin = match (u32_at(bytes, bin_start), u32_at(bytes, bin_start + 4)) {
+        (Ok(length), Ok(BIN_CHUNK)) => slice(bytes, bin_start + 8, length).ok_or("truncated glTF binary")?,
+        _ => &[],
     };
     Ok((json, bin))
+}
+
+/// A JSON index or count as usize (None if absent, negative or too large for this platform)
+fn index(v: &Value) -> Option<usize> {
+    v.as_u64().and_then(|n| usize::try_from(n).ok())
+}
+
+/// A byte offset: 0 when absent, an error when invalid
+fn offset(v: &Value) -> Result<usize, String> {
+    if v.is_null() {
+        return Ok(0);
+    }
+    index(v).ok_or_else(|| "bad byteOffset".into())
+}
+
+fn material<'a>(json: &'a Value, primitive: &Value) -> &'a Value {
+    &json["materials"][index(&primitive["material"]).unwrap_or(usize::MAX)]
+}
+
+/// Texture coordinate set of the base color texture of a primitive (`texCoord`, overridden by
+/// `KHR_texture_transform`)
+fn uv_set(json: &Value, primitive: &Value) -> u64 {
+    let base = &material(json, primitive)["pbrMetallicRoughness"]["baseColorTexture"];
+    base["extensions"]["KHR_texture_transform"]["texCoord"]
+        .as_u64()
+        .or(base["texCoord"].as_u64())
+        .unwrap_or(0)
+}
+
+/// Translation, rotation, scale or matrix of a node: `default` when absent, an error unless N numbers
+fn numbers<const N: usize>(value: &Value, default: [f64; N]) -> Result<[f64; N], String> {
+    match value {
+        Value::Null => Ok(default),
+        Value::Array(a) if a.len() == N => {
+            let mut out = [0.0; N];
+            for (o, v) in out.iter_mut().zip(a) {
+                *o = v.as_f64().ok_or("bad glTF node transform")?;
+            }
+            Ok(out)
+        }
+        _ => Err("bad glTF node transform".into()),
+    }
 }
 
 fn decode_glb(
@@ -158,12 +234,7 @@ fn decode_glb(
             return Err(format!("glTF extension {name} unsupported"));
         }
     }
-    let gltf = Gltf {
-        json: &json,
-        bin,
-        views: RefCell::default(),
-        draco,
-    };
+    let gltf = Gltf::new(&json, bin, draco);
     // glTF y-up → z-up: +90° about x
     let axis = if y_up {
         DMat4::from_rotation_x(std::f64::consts::FRAC_PI_2)
@@ -172,10 +243,22 @@ fn decode_glb(
     };
     let to_world = *transform * DMat4::from_translation(rtc) * axis;
     let mut out = Vec::new();
-    let scene = json["scene"].as_u64().unwrap_or(0) as usize;
-    let roots: Vec<usize> = match json["scenes"][scene]["nodes"].as_array() {
-        Some(nodes) => nodes.iter().filter_map(Value::as_u64).map(|n| n as usize).collect(),
-        None => (0..json["nodes"].as_array().map_or(0, Vec::len)).collect(),
+    let scene = index(&json["scene"]).unwrap_or(0);
+    let nodes = json["nodes"].as_array().map_or(&[][..], Vec::as_slice);
+    let roots: Vec<usize> = if let Some(roots) = json["scenes"][scene]["nodes"].as_array() {
+        roots.iter().filter_map(index).collect()
+    } else {
+        // No scene: the nodes no other node holds
+        let mut child = vec![false; nodes.len()];
+        for c in nodes
+            .iter()
+            .flat_map(|n| n["children"].as_array().into_iter().flatten())
+        {
+            if let Some(slot) = index(c).and_then(|c| child.get_mut(c)) {
+                *slot = true;
+            }
+        }
+        (0..nodes.len()).filter(|&n| !child[n]).collect()
     };
     for node in roots {
         gltf.node(node, &to_world, &mut out, 0)?;
@@ -188,7 +271,7 @@ fn decode_glb(
             max = max.max(*p);
         }
     }
-    let anchor = if min.x.is_finite() {
+    let anchor = if min.is_finite() && max.is_finite() {
         (min + max) / 2.0
     } else {
         transform.transform_point3(rtc)
@@ -216,6 +299,99 @@ const SUPPORTED: [&str; 6] = [
     "KHR_texture_basisu",
 ];
 
+/// Deepest node hierarchy followed
+const MAX_DEPTH: u32 = 32;
+/// Node visits allowed per node of the file: a hierarchy is a tree (each node once), some slack for files sharing
+/// nodes, none for a graph whose shared children would multiply the visits
+const VISITS_PER_NODE: usize = 4;
+/// Most values of an accessor without buffer view (zeros, possibly sparse)
+const MAX_ZEROS: usize = 1 << 22;
+
+/// Layout of an accessor
+struct Layout {
+    count: usize,
+    components: usize,
+    component_type: u64,
+    /// Bytes per component
+    size: usize,
+    normalized: bool,
+}
+
+impl Layout {
+    fn parse(accessor: &Value) -> Result<Self, String> {
+        let count = index(&accessor["count"]).ok_or("accessor without count")?;
+        let components = match accessor["type"].as_str() {
+            Some("SCALAR") => 1,
+            Some("VEC2") => 2,
+            Some("VEC3") => 3,
+            Some("VEC4") => 4,
+            _ => return Err("unsupported accessor type".into()),
+        };
+        let component_type = accessor["componentType"].as_u64().unwrap_or(0);
+        Ok(Self {
+            count,
+            components,
+            component_type,
+            size: component_size(component_type)?,
+            normalized: accessor["normalized"].as_bool().unwrap_or(false),
+        })
+    }
+
+    /// Bytes per element
+    fn element(&self) -> usize {
+        self.components * self.size
+    }
+}
+
+fn component_size(component_type: u64) -> Result<usize, String> {
+    match component_type {
+        5120 | 5121 => Ok(1),
+        5122 | 5123 => Ok(2),
+        5125 | 5126 => Ok(4),
+        _ => Err(format!("unsupported component type {component_type}")),
+    }
+}
+
+/// Reads one component from its little-endian bytes (at least its size)
+type Read<T> = fn(&[u8]) -> T;
+
+/// Components as f32: normalized integers mapped to [0, 1] or [-1, 1], other integers kept as values
+fn float_reader(component_type: u64, normalized: bool) -> Result<Read<f32>, String> {
+    Ok(match (component_type, normalized) {
+        (5126, _) => |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        (5121, true) => |b| f32::from(b[0]) / 255.0,
+        (5121, false) => |b| f32::from(b[0]),
+        (5120, true) => |b| (f32::from(b[0] as i8) / 127.0).max(-1.0),
+        (5120, false) => |b| f32::from(b[0] as i8),
+        (5123, true) => |b| f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0,
+        (5123, false) => |b| f32::from(u16::from_le_bytes([b[0], b[1]])),
+        (5122, true) => |b| (f32::from(i16::from_le_bytes([b[0], b[1]])) / 32767.0).max(-1.0),
+        (5122, false) => |b| f32::from(i16::from_le_bytes([b[0], b[1]])),
+        (5125, _) => |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32,
+        _ => return Err(format!("unsupported component type {component_type}")),
+    })
+}
+
+/// Unsigned integer components (indices), exact
+fn index_reader(component_type: u64) -> Result<Read<u32>, String> {
+    Ok(match component_type {
+        5121 => |b| u32::from(b[0]),
+        5123 => |b| u32::from(u16::from_le_bytes([b[0], b[1]])),
+        5125 => |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        _ => return Err(format!("indices of component type {component_type}")),
+    })
+}
+
+/// Whether `count` elements of `element` bytes, `stride` apart from `offset`, fit in `length` bytes
+fn fits(length: usize, offset: usize, stride: usize, count: usize, element: usize) -> bool {
+    count == 0
+        || (count - 1)
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(offset))
+            .and_then(|n| n.checked_add(element))
+            .is_some_and(|end| end <= length)
+}
+
 struct Gltf<'a> {
     json: &'a Value,
     bin: &'a [u8],
@@ -223,9 +399,22 @@ struct Gltf<'a> {
     draco: &'a [DracoGeometry],
     /// Buffer views decompressed so far (`EXT_meshopt_compression`)
     views: RefCell<HashMap<usize, Rc<[u8]>>>,
+    /// Node visits left
+    visits: Cell<usize>,
 }
 
-impl Gltf<'_> {
+impl<'a> Gltf<'a> {
+    fn new(json: &'a Value, bin: &'a [u8], draco: &'a [DracoGeometry]) -> Self {
+        let nodes = json["nodes"].as_array().map_or(0, Vec::len);
+        Self {
+            json,
+            bin,
+            draco,
+            views: RefCell::default(),
+            visits: Cell::new(nodes.saturating_mul(VISITS_PER_NODE)),
+        }
+    }
+
     fn node(
         &self,
         index: usize,
@@ -233,33 +422,24 @@ impl Gltf<'_> {
         out: &mut Vec<(Primitive, Vec<DVec3>)>,
         depth: u32,
     ) -> Result<(), String> {
-        if depth > 32 {
+        if depth > MAX_DEPTH {
             return Err("glTF node hierarchy too deep".into());
         }
+        let Some(visits) = self.visits.get().checked_sub(1) else {
+            return Err("glTF nodes shared too often (not a tree)".into());
+        };
+        self.visits.set(visits);
         let node = &self.json["nodes"][index];
-        let local = if let Some(m) = node["matrix"].as_array() {
-            let m: Vec<f64> = m.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect();
-            DMat4::from_cols_slice(m.get(..16).ok_or("bad node matrix")?)
+        let local = if node["matrix"].is_null() {
+            let t = numbers(&node["translation"], [0.0; 3])?;
+            let r = numbers(&node["rotation"], [0.0, 0.0, 0.0, 1.0])?;
+            let s = numbers(&node["scale"], [1.0; 3])?;
+            DMat4::from_scale_rotation_translation(DVec3::from(s), DQuat::from_array(r), DVec3::from(t))
         } else {
-            let v = |key: &str, default: &[f64]| -> Vec<f64> {
-                node[key].as_array().map_or(default.to_vec(), |a| {
-                    a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect()
-                })
-            };
-            let (t, r, s) = (
-                v("translation", &[0.0; 3]),
-                v("rotation", &[0.0, 0.0, 0.0, 1.0]),
-                v("scale", &[1.0; 3]),
-            );
-            DMat4::from_scale_rotation_translation(
-                DVec3::new(s[0], s[1], s[2]),
-                DQuat::from_xyzw(r[0], r[1], r[2], r[3]),
-                DVec3::new(t[0], t[1], t[2]),
-            )
+            DMat4::from_cols_array(&numbers(&node["matrix"], [0.0; 16])?)
         };
         let world = *parent * local;
-        if let Some(mesh) = node["mesh"].as_u64() {
-            let mesh = mesh as usize;
+        if let Some(mesh) = self::index(&node["mesh"]) {
             for (index, primitive) in self.json["meshes"][mesh]["primitives"]
                 .as_array()
                 .into_iter()
@@ -275,9 +455,9 @@ impl Gltf<'_> {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(Value::as_u64)
+            .filter_map(self::index)
         {
-            self.node(child as usize, &world, out, depth + 1)?;
+            self.node(child, &world, out, depth + 1)?;
         }
         Ok(())
     }
@@ -298,18 +478,19 @@ impl Gltf<'_> {
             };
             return Ok(Some((g.positions.clone(), uvs, g.indices.clone())));
         }
-        let Some(position) = primitive["attributes"]["POSITION"].as_u64() else {
+        let Some(position) = self::index(&primitive["attributes"]["POSITION"]) else {
             return Ok(None);
         };
-        let positions = self.accessor(position as usize)?;
+        let positions = self.floats(position)?;
         let count = positions.len() / 3;
-        let uvs = match primitive["attributes"]["TEXCOORD_0"].as_u64() {
-            Some(uv) => self.accessor(uv as usize)?,
+        let uv = &primitive["attributes"][format!("TEXCOORD_{}", uv_set(self.json, primitive))];
+        let uvs = match self::index(uv) {
+            Some(uv) => self.floats(uv)?,
             None => vec![0.0; count * 2],
         };
-        let indices: Vec<u32> = match primitive["indices"].as_u64() {
-            Some(i) => self.accessor(i as usize)?.iter().map(|&v| v as u32).collect(),
-            None => (0..count as u32).collect(),
+        let indices: Vec<u32> = match self::index(&primitive["indices"]) {
+            Some(i) => self.accessor(i, |l| index_reader(l.component_type))?,
+            None => (0..u32::try_from(count).map_err(|_| "too many vertices")?).collect(),
         };
         Ok(Some((positions, uvs, indices)))
     }
@@ -328,18 +509,18 @@ impl Gltf<'_> {
             return Ok(None);
         };
         let count = positions.len() / 3;
+        if !positions.len().is_multiple_of(3) || uvs.len() != count * 2 || indices.iter().any(|&i| i as usize >= count)
+        {
+            return Err("inconsistent glTF primitive".into());
+        }
         let world_positions: Vec<DVec3> = positions
             .as_chunks::<3>()
             .0
             .iter()
             .map(|&[x, y, z]| world.transform_point3(DVec3::new(f64::from(x), f64::from(y), f64::from(z))))
             .collect();
-        if uvs.len() != count * 2 || indices.iter().any(|&i| i as usize >= count) {
-            return Err("inconsistent glTF primitive".into());
-        }
-        let material = &self.json["materials"][primitive["material"].as_u64().unwrap_or(u64::MAX) as usize];
-        let base_color = &material["pbrMetallicRoughness"]["baseColorTexture"];
-        let texture = base_color["index"].as_u64();
+        let base_color = &material(self.json, primitive)["pbrMetallicRoughness"]["baseColorTexture"];
+        let texture = index(&base_color["index"]);
         // KHR_texture_transform (gltfpack uses it for quantized uv): uv' = offset + rotation · (scale · uv)
         let transform = &base_color["extensions"]["KHR_texture_transform"];
         if transform.is_object() {
@@ -359,10 +540,8 @@ impl Gltf<'_> {
         }
         // KHR_texture_basisu: the KTX2 image first (transcoded by the workers), else the plain one
         let image = texture.and_then(|t| {
-            let texture = &self.json["textures"][t as usize];
-            let source = texture["extensions"]["KHR_texture_basisu"]["source"]
-                .as_u64()
-                .or(texture["source"].as_u64())?;
+            let texture = &self.json["textures"][t];
+            let source = index(&texture["extensions"]["KHR_texture_basisu"]["source"]).or(index(&texture["source"]))?;
             self.image(source)
         });
         Ok(Some((
@@ -383,19 +562,21 @@ impl Gltf<'_> {
         }
         let view = &self.json["bufferViews"][index];
         let ext = &view["extensions"]["EXT_meshopt_compression"];
+        let field = |v: &Value, name: &str| self::index(&v[name]).ok_or(format!("buffer view without {name}"));
         let bytes: Rc<[u8]> = if ext.is_object() {
-            let offset = ext["byteOffset"].as_u64().unwrap_or(0) as usize;
-            let length = ext["byteLength"].as_u64().ok_or("meshopt view without byteLength")? as usize;
             if ext["buffer"].as_u64().unwrap_or(0) != 0 {
                 return Err("meshopt data outside the binary chunk".into());
             }
+            let (count, stride) = (field(ext, "count")?, field(ext, "byteStride")?);
+            // The decoded size is the view's
+            if count.checked_mul(stride) != Some(field(view, "byteLength")?) {
+                return Err("meshopt view of the wrong size".into());
+            }
             let decoded = meshopt::decode(&meshopt::View {
-                data: self
-                    .bin
-                    .get(offset..offset + length)
+                data: slice(self.bin, offset(&ext["byteOffset"])?, field(ext, "byteLength")?)
                     .ok_or("meshopt view out of the binary chunk")?,
-                count: ext["count"].as_u64().ok_or("meshopt view without count")? as usize,
-                stride: ext["byteStride"].as_u64().ok_or("meshopt view without byteStride")? as usize,
+                count,
+                stride,
                 mode: meshopt::Mode::parse(ext["mode"].as_str().unwrap_or(""))?,
                 filter: meshopt::Filter::parse(ext["filter"].as_str())?,
             })?;
@@ -404,10 +585,7 @@ impl Gltf<'_> {
             if view["buffer"].as_u64().unwrap_or(0) != 0 {
                 return Err("buffer view outside the binary chunk".into());
             }
-            let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-            let length = view["byteLength"].as_u64().ok_or("buffer view without byteLength")? as usize;
-            self.bin
-                .get(offset..offset + length)
+            slice(self.bin, offset(&view["byteOffset"])?, field(view, "byteLength")?)
                 .ok_or("buffer view out of the binary chunk")?
                 .into()
         };
@@ -416,55 +594,88 @@ impl Gltf<'_> {
     }
 
     /// Accessor values as f32 (normalized integers mapped to [0, 1] or [-1, 1], other integers kept as values)
-    fn accessor(&self, index: usize) -> Result<Vec<f32>, String> {
+    fn floats(&self, index: usize) -> Result<Vec<f32>, String> {
+        self.accessor(index, |l| float_reader(l.component_type, l.normalized))
+    }
+
+    /// Values of an accessor, read by `reader`: from its buffer view (interleaved or not), or zeros without one, then
+    /// its sparse substitutions
+    fn accessor<T: Copy + Default>(
+        &self,
+        index: usize,
+        reader: impl Fn(&Layout) -> Result<Read<T>, String>,
+    ) -> Result<Vec<T>, String> {
         let accessor = &self.json["accessors"][index];
-        let count = accessor["count"].as_u64().ok_or("accessor without count")? as usize;
-        let components = match accessor["type"].as_str() {
-            Some("SCALAR") => 1,
-            Some("VEC2") => 2,
-            Some("VEC3") => 3,
-            Some("VEC4") => 4,
-            _ => return Err("unsupported accessor type".into()),
-        };
-        let component_type = accessor["componentType"].as_u64().unwrap_or(0);
-        let size = match component_type {
-            5120 | 5121 => 1,
-            5122 | 5123 => 2,
-            5125 | 5126 => 4,
-            _ => return Err(format!("unsupported component type {component_type}")),
-        };
-        let normalized = accessor["normalized"].as_bool().unwrap_or(false);
-        let view_index = accessor["bufferView"].as_u64().ok_or("sparse accessors unsupported")? as usize;
-        let bytes = self.view(view_index)?;
-        let offset = accessor["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let stride = self.json["bufferViews"][view_index]["byteStride"]
-            .as_u64()
-            .map_or(components * size, |s| s as usize);
-        let mut out = Vec::with_capacity(count * components);
-        for i in 0..count {
-            for c in 0..components {
-                let at = offset + i * stride + c * size;
-                let b = bytes.get(at..at + size).ok_or("accessor out of its buffer view")?;
-                out.push(match (component_type, normalized) {
-                    (5126, _) => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-                    (5121, true) => f32::from(b[0]) / 255.0,
-                    (5121, false) => f32::from(b[0]),
-                    (5120, true) => (f32::from(b[0] as i8) / 127.0).max(-1.0),
-                    (5120, false) => f32::from(b[0] as i8),
-                    (5123, true) => f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0,
-                    (5123, false) => f32::from(u16::from_le_bytes([b[0], b[1]])),
-                    (5122, true) => (f32::from(i16::from_le_bytes([b[0], b[1]])) / 32767.0).max(-1.0),
-                    (5122, false) => f32::from(i16::from_le_bytes([b[0], b[1]])),
-                    _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32,
-                });
+        let layout = Layout::parse(accessor)?;
+        let read = reader(&layout)?;
+        let (count, components, size, element) = (layout.count, layout.components, layout.size, layout.element());
+        let total = count.checked_mul(components).ok_or("accessor too large")?;
+        let mut out = if let Some(view_index) = self::index(&accessor["bufferView"]) {
+            let bytes = self.view(view_index)?;
+            let start = offset(&accessor["byteOffset"])?;
+            let stride = match &self.json["bufferViews"][view_index]["byteStride"] {
+                Value::Null => element,
+                s => self::index(s).filter(|&s| s >= element).ok_or("bad byteStride")?,
+            };
+            if !fits(bytes.len(), start, stride, count, element) {
+                return Err("accessor out of its buffer view".into());
             }
+            let mut out = Vec::with_capacity(total);
+            for i in 0..count {
+                let e = slice(&bytes, start + i * stride, element).ok_or("accessor out of its buffer view")?;
+                out.extend((0..components).map(|c| read(&e[c * size..])));
+            }
+            out
+        } else if total <= MAX_ZEROS {
+            vec![T::default(); total]
+        } else {
+            return Err("accessor without buffer view too large".into());
+        };
+        let sparse = &accessor["sparse"];
+        if !sparse.is_null() {
+            self.sparse(sparse, &layout, read, &mut out)?;
         }
         Ok(out)
     }
 
-    fn image(&self, index: u64) -> Option<(Vec<u8>, String)> {
-        let image = &self.json["images"][index as usize];
-        let bytes = self.view(image["bufferView"].as_u64()? as usize).ok()?;
+    /// Applies the substitutions of a sparse accessor: values (tightly packed) at the given element indices
+    fn sparse<T: Copy>(&self, sparse: &Value, layout: &Layout, read: Read<T>, out: &mut [T]) -> Result<(), String> {
+        let count = index(&sparse["count"]).ok_or("sparse accessor without count")?;
+        if count > layout.count {
+            return Err("sparse accessor with too many values".into());
+        }
+        let (indices, values) = (&sparse["indices"], &sparse["values"]);
+        let index_type = indices["componentType"].as_u64().unwrap_or(0);
+        let (index_read, index_size) = (index_reader(index_type)?, component_size(index_type)?);
+        let index_bytes = self.view(index(&indices["bufferView"]).ok_or("sparse indices without bufferView")?)?;
+        let index_start = offset(&indices["byteOffset"])?;
+        let value_bytes = self.view(index(&values["bufferView"]).ok_or("sparse values without bufferView")?)?;
+        let value_start = offset(&values["byteOffset"])?;
+        let (components, size, element) = (layout.components, layout.size, layout.element());
+        if !fits(index_bytes.len(), index_start, index_size, count, index_size)
+            || !fits(value_bytes.len(), value_start, element, count, element)
+        {
+            return Err("sparse accessor out of its buffer views".into());
+        }
+        for k in 0..count {
+            let i = slice(&index_bytes, index_start + k * index_size, index_size)
+                .map(index_read)
+                .ok_or("sparse accessor out of its buffer views")? as usize;
+            let v = slice(&value_bytes, value_start + k * element, element).ok_or("sparse values out of range")?;
+            let target = out
+                .get_mut(i.saturating_mul(components)..)
+                .and_then(|o| o.get_mut(..components))
+                .ok_or("sparse index out of the accessor")?;
+            for (c, t) in target.iter_mut().enumerate() {
+                *t = read(&v[c * size..]);
+            }
+        }
+        Ok(())
+    }
+
+    fn image(&self, index: usize) -> Option<(Vec<u8>, String)> {
+        let image = &self.json["images"][index];
+        let bytes = self.view(self::index(&image["bufferView"])?).ok()?;
         let mime = image["mimeType"].as_str().unwrap_or("image/jpeg").to_owned();
         Some((bytes.to_vec(), mime))
     }
@@ -605,5 +816,454 @@ mod tests {
     fn rejects_garbage() {
         assert!(decode(b"nope", &DMat4::IDENTITY, true, &[]).is_err());
         assert!(decode(&LILLE[..40], &DMat4::IDENTITY, true, &[]).is_err());
+    }
+
+    use serde_json::json;
+
+    /// A glTF binary from its JSON and binary chunk
+    pub(crate) fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
+        let mut text = serde_json::to_vec(json).unwrap();
+        while !text.len().is_multiple_of(4) {
+            text.push(b' ');
+        }
+        let mut bin = bin.to_vec();
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let total = 20 + text.len() + if bin.is_empty() { 0 } else { 8 + bin.len() };
+        let mut out = Vec::new();
+        for v in [0x4654_6C67, 2, total, text.len(), JSON_CHUNK] {
+            out.extend((v as u32).to_le_bytes());
+        }
+        out.extend(text);
+        if !bin.is_empty() {
+            out.extend((bin.len() as u32).to_le_bytes());
+            out.extend((BIN_CHUNK as u32).to_le_bytes());
+            out.extend(bin);
+        }
+        out
+    }
+
+    fn f32s(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// One triangle: positions (x, y, z) then uv in a buffer, its accessors and node given by `json`
+    fn triangle(json: &Value, bin: &[u8]) -> Result<Mesh, String> {
+        decode(&glb(json, bin), &DMat4::IDENTITY, false, &[])
+    }
+
+    #[test]
+    fn interleaved_attributes_follow_the_byte_stride() {
+        // x y z u v per vertex, 20 bytes apart
+        let bin = f32s(&[
+            0.0, 0.0, 0.0, 0.1, 0.2, //
+            1.0, 0.0, 0.0, 0.3, 0.4, //
+            0.0, 1.0, 0.0, 0.5, 0.6,
+        ]);
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 60}],
+            "bufferViews": [{"buffer": 0, "byteLength": 60, "byteStride": 20}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+                {"bufferView": 0, "byteOffset": 12, "componentType": 5126, "count": 3, "type": "VEC2"}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        let mesh = triangle(&json, &bin).unwrap();
+        let p = &mesh.primitives[0];
+        assert_eq!(p.uvs, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+        assert_eq!(p.indices, [0, 1, 2]);
+        assert!((vertex(&mesh, 1) - DVec3::X).length() < 1e-6);
+        // A stride smaller than an element is refused
+        let mut bad = json;
+        bad["bufferViews"][0]["byteStride"] = json!(8);
+        assert!(triangle(&bad, &bin).is_err());
+    }
+
+    /// Vertex `i` of the first primitive, ECEF
+    fn vertex(mesh: &Mesh, i: usize) -> DVec3 {
+        let p = &mesh.primitives[0].positions[i * 3..i * 3 + 3];
+        mesh.anchor + DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
+    }
+
+    #[test]
+    fn sparse_accessors_substitute_their_values() {
+        // Base positions all at the origin but the substituted vertices 1 and 2; uv without buffer view (zeros) and
+        // one sparse value
+        let mut bin = f32s(&[0.0; 9]);
+        bin.extend(f32s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0])); // 36: values
+        bin.extend([1u8, 0, 2, 0]); // 60: u16 indices
+        bin.extend(f32s(&[0.5, 0.25])); // 64: uv value
+        bin.extend([2u8, 0, 0, 0]); // 72: u8 index
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 76}],
+            "bufferViews": [
+                {"buffer": 0, "byteLength": 36},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 24},
+                {"buffer": 0, "byteOffset": 60, "byteLength": 4},
+                {"buffer": 0, "byteOffset": 64, "byteLength": 8},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 1}
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "sparse": {
+                    "count": 2,
+                    "indices": {"bufferView": 2, "componentType": 5123},
+                    "values": {"bufferView": 1}
+                }},
+                {"componentType": 5126, "count": 3, "type": "VEC2", "sparse": {
+                    "count": 1,
+                    "indices": {"bufferView": 4, "componentType": 5121},
+                    "values": {"bufferView": 3}
+                }}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        let mesh = triangle(&json, &bin).unwrap();
+        let p = &mesh.primitives[0];
+        let at = |i: usize| vertex(&mesh, i);
+        assert!(at(0).length() < 1e-6 && (at(1) - DVec3::X).length() < 1e-6 && (at(2) - DVec3::Y).length() < 1e-6);
+        assert_eq!(p.uvs, [0.0, 0.0, 0.0, 0.0, 0.5, 0.25]);
+        // A sparse index past the accessor, too many sparse values: errors
+        let mut bad = json.clone();
+        bad["accessors"][1]["sparse"]["indices"]["componentType"] = json!(5125);
+        assert!(triangle(&bad, &bin).is_err());
+        let mut bad = json;
+        bad["accessors"][0]["sparse"]["count"] = json!(4);
+        assert!(triangle(&bad, &bin).is_err());
+    }
+
+    #[test]
+    fn the_texture_coordinate_set_of_the_material_is_used() {
+        let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        bin.extend(f32s(&[9.0; 6]));
+        bin.extend(f32s(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 84}],
+            "bufferViews": [
+                {"buffer": 0, "byteLength": 36},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 24},
+                {"buffer": 0, "byteOffset": 60, "byteLength": 24}
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"},
+                {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"}
+            ],
+            "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0, "texCoord": 1}}}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2}, "material": 0}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        assert_eq!(
+            triangle(&json, &bin).unwrap().primitives[0].uvs,
+            [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+        );
+    }
+
+    /// The one-triangle tile of the tests below, with `nodes` and `scenes` given
+    fn with_nodes(nodes: &Value, scenes: Option<&Value>) -> Result<Mesh, String> {
+        let bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let mut json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 36}],
+            "bufferViews": [{"buffer": 0, "byteLength": 36}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "nodes": nodes
+        });
+        if let Some(scenes) = scenes {
+            json["scenes"] = scenes.clone();
+        }
+        triangle(&json, &bin)
+    }
+
+    #[test]
+    fn node_transforms_of_the_wrong_size_are_errors() {
+        assert!(with_nodes(&json!([{"mesh": 0, "translation": [1.0, 2.0]}]), None).is_err());
+        assert!(with_nodes(&json!([{"mesh": 0, "rotation": [0.0, 0.0, 1.0]}]), None).is_err());
+        assert!(with_nodes(&json!([{"mesh": 0, "scale": "big"}]), None).is_err());
+        assert!(with_nodes(&json!([{"mesh": 0, "matrix": vec![1.0; 15]}]), None).is_err());
+        let moved = with_nodes(&json!([{"mesh": 0, "translation": [10.0, 0.0, 0.0]}]), None).unwrap();
+        assert!((moved.anchor.x - 10.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn node_graphs_neither_hang_nor_overflow() {
+        // A cycle
+        assert!(
+            with_nodes(
+                &json!([{"mesh": 0, "children": [1]}, {"children": [0]}]),
+                Some(&json!([{"nodes": [0]}]))
+            )
+            .is_err()
+        );
+        // 40 levels, each node holding the next twice: 2^40 paths
+        let nodes: Vec<Value> = (0..40)
+            .map(|i| json!({"mesh": 0, "children": [i + 1, i + 1]}))
+            .collect();
+        assert!(with_nodes(&json!(nodes), Some(&json!([{"nodes": [0]}]))).is_err());
+        // Without scenes, the roots are the nodes no other holds: a child is not drawn twice
+        let mesh = with_nodes(&json!([{"children": [1]}, {"mesh": 0}]), None).unwrap();
+        assert_eq!(mesh.primitives.len(), 1);
+    }
+
+    #[test]
+    fn huge_counts_are_errors_not_allocations() {
+        let bin = f32s(&[0.0; 9]);
+        for count in [u64::from(u32::MAX), u64::MAX, 1 << 40, 4] {
+            let json = json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 36}],
+                "bufferViews": [{"buffer": 0, "byteLength": 36, "byteStride": 12}],
+                "accessors": [{"bufferView": 0, "componentType": 5126, "count": count, "type": "VEC3"}],
+                "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+                "nodes": [{"mesh": 0}]
+            });
+            assert!(triangle(&json, &bin).is_err(), "{count}");
+            let mut no_view = json;
+            no_view["accessors"][0].as_object_mut().unwrap().remove("bufferView");
+            assert!(triangle(&no_view, &bin).is_err() || count == 4, "{count}");
+        }
+    }
+
+    #[test]
+    fn rtc_center_may_be_binary() {
+        // A b3dm whose feature table gives RTC_CENTER in its binary body
+        let inner = glb(
+            &json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 36}],
+                "bufferViews": [{"buffer": 0, "byteLength": 36}],
+                "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+                "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+                "nodes": [{"mesh": 0}]
+            }),
+            &f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        );
+        let table = br#"{"BATCH_LENGTH":0,"RTC_CENTER":{"byteOffset":0}}    "#;
+        let binary = f32s(&[1000.0, 2000.0, 3000.0]);
+        let mut b3dm = b"b3dm".to_vec();
+        let total = 28 + table.len() + binary.len() + inner.len();
+        for v in [1, total, table.len(), binary.len(), 0, 0] {
+            b3dm.extend((v as u32).to_le_bytes());
+        }
+        b3dm.extend(table);
+        b3dm.extend(binary);
+        b3dm.extend(&inner);
+        let mesh = decode(&b3dm, &DMat4::IDENTITY, false, &[]).unwrap();
+        assert!(
+            (mesh.anchor - DVec3::new(1000.5, 2000.5, 3000.0)).length() < 1e-6,
+            "{}",
+            mesh.anchor
+        );
+        // Its offset out of the binary body: an error
+        let mut bad = b3dm.clone();
+        bad[28 + table.len() - 7] = b'9';
+        assert!(decode(&bad, &DMat4::IDENTITY, false, &[]).is_err());
+        // Header sizes that overflow
+        let mut bad = b3dm;
+        bad[12..28].fill(0xff);
+        assert!(decode(&bad, &DMat4::IDENTITY, false, &[]).is_err());
+    }
+
+    #[test]
+    fn only_a_bin_chunk_is_the_binary() {
+        let mut bytes = with_nodes_glb();
+        assert!(decode(&bytes, &DMat4::IDENTITY, false, &[]).is_ok());
+        // Change the type of the second chunk: no binary any more, the accessor is out of range
+        let json_length = u32_at(&bytes, 12).unwrap();
+        bytes[20 + json_length + 4] = b'X';
+        assert!(decode(&bytes, &DMat4::IDENTITY, false, &[]).is_err());
+        // A JSON document is told apart
+        assert!(
+            decode(b"  {\"asset\":{}}", &DMat4::IDENTITY, false, &[])
+                .err()
+                .unwrap()
+                .contains("JSON")
+        );
+    }
+
+    fn with_nodes_glb() -> Vec<u8> {
+        glb(
+            &json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 36}],
+                "bufferViews": [{"buffer": 0, "byteLength": 36}],
+                "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+                "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+                "nodes": [{"mesh": 0}]
+            }),
+            &f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        )
+    }
+
+    /// Deterministic pseudo-random numbers (xorshift)
+    struct Random(u64);
+
+    impl Random {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    /// JSON pointers of every value of a document
+    fn pointers(v: &Value, at: String, out: &mut Vec<String>) {
+        match v {
+            Value::Object(o) => {
+                for (k, v) in o {
+                    pointers(v, format!("{at}/{k}"), out);
+                }
+            }
+            Value::Array(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    pointers(v, format!("{at}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+        out.push(at);
+    }
+
+    /// Values a malicious or broken file may hold
+    fn odd_value(r: &mut Random) -> Value {
+        let values = [
+            json!(0),
+            json!(1),
+            json!(2),
+            json!(3),
+            json!(4),
+            json!(7),
+            json!(255),
+            json!(65_535),
+            json!(u32::MAX),
+            json!(u64::from(u32::MAX) + 2),
+            json!(u64::MAX),
+            json!(-1),
+            json!(1e300),
+            json!(0.5),
+            json!("VEC3"),
+            json!("SCALAR"),
+            json!("MAT4"),
+            json!("ATTRIBUTES"),
+            json!("TRIANGLES"),
+            json!("INDICES"),
+            json!("OCTAHEDRAL"),
+            json!("QUATERNION"),
+            json!(null),
+            json!([]),
+            json!([0, 0]),
+            json!([0, 1, 0, 1]),
+            json!(vec![1.0; 16]),
+            json!({"count": 2, "indices": {"bufferView": 0, "componentType": 5123}, "values": {"bufferView": 1}}),
+            json!(5120),
+            json!(5121),
+            json!(5122),
+            json!(5123),
+            json!(5125),
+            json!(5126),
+        ];
+        values[r.below(values.len())].clone()
+    }
+
+    /// Keys an attacker may add to any object
+    const KEYS: [&str; 12] = [
+        "sparse",
+        "byteStride",
+        "byteOffset",
+        "count",
+        "matrix",
+        "children",
+        "mesh",
+        "bufferView",
+        "filter",
+        "texCoord",
+        "translation",
+        "rotation",
+    ];
+
+    fn try_all(bytes: &[u8]) {
+        let _ = decode(bytes, &DMat4::IDENTITY, true, &[]);
+        if let Ok(requests) = draco_requests(bytes) {
+            // Stand-in geometry for the Draco primitives, possibly inconsistent
+            let draco: Vec<DracoGeometry> = requests
+                .iter()
+                .map(|r| DracoGeometry {
+                    mesh: r.mesh,
+                    primitive: r.primitive,
+                    positions: vec![0.0; 9],
+                    uvs: vec![0.0; 4],
+                    indices: vec![0, 1, 5],
+                })
+                .collect();
+            let _ = decode(bytes, &DMat4::IDENTITY, true, &draco);
+        }
+    }
+
+    /// Mutated fixtures (bytes flipped, truncated, JSON fields given odd values) never panic, hang or allocate
+    /// wildly: every outcome is a mesh or an error
+    #[test]
+    fn malformed_tiles_never_panic() {
+        let fixtures: [&[u8]; 6] = [
+            LILLE,
+            include_bytes!("../tests/data/lille_noq.glb"),
+            include_bytes!("../tests/data/lille_q.glb"),
+            include_bytes!("../tests/data/lille_vpf.glb"),
+            include_bytes!("../tests/data/lille_draco.glb"),
+            include_bytes!("../tests/data/lille_ktx2.glb"),
+        ];
+        let mut r = Random(0x9E37_79B9_7F4A_7C15);
+        for fixture in fixtures {
+            // Bytes
+            for _ in 0..300 {
+                let mut bytes = fixture.to_vec();
+                match r.below(3) {
+                    0 => bytes.truncate(r.below(fixture.len())),
+                    1 => {
+                        for _ in 0..=r.below(8) {
+                            let i = r.below(bytes.len());
+                            bytes[i] ^= 1 << r.below(8);
+                        }
+                    }
+                    _ => {
+                        // A header or chunk length overwritten
+                        let i = r.below(40);
+                        let v = [0u32, 1, 0xffff_fff0, u32::MAX, fixture.len() as u32][r.below(5)];
+                        bytes[i..i + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
+                try_all(&bytes);
+            }
+            // JSON fields
+            let (glb_bytes, _) = split(fixture).unwrap();
+            let (json, bin) = parse_glb(glb_bytes).unwrap();
+            let mut paths = Vec::new();
+            pointers(&json, String::new(), &mut paths);
+            for _ in 0..1000 {
+                let mut json = json.clone();
+                for _ in 0..=r.below(3) {
+                    let path = &paths[r.below(paths.len())];
+                    if r.below(4) == 0 {
+                        if let Some(Value::Object(o)) = json.pointer_mut(path) {
+                            o.insert(KEYS[r.below(KEYS.len())].to_owned(), odd_value(&mut r));
+                        }
+                    } else if let Some(v) = json.pointer_mut(path) {
+                        *v = odd_value(&mut r);
+                    }
+                }
+                try_all(&glb(&json, bin));
+            }
+        }
     }
 }
