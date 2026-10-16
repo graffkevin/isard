@@ -1,6 +1,10 @@
 //! Space behind the globe: a deep blue to black sky, procedural stars fixed to the Earth's frame (they turn with the
 //! globe, as in Google Earth) and an atmosphere halo around its silhouette. One full-screen triangle, no texture;
 //! drawn only in the globe projection, fading out with it.
+//!
+//! Over the plane, an optional `Atmosphere` (`MapLibre`'s sky): a gradient from the horizon up to the sky, and fog
+//! below the horizon, where a tilted camera sees past the end of the ground; the ground itself fades into the fog
+//! towards the far plane (the raster pass reads `Atmosphere::fog`).
 
 use crate::render::gl;
 use geo::camera::View;
@@ -67,11 +71,61 @@ void main() {
   color = vec4(space, u_factor);
 }";
 
+/// Sky over the plane, with `MapLibre`'s settings
+const ATMOSPHERE: &str = r"#version 300 es
+precision highp float;
+uniform mat4 u_inverse;
+uniform vec3 u_sky;
+uniform vec3 u_horizon;
+uniform vec3 u_fog;
+// Sky-horizon and horizon-fog blends, as fractions of the vertical field of view
+uniform vec2 u_blend;
+uniform float u_factor;
+in vec2 v_ndc;
+out vec4 color;
+
+void main() {
+  vec4 near = u_inverse * vec4(v_ndc, -1.0, 1.0);
+  vec4 far = u_inverse * vec4(v_ndc, 1.0, 1.0);
+  vec3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
+  // Elevation of the ray over the horizon, radians (local frame: z up)
+  float elevation = asin(clamp(dir.z, -1.0, 1.0));
+  vec3 c = elevation >= 0.0
+    ? mix(u_horizon, u_sky, smoothstep(0.0, max(u_blend.x, 1e-3) * 0.6435, elevation))
+    : mix(u_horizon, u_fog, smoothstep(0.0, max(u_blend.y, 1e-3) * 0.3218, -elevation));
+  color = vec4(c, 1.0 - u_factor);
+}";
+
+/// Sky, horizon and fog over the plane (`MapLibre`'s `setSky`)
+#[derive(Clone, Copy, Debug)]
+pub struct Atmosphere {
+    pub sky: [f32; 3],
+    pub horizon: [f32; 3],
+    pub fog: [f32; 3],
+    pub sky_horizon_blend: f32,
+    pub horizon_fog_blend: f32,
+    /// Share of the distance to the far plane over which the ground fades into the fog (0: no fog on the ground)
+    pub fog_ground_blend: f32,
+}
+
+impl Atmosphere {
+    /// Fog of the ground: its color and the distances (pixels of the local frame) where it starts and is full
+    #[must_use]
+    pub fn fog(&self, view: &View) -> ([f32; 3], [f32; 2]) {
+        let far = view.far as f32;
+        let blend = self.fog_ground_blend.clamp(0.0, 1.0);
+        (self.fog, [far * (1.0 - blend), far])
+    }
+}
+
 pub struct Sky {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 7],
     vao: glow::VertexArray,
     pub enabled: bool,
+    atmosphere_program: glow::Program,
+    atmosphere_uniforms: [Option<glow::UniformLocation>; 6],
+    pub atmosphere: Option<Atmosphere>,
 }
 
 impl Sky {
@@ -90,6 +144,12 @@ impl Sky {
                 "u_factor",
             ],
         );
+        let atmosphere_program = gl::program(gl, VERTEX, ATMOSPHERE)?;
+        let atmosphere_uniforms = gl::uniforms(
+            gl,
+            atmosphere_program,
+            ["u_inverse", "u_sky", "u_horizon", "u_fog", "u_blend", "u_factor"],
+        );
         // SAFETY: object creation on a live context
         let vao = unsafe { gl.create_vertex_array()? };
         Ok(Self {
@@ -97,10 +157,14 @@ impl Sky {
             uniforms,
             vao,
             enabled: true,
+            atmosphere_program,
+            atmosphere_uniforms,
+            atmosphere: None,
         })
     }
 
     pub fn draw(&self, gl: &glow::Context, view: &View) {
+        self.draw_atmosphere(gl, view);
         let g = &view.globe;
         if !self.enabled || g.factor <= 0.0 {
             return;
@@ -117,6 +181,33 @@ impl Sky {
             }
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
             // The screen triangle turns the other way round than the globe's front faces
+            gl.disable(glow::CULL_FACE);
+            gl.bind_vertex_array(Some(self.vao));
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.bind_vertex_array(None);
+            gl.enable(glow::CULL_FACE);
+        }
+    }
+
+    /// The sky over the plane, fading out as the globe takes over
+    fn draw_atmosphere(&self, gl: &glow::Context, view: &View) {
+        let Some(a) = &self.atmosphere else {
+            return;
+        };
+        let factor = if self.enabled { view.globe.factor } else { 0.0 };
+        if factor >= 1.0 {
+            return;
+        }
+        let [inverse, sky, horizon, fog, blend, factor_u] = &self.atmosphere_uniforms;
+        // SAFETY: draw with objects owned by the sky
+        unsafe {
+            gl.use_program(Some(self.atmosphere_program));
+            gl.uniform_matrix_4_f32_slice(inverse.as_ref(), false, &gl::mat4(&view.inverse));
+            for (location, [r, g, b]) in [(sky, a.sky), (horizon, a.horizon), (fog, a.fog)] {
+                gl.uniform_3_f32(location.as_ref(), r, g, b);
+            }
+            gl.uniform_2_f32(blend.as_ref(), a.sky_horizon_blend, a.horizon_fog_blend);
+            gl.uniform_1_f32(factor_u.as_ref(), factor as f32);
             gl.disable(glow::CULL_FACE);
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);

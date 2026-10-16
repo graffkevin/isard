@@ -55,6 +55,11 @@ export class Interaction {
     for (const off of this.cleanup) off();
   }
 
+  /** A gesture holds the map (pointers down): the camera has not stopped moving */
+  get active(): boolean {
+    return this.pointers.size > 0;
+  }
+
   private local(e: MouseEvent): Point {
     const r = this.map.canvas.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
@@ -106,6 +111,8 @@ export class Interaction {
     const p = this.pointers.get(e.pointerId);
     if (!p) return;
     this.pointers.delete(e.pointerId);
+    // The next frame sends 'moveend' if the camera stays
+    this.map.requestRender();
     if (!this.moved && e.type === 'pointerup' && p.button === 0 && this.pointers.size === 0) {
       this.map.emit('click', { point: p.point, lonLat: this.map.unproject(p.point) });
       return;

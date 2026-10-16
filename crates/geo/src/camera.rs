@@ -19,7 +19,13 @@ use std::f64::consts::PI;
 pub const TILE_SIZE: f64 = 512.0;
 /// Vertical field of view (`MapLibre` default: 0.6435 rad, about 36.87°)
 pub const FOV: f64 = 0.643_501_108_793_284_4;
+/// Default pitch limit; `Camera::max_pitch` can raise it up to `PITCH_LIMIT`
 pub const MAX_PITCH: f64 = 70.0;
+/// Highest pitch a camera accepts: above, the view is almost all horizon
+pub const PITCH_LIMIT: f64 = 85.0;
+/// Under a camera tilted past the horizon, the ground is drawn up to this many center distances away (where the
+/// fog of `Atmosphere` hides the edge)
+pub const FAR_LIMIT: f64 = 100.0;
 pub const MIN_ZOOM: f64 = 0.0;
 pub const MAX_ZOOM: f64 = 22.0;
 /// Globe projection: full sphere up to this zoom…
@@ -68,6 +74,8 @@ pub struct Camera {
     pub height: f64,
     pub min_zoom: f64,
     pub max_zoom: f64,
+    /// Degrees, up to `PITCH_LIMIT`
+    pub max_pitch: f64,
     /// Globe projection (else Web Mercator)
     pub globe: bool,
     /// Altitude of the center (metres): the camera turns around the ground of the relief, not sea level
@@ -97,8 +105,9 @@ pub struct View {
     pub eye: DVec3,
     /// Distance from the camera to the center, in pixels
     pub center_distance: f64,
-    /// Near plane distance, in pixels
+    /// Near and far plane distances, in pixels
     pub near: f64,
+    pub far: f64,
     /// Altitude of the center in the local frame (pixels): the plane (or sphere) the camera turns around
     pub lift: f64,
     /// Pixels of the local frame per metre of altitude
@@ -211,6 +220,7 @@ impl Camera {
             height: 1.0,
             min_zoom: MIN_ZOOM,
             max_zoom: MAX_ZOOM,
+            max_pitch: MAX_PITCH,
             globe: false,
             elevation: 0.0,
         }
@@ -230,7 +240,7 @@ impl Camera {
             self.min_zoom
         };
         self.zoom = self.zoom.clamp(floor, self.max_zoom);
-        self.pitch = self.pitch.clamp(0.0, MAX_PITCH);
+        self.pitch = self.pitch.clamp(0.0, self.max_pitch.clamp(0.0, PITCH_LIMIT));
         self.bearing = (self.bearing + 540.0).rem_euclid(360.0) - 180.0;
         self.center.x = self.center.x.rem_euclid(1.0);
         let lat_limit = mercator(0.0, MAX_LAT).y;
@@ -263,7 +273,8 @@ impl Camera {
         // Far plane: just past the furthest ground point visible at the top of the screen…
         let top_angle = (PI / 2.0 - pitch - FOV / 2.0).max(0.01);
         let top_half = (FOV / 2.0).sin() * center_distance / top_angle.sin();
-        let mut far = ((PI / 2.0 - pitch).cos() * top_half + center_distance) * 1.01;
+        // (past the horizon, at `FAR_LIMIT` center distances)
+        let mut far = (((PI / 2.0 - pitch).cos() * top_half + center_distance) * 1.01).min(center_distance * FAR_LIMIT);
         // …or past the whole sphere
         if globe.factor > 0.0 {
             far = far.max(center_distance + 2.0 * globe.radius);
@@ -293,6 +304,7 @@ impl Camera {
             eye,
             center_distance,
             near,
+            far,
             lift,
             vertical,
             world_size: self.world_size(),
@@ -747,5 +759,22 @@ mod tests {
         let v = c.view();
         assert!(c.ground(&v, 600.0, 400.0).is_some());
         assert!(c.ground(&v, 5.0, 5.0).is_none());
+    }
+
+    #[test]
+    fn pitch_past_the_horizon_keeps_a_finite_far_plane() {
+        let mut c = camera();
+        c.pitch = 80.0;
+        c.clamp();
+        assert_eq!(c.pitch, MAX_PITCH, "the default limit holds");
+        c.max_pitch = 90.0;
+        c.pitch = 89.0;
+        c.clamp();
+        assert_eq!(c.pitch, PITCH_LIMIT, "never past the hard limit");
+        let view = c.view();
+        assert!(view.far.is_finite() && view.far <= view.center_distance * FAR_LIMIT * 1.0001);
+        // The top of the screen looks above the horizon: no ground there
+        assert!(c.ground(&view, 600.0, 0.0).is_none());
+        assert!(c.ground(&view, 600.0, 799.0).is_some());
     }
 }

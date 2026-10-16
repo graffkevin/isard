@@ -9,7 +9,7 @@ use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
 use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
-use crate::render::sky::Sky;
+use crate::render::sky::{Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
 use glow::HasContext;
@@ -227,24 +227,65 @@ impl Engine {
         self.sky.enabled = enabled;
     }
 
+    /// Sky over the plane (`MapLibre`'s `setSky`): colors of the sky, the horizon and the fog (RGB 0-1, 9 numbers),
+    /// then the sky-horizon, horizon-fog and fog-ground blends; `undefined` for none (the background color shows)
+    #[wasm_bindgen(js_name = setAtmosphere)]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_atmosphere(&mut self, settings: Option<Box<[f32]>>) {
+        self.sky.atmosphere = settings.as_deref().and_then(|s| {
+            let &[sr, sg, sb, hr, hg, hb, fr, fg, fb, sky_horizon, horizon_fog, fog_ground] = s else {
+                return None;
+            };
+            Some(Atmosphere {
+                sky: [sr, sg, sb],
+                horizon: [hr, hg, hb],
+                fog: [fr, fg, fb],
+                sky_horizon_blend: sky_horizon,
+                horizon_fog_blend: horizon_fog,
+                fog_ground_blend: fog_ground,
+            })
+        });
+    }
+
+    /// Highest pitch the camera accepts, degrees (up to 85)
+    #[wasm_bindgen(js_name = setMaxPitch)]
+    pub fn set_max_pitch(&mut self, max: f64) {
+        self.camera.max_pitch = max;
+        self.camera.clamp();
+    }
+
     /// Relief under the raster layers, from raw altitudes (`image/x-bil;bits=32`, 256 × 256): `url` is a template with
     /// `{bbox}` (WMS `GetMap` in EPSG:3857) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
-    /// heights (1: true relief)
+    /// heights (1: true relief); `max_z`: finest level loaded (6 to 15); `geoid`: altitudes raised by the RAF20 geoid
+    /// height (heights above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France)
     #[wasm_bindgen(js_name = setTerrain)]
-    pub fn set_terrain(&mut self, url: Option<String>, exaggeration: f64) -> Result<(), JsValue> {
+    pub fn set_terrain(
+        &mut self,
+        url: Option<String>,
+        exaggeration: f64,
+        max_z: Option<u8>,
+        geoid: Option<bool>,
+    ) -> Result<(), JsValue> {
         let exaggeration = exaggeration.max(0.0) as f32;
+        let max_z = max_z.unwrap_or(TERRAIN_MAX_Z).clamp(TERRAIN_MIN_Z, TERRAIN_MAX_Z);
+        let geoid = geoid.unwrap_or(true);
         match (url, &mut self.terrain) {
-            (Some(url), Some((source, current))) if source.options.url == url => *current = exaggeration,
+            (Some(url), Some((source, current)))
+                if source.options.url == url && source.options.max_z == max_z && source.options.geoid == geoid =>
+            {
+                *current = exaggeration;
+            }
             (Some(url), _) => {
                 let source = RasterSource::new(
                     &self.gl,
                     RasterOptions {
                         url,
                         min_z: TERRAIN_MIN_Z,
-                        max_z: TERRAIN_MAX_Z,
+                        max_z,
                         opacity: 1.0,
                         saturation: 1.0,
                         elevation: true,
+                        geoid,
                     },
                 )?;
                 if let Some((old, _)) = self.terrain.replace((source, exaggeration)) {
@@ -374,6 +415,32 @@ impl Engine {
         )
     }
 
+    /// Longitudes and latitudes the view covers on the ground, `[west, south, east, north]` (degrees): the screen's
+    /// border cast on the ground, or on the far plane where it passes the horizon
+    #[must_use]
+    pub fn bounds(&self) -> Box<[f64]> {
+        const STEPS: u32 = 8;
+        let view = self.camera.view();
+        let (w, h) = (self.camera.width, self.camera.height);
+        let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
+        for k in 0..=STEPS {
+            let t = f64::from(k) / f64::from(STEPS);
+            for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
+                let m = self
+                    .camera
+                    .ground_at(&view, x, y, self.camera.elevation)
+                    .unwrap_or_else(|| {
+                        let (_, far) = self.camera.ray(&view, x, y);
+                        self.camera.center + DVec2::new(far.x, far.y) / view.world_size
+                    });
+                let p = camera::lon_lat(m);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+        Box::new([lo.x.max(-180.0), lo.y.max(-85.06), hi.x.min(180.0), hi.y.min(85.06)])
+    }
+
     /// Raster tiles in Web Mercator; `url` holds {z}, {x} and {y}
     #[wasm_bindgen(js_name = addRaster)]
     pub fn add_raster(
@@ -393,6 +460,7 @@ impl Engine {
                 opacity,
                 saturation,
                 elevation: false,
+                geoid: false,
             },
         )?;
         Ok(self.push(Slot::Raster(Box::new(layer))))
@@ -509,8 +577,16 @@ impl Engine {
                 .terrain
                 .as_mut()
                 .map(|(source, exaggeration)| (source, *exaggeration));
-            self.raster_pass
-                .draw(&self.gl, &view, &mut stack, terrain, self.frame, self.loading.fade_ms);
+            let fog = self.sky.atmosphere.map(|a| a.fog(&view));
+            self.raster_pass.draw(
+                &self.gl,
+                &view,
+                &mut stack,
+                terrain,
+                self.frame,
+                self.loading.fade_ms,
+                fog,
+            );
             for source in &stack {
                 source.finish(&self.redraw);
             }

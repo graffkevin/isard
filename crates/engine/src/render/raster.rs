@@ -82,8 +82,10 @@ layout(location = 15) in vec4 a_height;
 uniform highp sampler2DArray u_heights;
 // Vertical exaggeration; 0: flat
 uniform float u_relief;
+uniform vec3 u_eye;
 out vec4 v_uv[4];
 flat out vec3 v_slot[4];
+out float v_distance;
 vec2 g;
 vec4 uv(vec4 front, vec4 back) { return vec4(mix(front.xy, front.zw, g), mix(back.xy, back.zw, g)); }
 
@@ -118,6 +120,7 @@ void main() {
   float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
   float width = (a_merc.z - a_merc.x) * 40075016.686 * cos(lat);
   vec3 p = project_up(mix(a_rect.xy, a_rect.zw, g), merc, height() - skirt * 0.05 * width);
+  v_distance = distance(p, u_eye);
   gl_Position = u_matrix * vec4(p, 1.0);
 }";
 
@@ -130,8 +133,12 @@ uniform highp sampler2DArray u_tiles3;
 uniform int u_count;
 uniform float u_opacity[4];
 uniform float u_saturation[4];
+// Fog of the atmosphere: color, then the distances where it starts and is full (none if the second is 0)
+uniform vec3 u_fog;
+uniform vec2 u_fog_range;
 in vec4 v_uv[4];
 flat in vec3 v_slot[4];
+in float v_distance;
 out vec4 color;
 
 // One layer, straight alpha: the tile mixed with its stand-in while it fades in; slot < 0 = none
@@ -155,6 +162,7 @@ void main() {
   if (u_count > 1) over(acc, layer(u_tiles1, v_uv[1], v_slot[1], u_opacity[1], u_saturation[1]));
   if (u_count > 2) over(acc, layer(u_tiles2, v_uv[2], v_slot[2], u_opacity[2], u_saturation[2]));
   if (u_count > 3) over(acc, layer(u_tiles3, v_uv[3], v_slot[3], u_opacity[3], u_saturation[3]));
+  if (u_fog_range.y > 0.0) acc.rgb = mix(acc.rgb, u_fog * acc.a, smoothstep(u_fog_range.x, u_fog_range.y, v_distance));
   color = acc;
 }";
 
@@ -184,6 +192,8 @@ pub struct RasterOptions {
     pub saturation: f32,
     /// Raw altitudes (`image/x-bil;bits=32`) rather than images: the relief
     pub elevation: bool,
+    /// Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles)
+    pub geoid: bool,
 }
 
 /// What a raster layer needs to load a frame's tiles
@@ -490,7 +500,7 @@ impl RasterSource {
             .replace("{x}", &tile.x.to_string())
             .replace("{y}", &tile.y.to_string())
             .replace("{bbox}", &bbox(tile));
-        let elevation = self.options.elevation;
+        let (elevation, geoid) = (self.options.elevation, self.options.geoid);
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.failed.contains_key(&tile);
@@ -503,7 +513,9 @@ impl RasterSource {
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
                 let reload = retried || attempt > 0;
                 let fetched = if elevation {
-                    fetch_heights(&url, tile, &signal, reload).await.map(Pixels::Heights)
+                    fetch_heights(&url, tile, geoid, &signal, reload)
+                        .await
+                        .map(Pixels::Heights)
                 } else {
                     fetch_bitmap(&url, &signal, reload).await.map(Pixels::Image)
                 };
@@ -856,6 +868,7 @@ async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) ->
 async fn fetch_heights(
     url: &str,
     tile: TileId,
+    geoid: bool,
     signal: &web_sys::AbortSignal,
     reload: bool,
 ) -> Result<Vec<f32>, Fetch> {
@@ -891,7 +904,9 @@ async fn fetch_heights(
             *h = fill;
         }
     }
-    to_ellipsoid(tile, &mut heights);
+    if geoid {
+        to_ellipsoid(tile, &mut heights);
+    }
     Ok(heights)
 }
 
@@ -985,7 +1000,7 @@ fn crop(tile: TileId, source: TileId) -> [f32; 4] {
 /// the others have on its area
 pub struct RasterPass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 10],
+    uniforms: [Option<glow::UniformLocation>; 13],
     projection: Projection,
     /// The ground's depth, for picking positions in relief
     depth: glow::Program,
@@ -1015,6 +1030,9 @@ impl RasterPass {
                 "u_tiles3",
                 "u_heights",
                 "u_relief",
+                "u_eye",
+                "u_fog",
+                "u_fog_range",
             ],
         );
         let projection = Projection::new(gl, program);
@@ -1084,7 +1102,9 @@ impl RasterPass {
     }
 
     /// One draw call for the whole stack (1 to `STACK` sources, prepared for this frame), in relief over `terrain`
-    /// (prepared too) when given: `relief` is its vertical exaggeration
+    /// (prepared too) when given: `relief` is its vertical exaggeration. `fog`: color and range of the atmosphere's
+    /// fog (`Atmosphere::fog`)
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         gl: &glow::Context,
@@ -1093,6 +1113,7 @@ impl RasterPass {
         mut terrain: Option<(&mut RasterSource, f32)>,
         frame: u64,
         fade_ms: f64,
+        fog: Option<([f32; 3], [f32; 2])>,
     ) {
         let n = sources.len().min(STACK);
         if n == 0 {
@@ -1146,7 +1167,14 @@ impl RasterPass {
                 t3,
                 heights_u,
                 relief_u,
+                eye,
+                fog_u,
+                fog_range,
             ] = &self.uniforms;
+            let ([r, g, b], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
+            gl.uniform_3_f32(eye.as_ref(), view.eye.x as f32, view.eye.y as f32, view.eye.z as f32);
+            gl.uniform_3_f32(fog_u.as_ref(), r, g, b);
+            gl.uniform_2_f32(fog_range.as_ref(), start, end);
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
             gl.uniform_1_i32(count_u.as_ref(), n as i32);
             gl.uniform_1_f32_slice(opacity_u.as_ref(), &opacity);

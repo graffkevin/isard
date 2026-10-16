@@ -35,6 +35,11 @@ export interface GeoMapOptions extends Partial<Camera> {
   terrain?: boolean | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;
+  /** Highest pitch, degrees, up to 85 (default 70) */
+  maxPitch?: number;
+  /** Sky over the plane, seen when the camera is tilted towards the horizon, and the fog the ground fades into
+   * (MapLibre's `setSky`); default none: the background color */
+  atmosphere?: AtmosphereOptions;
   /** Mouse and touch controls (default true) */
   interactive?: boolean;
   /** Where to load the engine from, when a bundler does not resolve the default URL */
@@ -56,6 +61,42 @@ export interface TerrainOptions {
   url?: string;
   /** Vertical exaggeration, 1 for the true relief (default 1) */
   exaggeration?: number;
+  /** Finest level of the relief, 6 to 15 (default 15) */
+  maxZoom?: number;
+  /** Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles); false keeps the
+   * altitudes as served (NGF-IGN69 over France) (default true) */
+  geoid?: boolean;
+}
+
+/** Sky, horizon and fog over the plane, with the names and meanings of MapLibre's `setSky` */
+export interface AtmosphereOptions {
+  /** `#rrggbb` (default `#9cc7ec`) */
+  skyColor?: string;
+  /** (default `#e8f1f8`) */
+  horizonColor?: string;
+  /** (default `#f2f5f8`) */
+  fogColor?: string;
+  /** Blend from the horizon to the sky color, share of the field of view above the horizon, 0-1 (default 0.6) */
+  skyHorizonBlend?: number;
+  /** Blend from the horizon to the fog color below the horizon, 0-1 (default 0.7) */
+  horizonFogBlend?: number;
+  /** Share of the distance to the far plane over which the ground fades into the fog, 0-1 (default 0.4) */
+  fogGroundBlend?: number;
+}
+
+/** Animation of a camera move */
+export interface AnimationOptions {
+  /** Milliseconds */
+  duration?: number;
+  /** Progress over time, both 0 to 1 */
+  easing?: (t: number) => number;
+}
+
+export interface FlyToOptions extends AnimationOptions {
+  /** How far the flight zooms out on its way, as MapLibre's `curve` (default 1.42) */
+  curve?: number;
+  /** Average speed in screens per second when `duration` is not given (default 1.2) */
+  speed?: number;
 }
 
 export interface RasterOptions {
@@ -115,8 +156,14 @@ export interface MapPointerEvent {
 }
 
 export interface MapEvents {
+  /** The camera started moving (a gesture, an animation or `setCamera`) */
+  movestart: Camera;
   /** The camera moved */
   move: Camera;
+  /** The camera stopped: no gesture held, no animation running */
+  moveend: Camera;
+  /** The map changed size (CSS pixels) */
+  resize: { width: number; height: number };
   /** The pointer moved over the map (at most once per frame, not while dragging) */
   hover: MapPointerEvent;
   /** Click without drag */

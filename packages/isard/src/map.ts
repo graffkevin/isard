@@ -9,7 +9,10 @@ import { Interaction } from './interaction.ts';
 import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
 import type {
+  AnimationOptions,
+  AtmosphereOptions,
   Basemap,
+  FlyToOptions,
   GeoMapOptions,
   LayerHost,
   LoadingMode,
@@ -39,14 +42,58 @@ async function compile(url: string | URL): Promise<WebAssembly.Module> {
   }
 }
 
-/** `#rrggbb` to RGB 0-1 */
 /** Relief settings from the option: undefined when off */
 function terrainSettings(terrain: boolean | TerrainOptions | undefined): Settings['terrain'] {
   if (!terrain) return undefined;
   const options = terrain === true ? {} : terrain;
-  return { url: options.url ?? TERRAIN_URL, exaggeration: options.exaggeration ?? 1 };
+  return {
+    url: options.url ?? TERRAIN_URL,
+    exaggeration: options.exaggeration ?? 1,
+    maxZoom: options.maxZoom ?? 15,
+    geoid: options.geoid ?? true,
+  };
 }
 
+/** Sky settings for the engine: colors (RGB 0-1) and blends, MapLibre's defaults */
+function atmosphereSettings(options: AtmosphereOptions | undefined): Float32Array | undefined {
+  if (!options) return undefined;
+  return Float32Array.from([
+    ...rgb(options.skyColor ?? '#9cc7ec'),
+    ...rgb(options.horizonColor ?? '#e8f1f8'),
+    ...rgb(options.fogColor ?? '#f2f5f8'),
+    options.skyHorizonBlend ?? 0.6,
+    options.horizonFogBlend ?? 0.7,
+    options.fogGroundBlend ?? 0.4,
+  ]);
+}
+
+/** MapLibre's default easing: cubic Bézier (0.25, 0.1, 0.25, 1) */
+export function defaultEasing(t: number): number {
+  if (t <= 0 || t >= 1) return Math.max(0, Math.min(1, t));
+  // Solve x(u) = t for the curve parameter, Newton then bisection
+  const [x1, y1, x2, y2] = [0.25, 0.1, 0.25, 1];
+  const bezier = (u: number, a: number, b: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  let u = t;
+  for (let i = 0; i < 8; i += 1) {
+    const x = bezier(u, x1, x2) - t;
+    const dx = 3 * x1 * (1 - u) ** 2 + 6 * (x2 - x1) * u * (1 - u) + 3 * (1 - x2) * u * u;
+    if (Math.abs(x) < 1e-6 || dx === 0) break;
+    u = Math.max(0, Math.min(1, u - x / dx));
+  }
+  return bezier(u, y1, y2);
+}
+
+const MERCATOR_LAT = 85.051128779806589;
+const toMercator = ([lon, lat]: LonLat): [number, number] => {
+  const phi = (Math.max(-MERCATOR_LAT, Math.min(MERCATOR_LAT, lat)) * Math.PI) / 180;
+  return [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI)];
+};
+const fromMercator = ([x, y]: [number, number]): LonLat => [
+  x * 360 - 180,
+  (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI,
+];
+
+/** `#rrggbb` to RGB 0-1 */
 function rgb(hex: string): [r: number, g: number, b: number] {
   const value = Number.parseInt(hex.replace('#', ''), 16);
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
@@ -55,9 +102,11 @@ function rgb(hex: string): [r: number, g: number, b: number] {
 /** Settings replayed on a new engine after a WebGL context loss */
 interface Settings {
   zoomRange: [min: number, max: number];
+  maxPitch: number;
   globe: boolean;
   sky: boolean;
-  terrain: { url: string; exaggeration: number } | undefined;
+  atmosphere: Float32Array | undefined;
+  terrain: { url: string; exaggeration: number; maxZoom: number; geoid: boolean } | undefined;
   loading: LoadingMode;
   background: [r: number, g: number, b: number];
   globeColor: [r: number, g: number, b: number];
@@ -72,7 +121,10 @@ export class GeoMap implements LayerHost {
   /** The WebGL context is lost: nothing is drawn until it is restored */
   private lost = false;
   private readonly listeners: Listeners = {
+    movestart: new Set(),
     move: new Set(),
+    moveend: new Set(),
+    resize: new Set(),
     hover: new Set(),
     click: new Set(),
     render: new Set(),
@@ -87,6 +139,8 @@ export class GeoMap implements LayerHost {
   private hoverPoint: Point | undefined;
   private frameRequest = 0;
   private lastCamera = '';
+  /** The camera moved since the last 'moveend' */
+  private moving = false;
   /** The last frame found everything loaded ('idle' sent) */
   private settled = false;
   private inFrame = false;
@@ -119,8 +173,10 @@ export class GeoMap implements LayerHost {
     container.append(this.canvas);
     this.settings = {
       zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
+      maxPitch: options.maxPitch ?? 70,
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
+      atmosphere: atmosphereSettings(options.atmosphere),
       terrain: terrainSettings(options.terrain),
       loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? '#f2f2f0'),
@@ -150,11 +206,13 @@ export class GeoMap implements LayerHost {
 
   private createEngine(): Engine {
     const engine = new Engine(this.canvas, () => this.requestRender());
-    const { zoomRange, globe, sky, terrain, loading, background, globeColor } = this.settings;
+    const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
+    engine.setMaxPitch(maxPitch);
     engine.setGlobe(globe);
     engine.setSky(sky);
-    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1);
+    engine.setAtmosphere(atmosphere);
+    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1, terrain?.maxZoom, terrain?.geoid);
     engine.setImmediateLoading(loading === 'immediate');
     engine.setBackground(...background);
     engine.setGlobeColor(...globeColor);
@@ -220,8 +278,10 @@ export class GeoMap implements LayerHost {
     this.requestRender();
   }
 
-  /** Animated move to a camera, ease-out, over `duration` milliseconds */
-  easeTo(camera: Partial<Camera>, duration = 600): void {
+  /** Animated move to a camera: over `duration` milliseconds (or the options), ease-out by default */
+  easeTo(camera: Partial<Camera>, options: number | AnimationOptions = 600): void {
+    const { duration = 600, easing = (t: number) => 1 - (1 - t) ** 3 } =
+      typeof options === 'number' ? { duration: options } : options;
     const from = this.getCamera();
     const to = { ...from, ...camera };
     // Shortest way round
@@ -229,8 +289,8 @@ export class GeoMap implements LayerHost {
     const start = performance.now();
     this.animate((now) => {
       if (now - start >= duration) this.engine.clearPreload();
-      const t = Math.min(1, (now - start) / duration);
-      const k = 1 - (1 - t) ** 3;
+      const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
+      const k = easing(t);
       const mix = (a: number, b: number) => a + (b - a) * k;
       this.engine.setCamera(
         mix(from.center[0], to.center[0]),
@@ -243,6 +303,87 @@ export class GeoMap implements LayerHost {
     });
     // The destination's tiles load during the flight (as Cesium does)
     this.engine.preload(to.center[0], to.center[1], to.zoom, to.pitch, to.bearing);
+  }
+
+  /**
+   * Flight to a camera that zooms out on its way and back in (van Wijk and Nuij's optimal path, as MapLibre's
+   * `flyTo`): long moves stay readable. Pitch and bearing follow the progress.
+   */
+  flyTo(camera: Partial<Camera>, options: FlyToOptions = {}): void {
+    const from = this.getCamera();
+    const to = { ...from, ...camera };
+    const { curve: rho = 1.42, speed = 1.2, easing = defaultEasing } = options;
+    const [x0, y0] = toMercator(from.center);
+    const [x1, y1] = toMercator(to.center);
+    // Across the antimeridian, the short way
+    const dx = x1 - x0 - Math.round(x1 - x0);
+    const dy = y1 - y0;
+    // In pixels at the start zoom (512 px world at zoom 0)
+    const world = 512 * 2 ** from.zoom;
+    const u1 = Math.hypot(dx, dy) * world;
+    const w0 = Math.max(this.canvas.clientWidth, this.canvas.clientHeight, 1);
+    const w1 = w0 / 2 ** (to.zoom - from.zoom);
+    const rho2 = rho * rho;
+    const r = (i: 0 | 1) => {
+      const b = (w1 * w1 - w0 * w0 + (i ? -1 : 1) * rho2 * rho2 * u1 * u1) / (2 * (i ? w1 : w0) * rho2 * u1);
+      return Math.log(Math.sqrt(b * b + 1) - b);
+    };
+    // No move on the ground (or nearly): a plain zoom
+    const still = u1 < 1e-6 || !Number.isFinite(r(0)) || !Number.isFinite(r(1));
+    const r0 = still ? 0 : r(0);
+    const length = still ? Math.abs(Math.log(w1 / w0)) / rho : (r(1) - r0) / rho;
+    const width = (s: number) =>
+      still ? Math.exp((w1 < w0 ? -1 : 1) * rho * s) : Math.cosh(r0) / Math.cosh(r0 + rho * s);
+    const along = (s: number) =>
+      still ? 0 : (w0 * ((Math.cosh(r0) * Math.tanh(r0 + rho * s) - Math.sinh(r0)) / rho2)) / u1;
+    const duration = options.duration ?? (1000 * length) / speed;
+    const turn = ((to.bearing - from.bearing + 540) % 360) - 180;
+    const start = performance.now();
+    this.animate((now) => {
+      if (now - start >= duration) this.engine.clearPreload();
+      const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
+      const k = easing(t);
+      const s = k * length;
+      const u = t >= 1 ? 1 : along(s);
+      const zoom = t >= 1 ? to.zoom : from.zoom + Math.log2(1 / width(s));
+      const [lon, lat] = fromMercator([x0 + dx * u, y0 + dy * u]);
+      this.engine.setCamera(lon, lat, zoom, from.pitch + (to.pitch - from.pitch) * k, from.bearing + turn * k);
+      return t < 1;
+    });
+    this.engine.preload(to.center[0], to.center[1], to.zoom, to.pitch, to.bearing);
+  }
+
+  /** Longitudes and latitudes the view covers on the ground: `[west, south, east, north]` */
+  getBounds(): [west: number, south: number, east: number, north: number] {
+    const [west = -180, south = -85, east = 180, north = 85] = this.engine.bounds();
+    return [west, south, east, north];
+  }
+
+  /** Lowest zoom the camera accepts (the widest view) */
+  setMinZoom(zoom: number): void {
+    this.settings.zoomRange[0] = zoom;
+    this.engine.setZoomRange(...this.settings.zoomRange);
+    this.requestRender();
+  }
+
+  setMaxZoom(zoom: number): void {
+    this.settings.zoomRange[1] = zoom;
+    this.engine.setZoomRange(...this.settings.zoomRange);
+    this.requestRender();
+  }
+
+  /** Highest pitch, degrees, up to 85 */
+  setMaxPitch(pitch: number): void {
+    this.settings.maxPitch = pitch;
+    this.engine.setMaxPitch(pitch);
+    this.requestRender();
+  }
+
+  /** Sky over the plane and the fog of the ground (see `GeoMapOptions.atmosphere`); undefined to remove them */
+  setAtmosphere(options: AtmosphereOptions | undefined): void {
+    this.settings.atmosphere = atmosphereSettings(options);
+    this.engine.setAtmosphere(this.settings.atmosphere);
+    this.requestRender();
   }
 
   setProjection(projection: Projection): void {
@@ -268,7 +409,8 @@ export class GeoMap implements LayerHost {
   /** Relief under the basemap: true for the IGN terrain model, its options, or false */
   setTerrain(terrain: boolean | TerrainOptions): void {
     this.settings.terrain = terrainSettings(terrain);
-    this.engine.setTerrain(this.settings.terrain?.url, this.settings.terrain?.exaggeration ?? 1);
+    const t = this.settings.terrain;
+    this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid);
     this.requestRender();
   }
 
@@ -365,9 +507,18 @@ export class GeoMap implements LayerHost {
     if (this.animation && !this.animation(now)) this.animation = undefined;
     const camera = this.getCamera();
     const key = `${camera.center}|${camera.zoom}|${camera.pitch}|${camera.bearing}`;
-    if (key !== this.lastCamera) {
+    const moved = key !== this.lastCamera;
+    if (moved) {
+      // The first frame is no move
+      if (!this.moving && this.lastCamera !== '') {
+        this.moving = true;
+        this.emit('movestart', camera);
+      }
       this.lastCamera = key;
       this.emit('move', camera);
+    } else if (this.moving && !this.animation && !this.interaction?.active) {
+      this.moving = false;
+      this.emit('moveend', camera);
     }
     // Values for the pointer position are computed before drawing, in the same frame
     if (this.hoverPoint) {
@@ -382,7 +533,8 @@ export class GeoMap implements LayerHost {
     this.inFrame = true;
     this.emit('render', { ms: performance.now() - t0 });
     this.inFrame = false;
-    if (this.animation) this.requestRender();
+    // A move goes on until a frame finds the camera still: that frame sends 'moveend'
+    if (this.animation || (moved && this.moving)) this.requestRender();
     // Idle: nothing loading, no animation, no frame asked for (uploads waiting, fades, listeners)
     if (loading || this.animation || this.frameRequest !== 0) {
       this.settled = false;
@@ -399,6 +551,7 @@ export class GeoMap implements LayerHost {
     this.canvas.width = Math.round(width * ratio);
     this.canvas.height = Math.round(height * ratio);
     this.engine.resize(width, height, ratio);
+    this.emit('resize', { width, height });
     // Draw at once: a resized canvas is cleared, waiting one frame would flash
     cancelAnimationFrame(this.frameRequest);
     this.frame(performance.now());

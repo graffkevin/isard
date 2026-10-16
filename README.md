@@ -72,9 +72,11 @@ you zoom in.
 
 | | |
 |---|---|
-| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `loading` (`'immediate'`, `'smooth'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `minZoom`, `maxZoom`, `interactive`, `wasmUrl` |
-| `map.on(type, listener)` | `'move'` (camera), `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms), `'idle'` (everything in view loaded and drawn: the end of a load); returns an unsubscribe function |
-| `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms)` | camera conventions of MapLibre: settings carry over unchanged |
+| `GeoMap.create(container, options)` | `center`, `zoom`, `pitch`, `bearing`, `projection` (`'globe'`, `'mercator'`), `loading` (`'immediate'`, `'smooth'`), `background`, `workers`, `workerUrl`, `basemap` (`'plan-grey'`, `'plan'`, `'ortho'`, `'none'`), `hillshade` (opacity), `terrain` (`true` or `{ url, exaggeration, maxZoom, geoid }`), `atmosphere`, `minZoom`, `maxZoom`, `maxPitch` (up to 85), `interactive`, `wasmUrl` |
+| `map.on(type, listener)` | `'movestart'`, `'move'`, `'moveend'` (camera), `'resize'`, `'hover'` (point, lonLat; once per frame), `'click'`, `'render'` (engine ms), `'idle'` (everything in view loaded and drawn: the end of a load); returns an unsubscribe function |
+| `map.getCamera()`, `setCamera(c)`, `easeTo(c, ms or { duration, easing })`, `flyTo(c, { duration, curve, speed, easing })` | camera conventions of MapLibre: settings carry over unchanged; `flyTo` zooms out on its way (van Wijk and Nuij's path, as MapLibre) |
+| `map.getBounds()`, `setMinZoom(z)`, `setMaxZoom(z)`, `setMaxPitch(p)` | `[west, south, east, north]` of the ground in view |
+| `map.setAtmosphere(options)` | sky over the plane and fog of the ground for tilted views, with the settings of MapLibre's `setSky` (`skyColor`, `horizonColor`, `fogColor`, `skyHorizonBlend`, `horizonFogBlend`, `fogGroundBlend`) |
 | `map.project(lonLat)`, `map.unproject(point)` | CSS pixels ↔ degrees |
 | `map.addTiles3d({ url, maxScreenSpaceError, opacity })` | textured meshes from a `tileset.json`; `layer.setStyle(…)`, `layer.stats()`, `layer.remove()` |
 | `map.pick(point)` | `{ layer, index }` of the network edge under a screen point: one pixel of an offscreen picking pass, cheap at any scale |
