@@ -26,6 +26,7 @@ mod fetch;
 mod pass;
 mod shaders;
 
+pub use cache::simulate_plans;
 pub use data::unpack_depth;
 pub use pass::RasterPass;
 pub use shaders::VERTEX;
@@ -335,7 +336,8 @@ impl RasterSource {
         }
     }
 
-    fn request(&mut self, tile: TileId, redraw: &Rc<dyn Fn()>, now: f64) {
+    /// Starts the download of a tile; `urgent`: with a high fetch priority (else low)
+    fn request(&mut self, tile: TileId, urgent: bool, redraw: &Rc<dyn Fn()>, now: f64) {
         let Ok(controller) = web_sys::AbortController::new() else {
             return;
         };
@@ -345,6 +347,7 @@ impl RasterSource {
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.cache.failed_before(tile);
+        let priority = if urgent { "high" } else { "low" };
         self.in_flight.insert(tile, (controller, now));
         let inbox = self.inbox.clone();
         let redraw = redraw.clone();
@@ -356,11 +359,11 @@ impl RasterSource {
                 let fetched = if let Some(loader) = &loader {
                     fetch::draw_tile(loader, tile, &signal).await.map(Pixels::Image)
                 } else if elevation {
-                    fetch::fetch_heights(&url, tile, geoid, &signal, reload)
+                    fetch::fetch_heights(&url, tile, geoid, &signal, reload, priority)
                         .await
                         .map(Pixels::Heights)
                 } else {
-                    fetch::fetch_bitmap(&url, size, &signal, reload)
+                    fetch::fetch_bitmap(&url, size, &signal, reload, priority)
                         .await
                         .map(Pixels::Image)
                 };
@@ -446,9 +449,12 @@ impl RasterSource {
             });
         }
         // Coverage first, then the tiles by priority, then the flight destination
-        let missing = std::mem::take(&mut self.plan.missing);
-        self.request_all(&missing, redraw, ctx.loading.raster_requests, now);
-        self.plan.missing = missing;
+        let (missing, urgent) = (
+            std::mem::take(&mut self.plan.missing),
+            std::mem::take(&mut self.plan.urgent),
+        );
+        self.request_all(&missing, &urgent, redraw, ctx.loading.raster_requests, now);
+        (self.plan.missing, self.plan.urgent) = (missing, urgent);
         let (cooling, missing) = self.cache.failure_counts(now);
         self.stats = RasterStats {
             drawn: self.plan.tiles.len(),
@@ -486,15 +492,15 @@ impl RasterSource {
         self.cache.altitude(m)
     }
 
-    /// Starts the requests, in order, within the in-flight limit
-    fn request_all(&mut self, tiles: &[TileId], redraw: &Rc<dyn Fn()>, max_requests: usize, now: f64) {
-        for &tile in tiles {
+    /// Starts the requests, in order, within the in-flight limit; `urgent`: which ones get a high fetch priority
+    fn request_all(&mut self, tiles: &[TileId], urgent: &[bool], redraw: &Rc<dyn Fn()>, max_requests: usize, now: f64) {
+        for (k, &tile) in tiles.iter().enumerate() {
             if self.in_flight.len() >= max_requests {
                 break;
             }
             // Neither loading nor arrived and waiting for its upload
             if !self.in_flight.contains_key(&tile) && !self.queued.contains(&tile) {
-                self.request(tile, redraw, now);
+                self.request(tile, urgent.get(k).copied().unwrap_or(false), redraw, now);
             }
         }
     }

@@ -13,7 +13,7 @@ use crate::render::sky::{Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
 use glow::HasContext;
-use pick::PickTarget;
+use pick::{AsyncPick, PickTarget};
 use std::any::Any;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -94,6 +94,8 @@ pub struct Engine {
     preload_generation: u64,
     /// Offscreen target of the picking pass, created on the first pick
     pick_target: Option<PickTarget>,
+    /// The pixel buffer of `requestPick` and the request waiting for the GPU
+    async_pick: Option<AsyncPick>,
     /// How tiles load and show
     loading: Loading,
     /// View of the last frame: what is on screen, for the picking of positions
@@ -175,6 +177,7 @@ impl Engine {
             preload: None,
             preload_generation: 0,
             pick_target: None,
+            async_pick: None,
             loading: Loading::IMMEDIATE,
             drawn: None,
             grab: None,
@@ -790,6 +793,9 @@ impl Drop for Engine {
         unsafe {
             if let Some(target) = self.pick_target.take() {
                 target.delete(gl);
+            }
+            if let Some(mut pick) = self.async_pick.take() {
+                pick.delete(gl);
             }
             if let Some(atlas) = self.glyphs.take() {
                 gl.delete_texture(atlas.texture);

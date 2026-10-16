@@ -13,14 +13,15 @@ pub fn get_array(target: &JsValue, key: &str) -> js_sys::Array {
     js_get(target, key).dyn_into().unwrap_or_default()
 }
 
-/// Asks the worker pool for a tile; None if the loader cannot take it
+/// Asks the worker pool for a tile; None if the loader cannot take it. `priority`: the Fetch Priority for the
+/// worker's download (`"high"`, `"low"`), a sixth argument a loader may ignore
 pub fn load_in_worker(
     loader: &JsValue,
     id: u32,
     url: &str,
     transform: &glam::DMat4,
-    y_up: bool,
-    reload: bool,
+    (y_up, reload): (bool, bool),
+    priority: &str,
 ) -> Option<js_sys::Promise> {
     let load: js_sys::Function = js_get(loader, "load").dyn_into().ok()?;
     let args = js_sys::Array::of5(
@@ -30,6 +31,7 @@ pub fn load_in_worker(
         &JsValue::from_bool(y_up),
         &JsValue::from_bool(reload),
     );
+    args.push(&JsValue::from_str(priority));
     load.apply(loader, &args).ok()?.dyn_into().ok()
 }
 
@@ -64,13 +66,19 @@ async fn decode_image(bytes: &[u8], mime: &str) -> Result<web_sys::ImageBitmap, 
     bitmap.dyn_into()
 }
 
-pub async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>, reload: bool) -> Result<Vec<u8>, JsValue> {
+/// Fetches a file; `priority`: the Fetch Priority (`"high"` for the root tileset and the first tiles of a frame,
+/// `"low"` for the rest: a tileset server can be slow, ~15 s per cold file in Lille, and must not hold the basemap
+/// back)
+pub async fn fetch_bytes(
+    url: &str,
+    signal: Option<&web_sys::AbortSignal>,
+    reload: bool,
+    priority: &str,
+) -> Result<Vec<u8>, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(signal);
-    // A tileset (or tile) server can be slow (~15 s per cold file in Lille): low priority, so that it never holds the
-    // basemap back
-    crate::js::fetch_priority(&init, "low");
+    crate::js::fetch_priority(&init, priority);
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }

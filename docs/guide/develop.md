@@ -47,8 +47,10 @@ Set the version in `packages/isard/package.json` and in the three `crates/*/Carg
 
 ```sh
 bun run release:dry   # the release checked, lint, types, tests, build, the package packed: its file list
-bun run release       # the same on a clean main, then published on npm (NPM_TOKEN in .env) and tagged v<version>
+bun run release       # the same on a clean main, then the v<version> tag pushed: the Release workflow publishes it
 ```
 
-The release stops before anything is published if the tree is not clean, the branch is not `main`, the changelog
-does not describe the version, a crate has another version, or the version is already tagged.
+The release stops before anything is tagged if the tree is not clean, the branch is not `main`, the changelog does
+not describe the version, a crate has another version, or the version is already tagged. The Release workflow
+publishes on npm with provenance through npm's trusted publishing: no token on any machine. It is set up once on
+npmjs.com, in the package's settings (publisher: GitHub Actions, this repository, workflow `release.yml`).

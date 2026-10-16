@@ -27,18 +27,31 @@ addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       controllers.get(message.id)?.abort();
       break;
     case 'load':
-      void load(message.id, message.url, message.transform, message.yUp, message.reload);
+      void load(message.id, message.url, message.transform, message.yUp, message.reload, message.priority);
       break;
   }
 });
 
-async function load(id: number, url: string, transform: Float64Array, yUp: boolean, reload: boolean): Promise<void> {
+async function load(
+  id: number,
+  url: string,
+  transform: Float64Array,
+  yUp: boolean,
+  reload: boolean,
+  priority: 'high' | 'low' | undefined,
+): Promise<void> {
   const controller = new AbortController();
   controllers.set(id, controller);
   try {
     await ready;
     // A retried tile bypasses the HTTP cache: it may hold the error
-    const response = await fetch(url, { signal: controller.signal, cache: reload ? 'reload' : 'default' });
+    // Fetch priority (tiles in view first): not yet in TypeScript's lib
+    const init: RequestInit & { priority?: 'high' | 'low' } = {
+      signal: controller.signal,
+      cache: reload ? 'reload' : 'default',
+      ...(priority ? { priority } : {}),
+    };
+    const response = await fetch(url, init);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     // Draco geometry first (its module loads on first use), then the tile itself

@@ -1,7 +1,8 @@
 /** Public types of the `isard` package */
 import type { AttributionOptions } from './controls.ts';
 import type { DecoderUrls } from './decoders.ts';
-import type { Ramp, Size } from './features.ts';
+import type { Feature, Ramp, Size } from './features.ts';
+import type { Layer } from './layers.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
 export type LonLat = [lon: number, lat: number];
@@ -44,8 +45,14 @@ export interface GeoMapOptions extends Partial<Camera> {
   /** Sky over the plane, seen when the camera is tilted towards the horizon, and the fog the ground fades into
    * (MapLibre's `setSky`); default none: the background color */
   atmosphere?: AtmosphereOptions;
-  /** Mouse and touch controls (default true) */
+  /** Mouse, touch and keyboard controls (default true) */
   interactive?: boolean;
+  /** Keyboard controls once the map has the focus (it is reached with Tab): arrows pan, Shift + arrows rotate and
+   * tilt, + and - zoom (Shift: two levels), 0 faces north and levels the view (default true; none when not
+   * `interactive`) */
+  keyboard?: boolean;
+  /** Accessible name of the map, read by screen readers (default 'Map') */
+  ariaLabel?: string;
   /** Where to load the engine from, when a bundler does not resolve the default URL */
   wasmUrl?: string | URL;
   /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
@@ -181,6 +188,19 @@ export interface MapPointerEvent {
   lonLat: LonLat | undefined;
 }
 
+/** What 'hoverfeature' found under the pointer */
+export interface MapHoverFeatureEvent extends MapPointerEvent {
+  /** The feature under the pointer (see `GeoMap.pickFeature`), undefined if none */
+  hit: FeatureHit | undefined;
+}
+
+/** A picked feature: its layer handle, its index there and, for line, circle and fill layers, the feature itself */
+export interface FeatureHit {
+  layer: Layer;
+  index: number;
+  feature: Feature | undefined;
+}
+
 export interface MapEvents {
   /** The camera started moving (a gesture, an animation or `setCamera`) */
   movestart: Camera;
@@ -192,6 +212,9 @@ export interface MapEvents {
   resize: { width: number; height: number };
   /** The pointer moved over the map (at most once per frame, not while dragging) */
   hover: MapPointerEvent;
+  /** What is under the pointer, picked without stalling the GPU: a frame or two after 'hover', only while listened to
+   * (radius and layers in `GeoMap.hoverPicking`) */
+  hoverfeature: MapHoverFeatureEvent;
   /** Click without drag */
   click: MapPointerEvent;
   /** A frame was drawn; duration of the engine call in milliseconds */

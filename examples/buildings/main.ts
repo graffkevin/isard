@@ -30,8 +30,9 @@ const layer = map.addExtrusions({
 });
 layer.setValues(Float32Array.from(buildings.features, (f) => f.properties.hauteur ?? Number.NaN));
 
-map.on('hover', ({ point }) => {
-  const p = map.pickFeature(point, { layers: [layer] })?.feature?.properties as Building | undefined;
+map.hoverPicking = { layers: [layer] };
+map.on('hoverfeature', ({ hit }) => {
+  const p = hit?.feature?.properties as Building | undefined;
   element('info').textContent = p
     ? `${p.usage_1 ?? 'Building'}, ${p.hauteur ?? '?'} m${p.nombre_de_logements ? `, ${p.nombre_de_logements} homes` : ''}`
     : ' ';

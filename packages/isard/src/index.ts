@@ -65,11 +65,13 @@ export type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
+  FeatureHit,
   FlyToOptions,
   GeoMapOptions,
   LoadingMode,
   LonLat,
   MapEvents,
+  MapHoverFeatureEvent,
   MapPointerEvent,
   NetworkOptions,
   NetworkStyle,
@@ -83,4 +85,4 @@ export type {
 export type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
 export type { VectorTilesOptions } from './vectortiles.ts';
 export { PLAN_STYLES, VectorTiles } from './vectortiles.ts';
-export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';
+export type { Camera, NetworkStats, PickHit, PickResult, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';

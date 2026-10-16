@@ -1,9 +1,10 @@
 /**
- * Mouse and touch controls. Every gesture only updates the camera and asks for a frame: the engine draws at most
+ * Mouse, touch and keyboard controls. Every gesture only updates the camera and asks for a frame: the engine draws at most
  * once per display refresh, whatever the event rate of the device.
  */
 import type { GeoMap } from './map.ts';
 import type { Point } from './types.ts';
+import type { Camera } from './wasm/isard.js';
 
 /** Zoom levels per wheel pixel (a mouse notch is about 100 px: 1/3 of a level) */
 const WHEEL_RATE = 1 / 300;
@@ -15,6 +16,70 @@ const ROTATE_RATE = 0.4;
 const CLICK_TOLERANCE = 4;
 /** Pan speed kept on release, decaying with this time constant (ms) */
 const INERTIA_DECAY = 280;
+
+/** CSS pixels per arrow key press */
+const KEY_PAN = 100;
+/** Degrees per Shift + left or right arrow */
+const KEY_BEARING = 15;
+/** Degrees per Shift + up or down arrow */
+const KEY_PITCH = 10;
+/** Duration of the moves made by keys, milliseconds */
+const KEY_DURATION = 300;
+
+/** What a key does to the camera: a pan in CSS pixels, a zoom, rotation or tilt step, or facing north */
+export type KeyAction = { pan: Point } | { zoom: number } | { bearing: number } | { pitch: number } | { reset: true };
+
+/** The action of a key (`KeyboardEvent.key`), as MapLibre's: arrows pan (with Shift: rotate and tilt), + and - zoom
+ * (with Shift: two levels), 0 faces north and levels the view */
+export function keyAction(key: string, shift: boolean): KeyAction | undefined {
+  switch (key) {
+    case 'ArrowLeft':
+      return shift ? { bearing: -KEY_BEARING } : { pan: [-KEY_PAN, 0] };
+    case 'ArrowRight':
+      return shift ? { bearing: KEY_BEARING } : { pan: [KEY_PAN, 0] };
+    case 'ArrowUp':
+      return shift ? { pitch: KEY_PITCH } : { pan: [0, -KEY_PAN] };
+    case 'ArrowDown':
+      return shift ? { pitch: -KEY_PITCH } : { pan: [0, KEY_PAN] };
+    case '+':
+    case '=':
+      return { zoom: shift ? 2 : 1 };
+    case '-':
+    case '_':
+      return { zoom: shift ? -2 : -1 };
+    case '0':
+      return { reset: true };
+    default:
+      return undefined;
+  }
+}
+
+/** The camera after a key's action: a pan moves the center by that many CSS pixels on screen (the ground in view,
+ * turned with the bearing, stretched by the tilt) */
+export function keyCamera(action: KeyAction, camera: Camera): Partial<Camera> {
+  if ('zoom' in action) return { zoom: camera.zoom + action.zoom };
+  if ('bearing' in action) return { bearing: camera.bearing + action.bearing };
+  if ('pitch' in action) return { pitch: Math.max(0, camera.pitch + action.pitch) };
+  if ('reset' in action) return { bearing: 0, pitch: 0 };
+  const b = (camera.bearing * Math.PI) / 180;
+  const [sx, sy] = [action.pan[0], action.pan[1] / Math.max(0.25, Math.cos((camera.pitch * Math.PI) / 180))];
+  // Web Mercator units (0 to 1 across the world, y down); the world is 512 CSS pixels at zoom 0
+  const world = 512 * 2 ** camera.zoom;
+  const dx = (sx * Math.cos(b) - sy * Math.sin(b)) / world;
+  const dy = (sx * Math.sin(b) + sy * Math.cos(b)) / world;
+  const [lon, lat] = camera.center;
+  const phi = (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180;
+  const x = (lon + 180) / 360 + dx;
+  const y = Math.max(0, Math.min(1, (1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2 + dy));
+  const wrapped = ((((x * 360) % 360) + 360) % 360) - 180;
+  return { center: [wrapped, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI] };
+}
+
+/** An element that takes the keys typed in it */
+function editable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
 
 interface Pointer {
   point: Point;
@@ -31,7 +96,10 @@ export class Interaction {
   private trail: [number, number, number][] = [];
   private moved = false;
 
-  constructor(private readonly map: GeoMap) {
+  constructor(
+    private readonly map: GeoMap,
+    options: { keyboard?: boolean } = {},
+  ) {
     const canvas = map.canvas;
     const listen = <K extends keyof HTMLElementEventMap>(
       type: K,
@@ -57,6 +125,12 @@ export class Interaction {
     this.cleanup.push(() => container.removeEventListener('wheel', wheel));
     listen('dblclick', (e) => this.zoomBy(e.shiftKey ? -1 : 1, this.local(e)));
     listen('contextmenu', (e) => e.preventDefault());
+    if (options.keyboard ?? true) {
+      // On the container: the keys work with the focus on a marker or a control too
+      const key = (e: KeyboardEvent) => this.onKey(e);
+      container.addEventListener('keydown', key);
+      this.cleanup.push(() => container.removeEventListener('keydown', key));
+    }
   }
 
   destroy(): void {
@@ -161,6 +235,16 @@ export class Interaction {
       this.local(e),
       e.deltaMode === 0 && Math.abs(pixels) < 40,
     );
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || editable(e.target)) return;
+    const action = keyAction(e.key, e.shiftKey);
+    if (!action) return;
+    e.preventDefault();
+    this.wheel.pending = 0;
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.map.easeTo(keyCamera(action, this.map.getCamera()), reduced ? 0 : KEY_DURATION);
   }
 
   /** Smooth zoom around a screen point; touchpads (`direct`) follow the fingers without easing */

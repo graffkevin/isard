@@ -14,6 +14,11 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Every CSS color wherever a color is given (`#rgb`, `rgb()`, `hsl()`, named colors).
 - Exported types used by the API: `AnimationOptions`, `FlyToOptions`, `AtmosphereOptions`, `DecoderUrls`,
   `LabelCandidate`, `Json`, `TileKey`; an API reference in the documentation.
+- `hoverfeature`: what is under the pointer, picked without stalling the GPU (`hoverPicking` for its radius and
+  layers); `PickResult`, `FeatureHit`, `MapHoverFeatureEvent` exported.
+- Labels never run out of glyph space: the atlas grows into pages.
+- Keyboard navigation (arrows, +/-, Shift to rotate and pitch, 0 to reset), `keyboard` and `ariaLabel` options, a
+  focusable map with a visible focus.
 
 ### Fixed
 
@@ -29,6 +34,11 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 - Fewer GPU readbacks (zoom anchored on the relief from the CPU), labels placed only when something moved, layers
   out of view not drawn, an LRU for raster tiles.
+- The vector basemap and the vector tiles of a map share one pool of workers and their decoded tiles; raster, vector
+  and 3D Tiles near the center of the view are fetched first (fetch priority).
+- Circles and fills drawn by the squares in view only.
+- The package ships its modules as they are (an application's bundler keeps what it uses), the workers and the
+  engine next to them; releases are published from the Release workflow, with provenance.
 
 ## [0.1.1] - 2026-10-16
 

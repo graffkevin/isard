@@ -1,0 +1,26 @@
+{
+  "asset": { "version": "1.0", "gltfUpAxis": "Z" },
+  "geometricError": 500,
+  "root": {
+    "boundingVolume": {
+      "region": [0.05235987755982988, 0.8827875356587318, 0.05445427266222308, 0.8845328649107262, 0, 100]
+    },
+    "geometricError": 200,
+    "refine": "REPLACE",
+    "content": { "uri": "root.b3dm" },
+    "children": [
+      {
+        "boundingVolume": { "sphere": [4045000, 212000, 4910000, 500] },
+        "geometricError": 50,
+        "content": { "url": "a/b.glb?x=1" },
+        "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]
+      },
+      {
+        "boundingVolume": { "box": [4045000, 212000, 4910000, 100, 0, 0, 0, 100, 0, 0, 0, 100] },
+        "geometricError": 10,
+        "refine": "ADD",
+        "contents": [{ "uri": "c.glb" }, { "uri": "external.json" }]
+      }
+    ]
+  }
+}

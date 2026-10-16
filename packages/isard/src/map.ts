@@ -31,6 +31,7 @@ import type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
+  FeatureHit,
   FlyToOptions,
   GeoMapOptions,
   LoadingMode,
@@ -43,8 +44,15 @@ import type {
   TerrainOptions,
   Tiles3dOptions,
 } from './types.ts';
-import { VECTOR_BASEMAPS, VectorTiles, type VectorTilesOptions } from './vectortiles.ts';
-import type { Camera, PickHit, RasterLayerStats } from './wasm/isard.js';
+import {
+  BasemapWorkers,
+  defaultWorkerCount,
+  defaultWorkerUrl,
+  VECTOR_BASEMAPS,
+  VectorTiles,
+  type VectorTilesOptions,
+} from './vectortiles.ts';
+import type { Camera, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
 import init, { Engine } from './wasm/isard.js';
 
 /** The engine of a destroyed map: every method a no-op returning undefined, but the camera (the last one) and the
@@ -200,6 +208,7 @@ export class GeoMap {
     moveend: new Set(),
     resize: new Set(),
     hover: new Set(),
+    hoverfeature: new Set(),
     click: new Set(),
     render: new Set(),
     idle: new Set(),
@@ -212,6 +221,10 @@ export class GeoMap {
   private hillshade: RasterLayer | undefined;
   private animation: ((now: number) => boolean) | undefined;
   private hoverPoint: Point | undefined;
+  /** Frame polling the engine for the answer of the hover picking, 0 if none */
+  private hoverPoll = 0;
+  /** What 'hoverfeature' looks for: within `radius` CSS pixels, in `layers` only if given */
+  hoverPicking: { radius?: number; layers?: readonly Layer[] } = {};
   private frameRequest = 0;
   private lastCamera = '';
   /** The camera moved since the last 'moveend' */
@@ -221,6 +234,8 @@ export class GeoMap {
   private inFrame = false;
   /** Vector tiles made by `vectorTiles()`, destroyed with the map */
   private readonly vectorSets = new Set<VectorTiles>();
+  /** The workers drawing vector tiles, shared by every `VectorTiles` of the map; created on first use */
+  private basemapPool: BasemapWorkers | undefined;
   /** Stops watching the device pixel ratio */
   private unwatchRatio: (() => void) | undefined;
 
@@ -303,7 +318,15 @@ export class GeoMap {
     this.resizeObserver.observe(container);
     this.watchRatio();
     this.resize();
-    this.interaction = (options.interactive ?? true) ? new Interaction(this) : undefined;
+    const interactive = options.interactive ?? true;
+    const keyboard = interactive && (options.keyboard ?? true);
+    this.interaction = interactive ? new Interaction(this, { keyboard }) : undefined;
+    // Reached with Tab when the keys move it; named for screen readers either way
+    this.canvas.classList.add('isard-canvas');
+    this.canvas.setAttribute('role', keyboard ? 'application' : 'region');
+    this.canvas.setAttribute('aria-roledescription', 'map');
+    this.canvas.setAttribute('aria-label', options.ariaLabel ?? 'Map');
+    if (keyboard) this.canvas.tabIndex = 0;
     const attribution = options.attributionControl ?? true;
     if (attribution !== false) {
       this.addControl(new AttributionControl(attribution === true ? {} : attribution), 'bottom-right');
@@ -342,6 +365,7 @@ export class GeoMap {
 
   /** After a context loss: a new engine with the same camera, settings and layers (same handles, same order) */
   private restore(): void {
+    this.cancelHoverPick();
     const camera = this.getCamera();
     this.#engine.free();
     this.#engine = this.createEngine();
@@ -593,18 +617,50 @@ export class GeoMap {
    * index there and, for line, circle and fill layers, the feature itself; undefined if none. `layers` restricts the
    * search to some layers (the others hide nothing).
    */
-  pickFeature(
-    point: Point,
-    options: { radius?: number; layers?: readonly Layer[] } = {},
-  ): { layer: Layer; index: number; feature: Feature | undefined } | undefined {
+  pickFeature(point: Point, options: { radius?: number; layers?: readonly Layer[] } = {}): FeatureHit | undefined {
     const hit = this.pick(point, options.radius ?? 0, options.layers);
-    const layer = hit && this.layers.find((l) => l.id === hit.layer);
-    if (!hit || !layer) return undefined;
+    return hit && this.featureHit(hit);
+  }
+
+  /** A hit with its layer handle and feature; undefined if the layer is gone */
+  private featureHit(hit: PickHit): FeatureHit | undefined {
+    const layer = this.layers.find((l) => l.id === hit.layer);
+    if (!layer) return undefined;
     const feature =
       'featureAt' in layer && typeof layer.featureAt === 'function'
         ? (layer.featureAt(hit.index) as Feature | undefined)
         : undefined;
     return { layer, index: hit.index, feature };
+  }
+
+  /** Asks the engine what is under the pointer; its answer, read without waiting for the GPU, comes on a later frame */
+  private requestHoverPick(point: Point): void {
+    const { radius = 0, layers } = this.hoverPicking;
+    const only = layers && Uint32Array.from(layers.map((l) => l.id));
+    // A new request replaces the one in flight (in the engine too): one poll loop at most
+    if (!this.engine.requestPick(point[0], point[1], radius, only) || this.hoverPoll) return;
+    this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
+  }
+
+  private readonly pollHoverPick = (): void => {
+    this.hoverPoll = 0;
+    if (this.lost) return;
+    const result: PickResult | undefined = this.engine.pollPick();
+    if (!result) {
+      // The GPU is not done yet (usually a frame): asked again next frame, without drawing
+      this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
+      return;
+    }
+    this.emit('hoverfeature', {
+      point: [result.x, result.y],
+      lonLat: result.lonLat,
+      hit: result.hit && this.featureHit(result.hit),
+    });
+  };
+
+  private cancelHoverPick(): void {
+    cancelAnimationFrame(this.hoverPoll);
+    this.hoverPoll = 0;
   }
 
   /** Screen point (CSS pixels) of a position, undefined behind the camera */
@@ -760,6 +816,22 @@ export class GeoMap {
     return tiles;
   }
 
+  /**
+   * @internal The workers for a `VectorTiles`: the map's shared pool, or a pool of its own (`own`, to stop with it)
+   * when it asks for another count or URL
+   */
+  basemapWorkers(count?: number, url?: string | URL): { pool: BasemapWorkers; own: boolean } {
+    const sharedUrl = this.basemapWorkerUrl ?? defaultWorkerUrl();
+    const shared = defaultWorkerCount();
+    const workers = Math.max(1, count ?? shared);
+    const workerUrl = url ?? sharedUrl;
+    if (workers === shared && String(workerUrl) === String(sharedUrl)) {
+      this.basemapPool ??= new BasemapWorkers(shared, sharedUrl);
+      return { pool: this.basemapPool, own: false };
+    }
+    return { pool: new BasemapWorkers(workers, workerUrl), own: true };
+  }
+
   /** Adds a layer, under `before` if given */
   private place<L extends Layer>(layer: L, before: Layer | undefined): L {
     this.add(layer);
@@ -794,6 +866,7 @@ export class GeoMap {
   hover(point: Point | undefined): void {
     this.hoverPoint = point;
     if (point) this.requestRender();
+    else this.cancelHoverPick();
   }
 
   private frame(now: number): void {
@@ -825,8 +898,10 @@ export class GeoMap {
       this.emit('moveend', camera);
     }
     // Values for the pointer position are computed before drawing, in the same frame
+    let hovered: Point | undefined;
     if (this.hoverPoint) {
       const point = this.hoverPoint;
+      hovered = point;
       this.hoverPoint = undefined;
       this.emit('hover', { point, lonLat: this.unproject(point) });
     }
@@ -835,6 +910,8 @@ export class GeoMap {
     this.inFrame = false;
     const loading = this.engine.render();
     this.inFrame = true;
+    // The picking pass sees the frame just drawn; its answer comes on a later frame
+    if (hovered && this.listeners.hoverfeature.size > 0) this.requestHoverPick(hovered);
     // Overlays follow the frame just drawn (camera, relief altitudes): all in one pass, transforms only
     for (const item of this.positioned) item.position(this.size);
     this.emit('render', { ms: performance.now() - t0 });
@@ -881,9 +958,12 @@ export class GeoMap {
   destroy(): void {
     const camera = this.getCamera();
     cancelAnimationFrame(this.frameRequest);
+    this.cancelHoverPick();
     this.vector?.tiles.destroy();
     for (const tiles of this.vectorSets) tiles.destroy();
     this.vectorSets.clear();
+    this.basemapPool?.terminate();
+    this.basemapPool = undefined;
     this.unwatchRatio?.();
     this.unwatchRatio = undefined;
     this.resizeObserver.disconnect();

@@ -1,0 +1,3 @@
+# cargo-fuzz needs nightly (sanitizers, -Z flags); the crates themselves build on the stable toolchain of the root
+[toolchain]
+channel = "nightly"

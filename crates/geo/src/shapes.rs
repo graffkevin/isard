@@ -12,6 +12,7 @@
 //! the world (a veil with a hole) keeps its edges to the centimetre at any zoom, the GPU subtracting the camera center
 //! part by part.
 
+use crate::pieces::{Grid, sort_by_square};
 use glam::DVec2;
 
 /// Side of the grid squares, Mercator (about 300 km at the equator): on the globe a chord that long sags less than
@@ -88,31 +89,40 @@ fn area(points: &[DVec2]) -> f64 {
     (0..n).map(|i| points[i].perp_dot(points[(i + 1) % n])).sum()
 }
 
-/// Clips a convex polygon to the square `[lo, hi]` (Sutherland-Hodgman, one side at a time)
-fn clip(polygon: &[DVec2], lo: DVec2, hi: DVec2) -> Vec<DVec2> {
-    let mut out = polygon.to_vec();
+/// Most points of a triangle clipped to a square: one more per side at most
+const CLIPPED: usize = 8;
+
+/// Clips a triangle to the square `[lo, hi]` (Sutherland-Hodgman, one side at a time): the points of the convex piece
+/// left, and their count. On the stack: millions of triangles may be cut
+fn clip(triangle: &[DVec2; 3], lo: DVec2, hi: DVec2) -> ([DVec2; CLIPPED], usize) {
+    let mut out = [DVec2::ZERO; CLIPPED];
+    out[..3].copy_from_slice(triangle);
+    let mut n = 3;
     // Each side: the coordinate (0: x, 1: y), the bound and whether points below it are kept
     for (axis, bound, below) in [(0, lo.x, false), (0, hi.x, true), (1, lo.y, false), (1, hi.y, true)] {
-        let input = std::mem::take(&mut out);
+        let (input, count) = (out, n);
+        n = 0;
         let inside = |p: DVec2| if below { p[axis] <= bound } else { p[axis] >= bound };
-        for (i, &p) in input.iter().enumerate() {
-            let q = input[(i + 1) % input.len()];
+        for i in 0..count {
+            let (p, q) = (input[i], input[(i + 1) % count]);
             if inside(p) {
-                out.push(p);
+                out[n] = p;
+                n += 1;
             }
             if inside(p) != inside(q) {
                 let t = (bound - p[axis]) / (q[axis] - p[axis]);
                 let mut x = p.lerp(q, t);
                 // Exactly on the grid line: the neighbour computes the same point
                 x[axis] = bound;
-                out.push(x);
+                out[n] = x;
+                n += 1;
             }
         }
-        if out.is_empty() {
+        if n == 0 {
             break;
         }
     }
-    out
+    (out, n)
 }
 
 /// Most grid squares one triangle may cover (16 worlds): beyond, coordinates are garbage and the triangle is dropped
@@ -121,9 +131,9 @@ const MAX_SQUARES: i64 = 1 << 18;
 const MAX_CROSSINGS: f64 = 4096.0;
 
 /// Grid squares (`[lo, hi]` corners) a box touches; none for a non-finite or absurdly large box
-fn squares(min: DVec2, max: DVec2) -> impl Iterator<Item = (DVec2, DVec2)> {
-    let (i0, i1) = ((min.x / SQUARE).floor() as i64, (max.x / SQUARE).ceil() as i64);
-    let (j0, j1) = ((min.y / SQUARE).floor() as i64, (max.y / SQUARE).ceil() as i64);
+fn squares(min: DVec2, max: DVec2, square: f64) -> impl Iterator<Item = (DVec2, DVec2)> {
+    let (i0, i1) = ((min.x / square).floor() as i64, (max.x / square).ceil() as i64);
+    let (j0, j1) = ((min.y / square).floor() as i64, (max.y / square).ceil() as i64);
     let (w, h) = (i1.saturating_sub(i0).max(1), j1.saturating_sub(j0).max(1));
     let sane = min.is_finite() && max.is_finite() && w.saturating_mul(h) <= MAX_SQUARES;
     let (j1, i1) = if sane {
@@ -133,14 +143,14 @@ fn squares(min: DVec2, max: DVec2) -> impl Iterator<Item = (DVec2, DVec2)> {
     };
     (j0..j1).flat_map(move |j| {
         (i0..i1).map(move |i| {
-            let lo = DVec2::new(i as f64, j as f64) * SQUARE;
-            (lo, lo + SQUARE)
+            let lo = DVec2::new(i as f64, j as f64) * square;
+            (lo, lo + square)
         })
     })
 }
 
 /// Fractions along `a` → `b` where it crosses the grid lines, with 0 and 1, in order
-fn crossings(a: DVec2, b: DVec2) -> Vec<f64> {
+fn crossings(a: DVec2, b: DVec2, square: f64) -> Vec<f64> {
     let mut t = vec![0.0, 1.0];
     for axis in 0..2 {
         let (p, q) = (a[axis], b[axis]);
@@ -148,12 +158,12 @@ fn crossings(a: DVec2, b: DVec2) -> Vec<f64> {
             continue;
         }
         let (lo, hi) = (p.min(q), p.max(q));
-        if !(lo.is_finite() && hi.is_finite()) || (hi - lo) / SQUARE > MAX_CROSSINGS {
+        if !(lo.is_finite() && hi.is_finite()) || (hi - lo) / square > MAX_CROSSINGS {
             continue;
         }
-        let mut k = (lo / SQUARE).floor() + 1.0;
-        while k * SQUARE < hi {
-            t.push((k * SQUARE - p) / (q - p));
+        let mut k = (lo / square).floor() + 1.0;
+        while k * square < hi {
+            t.push((k * square - p) / (q - p));
             k += 1.0;
         }
     }
@@ -162,10 +172,43 @@ fn crossings(a: DVec2, b: DVec2) -> Vec<f64> {
     t
 }
 
-/// Triangulates the polygons (see the module)
+/// Triangulates the polygons (see the module), cut along the grid of `SQUARE`
+#[must_use]
+pub fn triangulate(polygons: &Polygons) -> Mesh {
+    triangulate_in(polygons, SQUARE)
+}
+
+/// Squares across the extent of a fill layer when it is cut finer (`square_for`)
+const CHUNKS_ACROSS: f64 = 16.0;
+/// Finest cut: `SQUARE` halved at most this many times (about 75 m at the equator)
+const MAX_HALVINGS: i32 = 12;
+
+/// Side of the squares to cut polygons within `min..max` along: `SQUARE` halved until at least `CHUNKS_ACROSS` squares
+/// span their extent, so that the squares in view bound what is drawn. Its grid lines are lines of the grid of
+/// `SQUARE` too: on the globe, the pieces still follow the sphere
+#[must_use]
+pub fn square_for(min: DVec2, max: DVec2) -> f64 {
+    let extent = (max - min).max_element();
+    if !extent.is_finite() || extent <= 0.0 {
+        return SQUARE;
+    }
+    let halvings = (SQUARE * CHUNKS_ACROSS / extent)
+        .log2()
+        .ceil()
+        .clamp(0.0, f64::from(MAX_HALVINGS));
+    SQUARE / f64::from(1u32 << halvings as u32)
+}
+
+/// Triangulates the polygons (see the module), cut along the grid of `square` (`SQUARE` or a fraction of it by a
+/// power of two)
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn triangulate(polygons: &Polygons) -> Mesh {
+pub fn triangulate_in(polygons: &Polygons, square: f64) -> Mesh {
+    let square = if square.is_finite() && square > 0.0 {
+        square.min(SQUARE)
+    } else {
+        SQUARE
+    };
     let mut mesh = Mesh {
         min: DVec2::INFINITY,
         max: DVec2::NEG_INFINITY,
@@ -231,9 +274,18 @@ pub fn triangulate(polygons: &Polygons) -> Mesh {
     for (tri, &p) in caps.iter().zip(&cap_polygon) {
         let min = tri[0].min(tri[1]).min(tri[2]);
         let max = tri[0].max(tri[1]).max(tri[2]);
-        for (lo, hi) in squares(min, max) {
-            let piece = clip(tri, lo, hi);
-            if piece.len() < 3 || area(&piece).abs() < 1e-30 {
+        // Inside one square (most triangles of small polygons): as it is, without clipping
+        let mut cells = squares(min, max, square);
+        if cells.next().is_some() && cells.next().is_none() {
+            if area(tri).abs() >= 1e-30 {
+                top.extend(tri.map(|q| (q, p)));
+            }
+            continue;
+        }
+        for (lo, hi) in squares(min, max, square) {
+            let (points, n) = clip(tri, lo, hi);
+            let piece = &points[..n];
+            if piece.len() < 3 || area(piece).abs() < 1e-30 {
                 continue;
             }
             // A convex piece: a fan, still counterclockwise
@@ -257,7 +309,7 @@ pub fn triangulate(polygons: &Polygons) -> Mesh {
     mesh.walls = mesh.indices.len();
     for (a, b, p) in walls {
         // Split where they cross the grid lines, as the caps are: the walls meet the caps vertex to vertex
-        let cuts = crossings(a, b);
+        let cuts = crossings(a, b, square);
         for w in cuts.windows(2) {
             let (u, v) = (a.lerp(b, w[0]), a.lerp(b, w[1]));
             let base = mesh.vertices.len() as u32;
@@ -276,6 +328,59 @@ pub fn triangulate(polygons: &Polygons) -> Mesh {
         mesh.max = DVec2::ZERO;
     }
     mesh
+}
+
+/// The triangles of a fill mesh sorted by square of a grid, the top cap first: only the squares in view are drawn
+pub struct Chunks {
+    pub grid: Grid,
+    /// Indices of square `s` in the top cap: `indices[top[s] .. top[s + 1]]`
+    pub top: Vec<u32>,
+    /// The same for the bottom cap and the walls, after the top cap
+    pub rest: Vec<u32>,
+}
+
+/// Sorts the triangles of a mesh cut along `square` (`triangulate_in`) by square, the top cap and the rest each on
+/// their own, keeping their order within a square: triangles of different squares never overlap, so a fill draws the
+/// same. Every triangle lies in its square (a wall on its border), so the squares in view bound what is drawn
+#[must_use]
+pub fn chunk(mesh: &mut Mesh, square: f64) -> Chunks {
+    let min = (mesh.min / square).floor() * square;
+    let grid = if min.is_finite() && mesh.max.is_finite() {
+        Grid::over(min, mesh.max, square)
+    } else {
+        Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0)
+    };
+    let squares = grid.len();
+    let (top, end) = (mesh.top, mesh.indices.len() / 3 * 3);
+    let mut sort = |range: std::ops::Range<usize>| -> Vec<u32> {
+        let triangles = &mesh.indices[range.clone()];
+        let square_of: Vec<u32> = triangles
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let c = t.iter().map(|&i| mesh.vertices[i as usize].position()).sum::<DVec2>() / 3.0;
+                grid.square(c)
+            })
+            .collect();
+        let (order, start) = sort_by_square(&square_of, squares);
+        let sorted: Vec<u32> = order
+            .iter()
+            .flat_map(|&t| {
+                let t = t as usize * 3;
+                [triangles[t], triangles[t + 1], triangles[t + 2]]
+            })
+            .collect();
+        mesh.indices[range.clone()].copy_from_slice(&sorted);
+        start.into_iter().map(|s| s * 3 + range.start as u32).collect()
+    };
+    let top_start = sort(0..top);
+    let rest = sort(top..end);
+    Chunks {
+        grid,
+        top: top_start,
+        rest,
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +505,60 @@ mod tests {
     }
 
     #[test]
+    fn small_layers_are_cut_finer_on_the_same_grid() {
+        assert_eq!(square_for(DVec2::ZERO, DVec2::ONE), SQUARE);
+        let s = square_for(DVec2::new(0.5, 0.3), DVec2::new(0.505, 0.302));
+        assert!(
+            s < SQUARE && 0.005 / s >= CHUNKS_ACROSS && 0.005 / s < 2.0 * CHUNKS_ACROSS,
+            "{s}"
+        );
+        // A power of two of the squares: their grid lines are lines of the coarse grid
+        assert_eq!((SQUARE / s).fract(), 0.0);
+        assert!((SQUARE / s).log2().fract().abs() < 1e-12);
+        assert_eq!(square_for(DVec2::ONE, DVec2::ONE), SQUARE);
+    }
+
+    #[test]
+    fn chunks_sort_triangles_by_square_keeping_their_order() {
+        let size = 2e-3;
+        let (points, ring_start, polygon_start) = square_with_hole(size);
+        let polygons = Polygons {
+            points: &points,
+            ring_start: &ring_start,
+            polygon_start: &polygon_start,
+        };
+        let square = square_for(points[0], points[2]);
+        let mut m = triangulate_in(&polygons, square);
+        let before = m.indices.clone();
+        let area = total_area(&m);
+        let c = chunk(&mut m, square);
+        assert_eq!(c.top.len(), c.grid.len() + 1);
+        assert_eq!(*c.top.last().unwrap() as usize, m.top);
+        assert_eq!(*c.rest.last().unwrap() as usize, m.indices.len());
+        assert!(c.grid.len() > 100, "{}", c.grid.len());
+        // The same triangles, each in its square
+        let mut sorted = before.as_chunks::<3>().0.to_vec();
+        let mut after = m.indices.as_chunks::<3>().0.to_vec();
+        sorted.sort_unstable();
+        after.sort_unstable();
+        assert_eq!(sorted, after);
+        assert!((total_area(&m) - area).abs() < area * 1e-12);
+        for s in 0..c.grid.len() {
+            for t in m.indices[c.top[s] as usize..c.top[s + 1] as usize].as_chunks::<3>().0 {
+                let p = t.iter().map(|&i| m.vertices[i as usize].position()).sum::<DVec2>() / 3.0;
+                assert_eq!(c.grid.square(p) as usize, s);
+            }
+            // Order kept within a square
+            let firsts: Vec<u32> = m.indices[c.top[s] as usize..c.top[s + 1] as usize]
+                .iter()
+                .step_by(3)
+                .copied()
+                .collect();
+            assert!(firsts.is_sorted());
+        }
+    }
+
+    #[test]
     fn malformed_polygons_do_not_panic_or_hang() {
         let huge = DVec2::new(1e300, 1e300);
         let points = [
@@ -426,9 +585,9 @@ mod tests {
             let _ = triangulate(&polygons);
             let _ = extrude(&polygons, DVec2::ZERO);
         }
-        assert_eq!(squares(DVec2::ZERO, huge).count(), 0);
-        assert_eq!(squares(DVec2::NAN, DVec2::ONE).count(), 0);
-        assert_eq!(crossings(DVec2::ZERO, huge), [0.0, 1.0]);
+        assert_eq!(squares(DVec2::ZERO, huge, SQUARE).count(), 0);
+        assert_eq!(squares(DVec2::NAN, DVec2::ONE, SQUARE).count(), 0);
+        assert_eq!(crossings(DVec2::ZERO, huge, SQUARE), [0.0, 1.0]);
     }
 
     #[test]

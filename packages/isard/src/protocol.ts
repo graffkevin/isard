@@ -4,7 +4,15 @@ import type { DecodedTile, TextureFormats } from './wasm/isard.js';
 
 export type WorkerRequest =
   | { type: 'init'; module: WebAssembly.Module; decoders: DecoderUrls; formats: TextureFormats }
-  | { type: 'load'; id: number; url: string; transform: Float64Array; yUp: boolean; reload: boolean }
+  | {
+      type: 'load';
+      id: number;
+      url: string;
+      transform: Float64Array;
+      yUp: boolean;
+      reload: boolean;
+      priority?: 'high' | 'low';
+    }
   | { type: 'abort'; id: number };
 
 export type WorkerReply =

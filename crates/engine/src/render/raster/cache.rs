@@ -80,10 +80,21 @@ pub struct Plan {
     pub tiles: Vec<TileId>,
     /// Tiles to request, in order
     pub missing: Vec<TileId>,
+    /// Whether each tile of `missing` is urgent (fetched with a high priority): in view near the screen center, or a
+    /// coarse tile covering a hole; the others (off-center, stand-ins of failed tiles, flight destination) are not
+    pub urgent: Vec<bool>,
     /// Coarse tiles to request first (nothing covers their area yet)
     cover: Vec<TileId>,
     /// Some tiles wait for the camera to rest
     pub deferred: bool,
+}
+
+impl Plan {
+    /// A tile to request, urgent or not
+    fn want(&mut self, tile: TileId, urgent: bool) {
+        self.missing.push(tile);
+        self.urgent.push(urgent);
+    }
 }
 
 pub struct Cache {
@@ -242,6 +253,7 @@ impl Cache {
     ) {
         plan.tiles.clear();
         plan.missing.clear();
+        plan.urgent.clear();
         plan.cover.clear();
         plan.deferred = false;
         for selected in wanted {
@@ -279,7 +291,7 @@ impl Cache {
                     plan.deferred = true;
                 } else if tile.z <= self.min_z.saturating_add(COVER_LEVELS) && !self.is_failed(tile, now) {
                     // Too coarse to have a coarser cover: the tile itself
-                    plan.missing.push(tile);
+                    plan.want(tile, true);
                 }
                 continue;
             }
@@ -297,22 +309,23 @@ impl Cache {
                         break;
                     }
                     if !self.is_failed(a, now) {
-                        plan.missing.push(a);
+                        plan.want(a, false);
                         break;
                     }
                     ancestor = a.parent();
                 }
             } else {
-                plan.missing.push(tile);
+                plan.want(tile, selected.central);
             }
         }
         // Destination of a camera flight: loaded after the current view, kept in the pool
         for &tile in preload {
             if self.touch(tile, frame).is_none() && !self.is_failed(tile, now) {
-                plan.missing.push(tile);
+                plan.want(tile, false);
             }
         }
-        // Coverage first, then the tiles by priority, then the flight destination
+        // Coverage first (urgent: holes), then the tiles by priority, then the flight destination
+        plan.urgent.splice(0..0, plan.cover.iter().map(|_| true));
         plan.missing.splice(0..0, plan.cover.drain(..));
     }
 
@@ -410,6 +423,28 @@ impl Cache {
     }
 }
 
+/// Plans `frames` frames of a source of 256 slots over the tiles `wanted` and a flight destination, as the engine does:
+/// the plan, the first eight tiles asked arriving, every tile drawn sampled. For the benchmarks (`cargo bench -p
+/// isard`); returns the tiles drawn in all
+#[must_use]
+pub fn simulate_plans(wanted: &[Selected], preload: &[TileId], frames: u64) -> usize {
+    let mut cache = Cache::new(0, 19, 256);
+    let mut plan = Plan::default();
+    let mut drawn = 0;
+    for frame in 1..=frames {
+        let now = frame as f64 * 16.0;
+        cache.plan(&mut plan, wanted, preload, frame, now, Motion::default());
+        for &tile in plan.missing.iter().take(8) {
+            cache.install(tile, None, frame, now);
+        }
+        for &tile in &plan.tiles {
+            let _ = cache.sample(tile, frame, now, 200.0);
+        }
+        drawn += plan.tiles.len();
+    }
+    drawn
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +524,7 @@ mod tests {
         assert_eq!(plan.tiles, [tile]);
         let coarse = tile.parent().unwrap().parent().unwrap();
         assert_eq!(plan.missing, [coarse, tile]);
+        assert_eq!(plan.urgent, [true, true]);
         // The grand-parent arrived: it stands in, only the tile is asked
         cache.install(coarse, None, 1, 0.0);
         cache.plan(&mut plan, &[selected(tile)], &[], 2, 0.0, Motion::default());
@@ -508,6 +544,11 @@ mod tests {
         };
         cache.plan(&mut plan, &[off], &[], 3, 0.0, motion);
         assert!(plan.missing.is_empty() && plan.deferred);
+        // Off the center at rest: loaded, not urgent; the flight destination neither
+        let far = TileId::new(10, 900, 900);
+        cache.plan(&mut plan, &[off], &[far], 4, 0.0, Motion::default());
+        assert_eq!(plan.missing, [tile, far]);
+        assert_eq!(plan.urgent, [false, false]);
     }
 
     #[test]
@@ -519,6 +560,7 @@ mod tests {
         cache.missing(tile);
         cache.plan(&mut plan, &[selected(tile)], &[], 2, 0.0, Motion::default());
         assert_eq!(plan.missing, [tile.parent().unwrap()]);
+        assert_eq!(plan.urgent, [false]);
     }
 
     #[test]

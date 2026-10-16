@@ -1,0 +1,59 @@
+# Fuzz targets (cargo-fuzz, nightly: see rust-toolchain.toml here). Outside the main workspace: `cargo fuzz run <target>`
+# from this folder, `cargo fuzz list` for the targets. Seeds in seeds/<target>, plus crates/tiles3d/tests/data for the
+# tile decoder (copied into the corpus by .github/workflows/fuzz.yml).
+[package]
+name = "isard-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+glam = "0.30"
+geo = { package = "isard-geo", path = "../crates/geo" }
+tiles3d = { package = "isard-tiles3d", path = "../crates/tiles3d" }
+
+# Its own workspace: the main one excludes this folder
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "meshopt"
+path = "fuzz_targets/meshopt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tileset"
+path = "fuzz_targets/tileset.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "subtree"
+path = "fuzz_targets/subtree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shapes"
+path = "fuzz_targets/shapes.rs"
+test = false
+doc = false
+bench = false

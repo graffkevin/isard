@@ -3,6 +3,10 @@
 //! and keeps the glyph atlas; the engine places the labels each frame, every symbol layer sharing one collision grid
 //! from the top layer down (a label showing only where no label placed before it does), and draws each glyph as an
 //! instanced quad facing the screen. In relief a label stands on the ground, and the hills hide it.
+//!
+//! The atlas has pages of one size (the layers of a texture array), so it never runs out: the atlas coordinates of a
+//! glyph count its page's rows first (`v + page × height`, as if the pages were stacked), and the shader takes the
+//! page back from them. Glyphs already placed keep their coordinates when a page is added.
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
@@ -17,6 +21,7 @@ use wasm_bindgen::prelude::*;
 
 const VERTEX: &str = r"
 uniform float u_pixel_ratio;
+// Size of a page of the atlas, texels
 uniform vec2 u_atlas_size;
 uniform highp sampler2D u_labels;
 uniform highp sampler2D u_visible;
@@ -25,6 +30,8 @@ layout(location = 1) in vec4 a_rect;
 layout(location = 2) in vec4 a_uv;
 layout(location = 3) in float a_scale;
 out vec2 v_uv;
+// Page of the atlas
+flat out float v_page;
 flat out vec4 v_fill;
 flat out vec4 v_halo;
 // Halo edge in distance units, and the font scale
@@ -51,22 +58,27 @@ void main() {
   // Screen y runs down, clip y up
   c.xy += vec2(px.x, -px.y) / u_viewport * c.w;
   gl_Position = c;
-  v_uv = mix(a_uv.xy, a_uv.zw, corner) / u_atlas_size;
+  // The pages are stacked in the atlas coordinates: the page from the top of the glyph (half a texel in, safe from
+  // rounding), then the place in it
+  float page = floor((a_uv.y + 0.5) / u_atlas_size.y);
+  v_page = page;
+  v_uv = (mix(a_uv.xy, a_uv.zw, corner) - vec2(0.0, page * u_atlas_size.y)) / u_atlas_size;
   float font = a_scale * scale;
   v_edges = vec2(0.75 - halo_width / (font * 8.0), font);
 }";
 
 const FRAGMENT: &str = r"
-uniform sampler2D u_atlas;
+uniform mediump sampler2DArray u_atlas;
 uniform float u_opacity;
 in vec2 v_uv;
+flat in float v_page;
 flat in vec4 v_fill;
 flat in vec4 v_halo;
 flat in vec2 v_edges;
 out vec4 color;
 
 void main() {
-  float d = texture(u_atlas, v_uv).r;
+  float d = texture(u_atlas, vec3(v_uv, v_page)).r;
   float g = max(fwidth(d) * 0.7, 1e-3);
   float fill = smoothstep(0.75 - g, 0.75 + g, d);
   float halo = v_edges.x < 0.75 ? smoothstep(v_edges.x - g, v_edges.x + g, d) : 0.0;
@@ -87,7 +99,7 @@ const UNIFORMS: [&str; 6] = [
 ];
 
 /// Floats per glyph quad from the page: label, rect (x, y, w, h, CSS pixels from the anchor at the shaped size), atlas
-/// rect (u0, v0, u1, v1, texels), font scale (shaped size / 24)
+/// rect (u0, v0, u1, v1, texels; v counts the rows of the pages before the glyph's), font scale (shaped size / 24)
 pub const QUAD_FLOATS: usize = 10;
 /// Floats per label from the page: fill RGBA, halo RGBA, halo width (CSS pixels), flags (1: always shown, never
 /// hiding others), direction (Mercator; 0, 0: none, the text stays horizontal; else it runs along it, kept upright),
@@ -487,13 +499,13 @@ impl Layer for SymbolLayer {
             gl.uniform_1_f32(opacity.as_ref(), stops(&self.style.opacity, camera.zoom) as f32);
             self.projection.set(gl, view);
             self.drape.bind(gl, &self.drape_uniforms, relief);
-            for (unit, location, texture) in [
-                (LABELS_UNIT, labels, self.labels_texture),
-                (VISIBLE_UNIT, visible, self.visible_texture),
-                (ATLAS_UNIT, atlas_u, atlas),
+            for (unit, location, target, texture) in [
+                (LABELS_UNIT, labels, glow::TEXTURE_2D, self.labels_texture),
+                (VISIBLE_UNIT, visible, glow::TEXTURE_2D, self.visible_texture),
+                (ATLAS_UNIT, atlas_u, glow::TEXTURE_2D_ARRAY, atlas),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
-                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                gl.bind_texture(target, Some(texture));
                 gl.uniform_1_i32(location.as_ref(), unit as i32);
             }
             gl.active_texture(glow::TEXTURE0);
@@ -526,11 +538,16 @@ impl Layer for SymbolLayer {
     }
 }
 
-/// The glyph atlas of an engine: signed distances, one byte per texel
+/// The glyph atlas of an engine: signed distances, one byte per texel, in pages of one size (a texture array)
 pub struct GlyphAtlas {
     pub texture: glow::Texture,
+    /// Size of a page
     pub size: (i32, i32),
+    pub pages: i32,
 }
+
+/// Most pages of the glyph atlas (the least `MAX_ARRAY_TEXTURE_LAYERS` of WebGL2)
+const MAX_PAGES: i32 = 256;
 
 #[wasm_bindgen]
 impl Engine {
@@ -584,78 +601,84 @@ impl Engine {
         }
     }
 
-    /// The glyph atlas shared by the symbol layers: `width` × `height` bytes of signed distances (allocated again,
-    /// filled with `data` if given)
+    /// The glyph atlas shared by the symbol layers, one page: `width` × `height` bytes of signed distances
+    /// (allocated again, filled with `data` if given)
     #[wasm_bindgen(js_name = setGlyphAtlas)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_glyph_atlas(&mut self, width: i32, height: i32, data: Option<Box<[u8]>>) -> Result<(), JsValue> {
-        let len = gl::area(width, height)
-            .filter(|_| width > 0 && height > 0)
-            .ok_or("glyph atlas: a positive size expected")?;
-        // SAFETY: (re)allocation and upload of the atlas on the live context
+        self.set_glyph_pages(width, height, 1)?;
+        if let Some(data) = data {
+            self.update_glyph_page(0, 0, 0, width, height, &data);
+        }
+        Ok(())
+    }
+
+    /// The glyph atlas shared by the symbol layers, `pages` pages of `width` × `height` bytes of signed distances,
+    /// allocated again and empty (`updateGlyphPage` fills them). A glyph on page `p` at row `v` has the atlas
+    /// coordinate `v + p × height`
+    #[wasm_bindgen(js_name = setGlyphPages)]
+    pub fn set_glyph_pages(&mut self, width: i32, height: i32, pages: i32) -> Result<(), JsValue> {
+        gl::area(width, height)
+            .filter(|_| width > 0 && height > 0 && (1..=MAX_PAGES).contains(&pages))
+            .ok_or("glyph atlas: a positive size and 1 to 256 pages expected")?;
+        // SAFETY: (re)allocation of the atlas on the live context
         unsafe {
             let gl = &self.gl;
             if let Some(old) = self.glyphs.take() {
                 gl.delete_texture(old.texture);
             }
             let texture = gl.create_texture()?;
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::R8, width, height);
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(texture));
+            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, glow::R8, width, height, pages);
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
                 (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
                 (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
             ] {
-                gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
-            }
-            if let Some(data) = data.as_deref().filter(|d| d.len() >= len) {
-                gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-                gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    0,
-                    0,
-                    width,
-                    height,
-                    glow::RED,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&data[..len])),
-                );
-                gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+                gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, key, value as i32);
             }
             self.glyphs = Some(GlyphAtlas {
                 texture,
                 size: (width, height),
+                pages,
             });
         }
         Ok(())
     }
 
-    /// A region of the glyph atlas: `width` × `height` bytes at (`x`, `y`)
+    /// A region of the first page of the glyph atlas: `width` × `height` bytes at (`x`, `y`)
     #[wasm_bindgen(js_name = updateGlyphAtlas)]
     pub fn update_glyph_atlas(&mut self, x: i32, y: i32, width: i32, height: i32, data: &[u8]) {
+        self.update_glyph_page(0, x, y, width, height, data);
+    }
+
+    /// A region of a page of the glyph atlas: `width` × `height` bytes at (`x`, `y`) of the page
+    #[wasm_bindgen(js_name = updateGlyphPage)]
+    pub fn update_glyph_page(&mut self, page: i32, x: i32, y: i32, width: i32, height: i32, data: &[u8]) {
         let Some(atlas) = &self.glyphs else {
             return;
         };
         let Some(len) = gl::area(width, height) else {
             return;
         };
-        if data.len() < len || !gl::region_fits(x, y, width, height, atlas.size) {
+        if data.len() < len || !(0..atlas.pages).contains(&page) || !gl::region_fits(x, y, width, height, atlas.size) {
             return;
         }
-        // SAFETY: upload inside the atlas
+        // SAFETY: upload inside a page of the atlas
         unsafe {
             let gl = &self.gl;
-            gl.bind_texture(glow::TEXTURE_2D, Some(atlas.texture));
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(atlas.texture));
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
+            gl.tex_sub_image_3d(
+                glow::TEXTURE_2D_ARRAY,
                 0,
                 x,
                 y,
+                page,
                 width,
                 height,
+                1,
                 glow::RED,
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(Some(&data[..len])),

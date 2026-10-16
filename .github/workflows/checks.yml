@@ -27,3 +27,31 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run docs:check
+
+  # Visual regression tests: the examples rendered by headless Chrome (SwiftShader), the network answered from
+  # tests/visual/fixtures, compared with tests/visual/baseline. The Chrome of puppeteer-core's revision, pinned.
+  visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - id: versions
+        run: echo "wasm-bindgen=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      # Its system libraries are on the runner already (Google Chrome is preinstalled)
+      - name: Chrome
+        run: |
+          out=$(bunx @puppeteer/browsers@2.10.5 install chrome-headless-shell@137.0.7151.55 --path "$RUNNER_TEMP/chrome")
+          echo "CHROME_PATH=$(echo "$out" | tail -1 | cut -d' ' -f2-)" >> "$GITHUB_ENV"
+      - run: bun run test:visual
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diffs
+          path: tests/visual/out

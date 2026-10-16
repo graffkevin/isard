@@ -23,6 +23,14 @@ import {
 
 export type { LabelCandidate };
 
+/** Fetch priority of a request (`fetch`'s `priority`, a hint to the browser) */
+export type Priority = 'high' | 'low' | 'auto';
+
+/** A tile's image or labels, asked of a worker */
+export type BasemapWork =
+  | { type: 'render'; key: string; z: number; x: number; y: number; size: number; priority?: Priority }
+  | { type: 'labels'; key: string; z: number; x: number; y: number; priority?: Priority };
+
 export type BasemapRequest =
   | {
       type: 'init';
@@ -34,9 +42,10 @@ export type BasemapRequest =
       /** The style's sprite, for the fill patterns (loaded once by the page) */
       sprite?: Sprite;
     }
-  | { type: 'render'; key: string; id: number; z: number; x: number; y: number; size: number }
-  | { type: 'labels'; key: string; id: number; z: number; x: number; y: number }
-  | { type: 'abort'; id: number };
+  | (BasemapWork & { id: number })
+  | { type: 'abort'; id: number }
+  /** A renderer no longer used: forgotten */
+  | { type: 'drop'; key: string };
 
 export type BasemapResponse =
   | { id: number; image: ImageBitmap }
@@ -66,7 +75,11 @@ const CACHE = 96;
 const active = new Set<number>();
 const aborted = new Set<number>();
 
-function tile(url: string): Promise<Map<string, TileLayer> | undefined> {
+/** `RequestInit` with the fetch priority, which the TypeScript DOM library may not know yet */
+type PriorityInit = RequestInit & { priority?: Priority };
+
+/** A vector tile, decoded (shared by every renderer of its URL); the first request's priority fetches it */
+function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, TileLayer> | undefined> {
   const hit = cache.get(url);
   if (hit) {
     cache.delete(url);
@@ -75,7 +88,8 @@ function tile(url: string): Promise<Map<string, TileLayer> | undefined> {
   }
   const pending = (async () => {
     for (let attempt = 0; ; attempt += 1) {
-      const response = await fetch(url);
+      const init: PriorityInit = { priority };
+      const response = await fetch(url, init);
       if (response.status === 404 || response.status === 204) return undefined;
       if (response.ok) {
         // Every layer: renderers of other subsets share the tile
@@ -141,9 +155,9 @@ function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
   return image;
 }
 
-async function render(r: Renderer, z: number, x: number, y: number, size: number, id: number) {
+async function render(r: Renderer, z: number, x: number, y: number, size: number, id: number, priority?: Priority) {
   const s = source(r, z, x, y);
-  const layers = await tile(s.url);
+  const layers = await tile(s.url, priority);
   if (aborted.has(id)) return undefined;
   const sprite = r.sprite;
   const zoom = Math.max(0, z - 1);
@@ -267,9 +281,16 @@ function lonLat(z: number, x: number, y: number, extent: number, px: number, py:
   return [mx * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180) / Math.PI];
 }
 
-async function labels(r: Renderer, z: number, x: number, y: number, id: number): Promise<LabelCandidate[]> {
+async function labels(
+  r: Renderer,
+  z: number,
+  x: number,
+  y: number,
+  id: number,
+  priority?: Priority,
+): Promise<LabelCandidate[]> {
   const url = r.tiles.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
-  const layers = await tile(url);
+  const layers = await tile(url, priority);
   if (!layers || aborted.has(id)) return [];
   const out: LabelCandidate[] = [];
   r.layers.forEach((layer, index) => {
@@ -367,6 +388,10 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
     });
     return;
   }
+  if (data.type === 'drop') {
+    renderers.delete(data.key);
+    return;
+  }
   if (data.type === 'abort') {
     // An abort that arrives after the answer is ignored
     if (active.has(data.id)) aborted.add(data.id);
@@ -377,11 +402,11 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   try {
     if (!r) throw new Error(`no renderer ${data.key}`);
     if (data.type === 'render') {
-      const image = await render(r, data.z, data.x, data.y, data.size, data.id);
+      const image = await render(r, data.z, data.x, data.y, data.size, data.id, data.priority);
       if (image) post({ id: data.id, image }, [image]);
       else post({ id: data.id, missing: true });
     } else {
-      post({ id: data.id, labels: await labels(r, data.z, data.x, data.y, data.id) });
+      post({ id: data.id, labels: await labels(r, data.z, data.x, data.y, data.id, data.priority) });
     }
   } catch (error) {
     post({ id: data.id, error: String(error) });
