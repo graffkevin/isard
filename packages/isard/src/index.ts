@@ -1,8 +1,8 @@
 /**
- * isard: WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps.
+ * @ign-junn/isard: WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps.
  *
  * ```ts
- * import { GeoMap } from 'isard';
+ * import { GeoMap } from '@ign-junn/isard';
  * const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 13 });
  * const network = map.addNetwork({ nodes, edges, max: 1800, contour: 300 });
  * map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat)));

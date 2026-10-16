@@ -12,7 +12,7 @@ import {
   Popup,
   type Projection,
   type Tiles3dLayer,
-} from 'isard';
+} from '@ign-junn/isard';
 
 declare global {
   interface Window {

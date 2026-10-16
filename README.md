@@ -1,11 +1,19 @@
 # Isard
 
+[![npm](https://img.shields.io/npm/v/@ign-junn/isard)](https://www.npmjs.com/package/@ign-junn/isard)
+
 **A WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps.** Rust core compiled to
 WebAssembly, small TypeScript API. Built for maps where millions of features change at every mouse move
-(accessibility, flooding), where a general-purpose map library spends its time on things these maps do not need.
+(accessibility, flooding), where a general-purpose map library spends its time on things these maps do not need:
+networks recolored at every move, buildings colored by value, water depth drawn over the relief, labels, 3D Tiles,
+on raster or vector PLAN.IGN basemaps.
+
+```sh
+bun add @ign-junn/isard     # or npm install @ign-junn/isard
+```
 
 ```ts
-import { GeoMap } from 'isard';
+import { GeoMap } from '@ign-junn/isard';
 
 const map = await GeoMap.create(document.getElementById('map')!, { center: [2.4246, 48.8457], zoom: 14 });
 const network = map.addNetwork({ nodes, edges, max: 1800, contour: 300 }); // lon/lat pairs, node index pairs
@@ -15,6 +23,27 @@ map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))
 That is the whole integration: the map fills its container, follows its size, handles mouse and touch, and loads
 the Géoplateforme basemap (PLAN.IGN grey by default, hillshade on top), on a globe that turns into Web Mercator as
 you zoom in.
+
+The package is one ES module, the engine (`isard_bg.wasm`) and two workers (`decoder.worker.js` for 3D Tiles,
+`basemap.worker.js` for vector basemaps), found next to the module by default. A bundler that moves files around is
+given their URLs, with Vite for instance:
+
+```ts
+import { GeoMap } from '@ign-junn/isard';
+import basemapWorkerUrl from '@ign-junn/isard/basemap.worker.js?url';
+import decoderWorkerUrl from '@ign-junn/isard/decoder.worker.js?url';
+import wasmUrl from '@ign-junn/isard/isard_bg.wasm?url';
+
+const map = await GeoMap.create(container, {
+  basemap: 'plan-grey-vector',
+  wasmUrl,
+  workerUrl: decoderWorkerUrl,
+  basemapWorkerUrl,
+});
+```
+
+and kept out of its dependency pre-bundling (`optimizeDeps: { exclude: ['@ign-junn/isard'] }` in Vite), so that the
+files keep their place. A layer drawn with the map's own WebGL context: see `addGround` (GLSL over the ground).
 
 ## Why it is fast
 
@@ -131,15 +160,29 @@ crates/engine/          WebAssembly core (crate isard), on the two above
   src/layer.rs          the Layer trait: what is drawn over the ground (networks, 3D Tiles…)
   src/render/           WebGL2 layers and helpers; each Layer exports its own methods of Engine, next to it
   src/worker.rs         entry points of the 3D Tiles decoding workers
-packages/isard/         the npm package: GeoMap, layers, interactions, decoding workers
-apps/demo/              the demo, importing isard like any application
+packages/isard/         the npm package @ign-junn/isard: GeoMap, layers, overlays, workers (3D Tiles, vector tiles)
+apps/demo/              the demo, importing @ign-junn/isard like any application
 apps/bench/             benchmark: isard, iTowns and 3DTilesRendererJS on the same scenario
-scripts/                build and demo server
+scripts/                build, demo server, release
 ```
 
 Everything is typed end to end: the engine declares the TypeScript types of what it returns (`Camera`, `PickHit`,
 `RasterLayerStats`, `Tiles3dStats`, `TileLoaderLike`…), the package reuses them, the worker is checked against the
 WebWorker library, all under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+
+## Release
+
+`@ign-junn/isard` is published on npm, in the `ign-junn` organization (as `@ign-junn/design-system`). To publish a
+version: set it in `packages/isard/package.json`, describe it in `CHANGELOG.md`, put an npm token in `.env` (see
+`.env.example`), then:
+
+```sh
+bun run release:dry   # lint, types, tests, build, and the package packed without publishing: its file list
+bun run release       # the same, then published
+```
+
+The package holds the build only (`dist`: module, types, engine, workers), with the README, the changelog and the
+licence. The Rust crates (`isard-geo`, `isard-tiles3d`) are not published: they are compiled into the engine.
 
 ## Benchmark
 
@@ -172,6 +215,10 @@ to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`,
 Done: vector basemap (PLAN.IGN styles, labels above the data), buildings colored by value or by a network, ground
 layers (water depth over the terrain), feature layers with picking, labels, markers, popups and controls.
 
-1. Move geo-reach and geo-flood onto the engine.
+1. Move geo-reach (running on it, on a trial branch) and geo-flood onto the engine.
 2. Icons of the basemap's symbol layers (sprites), text along curved lines.
 3. Labels fading in and out instead of popping.
+
+## Licence
+
+MIT, © Institut national de l'information géographique et forestière (IGN). See `LICENSE`.

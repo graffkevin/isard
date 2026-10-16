@@ -2,6 +2,7 @@
 name = "isard"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 description = "WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps, compiled to WebAssembly"
 
 [lib]

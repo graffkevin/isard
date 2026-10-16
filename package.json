@@ -12,7 +12,9 @@
     "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p scripts",
     "lint": "biome check . && cargo clippy --all-targets && cargo clippy --target wasm32-unknown-unknown",
     "format": "biome check --write . && cargo fmt",
-    "test": "cargo test"
+    "test": "cargo test",
+    "release": "bun scripts/release.ts",
+    "release:dry": "bun scripts/release.ts --dry-run"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

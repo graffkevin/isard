@@ -2,6 +2,7 @@
 name = "isard-tiles3d"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 description = "3D Tiles tileset tree, traversal and b3dm / glb decoding of isard"
 
 [dependencies]

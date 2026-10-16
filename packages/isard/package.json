@@ -1,7 +1,21 @@
 {
-  "name": "isard",
+  "name": "@ign-junn/isard",
   "version": "0.1.0",
-  "description": "WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps (Rust core in WebAssembly)",
+  "description": "WebGL2 map engine for large, interactive data layers, labels and 3D Tiles on Géoplateforme basemaps, raster or vector (Rust core in WebAssembly)",
+  "license": "MIT",
+  "author": "Institut national de l'information géographique et forestière (IGN)",
+  "keywords": [
+    "map",
+    "webgl2",
+    "webassembly",
+    "geoplateforme",
+    "ign",
+    "3d-tiles",
+    "vector-tiles",
+    "network",
+    "accessibility",
+    "flood"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,7 +30,13 @@
     "./isard_bg.wasm": "./dist/isard_bg.wasm"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
-  "sideEffects": false
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  }
 }

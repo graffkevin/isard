@@ -1,5 +1,5 @@
 /** isard running the benchmark scenario */
-import { GeoMap } from 'isard';
+import { GeoMap } from '@ign-junn/isard';
 import { benchmark, FOV, LILLE_MESH, type Pose, SSE, START } from './scenario.ts';
 
 const found = document.getElementById('view');

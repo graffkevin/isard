@@ -3,3 +3,8 @@ node_modules/
 **/dist/
 packages/isard/src/wasm/
 .idea/
+.env
+# Copied from the repository root when publishing
+packages/isard/README.md
+packages/isard/CHANGELOG.md
+packages/isard/LICENSE

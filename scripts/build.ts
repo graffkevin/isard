@@ -3,7 +3,7 @@
  * pass (wasm-opt), then the `isard` package (packages/isard/dist: module, decoding worker,
  * type declarations) and the demo (apps/demo/dist, bundled from the package sources).
  */
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { $ } from 'bun';
@@ -30,7 +30,14 @@ const strip = ['--strip-debug', '--strip-producers'];
 await $`bun --bun ${join(root, 'node_modules/.bin/wasm-opt')} -O3 ${features} ${strip} ${wasm} -o ${wasm}`;
 
 /** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle) */
+/** Output folders emptied by this build: files of an older build (renamed since) would ship with the package */
+const emptied = new Set<string>();
+
 async function bundle(entry: string, outdir: string): Promise<void> {
+  if (!emptied.has(outdir)) {
+    emptied.add(outdir);
+    rmSync(join(root, outdir), { recursive: true, force: true });
+  }
   const result = await Bun.build({
     entrypoints: [
       join(root, entry),

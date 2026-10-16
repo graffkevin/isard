@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "isard": "workspace:*"
+    "@ign-junn/isard": "workspace:*"
   }
 }

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "isard": "workspace:*",
+    "@ign-junn/isard": "workspace:*",
     "itowns": "2.46.1-next.72",
     "postprocessing": "6.38.2",
     "proj4": "^2.20.4",
