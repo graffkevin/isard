@@ -166,10 +166,6 @@ export class SymbolLayer<P = Properties> extends Layer {
     this.map.requestRender();
   }
 
-  moveBefore(other: Layer | undefined): void {
-    this.map.moveLayer(this, other);
-  }
-
   /** Shapes the labels (loading their glyphs first) and sends them */
   private async update(): Promise<void> {
     const generation = ++this.generation;

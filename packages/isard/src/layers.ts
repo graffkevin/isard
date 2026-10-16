@@ -28,6 +28,11 @@ export abstract class Layer {
     this.map.detach(this);
     this.map.requestRender();
   }
+
+  /** Moves the layer under `other`, or on top of every layer (above the labels of a vector basemap too) */
+  moveBefore(other: Layer | undefined): void {
+    this.map.moveLayer(this, other);
+  }
 }
 
 /** Raster tiles (basemaps, overlays) */

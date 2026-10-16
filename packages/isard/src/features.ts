@@ -378,11 +378,6 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
     this.setStyle({ visible } as Partial<S>);
   }
 
-  /** Moves the layer under `other` (or on top of everything) */
-  moveBefore(other: Layer | undefined): void {
-    this.map.moveLayer(this, other);
-  }
-
   private mask(): Uint8Array {
     const { filter } = this.style;
     const mask = new Uint8Array(this.list.length).fill(255);

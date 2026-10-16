@@ -166,6 +166,10 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     this.map.requestRender();
   }
 
+  setVisible(visible: boolean): void {
+    this.setStyle({ visible } as Partial<ExtrusionStyle<P>>);
+  }
+
   setFilter(filter: ((properties: P, index: number) => boolean) | undefined): void {
     this.style = { ...this.style, filter };
     for (const tile of this.tiles.values()) this.map.engine.setFeatureMask(this.id, this.mask(tile), tile.batch);
