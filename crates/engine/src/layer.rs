@@ -64,6 +64,8 @@ pub struct Frame<'a> {
     pub ground: &'a RasterPass,
     /// Fog of the atmosphere: color and range (see `Atmosphere::fog`)
     pub fog: Option<([f32; 3], [f32; 2])>,
+    /// The glyph atlas of the symbol layers and its size, once the page has made one
+    pub glyphs: Option<(glow::Texture, (i32, i32))>,
 }
 
 /// A layer drawn over the ground. The frame starts with blending on, back faces culled, no depth test: a layer that
@@ -86,6 +88,9 @@ pub trait Layer: Any {
     fn pick_ground(&self, _m: glam::DVec2, _zoom: f64) -> Option<u32> {
         None
     }
+
+    /// Places its labels before the frame is drawn, the top layer first, all layers sharing one collision grid
+    fn place(&mut self, _frame: &Frame, _grid: &mut geo::collision::Grid) {}
 
     /// Layer `id` was removed: references to it (a network coloring buildings) are dropped
     fn forget(&mut self, _id: u32) {}

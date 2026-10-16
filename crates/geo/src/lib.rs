@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod camera;
+pub mod collision;
 pub mod geodesy;
 pub mod geoid;
 pub mod page;

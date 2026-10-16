@@ -45,6 +45,9 @@ export interface GeoMapOptions extends Partial<Camera> {
   interactive?: boolean;
   /** Where to load the engine from, when a bundler does not resolve the default URL */
   wasmUrl?: string | URL;
+  /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default the
+   * Géoplateforme's fonts) */
+  glyphs?: string;
   /** Workers decoding 3D Tiles off the main thread: a count, or false to decode on the main thread (default: cores - 1,
    * 1 to 4) */
   workers?: number | false;

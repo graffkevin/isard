@@ -12,4 +12,5 @@ pub(crate) mod lines;
 pub(crate) mod network;
 pub(crate) mod raster;
 pub(crate) mod sky;
+pub(crate) mod symbols;
 pub(crate) mod tiles3d;

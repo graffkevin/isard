@@ -283,7 +283,9 @@ impl ExtrusionLayer {
         }
         // SAFETY: texture creation and upload on the live context
         unsafe {
-            let texture = if let Some(texture) = batch.anchors { texture } else {
+            let texture = if let Some(texture) = batch.anchors {
+                texture
+            } else {
                 let texture = gl.create_texture()?;
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
                 gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA32F, 4096, n.div_ceil(4096).max(1) as i32);

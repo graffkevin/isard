@@ -43,6 +43,8 @@ export type {
   Styled,
 } from './features.ts';
 export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
+export type { TextPart } from './glyphs.ts';
+export { GLYPHS_URL } from './glyphs.ts';
 export type { GroundOptions, GroundTexture } from './layers.ts';
 export { GroundLayer, Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 export { GeoMap } from './map.ts';
@@ -56,6 +58,8 @@ export {
   type PopupEvents,
   type PopupOptions,
 } from './overlay.ts';
+export type { SymbolOptions, SymbolStyle } from './symbols.ts';
+export { SymbolLayer } from './symbols.ts';
 export type {
   Basemap,
   GeoMapOptions,

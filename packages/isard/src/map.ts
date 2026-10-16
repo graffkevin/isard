@@ -19,11 +19,13 @@ import {
   type LineOptions,
   lineStyle,
 } from './features.ts';
+import { Glyphs } from './glyphs.ts';
 import { Interaction } from './interaction.ts';
 import { GroundLayer, type GroundOptions, type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
 import { injectStyle } from './style.ts';
+import { SymbolLayer, type SymbolOptions, symbolStyle } from './symbols.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
@@ -132,6 +134,8 @@ const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-le
 
 export class GeoMap implements LayerHost {
   readonly canvas: HTMLCanvasElement;
+  #glyphs: Glyphs | undefined;
+  private readonly glyphsUrl: string | undefined;
   private readonly container: HTMLElement;
   /** Markers and popups, over the canvas */
   private readonly overlay: HTMLDivElement;
@@ -195,6 +199,7 @@ export class GeoMap implements LayerHost {
   }
 
   private constructor(container: HTMLElement, options: GeoMapOptions) {
+    this.glyphsUrl = options.glyphs;
     this.container = container;
     this.canvas = document.createElement('canvas');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
@@ -285,6 +290,7 @@ export class GeoMap implements LayerHost {
     this.#engine = this.createEngine();
     this.lost = false;
     this.setCamera(camera);
+    this.#glyphs?.attach(this.#engine);
     for (const layer of this.layers) layer.attach(this.#engine);
     this.resize();
   }
@@ -631,6 +637,20 @@ export class GeoMap implements LayerHost {
   /** Polygons raised into blocks with depth (buildings), styled per feature; tiles of them come with `setTile` */
   addExtrusions<P = Record<string, unknown>>(options: ExtrusionOptions<P> = {}): ExtrusionLayer<P> {
     return this.place(new ExtrusionLayer<P>(this, options.data, extrusionStyle(options)), options.before);
+  }
+
+  /** Text labels from GeoJSON (points, the middle of lines, the center of polygons), placed without overlaps */
+  addSymbols<P = Record<string, unknown>>(options: SymbolOptions<P>): SymbolLayer<P> {
+    return this.place(new SymbolLayer<P>(this, options.data, symbolStyle(options)), options.before);
+  }
+
+  /** @internal The glyphs of the symbol layers, loaded on first use */
+  get glyphs(): Glyphs {
+    if (!this.#glyphs) {
+      this.#glyphs = new Glyphs(this.glyphsUrl);
+      this.#glyphs.attach(this.engine);
+    }
+    return this.#glyphs;
   }
 
   /** Adds a layer, under `before` if given */

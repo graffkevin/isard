@@ -99,6 +99,8 @@ pub struct Engine {
     /// Last drag or zoom point (CSS pixels) and the altitude of the ground grabbed there (metres, exaggeration
     /// included): the next move from that point keeps the same ground point under the cursor
     grab: Option<(DVec2, f64)>,
+    /// Glyphs of the symbol layers
+    pub(crate) glyphs: Option<crate::render::symbols::GlyphAtlas>,
     /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
     /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
     handled: bool,
@@ -163,6 +165,7 @@ impl Engine {
             loading: Loading::IMMEDIATE,
             drawn: None,
             grab: None,
+            glyphs: None,
             handled: false,
         })
     }
@@ -556,6 +559,7 @@ impl Engine {
         }
         // Taken out while they draw: each layer gets the engine's state, the rasters the relief to drape on
         let mut layers = std::mem::take(&mut self.layers);
+        self.place_labels(&mut layers, &view);
         let mut i = 0;
         while i < layers.len() {
             if let Slot::Layer(layer) = &mut layers[i].1 {
@@ -637,6 +641,16 @@ impl Engine {
         }
     }
 
+    /// Places the labels before drawing, from the top layer down: a label shows only where none placed before it does
+    fn place_labels(&self, layers: &mut [(u32, Slot)], view: &View) {
+        let mut grid = geo::collision::Grid::new(self.camera.width, self.camera.height);
+        for (_, slot) in layers.iter_mut().rev() {
+            if let Slot::Layer(layer) = slot {
+                layer.place(&self.frame_state(view), &mut grid);
+            }
+        }
+    }
+
     /// What a layer gets to draw a frame of this view (`Layer::draw`, `Layer::draw_pick`)
     fn frame_state<'a>(&'a self, view: &'a View) -> Frame<'a> {
         Frame {
@@ -651,6 +665,7 @@ impl Engine {
             relief: self.terrain.as_ref().map(|(source, e)| (source, *e)),
             ground: &self.raster_pass,
             fog: self.sky.atmosphere.map(|a| a.fog(view)),
+            glyphs: self.glyphs.as_ref().map(|g| (g.texture, g.size)),
         }
     }
 
