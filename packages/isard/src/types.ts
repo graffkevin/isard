@@ -1,4 +1,5 @@
 /** Public types of the `isard` package */
+import type { AttributionOptions } from './controls.ts';
 import type { DecoderUrls } from './decoders.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
@@ -52,6 +53,9 @@ export interface GeoMapOptions extends Partial<Camera> {
   /** Folders of the Draco and Basis Universal decoders, loaded by the workers on first use (default: the official
    * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks) */
   decoders?: Partial<DecoderUrls>;
+  /** Credits at the bottom right: false for none, or its options (default true: the Géoplateforme credits, compact
+   * on maps narrower than 640 px) */
+  attributionControl?: boolean | AttributionOptions;
 }
 
 export interface TerrainOptions {
@@ -173,6 +177,8 @@ export interface MapEvents {
   /** Everything in view is loaded and drawn, nothing moves: the end of a load, once after each change (as MapLibre's
    * `idle`). Tiles requested by the first frame count, so it never fires before they arrive. */
   idle: Record<string, never>;
+  /** The pointer left the canvas (a mouse going out of the map, or onto a control or marker) */
+  leave: Record<string, never>;
 }
 
 /** What a layer handle needs from its map */

@@ -45,7 +45,11 @@ export class Interaction {
     listen('pointermove', (e) => this.move(e));
     listen('pointerup', (e) => this.up(e));
     listen('pointercancel', (e) => this.up(e));
-    listen('pointerleave', (e) => e.pointerType === 'mouse' && map.hover(undefined));
+    listen('pointerleave', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      map.hover(undefined);
+      map.emit('leave', {});
+    });
     listen('wheel', (e) => this.onWheel(e), { passive: false });
     listen('dblclick', (e) => this.zoomBy(e.shiftKey ? -1 : 1, this.local(e)));
     listen('contextmenu', (e) => e.preventDefault());

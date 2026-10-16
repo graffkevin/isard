@@ -4,10 +4,13 @@
  * same frame.
  */
 import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
+import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
 import { Interaction } from './interaction.ts';
 import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
+import type { Positioned } from './overlay.ts';
+import { injectStyle } from './style.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
@@ -112,8 +115,18 @@ interface Settings {
   globeColor: [r: number, g: number, b: number];
 }
 
+const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
 export class GeoMap implements LayerHost {
   readonly canvas: HTMLCanvasElement;
+  private readonly container: HTMLElement;
+  /** Markers and popups, over the canvas */
+  private readonly overlay: HTMLDivElement;
+  private readonly corners: Record<ControlPosition, HTMLDivElement>;
+  private readonly controls = new Map<Control, HTMLElement>();
+  private readonly positioned = new Set<Positioned>();
+  /** Canvas size in CSS pixels, kept on resize so placing overlays never reads the layout */
+  private size: Point = [0, 0];
   #engine: Engine;
   /** Layers in drawing order (bottom first), to recreate them after a context loss */
   private readonly layers: Layer[] = [];
@@ -129,6 +142,7 @@ export class GeoMap implements LayerHost {
     click: new Set(),
     render: new Set(),
     idle: new Set(),
+    leave: new Set(),
   };
   private readonly resizeObserver: ResizeObserver;
   private readonly interaction: Interaction | undefined;
@@ -168,9 +182,27 @@ export class GeoMap implements LayerHost {
   }
 
   private constructor(container: HTMLElement, options: GeoMapOptions) {
+    this.container = container;
     this.canvas = document.createElement('canvas');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
-    container.append(this.canvas);
+    // Overlays and controls are positioned against the container
+    injectStyle(container.ownerDocument);
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+    container.classList.add('isard-map');
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'isard-overlay';
+    const corner = (position: ControlPosition) => {
+      const element = document.createElement('div');
+      element.className = `isard-ctrl-${position}`;
+      return element;
+    };
+    this.corners = {
+      'top-left': corner('top-left'),
+      'top-right': corner('top-right'),
+      'bottom-left': corner('bottom-left'),
+      'bottom-right': corner('bottom-right'),
+    };
+    container.append(this.canvas, this.overlay, ...CORNERS.map((position) => this.corners[position]));
     this.settings = {
       zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
       maxPitch: options.maxPitch ?? 70,
@@ -197,6 +229,19 @@ export class GeoMap implements LayerHost {
     this.resizeObserver.observe(container);
     this.resize();
     this.interaction = (options.interactive ?? true) ? new Interaction(this) : undefined;
+    const attribution = options.attributionControl ?? true;
+    if (attribution !== false) {
+      this.addControl(new AttributionControl(attribution === true ? {} : attribution), 'bottom-right');
+    }
+  }
+
+  /** The element the map was created in */
+  getContainer(): HTMLElement {
+    return this.container;
+  }
+
+  getCanvas(): HTMLCanvasElement {
+    return this.canvas;
   }
 
   /** @internal The engine (replaced after a context loss) */
@@ -444,6 +489,47 @@ export class GeoMap implements LayerHost {
     return this.engine.ground(point[0], point[1]);
   }
 
+  // ── Overlays and controls ──
+
+  /** Adds a control in a corner of the map; controls stack from the corner inward */
+  addControl(control: Control, position: ControlPosition = 'top-right'): this {
+    if (this.controls.has(control)) return this;
+    const element = control.onAdd(this);
+    element.classList.add('isard-ctrl');
+    // In the bottom corners the first control added stays lowest, as in MapLibre
+    if (position.startsWith('bottom')) this.corners[position].prepend(element);
+    else this.corners[position].append(element);
+    this.controls.set(control, element);
+    return this;
+  }
+
+  removeControl(control: Control): this {
+    const element = this.controls.get(control);
+    if (!element) return this;
+    this.controls.delete(control);
+    control.onRemove(this);
+    element.remove();
+    return this;
+  }
+
+  /** @internal Shows a marker or popup, placed after every frame from now on */
+  attachOverlay(item: Positioned, element: HTMLElement): void {
+    this.overlay.append(element);
+    this.positioned.add(item);
+    item.position(this.size);
+  }
+
+  /** @internal */
+  detachOverlay(item: Positioned, element: HTMLElement): void {
+    this.positioned.delete(item);
+    element.remove();
+  }
+
+  /** @internal Places one overlay now (it moved), without drawing a frame */
+  positionOverlay(item: Positioned): void {
+    if (this.positioned.has(item)) item.position(this.size);
+  }
+
   // ── Layers ──
 
   /** Replaces the Géoplateforme basemap and hillshade, under the other layers */
@@ -531,6 +617,8 @@ export class GeoMap implements LayerHost {
     this.inFrame = false;
     const loading = this.engine.render();
     this.inFrame = true;
+    // Overlays follow the frame just drawn (camera, relief altitudes): all in one pass, transforms only
+    for (const item of this.positioned) item.position(this.size);
     this.emit('render', { ms: performance.now() - t0 });
     this.inFrame = false;
     // A move goes on until a frame finds the camera still: that frame sends 'moveend'
@@ -551,6 +639,7 @@ export class GeoMap implements LayerHost {
     this.canvas.width = Math.round(width * ratio);
     this.canvas.height = Math.round(height * ratio);
     this.engine.resize(width, height, ratio);
+    this.size = [width, height];
     this.emit('resize', { width, height });
     // Draw at once: a resized canvas is cleared, waiting one frame would flash
     cancelAnimationFrame(this.frameRequest);
@@ -563,7 +652,12 @@ export class GeoMap implements LayerHost {
     this.interaction?.destroy();
     this.loader?.destroy();
     this.engine.free();
+    for (const control of [...this.controls.keys()]) this.removeControl(control);
+    this.positioned.clear();
     this.canvas.remove();
+    this.overlay.remove();
+    for (const position of CORNERS) this.corners[position].remove();
+    this.container.classList.remove('isard-map');
     for (const listeners of Object.values(this.listeners)) listeners.clear();
   }
 }

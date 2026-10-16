@@ -3,7 +3,16 @@
  * IGN relief, and the loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles
  * decoded on the main thread, to compare), ?terrain=1 (relief on from the start).
  */
-import { type Basemap, GeoMap, type LonLat, type Projection, type Tiles3dLayer } from 'isard';
+import {
+  type Basemap,
+  GeoMap,
+  type LonLat,
+  Marker,
+  NavigationControl,
+  Popup,
+  type Projection,
+  type Tiles3dLayer,
+} from 'isard';
 
 declare global {
   interface Window {
@@ -34,6 +43,19 @@ const map = await GeoMap.create(element('map'), {
   ...(params.get('workers') === '0' ? { workers: false } : {}),
 });
 window.map = map;
+map.addControl(new NavigationControl({ visualizePitch: true }));
+
+// A draggable marker at the IGN headquarters; a click opens its popup, which follows it when dragged
+const popup = new Popup({ offset: [0, -34] });
+const ign = new Marker({ draggable: true }).setLonLat(IGN).setPopup(popup).addTo(map);
+const where = () => {
+  const [lon, lat] = ign.getLonLat();
+  popup.setHTML(
+    `<strong>IGN</strong><br>${lon.toFixed(5)}, ${lat.toFixed(5)}<br><small>Drag the pin to move it</small>`,
+  );
+};
+where();
+ign.on('drag', where);
 
 /** A row of toggle buttons */
 function buttons<T extends string>(parent: string, options: readonly T[], initial: T, pick: (option: T) => void): void {
@@ -88,6 +110,9 @@ map.on('hover', ({ point, lonLat }) => {
   label.style.left = `${point[0]}px`;
   label.style.top = `${point[1]}px`;
   label.textContent = `${lonLat[0].toFixed(4)}, ${lonLat[1].toFixed(4)}`;
+});
+map.on('leave', () => {
+  label.style.display = 'none';
 });
 
 // Counters: frames over the last second, engine time per frame, tiles per layer
