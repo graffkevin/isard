@@ -338,15 +338,17 @@ impl Layer for SymbolLayer {
         }
         let (camera, view) = (frame.camera, frame.view);
         let layer_scale = stops(&self.style.size, camera.zoom);
-        let screen = |m: DVec2, altitude: f64| -> Option<DVec2> {
+        // Screen point and distance to the eye (pixels of the local frame)
+        let screen = |m: DVec2, altitude: f64| -> Option<(DVec2, f64)> {
             let shift = -(m.x - camera.center.x).round();
             let p = view.position(m, shift) + glam::DVec3::Z * altitude * view.vertical;
             let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
             (clip.w > 0.0).then(|| {
-                DVec2::new(
+                let at = DVec2::new(
                     f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
                     f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
-                )
+                );
+                (at, clip.w)
             })
         };
         for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
@@ -354,13 +356,15 @@ impl Layer for SymbolLayer {
                 .relief
                 .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
                 .unwrap_or(0.0);
-            let Some(at) = screen(label.merc, altitude) else {
+            let Some((at, distance)) = screen(label.merc, altitude) else {
                 continue;
             };
             if at.x < -MARGIN || at.y < -MARGIN || at.x > camera.width + MARGIN || at.y > camera.height + MARGIN {
                 continue;
             }
-            let scale = layer_scale * stops(&label.size, camera.zoom);
+            // Smaller further away, as MapLibre's perspective ratio: a tilted view keeps its far labels sparse
+            let perspective = (0.5 + 0.5 * view.center_distance / distance).clamp(0.5, 1.5);
+            let scale = layer_scale * stops(&label.size, camera.zoom) * perspective;
             if scale <= 0.0 {
                 continue;
             }
@@ -369,7 +373,7 @@ impl Layer for SymbolLayer {
             if label.direction != DVec2::ZERO {
                 // A step of one pixel along the line
                 let step = label.direction.normalize() / view.world_size;
-                if let Some(ahead) = screen(label.merc + step, altitude) {
+                if let Some((ahead, _)) = screen(label.merc + step, altitude) {
                     let d = ahead - at;
                     angle = d.y.atan2(d.x);
                     if angle > std::f64::consts::FRAC_PI_2 {

@@ -158,7 +158,8 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
   const sprite = await r.sprite;
   const zoom = Math.max(0, z - 1);
   const canvas = new OffscreenCanvas(size, size);
-  const g = canvas.getContext('2d');
+  // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
+  const g = canvas.getContext('2d', { willReadFrequently: true });
   if (!g) throw new Error('no 2D context');
   // CSS pixels to canvas pixels: the tile is 256 CSS pixels across at its zoom
   const px = size / 256;
@@ -268,7 +269,7 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
     }
   }
   if (!drawn && !layers) return null;
-  return canvas.transferToImageBitmap();
+  return createImageBitmap(g.getImageData(0, 0, size, size), { premultiplyAlpha: 'none' });
 }
 
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */

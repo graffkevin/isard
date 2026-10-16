@@ -34,7 +34,7 @@ you zoom in.
   frame, and values computed in a `hover` listener are drawn by that very frame.
 - **f64 on the CPU, f32 relative to the camera on the GPU.** Exact to the centimetre at any zoom, without the
   precision tricks of 32-bit world coordinates.
-- **Small.** 266 KB of WebAssembly (88 KB gzipped) and 27 KB of JavaScript.
+- **Small.** 640 KB of WebAssembly (280 KB gzipped) and 100 KB of JavaScript (32 KB gzipped), plus the workers.
 - **No holes, no backlog.** A loading tile is replaced by its nearest loaded ancestor (or its loaded descendants, up
   to three levels, when zooming out); where nothing covers an area yet, a tile two levels coarser is loaded first
   (shallow first, as in 3DTilesRendererJS) and new tiles fade in over their stand-in. Requests for tiles that left
@@ -91,12 +91,13 @@ you zoom in.
 | `map.addSymbols({ data, text, font, size, color, haloColor, haloWidth, anchor, offset, maxWidth, lineHeight, overlap, … })` | text labels at points, at the middle of lines, at the center of polygons, in the Géoplateforme's fonts (signed distance fields, `glyphs` option for others): lines with `\n`, wrapping at `maxWidth` ems, runs of their own scale and font (`[{ text, scale, font }]`, as MapLibre's `format`), a halo; placed every frame without overlaps, all symbol layers sharing the collisions (the top layer first), unless `overlap` |
 | `map.addGround({ code, anchor, bounds, textures, uniforms })` | the application's GLSL `vec4 ground(vec2 offset)` run over the ground itself: the ground tiles in its bounds drawn once more with it, so it lies on the relief like the basemap (water depth from a terrain grid and levels, heat maps); `offset` is the Mercator offset from `anchor`, exact at any zoom; textures in any format, integer ones included (`r16ui`…), 2D or 2D arrays; `layer.setTexture(…)`, `updateTexture(name, data, region)`, `setUniform(name, value)`, `setBounds(…)` |
 | feature layer style | each value a constant, zoom stops `[[zoom, value], …]` (as `interpolate linear zoom`) or a function of the feature's properties; common to all: `opacity` (number or stops), `minZoom`, `maxZoom`, `visible`, `filter`, `ramp` (`[[value, color], …]`), `before` (a layer to go under); `layer.setData(…)`, `setStyle(…)`, `setValues(Float32Array)` (one per feature, colored by the ramp: one texture upload), `setFilter(fn)`, `setVisible(b)`, `moveBefore(layer)`, `remove()` |
-| `map.setBasemap(basemap, hillshade)` | swaps the basemap under the other layers |
+| `map.setBasemap(basemap, hillshade)` | swaps the basemap under the other layers: rasters (`'plan'`, `'plan-grey'`, `'ortho'`) or vector tiles (`'plan-vector'`, `'plan-grey-vector'`: the PLAN.IGN styles drawn in workers into the raster pool, on the relief like any basemap, and their labels kept above the layers added later) |
+| `map.vectorTiles({ style, workers })` | any MapLibre style (its legacy filters and functions, and the common expressions): `tiles.raster({ layers, extraLayers, size, before })` draws its fills, lines and circles (or a subset, restyled) as a raster layer; `tiles.labels({ layers })` its labels |
 | `map.setProjection(projection)` | `'globe'` or `'mercator'` |
 | `map.setLoading(mode)` | `'immediate'` (default): everything visible loads, tiles show as soon as they arrive; `'smooth'`: levels skipped during flights, off-center tiles waiting while the camera moves, fade-in, fewer downloads |
 | `map.setBackground(color)` | `#rrggbb` behind the map |
 | `map.stats()` | tile counters per raster layer: drawn, kept on the GPU, loading, waiting for upload |
-| `map.addRaster({ url, minZoom, maxZoom, opacity, saturation })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`) |
+| `map.addRaster({ url, minZoom, maxZoom, opacity, saturation, size, loader, before })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`), or tiles drawn by the page (`loader(z, x, y, signal)` returning an `ImageBitmap` of `size` pixels) |
 | `map.addNetwork({ nodes, edges, lines, costs, edgeWidths, width, max, contour, opacity, halo, haloOpacity, ramp, unreachedColor, fade })` | `lines`: `{ start, points }`, the line of each edge from A to B; `costs`: per edge, A → B then B → A (Infinity: closed); `width` and `halo` in CSS pixels or zoom stops; `edgeWidths`: a width factor per edge; `ramp`: `[[fraction of max, color], …]`; `fade`: share of `max` over which the colors fade out; `layer.setValues(Float32Array)` (negative or 1e30 = unreached), `layer.setCosts(…)` (new profile, geometry kept), `layer.setEdgeWidths(…)`, `layer.setStyle(…)`, `layer.stats()` (pieces, drawn), `layer.remove()` |
 
 Controls: drag to pan (with inertia), wheel or double click to zoom (shift + double click out), right drag or
@@ -168,8 +169,9 @@ to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`,
 
 ## Roadmap
 
-1. Vector basemap (PLAN.IGN vector tiles: fills, lines, then labels), to restyle the ground per use case.
-2. BD TOPO buildings colored by value.
-3. Field layer: a value grid drawn as a smooth surface (water depth over the terrain for flooding).
-4. Picking (feature under the cursor) and points (stations).
-5. Move geo-reach and geo-flood onto the engine.
+Done: vector basemap (PLAN.IGN styles, labels above the data), buildings colored by value or by a network, ground
+layers (water depth over the terrain), feature layers with picking, labels, markers, popups and controls.
+
+1. Move geo-reach and geo-flood onto the engine.
+2. Icons of the basemap's symbol layers (sprites), text along curved lines.
+3. Labels fading in and out instead of popping.
