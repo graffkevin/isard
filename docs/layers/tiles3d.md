@@ -13,4 +13,4 @@ replacing their parent only once all are ready, downloads aborted when they leav
 With the relief on, its altitudes get the geoid height so that the meshes (ellipsoidal heights) sit on the ground.
 The decoders come from gstatic.com and jsDelivr by default: `decoders` to self-host them.
 
-<Example slug="tiles3d" height="440px" />
+<LiveExample slug="tiles3d" height="440px" />

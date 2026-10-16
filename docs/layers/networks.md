@@ -30,4 +30,4 @@ map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))
 - **Picking**: `map.pickFeature(point)` gives the edge under the cursor.
 - **Buildings** can read the same values on the graphics card: see [Buildings](./buildings).
 
-<Example slug="network" height="440px" />
+<LiveExample slug="network" height="440px" />

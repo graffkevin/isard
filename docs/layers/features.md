@@ -40,4 +40,4 @@ a shadow volume: each polygon lifted into a prism, the ground inside it counted 
 on hills and valleys at any size, exact to the pixel: a veil as large as the world with a hole for a region costs a few
 full-screen passes at most.
 
-<Example slug="geojson" height="440px" />
+<LiveExample slug="geojson" height="440px" />

@@ -55,6 +55,6 @@ map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))
 The map fills its container, follows its size, handles mouse and touch, loads the basemap. The values computed in a
 `hover` listener are drawn by the very frame of the move.
 
-<Example slug="network" height="420px" />
+<LiveExample slug="network" height="420px" />
 
 </div>

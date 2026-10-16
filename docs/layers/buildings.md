@@ -36,4 +36,4 @@ buildings.linkNetwork(network, maxSeconds);
 buildings.setAnchors(Float32Array.from(anchors.flatMap((a) => [a.nodeA, a.nodeB, a.costA, a.costB])), tileKey);
 ```
 
-<Example slug="buildings" height="440px" />
+<LiveExample slug="buildings" height="440px" />

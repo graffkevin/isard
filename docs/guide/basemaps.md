@@ -36,7 +36,7 @@ tiles.raster({
 });
 ```
 
-<Example slug="vector" height="420px" />
+<LiveExample slug="vector" height="420px" />
 
 ## Relief
 
@@ -63,4 +63,4 @@ map.setMaxPitch(78);
 
 On the globe, stars and an atmosphere halo surround the Earth (`sky: false` to turn them off).
 
-<Example slug="relief" height="420px" />
+<LiveExample slug="relief" height="420px" />

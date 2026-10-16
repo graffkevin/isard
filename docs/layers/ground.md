@@ -34,4 +34,4 @@ water.updateTexture('u_levels', levels, { width: 1024, height: rows }); // a reg
 - Uniforms by name: numbers for any type. Also available: `u_zoom`, `u_pixel_ratio`, `fwidth` for pixel-wide lines.
 - Several ground layers with bounds (finer grids where they exist) draw only the tiles they meet.
 
-<Example slug="relief" height="440px" />
+<LiveExample slug="relief" height="440px" />
