@@ -5,6 +5,7 @@
  * textures, and restyling, recoloring by values or filtering never touches the geometry.
  */
 
+import { parseCssColor } from './color.ts';
 import { Layer } from './layers.ts';
 import type { LayerHost } from './types.ts';
 import type { Engine } from './wasm/isard.js';
@@ -112,38 +113,9 @@ const BASE: FeatureLayerStyle = {
 
 // ── Colors ──
 
-const NAMED: Record<string, [number, number, number, number]> = {
-  black: [0, 0, 0, 1],
-  white: [1, 1, 1, 1],
-  transparent: [0, 0, 0, 0],
-  red: [1, 0, 0, 1],
-  blue: [0, 0, 1, 1],
-  grey: [0.5, 0.5, 0.5, 1],
-  gray: [0.5, 0.5, 0.5, 1],
-};
-
-/** A CSS color to RGBA 0-1 (hex forms, `rgb()`, `rgba()`, a few names); black if unknown */
+/** A CSS color to RGBA 0-1 (see `parseCssColor`); black if unknown or missing */
 export function parseColor(color: string): [r: number, g: number, b: number, a: number] {
-  const c = color.trim().toLowerCase();
-  const named = NAMED[c];
-  if (named) return [...named];
-  if (c.startsWith('#')) {
-    const hex = c.slice(1);
-    const full = hex.length <= 4 ? [...hex].map((h) => h + h).join('') : hex;
-    const v = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255;
-    return [v(0), v(2), v(4), full.length >= 8 ? v(6) : 1];
-  }
-  const match = /^rgba?\(([^)]*)\)$/.exec(c);
-  if (match?.[1]) {
-    const parts = match[1].split(/[\s,/]+/).filter(Boolean);
-    const channel = (p: string | undefined) => {
-      if (p === undefined) return 1;
-      return p.endsWith('%') ? Number.parseFloat(p) / 100 : Number.parseFloat(p);
-    };
-    const [r, g, b] = parts.slice(0, 3).map((p) => channel(p) / (p.endsWith('%') ? 1 : 255));
-    return [r ?? 0, g ?? 0, b ?? 0, channel(parts[3])];
-  }
-  return [0, 0, 0, 1];
+  return parseCssColor(color) ?? [0, 0, 0, 1];
 }
 
 /** 256 RGBA texels of a ramp over its value range, and that range */
@@ -321,6 +293,7 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   protected list: Feature<P>[];
   protected values: Float32Array | undefined;
 
+  /** @internal */
   constructor(
     map: LayerHost,
     data: FeatureData<P>,
@@ -396,6 +369,7 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
     this.map.replaceLayer(this, old);
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const id = this.add(engine);
     this.applyStyle(engine, id);
@@ -403,18 +377,19 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
     return id;
   }
 
-  /** Adds the geometry to the engine, returns the layer id */
+  /** @internal Adds the geometry to the engine, returns the layer id */
   protected abstract add(engine: Engine): number;
-  /** Sends the geometry again (same feature count) */
+  /** @internal Sends the geometry again (same feature count) */
   protected abstract upload(engine: Engine, id: number): void;
   /** Two colors and two sizes of a feature */
   protected abstract featureStyle(
     properties: P,
     index: number,
   ): [color: string, second: string, size: Size, second: Size];
-  /** Layer-specific settings (dashes, alignment) */
+  /** @internal Layer-specific settings (dashes, alignment) */
   protected abstract applyExtra(engine: Engine, id: number): void;
 
+  /** @internal */
   protected applyStyle(engine: Engine, id: number): void {
     const out = new Float32Array(this.list.length * FLOATS);
     this.list.forEach((f, i) => {
@@ -436,11 +411,13 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
 }
 
 export class LineLayer<P = Properties> extends FeatureLayer<P, LineStyle<P>> {
+  /** @internal */
   protected add(engine: Engine): number {
     const g = lineGeometry(this.list);
     return engine.addLines(g.points, g.start, g.feature, this.list.length);
   }
 
+  /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = lineGeometry(this.list);
     engine.setLines(id, g.points, g.start, g.feature);
@@ -451,6 +428,7 @@ export class LineLayer<P = Properties> extends FeatureLayer<P, LineStyle<P>> {
     return [evaluate(color, properties, index), '#000', evaluate(width, properties, index), 0];
   }
 
+  /** @internal */
   protected applyExtra(engine: Engine, id: number): void {
     const [dash, gap] = this.style.dash ?? [0, 0];
     engine.setLineDash(id, dash, gap);
@@ -458,11 +436,13 @@ export class LineLayer<P = Properties> extends FeatureLayer<P, LineStyle<P>> {
 }
 
 export class CircleLayer<P = Properties> extends FeatureLayer<P, CircleStyle<P>> {
+  /** @internal */
   protected add(engine: Engine): number {
     const g = pointGeometry(this.list);
     return engine.addCircles(g.points, g.feature, this.list.length);
   }
 
+  /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = pointGeometry(this.list);
     engine.setCircles(id, g.points, g.feature);
@@ -478,17 +458,20 @@ export class CircleLayer<P = Properties> extends FeatureLayer<P, CircleStyle<P>>
     ];
   }
 
+  /** @internal */
   protected applyExtra(engine: Engine, id: number): void {
     engine.setCircleAlignment(id, this.style.alignment === 'map');
   }
 }
 
 export class FillLayer<P = Properties> extends FeatureLayer<P, FillStyle<P>> {
+  /** @internal */
   protected add(engine: Engine): number {
     const g = polygonGeometry(this.list);
     return engine.addFills(g.points, g.ringStart, g.polygonStart, g.feature, this.list.length);
   }
 
+  /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = polygonGeometry(this.list);
     engine.setFills(id, g.points, g.ringStart, g.polygonStart, g.feature);

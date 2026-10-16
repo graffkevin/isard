@@ -20,7 +20,8 @@ export {
   NavigationControl,
   type NavigationOptions,
 } from './controls.ts';
-export type { ExtrusionOptions, ExtrusionStyle, PolygonArrays } from './extrusions.ts';
+export type { DecoderUrls } from './decoders.ts';
+export type { ExtrusionOptions, ExtrusionStyle, PolygonArrays, TileKey } from './extrusions.ts';
 export { ExtrusionLayer } from './extrusions.ts';
 export type {
   CircleOptions,
@@ -61,7 +62,10 @@ export {
 export type { SymbolOptions, SymbolStyle } from './symbols.ts';
 export { SymbolLayer } from './symbols.ts';
 export type {
+  AnimationOptions,
+  AtmosphereOptions,
   Basemap,
+  FlyToOptions,
   GeoMapOptions,
   LoadingMode,
   LonLat,
@@ -76,7 +80,7 @@ export type {
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
-export type { Style, StyleLayer } from './vectorstyle.ts';
+export type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
 export type { VectorTilesOptions } from './vectortiles.ts';
 export { PLAN_STYLES, VectorTiles } from './vectortiles.ts';
 export type { Camera, NetworkStats, PickHit, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';

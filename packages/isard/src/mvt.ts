@@ -29,15 +29,33 @@ class Pbf {
   ) {
     this.pos = start;
   }
+  /** An unsigned varint, approximated beyond 2^53; all its bytes are read (up to 10), so the next field is right */
   varint(): number {
     let value = 0;
-    let shift = 0;
-    for (;;) {
+    for (let shift = 0; shift < 70; shift += 7) {
       const b = this.buf[this.pos++] ?? 0;
       value += (b & 0x7f) * 2 ** shift;
-      if (b < 0x80 || shift > 49) return value;
-      shift += 7;
+      if (b < 0x80) break;
     }
+    return value;
+  }
+  /** A signed 64-bit varint (two's complement: a negative value takes 10 bytes) */
+  int64(): number {
+    let lo = 0;
+    let hi = 0;
+    for (let i = 0; i < 10; i += 1) {
+      const b = this.buf[this.pos++] ?? 0;
+      const bits = b & 0x7f;
+      // Bits 0-27 in the low word, bits 28-31 split, the rest in the high word
+      if (i < 4) lo |= bits << (7 * i);
+      else if (i === 4) {
+        lo |= (bits & 0x0f) << 28;
+        hi |= bits >> 4;
+      } else hi |= bits << (7 * i - 32);
+      if (b < 0x80) break;
+    }
+    // The high word signed: values from 2^63 up are negative
+    return (hi | 0) * 2 ** 32 + (lo >>> 0);
   }
   sint(): number {
     const v = this.varint();
@@ -46,25 +64,31 @@ class Pbf {
   /** A length-delimited field as a sub-reader */
   sub(): Pbf {
     const n = this.varint();
-    const r = new Pbf(this.buf, this.pos, this.pos + n);
-    this.pos += n;
+    // A length past the end (a truncated tile) stops at the end
+    const end = Math.min(this.pos + n, this.end);
+    const r = new Pbf(this.buf, this.pos, end);
+    this.pos = end;
     return r;
   }
   string(): string {
     const n = this.varint();
-    const s = decoder.decode(this.buf.subarray(this.pos, this.pos + n));
-    this.pos += n;
+    const end = Math.min(this.pos + n, this.end);
+    const s = decoder.decode(this.buf.subarray(this.pos, end));
+    this.pos = end;
     return s;
   }
   float(): number {
-    const v = new DataView(this.buf.buffer, this.buf.byteOffset + this.pos, 4).getFloat32(0, true);
+    const v = this.pos + 4 <= this.end ? this.view().getFloat32(this.pos, true) : 0;
     this.pos += 4;
     return v;
   }
   double(): number {
-    const v = new DataView(this.buf.buffer, this.buf.byteOffset + this.pos, 8).getFloat64(0, true);
+    const v = this.pos + 8 <= this.end ? this.view().getFloat64(this.pos, true) : 0;
     this.pos += 8;
     return v;
+  }
+  private view(): DataView {
+    return new DataView(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength);
   }
   skip(wire: number): void {
     if (wire === 0) this.varint();
@@ -94,6 +118,8 @@ function value(p: Pbf): Value {
         v = p.double();
         break;
       case 4:
+        v = p.int64();
+        break;
       case 5:
         v = p.varint();
         break;
@@ -124,7 +150,8 @@ function geometry(p: Pbf): number[][] {
       if (current && current.length >= 2) current.push(current[0] ?? 0, current[1] ?? 0);
       continue;
     }
-    for (let i = 0; i < count; i += 1) {
+    // A count past the end (a truncated geometry) stops there
+    for (let i = 0; i < count && p.more; i += 1) {
       x += p.sint();
       y += p.sint();
       if (id === 1) {

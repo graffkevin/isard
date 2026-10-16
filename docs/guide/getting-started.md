@@ -8,7 +8,7 @@ bun add @ign-junn/isard
 npm install @ign-junn/isard
 ```
 
-The package is one ES module with its types, the engine (`isard_bg.wasm`, 280 KB gzipped) and two workers:
+The package is one ES module with its types, the engine (`isard_bg.wasm`, 320 KB gzipped) and two workers:
 `decoder.worker.js` decodes 3D Tiles, `basemap.worker.js` draws vector basemaps. It needs WebGL2, and runs in every
 current browser.
 

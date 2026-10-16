@@ -2,31 +2,161 @@
 
 use glow::HasContext;
 
-/// Compiles and links a program; the error carries the info log
+/// Compiles and links a program; the error carries the info log. Nothing is left behind on a failure
 pub fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<glow::Program, String> {
-    // SAFETY: plain GL calls on a live context, every object created here is checked or deleted
+    // SAFETY: plain GL calls on a live context, every object created here is attached and deleted, or deleted on
+    // the way out of an error
     unsafe {
         let program = gl.create_program()?;
         let mut shaders = Vec::new();
+        let mut error = None;
         for (kind, source) in [(glow::VERTEX_SHADER, vertex), (glow::FRAGMENT_SHADER, fragment)] {
-            let shader = gl.create_shader(kind)?;
+            let shader = match gl.create_shader(kind) {
+                Ok(shader) => shader,
+                Err(e) => {
+                    error = Some(e);
+                    break;
+                }
+            };
+            shaders.push(shader);
             gl.shader_source(shader, source);
             gl.compile_shader(shader);
             if !gl.get_shader_compile_status(shader) {
-                return Err(gl.get_shader_info_log(shader));
+                error = Some(gl.get_shader_info_log(shader));
+                break;
             }
             gl.attach_shader(program, shader);
-            shaders.push(shader);
         }
-        gl.link_program(program);
+        if error.is_none() {
+            gl.link_program(program);
+            if !gl.get_program_link_status(program) {
+                error = Some(gl.get_program_info_log(program));
+            }
+        }
         for shader in shaders {
-            gl.detach_shader(program, shader);
+            // Detaching a shader never attached is a harmless GL error
+            if error.is_none() {
+                gl.detach_shader(program, shader);
+            }
             gl.delete_shader(shader);
         }
-        if !gl.get_program_link_status(program) {
-            return Err(gl.get_program_info_log(program));
+        match error {
+            Some(e) => {
+                gl.delete_program(program);
+                Err(e)
+            }
+            None => Ok(program),
         }
+    }
+}
+
+/// The GL objects a constructor creates, deleted together when it fails half-way (an early `?`): no leak on a partial
+/// failure. `keep` hands them over once everything succeeded
+pub struct Objects<'a> {
+    gl: &'a glow::Context,
+    programs: Vec<glow::Program>,
+    vertex_arrays: Vec<glow::VertexArray>,
+    buffers: Vec<glow::Buffer>,
+    textures: Vec<glow::Texture>,
+    framebuffers: Vec<glow::Framebuffer>,
+    renderbuffers: Vec<glow::Renderbuffer>,
+}
+
+impl<'a> Objects<'a> {
+    pub fn new(gl: &'a glow::Context) -> Self {
+        Self {
+            gl,
+            programs: Vec::new(),
+            vertex_arrays: Vec::new(),
+            buffers: Vec::new(),
+            textures: Vec::new(),
+            framebuffers: Vec::new(),
+            renderbuffers: Vec::new(),
+        }
+    }
+
+    pub fn program(&mut self, vertex: &str, fragment: &str) -> Result<glow::Program, String> {
+        let program = program(self.gl, vertex, fragment)?;
+        self.programs.push(program);
         Ok(program)
+    }
+
+    pub fn vertex_array(&mut self) -> Result<glow::VertexArray, String> {
+        // SAFETY: creation on a live context, tracked for deletion
+        let vao = unsafe { self.gl.create_vertex_array()? };
+        self.vertex_arrays.push(vao);
+        Ok(vao)
+    }
+
+    pub fn buffer(&mut self) -> Result<glow::Buffer, String> {
+        // SAFETY: creation on a live context, tracked for deletion
+        let buffer = unsafe { self.gl.create_buffer()? };
+        self.buffers.push(buffer);
+        Ok(buffer)
+    }
+
+    pub fn texture(&mut self) -> Result<glow::Texture, String> {
+        // SAFETY: creation on a live context, tracked for deletion
+        let texture = unsafe { self.gl.create_texture()? };
+        self.textures.push(texture);
+        Ok(texture)
+    }
+
+    /// A texture already made (`table_texture`…), deleted with the others on a failure
+    pub fn adopt_texture(&mut self, texture: glow::Texture) -> glow::Texture {
+        self.textures.push(texture);
+        texture
+    }
+
+    pub fn framebuffer(&mut self) -> Result<glow::Framebuffer, String> {
+        // SAFETY: creation on a live context, tracked for deletion
+        let framebuffer = unsafe { self.gl.create_framebuffer()? };
+        self.framebuffers.push(framebuffer);
+        Ok(framebuffer)
+    }
+
+    pub fn renderbuffer(&mut self) -> Result<glow::Renderbuffer, String> {
+        // SAFETY: creation on a live context, tracked for deletion
+        let renderbuffer = unsafe { self.gl.create_renderbuffer()? };
+        self.renderbuffers.push(renderbuffer);
+        Ok(renderbuffer)
+    }
+
+    /// Everything succeeded: the objects belong to the caller from now on
+    pub fn keep(mut self) {
+        self.programs.clear();
+        self.vertex_arrays.clear();
+        self.buffers.clear();
+        self.textures.clear();
+        self.framebuffers.clear();
+        self.renderbuffers.clear();
+    }
+}
+
+impl Drop for Objects<'_> {
+    fn drop(&mut self) {
+        let gl = self.gl;
+        // SAFETY: objects created by this guard and never handed over (`keep` empties the lists)
+        unsafe {
+            for &p in &self.programs {
+                gl.delete_program(p);
+            }
+            for &v in &self.vertex_arrays {
+                gl.delete_vertex_array(v);
+            }
+            for &b in &self.buffers {
+                gl.delete_buffer(b);
+            }
+            for &t in &self.textures {
+                gl.delete_texture(t);
+            }
+            for &f in &self.framebuffers {
+                gl.delete_framebuffer(f);
+            }
+            for &r in &self.renderbuffers {
+                gl.delete_renderbuffer(r);
+            }
+        }
     }
 }
 
@@ -149,18 +279,28 @@ impl Grid {
         }
         let (last, row) = (n * n - 1, GRID);
         indices.extend_from_slice(&[0, row, n * GRID, row, last, n * GRID]);
-        // SAFETY: buffer creation and uploads on a live context
+        let mut objects = Objects::new(gl);
+        let vertex_buffer = objects.buffer()?;
+        let index_buffer = objects.buffer()?;
+        objects.keep();
+        // SAFETY: uploads into buffers just created on a live context
         unsafe {
-            let vertex_buffer = gl.create_buffer()?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&vertices), glow::STATIC_DRAW);
-            let index_buffer = gl.create_buffer()?;
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buffer));
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&indices), glow::STATIC_DRAW);
             Ok(Self {
                 vertices: vertex_buffer,
                 indices: index_buffer,
             })
+        }
+    }
+
+    pub fn delete(&self, gl: &glow::Context) {
+        // SAFETY: buffers owned by the mesh, not used afterwards
+        unsafe {
+            gl.delete_buffer(self.vertices);
+            gl.delete_buffer(self.indices);
         }
     }
 
@@ -195,4 +335,168 @@ impl Grid {
 /// Numbers viewed as bytes for an upload (checked at compile time: plain types without padding)
 pub fn bytes<T: bytemuck::NoUninit>(data: &[T]) -> &[u8] {
     bytemuck::cast_slice(data)
+}
+
+/// The glow context of a WebGL2 context (only in the browser: natively, the pure logic is compiled for its tests)
+#[cfg_attr(target_arch = "wasm32", allow(clippy::unnecessary_wraps))]
+pub fn context(webgl: web_sys::WebGl2RenderingContext) -> Result<glow::Context, String> {
+    #[cfg(target_arch = "wasm32")]
+    return Ok(glow::Context::from_webgl2_context(webgl));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        drop(webgl);
+        Err("WebGL2 is only available in the browser".to_owned())
+    }
+}
+
+/// Uploads a decoded image into layer `layer` of the bound `TEXTURE_2D_ARRAY` (`size` × `size`, RGBA8)
+pub fn upload_bitmap_layer(gl: &glow::Context, layer: i32, size: i32, bitmap: &web_sys::ImageBitmap) {
+    // SAFETY: upload into the bound texture array, inside its storage (checked by the caller)
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        gl.tex_sub_image_3d_with_image_bitmap(
+            glow::TEXTURE_2D_ARRAY,
+            0,
+            0,
+            0,
+            layer,
+            size,
+            size,
+            1,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            bitmap,
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (gl, layer, size, bitmap);
+}
+
+/// Allocates and fills level 0 of the bound `TEXTURE_2D` from a decoded image (RGBA8)
+pub fn image_bitmap_2d(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) {
+    // SAFETY: (re)allocation of the bound texture from the image
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        gl.tex_image_2d_with_image_bitmap(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            bitmap,
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (gl, bitmap);
+}
+
+/// Width of the tables read with `texelFetch` (an entry per texel, row after row): 4096 is supported everywhere
+/// WebGL2 is. GLSL: `ivec2(int(i & 4095u), int(i >> 12))`
+pub const TABLE_WIDTH: usize = 4096;
+
+/// Rows of a table of `texels` texels (at least one)
+#[must_use]
+pub fn table_rows(texels: usize) -> usize {
+    texels.div_ceil(TABLE_WIDTH).max(1)
+}
+
+/// A table texture of `texels` texels in `format`, `TABLE_WIDTH` wide, nearest filtering, left bound
+pub fn table_texture(gl: &glow::Context, format: u32, texels: usize) -> Result<glow::Texture, String> {
+    // SAFETY: creation and storage on a live context
+    unsafe {
+        let texture = gl.create_texture()?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        gl.tex_storage_2d(
+            glow::TEXTURE_2D,
+            1,
+            format,
+            TABLE_WIDTH as i32,
+            table_rows(texels) as i32,
+        );
+        for (key, value) in [
+            (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
+            (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
+        }
+        Ok(texture)
+    }
+}
+
+/// Uploads `texels` texels of `data` (`size` bytes each) into the bound table texture from its first texel: the full
+/// rows in one call, the rest of the last row in another. Rows of 1-byte texels need `UNPACK_ALIGNMENT` 1 only for
+/// the rest, which this sets and resets
+pub fn upload_table(gl: &glow::Context, data: &[u8], texels: usize, format: u32, kind: u32, size: usize) {
+    let texels = texels.min(data.len() / size.max(1));
+    let (full, rest) = (texels / TABLE_WIDTH, texels % TABLE_WIDTH);
+    // SAFETY: the caller bound a table texture with room for `texels` texels; the slices are within `data`
+    unsafe {
+        if full > 0 {
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                0,
+                TABLE_WIDTH as i32,
+                full as i32,
+                format,
+                kind,
+                glow::PixelUnpackData::Slice(Some(&data[..full * TABLE_WIDTH * size])),
+            );
+        }
+        if rest > 0 {
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                full as i32,
+                rest as i32,
+                1,
+                format,
+                kind,
+                glow::PixelUnpackData::Slice(Some(&data[full * TABLE_WIDTH * size..texels * size])),
+            );
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+        }
+    }
+}
+
+/// Texels of a `width` × `height` region, None if a side is negative or the count overflows
+#[must_use]
+pub fn area(width: i32, height: i32) -> Option<usize> {
+    usize::try_from(width).ok()?.checked_mul(usize::try_from(height).ok()?)
+}
+
+/// Whether the region `x`, `y`, `width` × `height` lies within a texture of `size` (no overflow)
+#[must_use]
+pub fn region_fits(x: i32, y: i32, width: i32, height: i32, size: (i32, i32)) -> bool {
+    let fits =
+        |at: i32, len: i32, total: i32| at >= 0 && len >= 0 && i64::from(at) + i64::from(len) <= i64::from(total);
+    fits(x, width, size.0) && fits(y, height, size.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn areas_and_regions_never_overflow() {
+        assert_eq!(area(4096, 4096), Some(1 << 24));
+        assert_eq!(area(-1, 10), None);
+        assert_eq!(area(i32::MAX, i32::MAX), Some(i32::MAX as usize * i32::MAX as usize));
+        assert!(region_fits(0, 0, 10, 10, (10, 10)));
+        assert!(!region_fits(1, 0, 10, 10, (10, 10)));
+        assert!(!region_fits(i32::MAX, 0, 10, 1, (10, 10)));
+        assert!(!region_fits(-1, 0, 1, 1, (10, 10)));
+    }
+
+    #[test]
+    fn tables_have_at_least_a_row() {
+        assert_eq!(table_rows(0), 1);
+        assert_eq!(table_rows(TABLE_WIDTH), 1);
+        assert_eq!(table_rows(TABLE_WIDTH + 1), 2);
+    }
 }

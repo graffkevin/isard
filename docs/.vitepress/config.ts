@@ -1,4 +1,9 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { defineConfig } from 'vitepress';
+
+/** The API reference, generated from the package's declarations by TypeDoc (`typedoc`, before `vitepress`) */
+const referenceSidebar = new URL('../reference/typedoc-sidebar.json', import.meta.url);
+const reference = existsSync(referenceSidebar) ? JSON.parse(readFileSync(referenceSidebar, 'utf8')) : [];
 
 const examples = [
   ['The globe', 'globe'],
@@ -29,7 +34,14 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started', activeMatch: '/guide/' },
       { text: 'Layers', link: '/layers/', activeMatch: '/layers/' },
       { text: 'Examples', link: '/examples/', activeMatch: '/examples/' },
-      { text: 'API', link: '/api' },
+      {
+        text: 'API',
+        activeMatch: '/(api|reference/)',
+        items: [
+          { text: 'Overview', link: '/api' },
+          { text: 'Reference', link: '/reference/' },
+        ],
+      },
       { text: 'Changelog', link: '/changelog' },
     ],
     sidebar: {
@@ -63,6 +75,7 @@ export default defineConfig({
           ],
         },
       ],
+      '/reference/': [{ text: 'Reference', link: '/reference/', items: reference }],
       '/examples/': [
         {
           text: 'Examples',

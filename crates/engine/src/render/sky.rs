@@ -130,7 +130,9 @@ pub struct Sky {
 
 impl Sky {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
-        let program = gl::program(gl, VERTEX, FRAGMENT)?;
+        // Everything created is deleted again if a step fails
+        let mut objects = gl::Objects::new(gl);
+        let program = objects.program(VERTEX, FRAGMENT)?;
         let uniforms = gl::uniforms(
             gl,
             program,
@@ -144,14 +146,14 @@ impl Sky {
                 "u_factor",
             ],
         );
-        let atmosphere_program = gl::program(gl, VERTEX, ATMOSPHERE)?;
+        let atmosphere_program = objects.program(VERTEX, ATMOSPHERE)?;
         let atmosphere_uniforms = gl::uniforms(
             gl,
             atmosphere_program,
             ["u_inverse", "u_sky", "u_horizon", "u_fog", "u_blend", "u_factor"],
         );
-        // SAFETY: object creation on a live context
-        let vao = unsafe { gl.create_vertex_array()? };
+        let vao = objects.vertex_array()?;
+        objects.keep();
         Ok(Self {
             program,
             uniforms,
@@ -186,6 +188,15 @@ impl Sky {
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.bind_vertex_array(None);
             gl.enable(glow::CULL_FACE);
+        }
+    }
+
+    pub fn delete(&self, gl: &glow::Context) {
+        // SAFETY: objects owned by the sky, not used afterwards
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_program(self.atmosphere_program);
+            gl.delete_vertex_array(self.vao);
         }
     }
 

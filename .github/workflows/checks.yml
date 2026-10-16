@@ -1,4 +1,4 @@
-# Lint, types and tests on every push and pull request
+# Format, lint, types and tests on every push and pull request; on main, the documentation is deployed once they pass
 name: Checks
 
 on:
@@ -11,17 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
+      # The toolchain of rust-toolchain.toml (components and target included)
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # The version of the wasm-bindgen crate in Cargo.lock: the bindings generator must match it
+      - id: versions
+        run: echo "wasm-bindgen=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.129
+          tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
+      - run: bun run docs:check

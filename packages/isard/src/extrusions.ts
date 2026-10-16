@@ -37,7 +37,8 @@ export interface ExtrusionOptions<P = Properties> extends Partial<ExtrusionStyle
   data?: FeatureData<P>;
 }
 
-type Key = string | number;
+/** Key of a tile of extrusions (see `ExtrusionLayer.setTile`) */
+export type TileKey = string | number;
 
 /**
  * Polygons as typed arrays, for tiles decoded in a worker (no GeoJSON in between): points in Mercator [0, 1] (x, y
@@ -62,14 +63,15 @@ interface Tile<P> {
   anchors: Float32Array | undefined;
 }
 
-/** Key of the set given as `data` */
+/** TileKey of the set given as `data` */
 const DATA = Symbol('data');
 
 export class ExtrusionLayer<P = Properties> extends Layer {
-  private readonly tiles = new Map<Key | typeof DATA, Tile<P>>();
+  private readonly tiles = new Map<TileKey | typeof DATA, Tile<P>>();
   private nextBatch = 1;
   private network: { layer: NetworkLayer; max: number } | undefined;
 
+  /** @internal */
   constructor(
     map: LayerHost,
     data: FeatureData<P> | undefined,
@@ -102,7 +104,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   /** Adds or replaces the buildings of a tile: GeoJSON, or typed arrays with the properties of each feature */
-  setTile(key: Key, data: FeatureData<P> | { arrays: PolygonArrays; properties: P[] }): void {
+  setTile(key: TileKey, data: FeatureData<P> | { arrays: PolygonArrays; properties: P[] }): void {
     if ('arrays' in data) this.put(key, data.properties, undefined, data.arrays);
     else {
       const features = featuresOf(data);
@@ -115,7 +117,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     }
   }
 
-  removeTile(key: Key): void {
+  removeTile(key: TileKey): void {
     const tile = this.tiles.get(key);
     if (!tile) return;
     this.tiles.delete(key);
@@ -124,12 +126,12 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   /** Keys of the tiles held */
-  get tileKeys(): Key[] {
-    return [...this.tiles.keys()].filter((k): k is Key => k !== DATA);
+  get tileKeys(): TileKey[] {
+    return [...this.tiles.keys()].filter((k): k is TileKey => k !== DATA);
   }
 
   /** The properties of the features of a tile (or of the data) */
-  properties(key?: Key): readonly P[] {
+  properties(key?: TileKey): readonly P[] {
     return this.tiles.get(key ?? DATA)?.properties ?? [];
   }
 
@@ -149,7 +151,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   /** The tile and the index in it of a picked index */
-  tileAt(index: number): { key: Key | undefined; index: number } | undefined {
+  tileAt(index: number): { key: TileKey | undefined; index: number } | undefined {
     let rest = index;
     for (const [key, tile] of [...this.tiles].sort((a, b) => a[1].batch - b[1].batch)) {
       if (rest < tile.properties.length) return { key: key === DATA ? undefined : key, index: rest };
@@ -177,7 +179,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   /** One value per building of a tile (or of the data), colored through the ramp; NaN keeps a building's color */
-  setValues(values: Float32Array | undefined, key?: Key): void {
+  setValues(values: Float32Array | undefined, key?: TileKey): void {
     const tile = this.tiles.get(key ?? DATA);
     if (!tile) return;
     tile.values = values;
@@ -201,7 +203,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   /** Per building of a tile (or of the data): node A, node B, cost from A, cost from B (4 floats each) */
-  setAnchors(anchors: Float32Array, key?: Key): void {
+  setAnchors(anchors: Float32Array, key?: TileKey): void {
     const tile = this.tiles.get(key ?? DATA);
     if (!tile) return;
     tile.anchors = anchors;
@@ -210,7 +212,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   private put(
-    key: Key | typeof DATA,
+    key: TileKey | typeof DATA,
     properties: P[],
     features: Feature<P>[] | undefined,
     arrays: PolygonArrays | undefined,
@@ -275,6 +277,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     engine.linkExtrusionNetwork(id, n?.layer.id, n ? Math.min(n.max, 1e29) : 0);
   }
 
+  /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addExtrusions();
     this.sendLayer(engine, id);

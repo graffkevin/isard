@@ -1,6 +1,8 @@
 # API
 
-Everything is typed: the declarations ship with the package, under `strict` and `exactOptionalPropertyTypes`.
+Everything is typed: the declarations ship with the package, under `strict` and `exactOptionalPropertyTypes`. This
+page is an overview; the [reference](/reference/) lists every class, option and type, generated from those
+declarations.
 
 ## `GeoMap.create(container, options)`
 

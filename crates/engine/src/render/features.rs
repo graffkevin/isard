@@ -15,6 +15,7 @@ use crate::engine::Engine;
 use crate::render::circles::CircleLayer;
 use crate::render::extrusions::ExtrusionLayer;
 use crate::render::fills::FillLayer;
+use crate::render::gl::{self, Objects};
 use crate::render::lines::LineLayer;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
@@ -23,8 +24,6 @@ use wasm_bindgen::prelude::*;
 pub const TEXELS: usize = 8;
 /// Floats per feature in the style given to `Features::set_style`
 pub const FLOATS: usize = TEXELS * 4;
-/// Width of the feature textures
-const WIDTH: usize = 4096;
 /// Values from here up keep the feature's own color
 pub const NO_VALUE: f32 = 1e29;
 /// Texels of the ramp texture
@@ -168,74 +167,50 @@ impl FeatureUniforms {
     }
 }
 
-/// Rows of a texture of `texels` texels
-fn rows(texels: usize) -> usize {
-    texels.div_ceil(WIDTH).max(1)
-}
-
 impl Features {
     /// Textures for `count` features: black, size 1, visible, no value
     pub fn new(gl: &glow::Context, count: usize) -> Result<Self, String> {
-        // SAFETY: texture creation and uploads on a live context
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let style = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, count * TEXELS)?);
+        let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, count)?);
+        let mask = objects.adopt_texture(gl::table_texture(gl, glow::R8, count)?);
+        let ramp = objects.texture()?;
+        // SAFETY: storage and parameters of a texture just created on a live context
         unsafe {
-            let make = |format: u32, texels: usize, filter: u32| -> Result<glow::Texture, String> {
-                let texture = gl.create_texture()?;
-                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                let (w, h) = if texels == RAMP {
-                    (RAMP, 1)
-                } else {
-                    (WIDTH, rows(texels))
-                };
-                gl.tex_storage_2d(glow::TEXTURE_2D, 1, format, w as i32, h as i32);
-                for (key, value) in [
-                    (glow::TEXTURE_MIN_FILTER, filter),
-                    (glow::TEXTURE_MAG_FILTER, filter),
-                    (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-                    (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-                ] {
-                    gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
-                }
-                Ok(texture)
-            };
-            let features = Self {
-                count,
-                style: make(glow::RGBA32F, count * TEXELS, glow::NEAREST)?,
-                values: make(glow::R32F, count, glow::NEAREST)?,
-                mask: make(glow::R8, count, glow::NEAREST)?,
-                ramp: make(glow::RGBA8, RAMP, glow::LINEAR)?,
-                ramp_range: None,
-                layer: LayerStyle::default(),
-            };
-            let mut style = vec![0f32; count * FLOATS];
-            for s in style.as_chunks_mut::<FLOATS>().0 {
-                // Opaque black, sizes 1 at every zoom
-                s[3] = 1.0;
-                s[7] = 1.0;
-                s[12..16].fill(1.0);
-                s[20..24].fill(1.0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
+            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP as i32, 1);
+            for (key, value) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
             }
-            features.set_style(gl, &style);
-            features.set_values(gl, &vec![NO_VALUE; count]);
-            features.set_mask(gl, &vec![255u8; count]);
-            Ok(features)
         }
+        objects.keep();
+        let features = Self {
+            count,
+            style,
+            values,
+            mask,
+            ramp,
+            ramp_range: None,
+            layer: LayerStyle::default(),
+        };
+        features.set_style(gl, &default_style(count));
+        features.set_values(gl, &vec![NO_VALUE; count]);
+        features.set_mask(gl, &vec![255u8; count]);
+        Ok(features)
     }
 
     /// `FLOATS` per feature: color (RGBA 0-1), second color, then two sizes as stops: four zooms, four values each
     pub fn set_style(&self, gl: &glow::Context, style: &[f32]) {
         let n = (style.len() / FLOATS).min(self.count) * FLOATS;
-        // SAFETY: upload inside the texture allocated for `count` features
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.style));
-            upload(
-                gl,
-                bytemuck::cast_slice(&style[..n]),
-                n / 4,
-                glow::RGBA,
-                glow::FLOAT,
-                16,
-            );
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.style)) };
+        gl::upload_table(gl, gl::bytes(&style[..n]), n / 4, glow::RGBA, glow::FLOAT, 16);
     }
 
     /// One value per feature; from `NO_VALUE` up (or NaN), the feature keeps its own color
@@ -245,23 +220,17 @@ impl Features {
             .iter()
             .map(|&v| if v.is_nan() { NO_VALUE } else { v.min(NO_VALUE) })
             .collect();
-        // SAFETY: upload inside the texture allocated for `count` features
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.values));
-            upload(gl, bytemuck::cast_slice(&clean), n, glow::RED, glow::FLOAT, 4);
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.values)) };
+        gl::upload_table(gl, gl::bytes(&clean), n, glow::RED, glow::FLOAT, 4);
     }
 
     /// One byte per feature: 0 hides it
     pub fn set_mask(&self, gl: &glow::Context, mask: &[u8]) {
         let n = mask.len().min(self.count);
-        // SAFETY: upload inside the texture allocated for `count` features
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.mask));
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            upload(gl, &mask[..n], n, glow::RED, glow::UNSIGNED_BYTE, 1);
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.mask)) };
+        gl::upload_table(gl, &mask[..n], n, glow::RED, glow::UNSIGNED_BYTE, 1);
     }
 
     /// Colors of the values from `min` to `max`: 256 RGBA texels; None: features keep their own colors
@@ -336,67 +305,24 @@ impl Features {
     }
 }
 
-/// Uploads `texels` texels of `data` into the bound texture (rows of `WIDTH`) from its first texel; `size`: bytes
-/// per texel
-unsafe fn upload(gl: &glow::Context, data: &[u8], texels: usize, format: u32, kind: u32, size: usize) {
-    let (full, rest) = (texels / WIDTH, texels % WIDTH);
-    // SAFETY: the caller bound a texture large enough for `data`
-    unsafe {
-        if full > 0 {
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                WIDTH as i32,
-                full as i32,
-                format,
-                kind,
-                glow::PixelUnpackData::Slice(Some(&data[..full * WIDTH * size])),
-            );
-        }
-        if rest > 0 {
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                full as i32,
-                rest as i32,
-                1,
-                format,
-                kind,
-                glow::PixelUnpackData::Slice(Some(&data[full * WIDTH * size..texels * size])),
-            );
-        }
-    }
-}
-
 /// A texture of two floats per entry (RG32F), read with `feature_texel`: the feature of each line and its length,
 /// exact up to 2^24 features
 pub fn index_texture(gl: &glow::Context, entries: &[f32]) -> Result<glow::Texture, String> {
-    // SAFETY: texture creation and upload on a live context
-    unsafe {
-        let texture = gl.create_texture()?;
-        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-        gl.tex_storage_2d(
-            glow::TEXTURE_2D,
-            1,
-            glow::RG32F,
-            WIDTH as i32,
-            rows(entries.len() / 2) as i32,
-        );
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-        upload(
-            gl,
-            bytemuck::cast_slice(entries),
-            entries.len() / 2,
-            glow::RG,
-            glow::FLOAT,
-            8,
-        );
-        Ok(texture)
+    let texture = gl::table_texture(gl, glow::RG32F, entries.len() / 2)?;
+    gl::upload_table(gl, gl::bytes(entries), entries.len() / 2, glow::RG, glow::FLOAT, 8);
+    Ok(texture)
+}
+
+/// The style of `count` features before any is given: opaque black, sizes 1 at every zoom
+fn default_style(count: usize) -> Vec<f32> {
+    let mut style = vec![0f32; count * FLOATS];
+    for s in style.as_chunks_mut::<FLOATS>().0 {
+        s[3] = 1.0;
+        s[7] = 1.0;
+        s[12..16].fill(1.0);
+        s[20..24].fill(1.0);
     }
+    style
 }
 
 impl Engine {
@@ -462,16 +388,66 @@ impl Engine {
             visible,
             ..LayerStyle::default()
         };
-        if let (Some(zooms), Some(values)) = (opacity.get(..4), opacity.get(4..8)) {
-            style.opacity = [
-                [zooms[0], zooms[1], zooms[2], zooms[3]],
-                [values[0], values[1], values[2], values[3]],
-            ];
+        if let Some(stops) = stops_of(opacity) {
+            style.opacity = stops;
         }
         if let Some((layer, _)) = self.layer_mut::<ExtrusionLayer>(id) {
             layer.layer = style;
             return;
         }
         self.with_features(id, None, |features, _| features.layer = style);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stops_interpolate_linearly_and_hold_outside() {
+        let s = [[10.0, 12.0, 14.0, 16.0], [1.0, 3.0, 3.0, 0.0]];
+        assert_eq!(stops(&s, 5.0), 1.0);
+        assert_eq!(stops(&s, 11.0), 2.0);
+        assert_eq!(stops(&s, 13.0), 3.0);
+        assert_eq!(stops(&s, 15.0), 1.5);
+        assert_eq!(stops(&s, 20.0), 0.0);
+        // Equal zooms: a step, no division by zero
+        let step = [[10.0, 10.0, 10.0, 10.0], [0.0, 1.0, 1.0, 1.0]];
+        assert_eq!(stops(&step, 9.0), 0.0);
+        assert_eq!(stops(&step, 11.0), 1.0);
+    }
+
+    #[test]
+    fn stops_of_reads_eight_floats() {
+        let f = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        assert_eq!(stops_of(&f), Some([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]));
+        assert_eq!(stops_of(&f[..7]), None);
+    }
+
+    #[test]
+    fn the_default_style_is_black_and_sizes_one() {
+        let s = default_style(2);
+        assert_eq!(s.len(), 2 * FLOATS);
+        assert_eq!(&s[FLOATS..FLOATS + 8], &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        // Zooms 0, sizes 1
+        assert_eq!(&s[8..16], &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(&s[16..24], &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn layers_show_in_their_zoom_range() {
+        let style = LayerStyle {
+            min_zoom: 10.0,
+            max_zoom: 14.0,
+            ..LayerStyle::default()
+        };
+        assert!(!style.shows(9.99) && style.shows(10.0) && style.shows(13.9) && !style.shows(14.0));
+        assert!(
+            !LayerStyle {
+                visible: false,
+                ..LayerStyle::default()
+            }
+            .shows(12.0)
+        );
     }
 }

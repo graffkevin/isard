@@ -3,12 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vitepress dev",
-    "build": "vitepress build",
-    "preview": "vitepress preview"
+    "dev": "typedoc && vitepress dev",
+    "build": "typedoc && vitepress build",
+    "preview": "vitepress preview",
+    "check": "typedoc --emit none --treatWarningsAsErrors"
   },
   "devDependencies": {
     "@vue/server-renderer": "^3.5.44",
+    "typedoc": "0.28.20",
+    "typedoc-plugin-markdown": "4.14.0",
+    "typedoc-vitepress-theme": "1.1.4",
     "vitepress": "^1.6.3",
     "vue": "^3.5.44"
   }

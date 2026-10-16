@@ -12,206 +12,39 @@
 //! first, so that the streets add up into a heat map. In relief, the pieces stand on the ground (`drape`) and the
 //! hills hide the lines behind them.
 
+mod shaders;
+
 use crate::engine::Engine;
 use crate::js;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{stops, stops_of};
-use crate::render::gl::{self, Projection, bytes as as_bytes};
+use crate::render::gl::{self, Objects, Projection, bytes as as_bytes};
+use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
 use crate::render::raster::RasterSource;
 use geo::camera::{Camera, View};
 use geo::pieces::{self, Grid, Lines};
 use glam::DVec2;
 use glow::HasContext;
+use shaders::{FRAGMENT, PICK_FRAGMENT, VALUE, VERTEX};
 use std::cell::Cell;
 use wasm_bindgen::prelude::*;
-
-/// Width of the node and edge textures; 4096 is supported everywhere WebGL2 is
-const WIDTH: usize = 4096;
 
 /// Stored for a closed way: Infinity does not survive every driver's float textures (some read it back as 0); the
 /// shader takes values and costs from 1e29 up as unreachable
 const CLOSED: f32 = 1e30;
 
-const VERTEX: &str = r"
-uniform mat4 u_matrix;
-// Piece ends are Mercator, relative to the network origin: on the plane, in pixels from the camera center
-// (u_world, pixels per world, comes with PROJECT)
-uniform vec2 u_plane_origin;
-uniform vec2 u_origin;
-uniform vec2 u_viewport;
-uniform float u_width;
-// Pulls the lines towards the camera in relief (clip space), so that they win over the ground they lie on
-uniform float u_depth_bias;
-uniform int u_segments;
-uniform bool u_with_costs;
-uniform highp sampler2D u_values;
-uniform highp usampler2D u_edges;
-uniform highp sampler2D u_costs;
-// Width factor of each edge (rail lines wider than streets)
-uniform highp sampler2D u_scales;
-uniform float u_max;
-uniform float u_halo;
-// From, to (Mercator offsets); fractions of the edge's length at both ends; the edge
-layout(location = 0) in vec4 a_piece;
-layout(location = 1) in vec2 a_fractions;
-layout(location = 2) in uint a_edge;
-#ifdef PICK
-flat out uint v_id;
-#endif
-out float v_fraction;
-flat out vec4 v_ends;
-out float v_across;
-flat out float v_half;
-
-ivec2 texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
-
-// Clip position of the point at `t` along the piece, standing on the ground in relief
-vec4 clip(float t) {
-  vec2 offset = mix(a_piece.xy, a_piece.zw, t);
-  vec2 merc = u_origin + offset;
-  vec4 c = u_matrix * vec4(project_up(u_plane_origin + offset * u_world, merc, altitude(merc)), 1.0);
-  c.z -= u_depth_bias;
-  return c;
-}
-
-void hide() { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
-
-void main() {
-  uvec2 nodes = texelFetch(u_edges, texel(a_edge), 0).xy;
-  vec2 costs = u_with_costs ? texelFetch(u_costs, texel(a_edge), 0).xy : vec2(0.0);
-  // An edge closed both ways is not drawn
-  if (u_with_costs && costs.x >= 1e29 && costs.y >= 1e29) { hide(); return; }
-  v_ends = vec4(texelFetch(u_values, texel(nodes.x), 0).r, texelFetch(u_values, texel(nodes.y), 0).r, costs);
-  // The halo of an edge reached at neither end within the maximum draws nothing: out of the clip space, it costs no
-  // pixel (a million wide quads zoomed out would saturate the graphics card)
-  bool near_a = v_ends.x >= 0.0 && v_ends.x <= u_max;
-  bool near_b = v_ends.y >= 0.0 && v_ends.y <= u_max;
-  if (u_halo > 0.0 && !near_a && !near_b) { hide(); return; }
-  float width = u_width * texelFetch(u_scales, texel(a_edge), 0).r;
-  // The piece is a strip of `u_segments` parts (1 on flat ground; in relief each part follows the ground)
-  int k = gl_VertexID >> 1;
-  float side = float(gl_VertexID & 1) * 2.0 - 1.0;
-  float step = 1.0 / float(u_segments);
-  float t = float(k) * step;
-  vec4 c = clip(t);
-  vec4 prev = k > 0 ? clip(t - step) : c;
-  vec4 next = k < u_segments ? clip(t + step) : c;
-  if (c.w <= 0.0 || prev.w <= 0.0 || next.w <= 0.0) { hide(); return; }
-  vec2 s = c.xy / c.w * u_viewport;
-  vec2 dir = next.xy / next.w * u_viewport - prev.xy / prev.w * u_viewport;
-  dir = length(dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
-  vec2 normal = vec2(-dir.y, dir.x);
-  // Half width plus one pixel for the antialiasing ramp; caps extended by the same amount
-  float half_width = width * 0.5 + 1.0;
-  float cap = k == 0 ? -1.0 : k == u_segments ? 1.0 : 0.0;
-  s += normal * side * half_width + dir * cap * half_width * 0.5;
-  gl_Position = vec4(s / u_viewport * c.w, c.z, c.w);
-  v_fraction = mix(a_fractions.x, a_fractions.y, t);
-  v_across = side * half_width;
-  v_half = half_width;
-#ifdef PICK
-  v_id = a_edge + 1u;
-#endif
-}";
-
-/// Value at a pixel of an edge; negative: unreached
-const VALUE: &str = r"
-uniform bool u_with_costs;
-in float v_fraction;
-flat in vec4 v_ends;
-
-float value() {
-  float ta = v_ends.x, tb = v_ends.y;
-  bool ra = ta >= 0.0 && ta < 1e29;
-  bool rb = tb >= 0.0 && tb < 1e29;
-  if (!u_with_costs) return ra && rb ? mix(ta, tb, v_fraction) : -1.0;
-  // The quickest way here: from A forwards or from B backwards
-  float t = 1e30;
-  if (ra && v_ends.z < 1e29) t = ta + v_fraction * v_ends.z;
-  if (rb && v_ends.w < 1e29) t = min(t, tb + (1.0 - v_fraction) * v_ends.w);
-  return t >= 1e29 ? -1.0 : t;
-}
-";
-
-const FRAGMENT: &str = r"
-uniform float u_max;
-uniform float u_contour;
-uniform float u_opacity;
-// 0: the lines; 1: the halo (wide, faint, reached parts only)
-uniform float u_halo;
-uniform sampler2D u_ramp;
-// Color of the parts beyond the maximum (or unreached), straight alpha
-uniform vec4 u_unreached;
-// Share of the maximum over which the colors fade out before it, 0 for none
-uniform float u_fade;
-in float v_across;
-flat in float v_half;
-out vec4 color;
-
-vec3 ramp(float t) { return texture(u_ramp, vec2((clamp(t, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.5)).rgb; }
-
-void main() {
-  float v = value();
-  bool reached = v >= 0.0 && v <= u_max;
-  float fade = u_fade > 0.0 && reached ? 1.0 - smoothstep(u_max * (1.0 - u_fade), u_max, v) : 1.0;
-  if (u_halo > 0.0) {
-    if (!reached) discard;
-    // Quadratic falloff from the middle of the line: overlapping streets add up and fill the blocks
-    float d = 1.0 - clamp(abs(v_across) / v_half, 0.0, 1.0);
-    color = vec4(ramp(v / u_max), d * d * u_opacity * fade);
-    return;
-  }
-  float edge = clamp(v_half - abs(v_across), 0.0, 1.0);
-  vec3 rgb = reached ? ramp(v / u_max) : u_unreached.rgb;
-  float alpha = reached ? fade : u_unreached.a;
-  if (reached && u_contour > 0.0) {
-    float d = abs(fract(v / u_contour + 0.5) - 0.5) * u_contour;
-    float w = fwidth(v);
-    rgb *= mix(0.45, 1.0, smoothstep(w * 0.5, w * 1.5, d));
-  }
-  color = vec4(rgb, alpha * edge * u_opacity);
-}";
-
-/// Picking pass: the edge number (+1) in RGB, the layer in alpha; no blending, no antialiasing
-const PICK_FRAGMENT: &str = r"
-uniform float u_layer;
-in float v_across;
-flat in float v_half;
-flat in uint v_id;
-out vec4 color;
-void main() {
-  if (abs(v_across) > v_half) discard;
-  color = vec4(float(v_id & 255u), float((v_id >> 8) & 255u), float((v_id >> 16) & 255u), u_layer) / 255.0;
-}";
-
 /// Extra width of the lines in the picking pass, CSS pixels: thin lines stay easy to hover
 const PICK_SLOP: f64 = 6.0;
 
-/// Lines in relief are pulled towards the camera by this fraction of their distance: the ground under them is
-/// interpolated between the vertices of its mesh and can rise a little above the line
-const DEPTH_BIAS: f64 = 0.002;
-
-/// Parts of each piece in relief: a straight piece would cut through the bumps of the ground between its ends
-const RELIEF_SEGMENTS: i32 = 8;
-
-/// Altitudes the network may stand at in relief (metres, before exaggeration), to bound the squares in view
-const RELIEF_RANGE: (f64, f64) = (-200.0, 5000.0);
-
-/// Uniforms of a pass, by name
-const UNIFORMS: [&str; 21] = [
-    "u_matrix",
-    "u_viewport",
+/// Uniforms of a pass, by name (besides `Anchor`'s)
+const UNIFORMS: [&str; 15] = [
     "u_width",
     "u_values",
     "u_max",
     "u_contour",
     "u_opacity",
-    "u_plane_origin",
-    "u_world",
-    "u_origin",
     "u_layer",
-    "u_depth_bias",
     "u_segments",
     "u_with_costs",
     "u_edges",
@@ -222,25 +55,32 @@ const UNIFORMS: [&str; 21] = [
     "u_unreached",
     "u_fade",
 ];
+/// Index of `u_layer` in `UNIFORMS`
+const LAYER_UNIFORM: usize = 5;
 
 /// A program with its uniforms
 struct Pass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 21],
+    uniforms: [Option<glow::UniformLocation>; 15],
+    anchor: Anchor,
     projection: Projection,
     drape: DrapeUniforms,
 }
 
 impl Pass {
-    fn new(gl: &glow::Context, defines: &str, fragment: &str) -> Result<Self, String> {
-        let program = gl::program(
-            gl,
-            &format!("#version 300 es\n{defines}{}{}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
+    fn new(objects: &mut Objects, gl: &glow::Context, defines: &str, fragment: &str) -> Result<Self, String> {
+        let program = objects.program(
+            &format!(
+                "#version 300 es\n{defines}{}{}{ANCHOR}{LINE}{VERTEX}",
+                gl::PROJECT,
+                drape::ALTITUDE
+            ),
             &format!("#version 300 es\nprecision highp float;\n{defines}{VALUE}{fragment}"),
         )?;
         Ok(Self {
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
+            anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape: DrapeUniforms::new(gl, program),
         })
@@ -328,9 +168,6 @@ pub struct NetworkLayer {
     drawn: Cell<u32>,
 }
 
-/// Bytes per piece: from, to (4 × f32), fractions (2 × f32), edge (u32)
-const STRIDE: i32 = 28;
-
 impl NetworkLayer {
     /// `mercator`: node positions in Mercator [0, 1] (y towards the south), interleaved; `edges`: node index pairs,
     /// interleaved; `lines`: the line of each edge from A to B (offsets of edge `e`'s points: `start[e] .. start[e +
@@ -344,45 +181,31 @@ impl NetworkLayer {
         style: NetworkStyle,
     ) -> Result<Self, String> {
         let nodes = mercator.len() / 2;
-        if let Some(bad) = edges.iter().find(|&&i| i as usize >= nodes) {
-            return Err(format!("edge to node {bad}, only {nodes} nodes"));
-        }
+        check_edges(edges, nodes)?;
         let edge_count = edges.len() / 2;
-        let shaded = Pass::new(gl, "", FRAGMENT)?;
-        let pick = Pass::new(gl, "#define PICK\n", PICK_FRAGMENT)?;
+        overlay::pick_ids_fit(edge_count, "network layer");
         // The points as they came, no copy (millions for a region): pairs of f64 are a DVec2
         let merc: &[DVec2] = bytemuck::cast_slice(&mercator[..nodes * 2]);
         let lines = lines.map(|(start, line)| Lines {
             start,
             points: bytemuck::cast_slice(&line[..line.len() / 2 * 2]),
         });
-        let (min, max) = merc.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-            (a.min(p), b.max(p))
-        });
-        let origin = if nodes == 0 { DVec2::ZERO } else { (min + max) / 2.0 };
+        let origin = overlay::bounds(merc).map_or(DVec2::ZERO, |(min, max)| (min + max) / 2.0);
         let built = pieces::build(merc, edges, lines.as_ref(), origin);
-        // SAFETY: object creation and uploads on a live WebGL2 context
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let shaded = Pass::new(&mut objects, gl, "", FRAGMENT)?;
+        let pick = Pass::new(&mut objects, gl, "#define PICK\n", PICK_FRAGMENT)?;
+        let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, nodes)?);
+        let edge_texture = objects.adopt_texture(gl::table_texture(gl, glow::RG32UI, edge_count)?);
+        gl::upload_table(gl, as_bytes(edges), edge_count, glow::RG_INTEGER, glow::UNSIGNED_INT, 8);
+        let cost_texture = objects.adopt_texture(gl::table_texture(gl, glow::RG32F, edge_count)?);
+        let scales = objects.adopt_texture(gl::table_texture(gl, glow::R32F, edge_count)?);
+        let ramp = objects.texture()?;
+        let vao = objects.vertex_array()?;
+        let buffer = objects.buffer()?;
+        // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
         unsafe {
-            let node_rows = nodes.div_ceil(WIDTH).max(1);
-            let edge_rows = edge_count.div_ceil(WIDTH).max(1);
-            let values = texture(gl, glow::R32F, node_rows)?;
-            let edge_texture = texture(gl, glow::RG32UI, edge_rows)?;
-            let mut padded = vec![0u32; edge_rows * WIDTH * 2];
-            padded[..edges.len()].copy_from_slice(edges);
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                WIDTH as i32,
-                edge_rows as i32,
-                glow::RG_INTEGER,
-                glow::UNSIGNED_INT,
-                glow::PixelUnpackData::Slice(Some(as_bytes(&padded))),
-            );
-            let cost_texture = texture(gl, glow::RG32F, edge_rows)?;
-            let scales = texture(gl, glow::R32F, edge_rows)?;
-            let ramp = gl.create_texture()?;
             gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
             gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, 256, 1);
             for (key, value) in [
@@ -393,8 +216,6 @@ impl NetworkLayer {
             ] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
             }
-            let vao = gl.create_vertex_array()?;
-            let buffer = gl.create_buffer()?;
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, as_bytes(&built.pieces), glow::STATIC_DRAW);
@@ -403,44 +224,43 @@ impl NetworkLayer {
                 gl.vertex_attrib_divisor(location, 1);
             }
             gl.bind_vertex_array(None);
-            let mut layer = Self {
-                style,
-                shaded,
-                pick,
-                vao,
-                pieces: buffer,
-                values,
-                edges: edge_texture,
-                costs: cost_texture,
-                scales,
-                ramp,
-                with_costs: false,
-                origin,
-                grid: built.grid,
-                start: built.start,
-                drape: Drape::new(),
-                nodes,
-                edge_count,
-                piece_count: built.pieces.len(),
-                drawn: Cell::new(0),
-            };
-            // Unreached until the first values
-            layer.set_values(gl, &vec![-1.0; nodes]);
-            layer.set_costs(gl, costs);
-            layer.set_scales(gl, None);
-            layer.set_ramp(gl, None);
-            Ok(layer)
         }
+        objects.keep();
+        let mut layer = Self {
+            style,
+            shaded,
+            pick,
+            vao,
+            pieces: buffer,
+            values,
+            edges: edge_texture,
+            costs: cost_texture,
+            scales,
+            ramp,
+            with_costs: false,
+            origin,
+            grid: built.grid,
+            start: built.start,
+            drape: Drape::new(),
+            nodes,
+            edge_count,
+            piece_count: built.pieces.len(),
+            drawn: Cell::new(0),
+        };
+        // Unreached until the first values
+        layer.set_values(gl, &vec![-1.0; nodes]);
+        layer.set_costs(gl, costs);
+        layer.set_scales(gl, None);
+        layer.set_ramp(gl, None);
+        Ok(layer)
     }
 
     /// One value per node, in node order; negative (or 1e30 and above) = unreached
     pub fn set_values(&mut self, gl: &glow::Context, values: &[f32]) {
         let n = values.len().min(self.nodes);
-        // SAFETY: uploads inside the texture allocated for `nodes` values
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.values));
-            upload(gl, &values[..n], 1, glow::RED);
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.values)) };
+        gl::upload_table(gl, as_bytes(&values[..n]), n, glow::RED, glow::FLOAT, 4);
     }
 
     /// Per edge, the cost of travelling it from A to B then from B to A (Infinity: closed that way); None: values
@@ -455,11 +275,9 @@ impl NetworkLayer {
             .take(self.edge_count * 2)
             .map(|&c| if c.is_nan() { CLOSED } else { c.min(CLOSED) })
             .collect();
-        // SAFETY: uploads inside the texture allocated for `edge_count` pairs
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.costs));
-            upload(gl, &clamped, 2, glow::RG);
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.costs)) };
+        gl::upload_table(gl, as_bytes(&clamped), clamped.len() / 2, glow::RG, glow::FLOAT, 8);
     }
 
     /// Width factor of each edge (1 for all without)
@@ -469,27 +287,14 @@ impl NetworkLayer {
             let n = s.len().min(all.len());
             all[..n].copy_from_slice(&s[..n]);
         }
-        // SAFETY: upload inside the texture allocated for `edge_count` edges
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.scales));
-            upload(gl, &all[..self.edge_count], 1, glow::RED);
-        }
+        // SAFETY: binding a texture owned by this layer, for the upload inside its storage
+        unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.scales)) };
+        gl::upload_table(gl, as_bytes(&all), self.edge_count, glow::RED, glow::FLOAT, 4);
     }
 
     /// Colors of the values from 0 to the maximum: 256 RGBA texels; None: the default ramp, green to red
     pub fn set_ramp(&mut self, gl: &glow::Context, rgba: Option<&[u8]>) {
-        let default: Vec<u8> = (0..256)
-            .flat_map(|i| {
-                let t = i as f32 / 255.0 * 4.0;
-                let k = (t.floor() as usize).min(3);
-                let f = t - k as f32;
-                let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
-                [0, 1, 2]
-                    .map(|c| ((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8)
-                    .into_iter()
-                    .chain([255])
-            })
-            .collect();
+        let default = default_ramp();
         let data = rgba.filter(|r| r.len() >= 1024).unwrap_or(&default);
         // SAFETY: upload of the whole ramp texture
         unsafe {
@@ -518,16 +323,6 @@ impl NetworkLayer {
         (self.piece_count, self.drawn.get())
     }
 
-    /// Ranges of pieces in the squares in view
-    fn visible(&self, view: &View, relief: Option<(&RasterSource, f32)>) -> Vec<(u32, u32)> {
-        let heights = relief.map_or((0.0, 0.0), |(_, e)| {
-            let k = view.vertical * f64::from(e);
-            (RELIEF_RANGE.0 * k, RELIEF_RANGE.1 * k)
-        });
-        let shift = -(self.origin.x - view.center.x).round();
-        pieces::visible(&self.grid, &self.start, view, heights, shift)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn render(
         &self,
@@ -544,18 +339,12 @@ impl NetworkLayer {
             return;
         }
         let [
-            matrix,
-            viewport,
             width_u,
             values,
             max,
             contour,
             opacity,
-            plane_origin,
-            world,
-            origin,
             _,
-            depth_bias,
             segments,
             with_costs,
             edges,
@@ -566,29 +355,18 @@ impl NetworkLayer {
             unreached,
             fade,
         ] = &pass.uniforms;
-        let shift = -(self.origin.x - camera.center.x).round();
-        let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
         let style = &self.style;
         // SAFETY: draw with objects owned by this layer
         unsafe {
             gl.use_program(Some(pass.program));
-            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
-            gl.uniform_2_f32(plane_origin.as_ref(), plane.x as f32, plane.y as f32);
-            gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
-            gl.uniform_2_f32(origin.as_ref(), self.origin.x as f32, self.origin.y as f32);
+            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+            pass.anchor
+                .set_view(gl, view, viewport, relief.is_some(), LINE_DEPTH_BIAS);
+            pass.anchor.set_origin(gl, view, self.origin);
             pass.projection.set(gl, view);
             self.drape.bind(gl, &pass.drape, relief);
-            // About 0.2 % of the distance: in clip space a constant (2 × near × fraction)
-            let bias = if relief.is_some() {
-                2.0 * view.near * DEPTH_BIAS
-            } else {
-                0.0
-            };
-            gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
             let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
             gl.uniform_1_i32(segments.as_ref(), parts);
-            let (w, h) = (camera.width * pixel_ratio / 2.0, camera.height * pixel_ratio / 2.0);
-            gl.uniform_2_f32(viewport.as_ref(), w as f32, h as f32);
             gl.uniform_1_f32(width_u.as_ref(), (width.pixels * pixel_ratio) as f32);
             gl.uniform_1_f32(max.as_ref(), style.max);
             gl.uniform_1_f32(contour.as_ref(), style.contour);
@@ -646,7 +424,7 @@ impl Layer for NetworkLayer {
             );
             self.drape.update(gl, lo, hi, source);
         }
-        let ranges = self.visible(view, relief);
+        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, view, relief);
         self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
         // Line quads are built on screen, either way round
         // SAFETY: state changes on the live context, set back below
@@ -698,9 +476,9 @@ impl Layer for NetworkLayer {
         // SAFETY: uniform on the picking program
         unsafe {
             gl.use_program(Some(self.pick.program));
-            gl.uniform_1_f32(self.pick.uniforms[10].as_ref(), f32::from(layer));
+            gl.uniform_1_f32(self.pick.uniforms[LAYER_UNIFORM].as_ref(), f32::from(layer));
         }
-        let ranges = self.visible(view, relief);
+        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, view, relief);
         let width = Width {
             pixels: stops(&self.style.width, camera.zoom) + PICK_SLOP,
             halo: false,
@@ -732,52 +510,31 @@ struct Width {
     halo: bool,
 }
 
-/// Texture of `rows` × 4096 texels, nearest filtering (read with `texelFetch`), left bound
-unsafe fn texture(gl: &glow::Context, format: u32, rows: usize) -> Result<glow::Texture, String> {
-    // SAFETY: called with a live context
-    unsafe {
-        let texture = gl.create_texture()?;
-        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-        gl.tex_storage_2d(glow::TEXTURE_2D, 1, format, WIDTH as i32, rows as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-        Ok(texture)
+/// Edges as node index pairs: an even count, every node among the `nodes`
+fn check_edges(edges: &[u32], nodes: usize) -> Result<(), String> {
+    if !edges.len().is_multiple_of(2) {
+        return Err(format!("edges: node pairs expected, {} numbers", edges.len()));
     }
+    if let Some(bad) = edges.iter().find(|&&i| i as usize >= nodes) {
+        return Err(format!("edge to node {bad}, only {nodes} nodes"));
+    }
+    Ok(())
 }
 
-/// Uploads `data` (`channels` floats per texel) into the bound texture from its first texel, row after row
-unsafe fn upload(gl: &glow::Context, data: &[f32], channels: usize, format: u32) {
-    let texels = data.len() / channels;
-    let (full, rest) = (texels / WIDTH, texels % WIDTH);
-    // SAFETY: the caller bound a texture large enough for `data`
-    unsafe {
-        if full > 0 {
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                WIDTH as i32,
-                full as i32,
-                format,
-                glow::FLOAT,
-                glow::PixelUnpackData::Slice(Some(as_bytes(&data[..full * WIDTH * channels]))),
-            );
-        }
-        if rest > 0 {
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                full as i32,
-                rest as i32,
-                1,
-                format,
-                glow::FLOAT,
-                glow::PixelUnpackData::Slice(Some(as_bytes(&data[full * WIDTH * channels..texels * channels]))),
-            );
-        }
-    }
+/// The ramp used without one given: `DEFAULT_RAMP` over 256 RGBA texels
+fn default_ramp() -> Vec<u8> {
+    (0..256)
+        .flat_map(|i| {
+            let t = i as f32 / 255.0 * 4.0;
+            let k = (t.floor() as usize).min(3);
+            let f = t - k as f32;
+            let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
+            [0, 1, 2]
+                .map(|c| ((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8)
+                .into_iter()
+                .chain([255])
+        })
+        .collect()
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -869,5 +626,40 @@ impl Engine {
             let (pieces, drawn) = layer.counts();
             js::object(&[("pieces", (pieces as f64).into()), ("drawn", drawn.into())])
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn styles_read_25_floats() {
+        let mut f: Vec<f32> = (0..25).map(|i| i as f32).collect();
+        let s = NetworkStyle::from_floats(&f).unwrap();
+        assert_eq!(s.width, [[0.0, 1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0]]);
+        assert_eq!(s.halo[1], [12.0, 13.0, 14.0, 15.0]);
+        assert_eq!((s.max, s.contour, s.opacity, s.halo_opacity), (16.0, 17.0, 18.0, 19.0));
+        assert_eq!(s.unreached, [20.0, 21.0, 22.0, 23.0]);
+        assert_eq!(s.fade, 24.0);
+        f.pop();
+        assert!(NetworkStyle::from_floats(&f).is_none());
+    }
+
+    #[test]
+    fn edges_are_checked_before_any_upload() {
+        assert!(check_edges(&[0, 1, 1, 2], 3).is_ok());
+        assert!(check_edges(&[0, 1, 2], 3).is_err());
+        assert!(check_edges(&[0, 3], 3).is_err());
+        // An odd count past a full row of the texture (it used to panic)
+        assert!(check_edges(&vec![0; 2 * 4096 + 1], 1).is_err());
+    }
+
+    #[test]
+    fn the_default_ramp_runs_green_to_red() {
+        let r = default_ramp();
+        assert_eq!(r.len(), 1024);
+        assert_eq!(&r[..4], &[0, 168, 107, 255]);
+        assert_eq!(&r[1020..], &[232, 56, 79, 255]);
     }
 }

@@ -2,9 +2,11 @@
  * The parts of the MapLibre style specification a vector basemap needs, evaluated on the page: filters (legacy
  * `["==", "key", value]` forms and expressions), property values given as constants, legacy functions (`{ stops }`
  * of zoom or of a property: exponential, interval, categorical, identity) or expressions (`get`, `has`, `concat`,
- * `interpolate`, `step`, `match`, `case`, `coalesce`, comparisons, `all`, `any`, `!`, `in`, `zoom`, `to-number`,
- * `to-string`, `upcase`, `downcase`, `literal`), colors interpolated in RGBA, `{token}` text fields.
+ * `interpolate`, `step`, `match`, `case`, `coalesce`, comparisons, `all`, `any`, `!`, `in`, `zoom`, arithmetic,
+ * `format`, conversions and assertions, `upcase`, `downcase`, `literal`…; others give null, with a warning), colors
+ * interpolated in RGBA, `{token}` text fields.
  */
+import { parseCssColor } from './color.ts';
 import type { TileFeature, Value } from './mvt.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -29,6 +31,27 @@ export interface Style {
   sprite?: string;
 }
 
+/** A label to shape and place, in style terms evaluated at the tile's zoom */
+export interface LabelCandidate {
+  /** Index of its style layer: higher ones are placed first */
+  layer: number;
+  text: string;
+  lon: number;
+  lat: number;
+  /** Along a line: the direction there (degrees of longitude and latitude) */
+  along?: [number, number];
+  font: string;
+  size: Json;
+  color: string;
+  haloColor: string;
+  haloWidth: number;
+  anchor: string;
+  offset: [number, number];
+  maxWidth: number;
+  lineHeight: number;
+  overlap: boolean;
+}
+
 /** What expressions see of a feature */
 export interface Context {
   zoom: number;
@@ -47,45 +70,7 @@ export function context(feature: TileFeature, zoom: number): Context {
 
 /** A color to RGBA 0-1, undefined if it is not one */
 export function color(value: unknown): [number, number, number, number] | undefined {
-  if (typeof value !== 'string') return undefined;
-  const c = value.trim().toLowerCase();
-  if (c.startsWith('#')) {
-    const hex = c.slice(1);
-    const full = hex.length <= 4 ? [...hex].map((h) => h + h).join('') : hex;
-    const v = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255;
-    return [v(0), v(2), v(4), full.length >= 8 ? v(6) : 1];
-  }
-  const match = /^(rgba?|hsla?)\(([^)]*)\)$/.exec(c);
-  if (match?.[1] && match[2] !== undefined) {
-    const parts = match[2]
-      .split(/[\s,/]+/)
-      .filter(Boolean)
-      .map((p) => Number.parseFloat(p));
-    const a = parts[3] ?? 1;
-    if (match[1].startsWith('rgb')) return [(parts[0] ?? 0) / 255, (parts[1] ?? 0) / 255, (parts[2] ?? 0) / 255, a];
-    const [h, s, l] = [((parts[0] ?? 0) % 360) / 360, (parts[1] ?? 0) / 100, (parts[2] ?? 0) / 100];
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    const hue = (t: number) => {
-      const u = (t + 1) % 1;
-      if (u < 1 / 6) return p + (q - p) * 6 * u;
-      if (u < 1 / 2) return q;
-      if (u < 2 / 3) return p + (q - p) * (2 / 3 - u) * 6;
-      return p;
-    };
-    return [hue(h + 1 / 3), hue(h), hue(h - 1 / 3), a];
-  }
-  const named: Record<string, [number, number, number, number]> = {
-    black: [0, 0, 0, 1],
-    white: [1, 1, 1, 1],
-    transparent: [0, 0, 0, 0],
-    red: [1, 0, 0, 1],
-    blue: [0, 0, 1, 1],
-    green: [0, 0.5, 0, 1],
-    grey: [0.5, 0.5, 0.5, 1],
-    gray: [0.5, 0.5, 0.5, 1],
-  };
-  return named[c];
+  return parseCssColor(value);
 }
 
 export function css([r, g, b, a]: [number, number, number, number]): string {
@@ -160,12 +145,89 @@ function get(ctx: Context, key: unknown): unknown {
   return typeof key === 'string' ? ctx.properties[key] : undefined;
 }
 
+/** The operators `evaluate` knows */
+const OPERATORS = new Set([
+  'literal',
+  'zoom',
+  'get',
+  'has',
+  '!has',
+  'properties',
+  'id',
+  'geometry-type',
+  'concat',
+  'format',
+  'image',
+  'number-format',
+  'to-number',
+  'to-string',
+  'to-boolean',
+  'to-color',
+  'number',
+  'string',
+  'boolean',
+  'typeof',
+  'length',
+  'at',
+  'upcase',
+  'downcase',
+  'coalesce',
+  '!',
+  'all',
+  'any',
+  '==',
+  '!=',
+  '<',
+  '<=',
+  '>',
+  '>=',
+  'in',
+  'case',
+  'match',
+  'step',
+  'interpolate',
+  'interpolate-hcl',
+  'interpolate-lab',
+  'rgb',
+  'rgba',
+  '+',
+  '-',
+  '*',
+  '/',
+  '%',
+  '^',
+  'min',
+  'max',
+  'abs',
+  'round',
+  'floor',
+  'ceil',
+  'sqrt',
+  'ln',
+  'log10',
+  'log2',
+  'pi',
+  'e',
+]);
+
+/** Whether a value is an expression (an array starting with a known operator), not a literal array */
+export function isExpression(e: unknown): e is Json[] {
+  return Array.isArray(e) && typeof e[0] === 'string' && OPERATORS.has(e[0]);
+}
+
+/** Operators already warned about */
+const warned = new Set<string>();
+
+const str = (v: unknown) => (v === undefined || v === null ? '' : String(v));
+
 export function evaluate(e: Json, ctx: Context): unknown {
   if (isFunction(e)) return legacy(e, ctx);
   if (!Array.isArray(e)) return e;
   const [op, ...args] = e;
   if (typeof op !== 'string') return e;
   const ev = (i: number) => evaluate(args[i] ?? null, ctx);
+  const num = (i: number) => Number(ev(i));
+  const nums = () => args.map((_, i) => num(i));
   switch (op) {
     case 'literal':
       return args[0];
@@ -175,30 +237,82 @@ export function evaluate(e: Json, ctx: Context): unknown {
       return get(ctx, ev(0));
     case 'has':
       return get(ctx, ev(0)) !== undefined;
+    case '!has':
+      return get(ctx, ev(0)) === undefined;
+    case 'properties':
+      return ctx.properties;
+    case 'id':
+      return null;
     case 'geometry-type':
       return ctx.type;
     case 'concat':
-      return args
-        .map((_, i) => {
-          const v = ev(i);
-          return v === undefined || v === null ? '' : String(v);
-        })
-        .join('');
+      return args.map((_, i) => str(ev(i))).join('');
+    case 'format':
+      // Its text sections, the options of each (objects) left out
+      return args.map((a, i) => (a !== null && typeof a === 'object' && !Array.isArray(a) ? '' : str(ev(i)))).join('');
+    case 'image':
+      return ev(0);
+    case 'number-format': {
+      const options = (args[1] ?? {}) as {
+        locale?: string;
+        'min-fraction-digits'?: number;
+        'max-fraction-digits'?: number;
+      };
+      const n = num(0);
+      if (!Number.isFinite(n)) return '';
+      return n.toLocaleString(options.locale, {
+        minimumFractionDigits: options['min-fraction-digits'],
+        maximumFractionDigits: options['max-fraction-digits'],
+      });
+    }
     case 'to-number': {
       for (let i = 0; i < args.length; i += 1) {
-        const n = Number(ev(i));
-        if (!Number.isNaN(n)) return n;
+        const v = ev(i);
+        const n = typeof v === 'string' && v.trim() === '' ? Number.NaN : Number(v);
+        if (v !== null && v !== undefined && !Number.isNaN(n)) return n;
       }
       return 0;
     }
-    case 'to-string': {
+    case 'to-string':
+      return str(ev(0));
+    case 'to-boolean': {
       const v = ev(0);
-      return v === undefined || v === null ? '' : String(v);
+      return !(v === '' || v === 0 || v === false || v === null || v === undefined || Number.isNaN(v));
+    }
+    case 'to-color':
+    case 'number':
+    case 'string':
+    case 'boolean': {
+      // Assertions: the first value of the type, else the last one
+      const types: Record<string, (v: unknown) => boolean> = {
+        'to-color': (v) => color(v) !== undefined,
+        number: (v) => typeof v === 'number',
+        string: (v) => typeof v === 'string',
+        boolean: (v) => typeof v === 'boolean',
+      };
+      for (let i = 0; i < args.length; i += 1) {
+        const v = ev(i);
+        if (types[op]?.(v)) return v;
+      }
+      return args.length ? ev(args.length - 1) : null;
+    }
+    case 'typeof': {
+      const v = ev(0);
+      if (v === null || v === undefined) return 'null';
+      return Array.isArray(v) ? 'array' : typeof v;
+    }
+    case 'length': {
+      const v = ev(0);
+      return typeof v === 'string' || Array.isArray(v) ? v.length : 0;
+    }
+    case 'at': {
+      const v = ev(1);
+      return Array.isArray(v) ? (v[num(0)] ?? null) : null;
     }
     case 'upcase':
-      return String(ev(0) ?? '').toUpperCase();
+      return str(ev(0)).toUpperCase();
     case 'downcase':
-      return String(ev(0) ?? '').toLowerCase();
+      return str(ev(0)).toLowerCase();
     case 'coalesce':
       for (let i = 0; i < args.length; i += 1) {
         const v = ev(i);
@@ -242,7 +356,7 @@ export function evaluate(e: Json, ctx: Context): unknown {
       return ev(args.length - 1);
     }
     case 'step': {
-      const input = Number(ev(0));
+      const input = num(0);
       let out = ev(1);
       for (let i = 2; i + 1 < args.length; i += 2) {
         if (input >= Number(args[i])) out = ev(i + 1);
@@ -250,14 +364,16 @@ export function evaluate(e: Json, ctx: Context): unknown {
       }
       return out;
     }
-    case 'interpolate': {
+    case 'interpolate':
+    case 'interpolate-hcl':
+    case 'interpolate-lab': {
       const kind = args[0];
-      const input = Number(ev(1));
+      const input = num(1);
       const base = Array.isArray(kind) && kind[0] === 'exponential' ? Number(kind[1]) : 1;
       const stops: [number, Json][] = [];
       for (let i = 2; i + 1 < args.length; i += 2) stops.push([Number(args[i]), args[i + 1] ?? null]);
       const first = stops[0];
-      if (!first) return undefined;
+      if (!first) return null;
       if (input <= first[0]) return evaluate(first[1], ctx);
       for (let i = 1; i < stops.length; i += 1) {
         const [s0, s1] = [stops[i - 1], stops[i]];
@@ -266,8 +382,53 @@ export function evaluate(e: Json, ctx: Context): unknown {
       }
       return evaluate(stops.at(-1)?.[1] ?? null, ctx);
     }
+    case 'rgb':
+    case 'rgba':
+      return css([num(0) / 255, num(1) / 255, num(2) / 255, args.length > 3 ? num(3) : 1]);
+    case '+':
+      return nums().reduce((a, b) => a + b, 0);
+    case '*':
+      return nums().reduce((a, b) => a * b, 1);
+    case '-':
+      return args.length === 1 ? -num(0) : num(0) - num(1);
+    case '/':
+      return num(0) / num(1);
+    case '%':
+      return num(0) % num(1);
+    case '^':
+      return num(0) ** num(1);
+    case 'min':
+      return Math.min(...nums());
+    case 'max':
+      return Math.max(...nums());
+    case 'abs':
+      return Math.abs(num(0));
+    case 'round':
+      // Half away from zero, as MapLibre
+      return Math.sign(num(0)) * Math.round(Math.abs(num(0)));
+    case 'floor':
+      return Math.floor(num(0));
+    case 'ceil':
+      return Math.ceil(num(0));
+    case 'sqrt':
+      return Math.sqrt(num(0));
+    case 'ln':
+      return Math.log(num(0));
+    case 'log10':
+      return Math.log10(num(0));
+    case 'log2':
+      return Math.log2(num(0));
+    case 'pi':
+      return Math.PI;
+    case 'e':
+      return Math.E;
     default:
-      return e;
+      // Unsupported: no value (a filter drops the feature, a property takes its default)
+      if (!warned.has(op)) {
+        warned.add(op);
+        console.warn(`isard: the style expression "${op}" is not supported`);
+      }
+      return null;
   }
 }
 
@@ -275,28 +436,20 @@ export function evaluate(e: Json, ctx: Context): unknown {
 
 const LEGACY_COMPARISONS = new Set(['==', '!=', '<', '<=', '>', '>=']);
 
-/** Whether a filter is in the legacy form: `["==", "key", value]`, `["in", "key", a, b]`, `["has", "key"]` */
-function isLegacy(f: Json): boolean {
-  if (!Array.isArray(f) || typeof f[0] !== 'string') return false;
-  const [op, a] = f;
-  if (op === 'all' || op === 'any' || op === 'none') return f.slice(1).some(isLegacy) || f.length === 1;
-  if (LEGACY_COMPARISONS.has(op) || op === 'in' || op === '!in' || op === 'has' || op === '!has') {
-    return typeof a === 'string';
-  }
-  return false;
+/** Whether a filter (not `all`, `any`, `none`) is in the legacy form: `["==", "key", value]`, `["in", "key", a, b]`,
+ * `["has", "key"]`; a key and literal values, as MapLibre tells them from expressions */
+function isLegacyLeaf(f: Json[]): boolean {
+  const [op, a, ...rest] = f;
+  if (typeof op !== 'string' || typeof a !== 'string' || rest.some(Array.isArray)) return false;
+  if (LEGACY_COMPARISONS.has(op)) return f.length === 3;
+  if (op === 'in') return f.length !== 3 || !Array.isArray(f[2]);
+  return op === '!in' || op === 'has' || op === '!has';
 }
 
-function legacyFilter(f: Json, ctx: Context): boolean {
-  if (!Array.isArray(f)) return true;
+function legacyFilter(f: Json[], ctx: Context): boolean {
   const [op, key, ...rest] = f;
   const v = get(ctx, key);
   switch (op) {
-    case 'all':
-      return f.slice(1).every((g) => legacyFilter(g, ctx));
-    case 'any':
-      return f.slice(1).some((g) => legacyFilter(g, ctx));
-    case 'none':
-      return !f.slice(1).some((g) => legacyFilter(g, ctx));
     case '==':
       return v === rest[0];
     case '!=':
@@ -322,17 +475,42 @@ function legacyFilter(f: Json, ctx: Context): boolean {
   }
 }
 
+type Test = (ctx: Context) => boolean;
+
+/** Compiled filters, by filter object */
+const compiled = new WeakMap<Json[], Test>();
+
+/** A filter as a function: `all`, `any`, `none` of their parts, each part legacy or an expression (they may mix) */
+function compile(f: Json): Test {
+  if (!Array.isArray(f)) return () => Boolean(f);
+  const hit = compiled.get(f);
+  if (hit) return hit;
+  let test: Test;
+  const op = f[0];
+  if (op === 'all' || op === 'any' || op === 'none') {
+    const parts = f.slice(1).map(compile);
+    if (op === 'all') test = (ctx) => parts.every((p) => p(ctx));
+    else if (op === 'any') test = (ctx) => parts.some((p) => p(ctx));
+    else test = (ctx) => !parts.some((p) => p(ctx));
+  } else if (isLegacyLeaf(f)) {
+    test = (ctx) => legacyFilter(f, ctx);
+  } else {
+    test = (ctx) => Boolean(evaluate(f, ctx));
+  }
+  compiled.set(f, test);
+  return test;
+}
+
 export function filter(f: Json | undefined, ctx: Context): boolean {
   if (f === undefined || f === null) return true;
-  if (isLegacy(f)) return legacyFilter(f, ctx);
-  return Boolean(evaluate(f, ctx));
+  return compile(f)(ctx);
 }
 
 /** Whether a value depends on the feature (else only on the zoom, evaluated once per tile) */
 export function isFeatureDependent(e: Json | undefined): boolean {
   if (e !== undefined && isFunction(e)) return e.property !== undefined;
   if (!Array.isArray(e)) return false;
-  if (e[0] === 'get' || e[0] === 'has' || e[0] === 'geometry-type' || e[0] === 'properties') return true;
+  if (['get', 'has', '!has', 'geometry-type', 'properties', 'id'].includes(e[0] as string)) return true;
   return e.some((x) => isFeatureDependent(x));
 }
 

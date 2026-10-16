@@ -7,13 +7,13 @@
  * Any subset of the style can be drawn on its own raster layer (`raster({ layers })`), at its own place in the stack:
  * rivers from the basemap's data over a flood layer, for instance, restyled with `extraLayers`.
  */
-import type { BasemapRequest, BasemapResponse, LabelCandidate, Sprite } from './basemap.worker.ts';
+import type { BasemapRequest, BasemapResponse, Sprite } from './basemap.worker.ts';
 import type { Feature, Size } from './features.ts';
 import type { RasterLayer } from './layers.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
 import type { SymbolLayer } from './symbols.ts';
-import type { Json, Style, StyleLayer } from './vectorstyle.ts';
+import type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
 
 /** PLAN.IGN vector styles of the Géoplateforme */
 export const PLAN_STYLES = {
@@ -57,7 +57,11 @@ async function json<T>(url: string): Promise<T> {
 
 export class VectorTiles {
   private readonly workers: Worker[];
-  private readonly pending = new Map<number, { resolve: (r: BasemapResponse) => void; reject: (e: Error) => void }>();
+  private readonly pending = new Map<
+    number,
+    { resolve: (r: BasemapResponse) => void; reject: (e: Error) => void; worker: Worker }
+  >();
+  private destroyed = false;
   private next = 1;
   private keys = 0;
   private readonly cleanup: (() => void)[] = [];
@@ -79,9 +83,31 @@ export class VectorTiles {
         if ('error' in data) p.reject(new Error(data.error));
         else p.resolve(data);
       };
+      // A worker that fails to load (a bundler serving it from elsewhere) or to read a message fails its requests
+      worker.onerror = (event) => {
+        event.preventDefault();
+        this.fail(worker, `the vector basemap worker ${url} failed${event.message ? `: ${event.message}` : ''}`);
+      };
+      worker.onmessageerror = () => this.fail(worker, `the vector basemap worker ${url} sent an unreadable message`);
       return worker;
     });
     this.ready = this.load(options.style ?? PLAN_STYLES.grey);
+    // Reported once here; `ready`, the raster tiles and the labels fail with it
+    this.ready.catch((error: unknown) => {
+      if (!this.destroyed) console.warn('isard: vector tiles', error);
+    });
+  }
+
+  /** Rejects the requests of a failed worker */
+  private fail(worker: Worker, message: string): void {
+    const error = new Error(
+      `isard: ${message}. If a bundler moves the worker, give its URL in the \`basemapWorkerUrl\` option (see "With a bundler" in the guide)`,
+    );
+    for (const [id, p] of this.pending) {
+      if (p.worker !== worker) continue;
+      this.pending.delete(id);
+      p.reject(error);
+    }
   }
 
   private async load(input: string | Style) {
@@ -104,7 +130,8 @@ export class VectorTiles {
   /** The worker of a vector tile: always the same one, which keeps it decoded for every raster tile and every label
    * request drawn from it (one download per vector tile) */
   private worker(vz: number, vx: number, vy: number): Worker {
-    const k = (Math.abs(vx * 73856093) ^ Math.abs(vy * 19349663) ^ vz) % this.workers.length;
+    // Unsigned: every worker gets its share
+    const k = ((Math.imul(vx, 73856093) ^ Math.imul(vy, 19349663) ^ vz) >>> 0) % this.workers.length;
     return this.workers[k] ?? (this.workers[0] as Worker);
   }
 
@@ -126,12 +153,27 @@ export class VectorTiles {
 
   private request(worker: Worker, message: BasemapRequest & { id: number }, signal?: AbortSignal) {
     return new Promise<BasemapResponse>((resolve, reject) => {
-      this.pending.set(message.id, { resolve, reject });
-      signal?.addEventListener('abort', () => {
+      if (this.destroyed) return reject(new Error('isard: vector tiles destroyed'));
+      if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'));
+      const abort = () => {
         worker.postMessage({ type: 'abort', id: message.id } satisfies BasemapRequest);
         this.pending.delete(message.id);
         reject(new DOMException('aborted', 'AbortError'));
+      };
+      // The listener goes once the request is settled
+      const settle = () => signal?.removeEventListener('abort', abort);
+      this.pending.set(message.id, {
+        resolve: (r) => {
+          settle();
+          resolve(r);
+        },
+        reject: (e) => {
+          settle();
+          reject(e);
+        },
+        worker,
       });
+      signal?.addEventListener('abort', abort, { once: true });
       worker.postMessage(message);
     });
   }
@@ -175,6 +217,8 @@ export class VectorTiles {
     const { layers = () => true, extraLayers = [], size: texture = 512, opacity = 1, before } = options;
     const drawn = (l: StyleLayer) => l.type !== 'symbol' && layers(l);
     const renderer = this.renderer(drawn, extraLayers);
+    // Its failure is reported by `ready` and each tile
+    renderer.catch(() => undefined);
     const loader = async (z: number, x: number, y: number, signal: AbortSignal) => {
       const { key, maxzoom } = await renderer;
       // The vector tile it is drawn from (see the worker)
@@ -222,9 +266,14 @@ export class VectorTiles {
     });
     this.map.keepOnTop(symbol);
     const renderer = this.renderer((l) => l.type === 'symbol' && layers(l), []);
+    renderer.catch(() => undefined);
+    /** The labels of the tiles, the most recently used last */
     const tiles = new Map<string, Promise<LabelCandidate[]>>();
     let generation = 0;
+    /** The tiles whose labels are shown */
+    let shown = '';
     const update = async () => {
+      if (this.destroyed) return;
       const { key, maxzoom } = await renderer;
       const run = ++generation;
       const camera = this.map.getCamera();
@@ -255,26 +304,39 @@ export class VectorTiles {
         (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
       );
       const keys = wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}`);
+      // The same tiles as the labels shown: nothing to do
+      const set = keys.join(' ');
+      if (set === shown) return;
       const lists = await Promise.all(
         keys.map((k) => {
           let p = tiles.get(k);
-          if (!p) {
-            const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
-            p = this.request(this.worker(tz, x, y), { type: 'labels', key, id: this.next++, z: tz, x, y }).then(
-              (r) => ('labels' in r ? r.labels : []),
-              () => [],
-            );
+          if (p) {
+            // Used again: the most recent
+            tiles.delete(k);
             tiles.set(k, p);
-            // A bounded cache of tiles' labels
-            if (tiles.size > 256) {
-              const oldest = tiles.keys().next().value;
-              if (oldest !== undefined) tiles.delete(oldest);
-            }
+            return p;
+          }
+          const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
+          p = this.request(this.worker(tz, x, y), { type: 'labels', key, id: this.next++, z: tz, x, y }).then(
+            (r) => ('labels' in r ? r.labels : []),
+            () => {
+              // A network error is not kept: the tile is asked for again on the next update
+              tiles.delete(k);
+              return [];
+            },
+          );
+          tiles.set(k, p);
+          // A bounded cache of tiles' labels, the least recently used dropped
+          if (tiles.size > 256) {
+            const oldest = tiles.keys().next().value;
+            if (oldest !== undefined) tiles.delete(oldest);
           }
           return p;
         }),
       );
-      if (run !== generation) return;
+      if (run !== generation || this.destroyed) return;
+      // A tile that failed is missing: the next update asks for it again
+      shown = keys.every((k) => tiles.has(k)) ? set : '';
       const features: Feature<LabelCandidate>[] = lists
         .flat()
         // The labels of the higher style layers first: they win the collisions
@@ -297,26 +359,31 @@ export class VectorTiles {
         );
       symbol.setData(features);
     };
+    // The style failed to load: reported by `ready`
+    const refresh = () => {
+      update().catch(() => undefined);
+    };
     let timer = 0;
     const schedule = () => {
       if (timer) return;
       timer = window.setTimeout(() => {
         timer = 0;
-        void update();
+        refresh();
       }, 250);
     };
-    this.cleanup.push(
-      this.map.on('move', schedule),
-      this.map.on('moveend', () => void update()),
-    );
-    void update();
+    this.cleanup.push(this.map.on('move', schedule), this.map.on('moveend', refresh), () => clearTimeout(timer));
+    refresh();
     return symbol;
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     for (const off of this.cleanup) off();
+    this.cleanup.length = 0;
     for (const w of this.workers) w.terminate();
-    for (const p of this.pending.values()) p.reject(new Error('destroyed'));
+    const pending = [...this.pending.values()];
     this.pending.clear();
+    for (const p of pending) p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
   }
 }

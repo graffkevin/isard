@@ -6,7 +6,6 @@
 use crate::render::raster::{RasterPass, RasterSource};
 use geo::camera::{Camera, View};
 use std::any::Any;
-use std::rc::Rc;
 
 /// How tiles load and show: the engine's two profiles
 #[derive(Clone, Copy, Debug)]
@@ -55,8 +54,6 @@ pub struct Frame<'a> {
     pub pixel_ratio: f64,
     /// Frame number
     pub number: u64,
-    /// Asks for a new frame (content arrived)
-    pub redraw: &'a Rc<dyn Fn()>,
     pub loading: Loading,
     /// The relief, if any: its elevation source and vertical exaggeration
     pub relief: Option<(&'a RasterSource, f32)>,
@@ -87,6 +84,11 @@ pub trait Layer: Any {
     /// Feature at a ground position (Mercator), for the layers picked on the CPU (fills), at the camera's zoom
     fn pick_ground(&self, _m: glam::DVec2, _zoom: f64) -> Option<u32> {
         None
+    }
+
+    /// Whether `pick_ground` may find features (the picking then needs the ground position under the cursor)
+    fn picks_ground(&self) -> bool {
+        false
     }
 
     /// Places its labels before the frame is drawn, the top layer first, all layers sharing one collision grid

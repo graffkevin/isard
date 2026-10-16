@@ -10,6 +10,7 @@ pub(crate) mod globe;
 pub(crate) mod ground;
 pub(crate) mod lines;
 pub(crate) mod network;
+pub(crate) mod overlay;
 pub(crate) mod raster;
 pub(crate) mod sky;
 pub(crate) mod symbols;

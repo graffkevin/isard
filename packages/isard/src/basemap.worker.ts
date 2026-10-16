@@ -14,11 +14,14 @@ import {
   css,
   evaluate,
   filter,
+  isExpression,
   isFeatureDependent,
-  type Json,
+  type LabelCandidate,
   type StyleLayer,
   text,
 } from './vectorstyle.ts';
+
+export type { LabelCandidate };
 
 export type BasemapRequest =
   | {
@@ -35,27 +38,6 @@ export type BasemapRequest =
   | { type: 'labels'; key: string; id: number; z: number; x: number; y: number }
   | { type: 'abort'; id: number };
 
-/** A label to shape and place, in style terms evaluated at the tile's zoom */
-export interface LabelCandidate {
-  /** Index of its style layer: higher ones are placed first */
-  layer: number;
-  text: string;
-  lon: number;
-  lat: number;
-  /** Along a line: the direction there (degrees of longitude and latitude) */
-  along?: [number, number];
-  font: string;
-  size: Json;
-  color: string;
-  haloColor: string;
-  haloWidth: number;
-  anchor: string;
-  offset: [number, number];
-  maxWidth: number;
-  lineHeight: number;
-  overlap: boolean;
-}
-
 export type BasemapResponse =
   | { id: number; image: ImageBitmap }
   | { id: number; missing: true }
@@ -66,8 +48,9 @@ interface Renderer {
   tiles: string;
   maxzoom: number;
   layers: StyleLayer[];
-  sourceLayers: Set<string>;
   sprite: Sprite | undefined;
+  /** Fill patterns by icon name, cut from the sprite once */
+  patterns: Map<string, OffscreenCanvas | undefined>;
 }
 
 export interface Sprite {
@@ -79,9 +62,11 @@ const renderers = new Map<string, Renderer>();
 /** Decoded tiles by URL, the most recent last */
 const cache = new Map<string, Promise<Map<string, TileLayer> | undefined>>();
 const CACHE = 96;
+/** Requests in progress, and those of them aborted (both forgotten once answered) */
+const active = new Set<number>();
 const aborted = new Set<number>();
 
-function tile(url: string, sourceLayers: Set<string>): Promise<Map<string, TileLayer> | undefined> {
+function tile(url: string): Promise<Map<string, TileLayer> | undefined> {
   const hit = cache.get(url);
   if (hit) {
     cache.delete(url);
@@ -93,10 +78,8 @@ function tile(url: string, sourceLayers: Set<string>): Promise<Map<string, TileL
       const response = await fetch(url);
       if (response.status === 404 || response.status === 204) return undefined;
       if (response.ok) {
-        const bytes = new Uint8Array(await response.arrayBuffer());
         // Every layer: renderers of other subsets share the tile
-        void sourceLayers;
-        return decode(bytes);
+        return decode(new Uint8Array(await response.arrayBuffer()));
       }
       if (attempt >= 2) throw new Error(`${url}: ${response.status}`);
       await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
@@ -127,7 +110,8 @@ function source(r: Renderer, z: number, x: number, y: number) {
 const value = (layer: StyleLayer, group: 'paint' | 'layout', key: string, ctx: Context, fallback: unknown) => {
   const v = layer[group]?.[key];
   if (v === undefined) return fallback;
-  const out = evaluate(v, ctx);
+  // An array that is not an expression is a literal value (`text-font`, `text-offset`, `line-dasharray`)
+  const out = Array.isArray(v) && !isExpression(v) ? v : evaluate(v, ctx);
   return out === undefined || out === null ? fallback : out;
 };
 
@@ -142,9 +126,24 @@ function shown(layer: StyleLayer, zoom: number): boolean {
   return zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24);
 }
 
+/** The image of a fill pattern, cut from the sprite on first use */
+function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
+  if (r.patterns.has(name)) return r.patterns.get(name);
+  const icon = r.sprite?.icons[name];
+  let image: OffscreenCanvas | undefined;
+  if (r.sprite && icon && icon.width > 0 && icon.height > 0) {
+    image = new OffscreenCanvas(icon.width, icon.height);
+    image
+      .getContext('2d')
+      ?.drawImage(r.sprite.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
+  }
+  r.patterns.set(name, image);
+  return image;
+}
+
 async function render(r: Renderer, z: number, x: number, y: number, size: number, id: number) {
   const s = source(r, z, x, y);
-  const layers = await tile(s.url, r.sourceLayers);
+  const layers = await tile(s.url);
   if (aborted.has(id)) return undefined;
   const sprite = r.sprite;
   const zoom = Math.max(0, z - 1);
@@ -200,13 +199,10 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
         const opacity = Number(get('paint', 'fill-opacity', ctx, 1));
         const pattern = get('paint', 'fill-pattern', ctx, undefined);
         path(f, true);
-        const icon = typeof pattern === 'string' && sprite?.icons[pattern];
-        if (icon && sprite) {
-          const tileCanvas = new OffscreenCanvas(icon.width, icon.height);
-          tileCanvas
-            .getContext('2d')
-            ?.drawImage(sprite.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
-          const p = g.createPattern(tileCanvas, 'repeat');
+        const icon = typeof pattern === 'string' ? sprite?.icons[pattern] : undefined;
+        const image = icon && patternImage(r, pattern as string);
+        if (icon && image) {
+          const p = g.createPattern(image, 'repeat');
           if (p) {
             p.setTransform(new DOMMatrix().scale(px / (icon.pixelRatio ?? 1)));
             g.globalAlpha = opacity;
@@ -273,7 +269,7 @@ function lonLat(z: number, x: number, y: number, extent: number, px: number, py:
 
 async function labels(r: Renderer, z: number, x: number, y: number, id: number): Promise<LabelCandidate[]> {
   const url = r.tiles.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
-  const layers = await tile(url, r.sourceLayers);
+  const layers = await tile(url);
   if (!layers || aborted.has(id)) return [];
   const out: LabelCandidate[] = [];
   r.layers.forEach((layer, index) => {
@@ -362,20 +358,21 @@ const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
 
 self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   if (data.type === 'init') {
-    const sourceLayers = new Set(data.layers.map((l) => l['source-layer'] ?? ''));
     renderers.set(data.key, {
       tiles: data.tiles,
       maxzoom: data.maxzoom,
       layers: data.layers,
-      sourceLayers,
       sprite: data.sprite,
+      patterns: new Map(),
     });
     return;
   }
   if (data.type === 'abort') {
-    aborted.add(data.id);
+    // An abort that arrives after the answer is ignored
+    if (active.has(data.id)) aborted.add(data.id);
     return;
   }
+  active.add(data.id);
   const r = renderers.get(data.key);
   try {
     if (!r) throw new Error(`no renderer ${data.key}`);
@@ -389,6 +386,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   } catch (error) {
     post({ id: data.id, error: String(error) });
   } finally {
+    active.delete(data.id);
     aborted.delete(data.id);
   }
 };

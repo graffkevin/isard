@@ -4,6 +4,7 @@
  * same frame.
  */
 import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
+import { parseCssColor } from './color.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
 import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './extrusions.ts';
@@ -32,7 +33,6 @@ import type {
   Basemap,
   FlyToOptions,
   GeoMapOptions,
-  LayerHost,
   LoadingMode,
   LonLat,
   MapEvents,
@@ -62,17 +62,39 @@ function destroyed(camera: Camera): Engine {
   ) as Engine;
 }
 
+/** Reports an error without throwing it here: the console shows it, as an uncaught one */
+function report(error: unknown): void {
+  if (typeof reportError === 'function') reportError(error);
+  else
+    queueMicrotask(() => {
+      throw error;
+    });
+}
+
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
 /** The engine, compiled once per page and shared with the decoding workers */
 let compiled: Promise<WebAssembly.Module> | undefined;
 
 async function compile(url: string | URL): Promise<WebAssembly.Module> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`isard: failed to load the engine from ${url}: ${response.status}`);
   try {
-    return await WebAssembly.compileStreaming(fetch(url));
+    return await WebAssembly.compileStreaming(response.clone());
   } catch {
     // Servers that do not send application/wasm
-    return WebAssembly.compile(await (await fetch(url)).arrayBuffer());
+    return WebAssembly.compile(await response.arrayBuffer());
+  }
+}
+
+/** Checks a network's arrays before the engine reads them: node index pairs, indices of existing nodes */
+function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
+  if (nodes.length % 2 !== 0) throw new Error(`isard: network nodes must be lon, lat pairs (length ${nodes.length})`);
+  if (edges.length % 2 !== 0) throw new Error(`isard: network edges must be node index pairs (length ${edges.length})`);
+  const count = nodes.length / 2;
+  for (let i = 0; i < edges.length; i += 1) {
+    const node = edges[i] as number;
+    if (node >= count) throw new Error(`isard: network edge ${i >> 1} refers to node ${node}, of ${count} nodes`);
   }
 }
 
@@ -127,10 +149,10 @@ const fromMercator = ([x, y]: [number, number]): LonLat => [
   (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI,
 ];
 
-/** `#rrggbb` to RGB 0-1 */
-function rgb(hex: string): [r: number, g: number, b: number] {
-  const value = Number.parseInt(hex.replace('#', ''), 16);
-  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+/** A CSS color to RGB 0-1 (its alpha dropped); black if unknown */
+function rgb(color: string): [r: number, g: number, b: number] {
+  const [r, g, b] = parseCssColor(color) ?? [0, 0, 0, 1];
+  return [r, g, b];
 }
 
 /** Settings replayed on a new engine after a WebGL context loss */
@@ -148,7 +170,8 @@ interface Settings {
 
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
-export class GeoMap implements LayerHost {
+/** A map (see `GeoMap.create`); layers take it as their host */
+export class GeoMap {
   readonly canvas: HTMLCanvasElement;
   #glyphs: Glyphs | undefined;
   /** Layers new layers go under */
@@ -196,13 +219,24 @@ export class GeoMap implements LayerHost {
   /** The last frame found everything loaded ('idle' sent) */
   private settled = false;
   private inFrame = false;
+  /** Vector tiles made by `vectorTiles()`, destroyed with the map */
+  private readonly vectorSets = new Set<VectorTiles>();
+  /** Stops watching the device pixel ratio */
+  private unwatchRatio: (() => void) | undefined;
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
-    compiled ??= compile(options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url)).then(async (module) => {
-      await init({ module_or_path: module });
-      return module;
-    });
+    compiled ??= compile(options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url)).then(
+      async (module) => {
+        await init({ module_or_path: module });
+        return module;
+      },
+      (error: unknown) => {
+        // A later call tries again (a network error, a wrong URL fixed)
+        compiled = undefined;
+        throw error;
+      },
+    );
     const module = await compiled;
     const map = new GeoMap(container, options);
     const workers = options.workers ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
@@ -267,6 +301,7 @@ export class GeoMap implements LayerHost {
     this.setBasemap(options.basemap ?? 'plan-grey', options.hillshade ?? 0.4);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
+    this.watchRatio();
     this.resize();
     this.interaction = (options.interactive ?? true) ? new Interaction(this) : undefined;
     const attribution = options.attributionControl ?? true;
@@ -372,10 +407,16 @@ export class GeoMap implements LayerHost {
     return () => listeners.delete(listener);
   }
 
-  /** @internal */
+  /** @internal Calls the listeners; one that throws is reported and does not stop the others nor the frame */
   emit<K extends keyof MapEvents>(type: K, event: MapEvents[K]): void {
     const listeners: Set<(event: MapEvents[K]) => void> = this.listeners[type];
-    for (const listener of listeners) listener(event);
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        report(error);
+      }
+    }
   }
 
   // ── Camera ──
@@ -526,7 +567,7 @@ export class GeoMap implements LayerHost {
     this.requestRender();
   }
 
-  /** Color behind the map, `#rrggbb` */
+  /** Color behind the map, a CSS color (its alpha ignored) */
   setBackground(color: string): void {
     this.settings.background = rgb(color);
     this.engine.setBackground(...this.settings.background);
@@ -659,6 +700,7 @@ export class GeoMap implements LayerHost {
     const { nodes, edges, lines, costs, edgeWidths, width = 2, max = 1800, contour = 0, opacity = 1 } = options;
     const { halo = 0, haloOpacity = 0.11, ramp, unreachedColor = 'rgba(140, 140, 140, 0.25)', fade = 0 } = options;
     const style = { width, max, contour, opacity, halo, haloOpacity, ramp, unreachedColor, fade };
+    validateNetwork(nodes, edges);
     return this.add(new NetworkLayer(this, { nodes, edges, lines }, costs, style, edgeWidths));
   }
 
@@ -695,7 +737,10 @@ export class GeoMap implements LayerHost {
   /** @internal The glyphs of the symbol layers, loaded on first use */
   get glyphs(): Glyphs {
     if (!this.#glyphs) {
-      this.#glyphs = new Glyphs(this.glyphsUrl);
+      // The engine's context: the atlas stays within its texture size limit
+      const gl = this.canvas.getContext('webgl2');
+      const max = gl?.getParameter(gl.MAX_TEXTURE_SIZE);
+      this.#glyphs = new Glyphs(this.glyphsUrl, typeof max === 'number' ? max : undefined);
       this.#glyphs.attach(this.engine);
     }
     return this.#glyphs;
@@ -706,10 +751,13 @@ export class GeoMap implements LayerHost {
    * subset) as a raster layer, `tiles.labels(…)` its labels. `setBasemap('plan-grey-vector')` does both for the basemap.
    */
   vectorTiles(options: VectorTilesOptions = {}): VectorTiles {
-    return new VectorTiles(this, {
+    const tiles = new VectorTiles(this, {
       ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
       ...options,
     });
+    // Its workers stop with the map
+    this.vectorSets.add(tiles);
+    return tiles;
   }
 
   /** Adds a layer, under `before` if given */
@@ -750,7 +798,16 @@ export class GeoMap implements LayerHost {
 
   private frame(now: number): void {
     this.frameRequest = 0;
-    this.inFrame = true;
+    try {
+      this.inFrame = true;
+      this.drawFrame(now);
+    } finally {
+      // Whatever throws in a frame, the next ones are still drawn
+      this.inFrame = false;
+    }
+  }
+
+  private drawFrame(now: number): void {
     if (this.animation && !this.animation(now)) this.animation = undefined;
     const camera = this.getCamera();
     const key = `${camera.center}|${camera.zoom}|${camera.pitch}|${camera.bearing}`;
@@ -793,6 +850,20 @@ export class GeoMap implements LayerHost {
     }
   }
 
+  /** Resizes when the device pixel ratio changes (browser zoom, a window moved to another screen) */
+  private watchRatio(): void {
+    if (typeof matchMedia !== 'function') return;
+    const query = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const changed = () => {
+      // A query for the new ratio
+      this.unwatchRatio?.();
+      this.watchRatio();
+      this.resize();
+    };
+    query.addEventListener('change', changed, { once: true });
+    this.unwatchRatio = () => query.removeEventListener('change', changed);
+  }
+
   private resize(): void {
     if (this.lost) return;
     const { clientWidth: width, clientHeight: height } = this.canvas;
@@ -811,6 +882,10 @@ export class GeoMap implements LayerHost {
     const camera = this.getCamera();
     cancelAnimationFrame(this.frameRequest);
     this.vector?.tiles.destroy();
+    for (const tiles of this.vectorSets) tiles.destroy();
+    this.vectorSets.clear();
+    this.unwatchRatio?.();
+    this.unwatchRatio = undefined;
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
     this.loader?.destroy();

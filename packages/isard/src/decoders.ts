@@ -5,7 +5,16 @@
  */
 import type { CompressedTexture, DracoGeometry, DracoRequest, TextureFormats } from './wasm/isard.js';
 
-/** Base URLs of the decoders (each ending with `/`) */
+/**
+ * Base URLs of the decoders (each ending with `/`).
+ *
+ * The decoders are Emscripten builds published as classic scripts: the worker fetches the script and runs it with
+ * `new Function`, so a Content Security Policy must allow `'unsafe-eval'` in `script-src` (or `worker-src`) for 3D
+ * Tiles that use Draco or KTX2. They are fetched from the default CDNs; to self-host them (offline, locked-down
+ * networks, no third-party requests), copy the four files (`draco_wasm_wrapper_gltf.js`, `draco_decoder_gltf.wasm`
+ * from the Draco release, `basis_transcoder.js`, `basis_transcoder.wasm` from three.js's `examples/jsm/libs/basis/`)
+ * to your server and give their folders in `GeoMapOptions.decoders`.
+ */
 export interface DecoderUrls {
   /** Folder of `draco_wasm_wrapper_gltf.js` and `draco_decoder_gltf.wasm` */
   draco: string;
@@ -83,7 +92,8 @@ interface BasisModule {
 
 type Factory<T> = (options: { wasmBinary: ArrayBuffer }) => Promise<T>;
 
-/** Loads an Emscripten factory published as a classic script (module workers have no importScripts) */
+/** Loads an Emscripten factory published as a classic script (module workers have no importScripts); needs
+ * `'unsafe-eval'` under a Content Security Policy (see `DecoderUrls`) */
 async function factory<T>(url: string, name: string): Promise<Factory<T>> {
   const source = await (await fetch(url)).text();
   return new Function(`${source}\nreturn ${name};`)() as Factory<T>;
@@ -120,16 +130,22 @@ export async function decodeDraco(urls: DecoderUrls, requests: DracoRequest[]): 
         const attribute = decoder.GetAttributeByUniqueId(mesh, id);
         const count = mesh.num_points() * attribute.num_components();
         const pointer = module._malloc(count * 4);
-        decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, module.DT_FLOAT32, count * 4, pointer);
-        const out = module.HEAPF32.slice(pointer / 4, pointer / 4 + count);
-        module._free(pointer);
-        return out;
+        try {
+          decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, module.DT_FLOAT32, count * 4, pointer);
+          return module.HEAPF32.slice(pointer / 4, pointer / 4 + count);
+        } finally {
+          module._free(pointer);
+        }
       };
       const count = mesh.num_faces() * 3;
       const pointer = module._malloc(count * 4);
-      decoder.GetTrianglesUInt32Array(mesh, count * 4, pointer);
-      const indices = module.HEAPU32.slice(pointer / 4, pointer / 4 + count);
-      module._free(pointer);
+      let indices: Uint32Array;
+      try {
+        decoder.GetTrianglesUInt32Array(mesh, count * 4, pointer);
+        indices = module.HEAPU32.slice(pointer / 4, pointer / 4 + count);
+      } finally {
+        module._free(pointer);
+      }
       const geometry: DracoGeometry = {
         mesh: request.mesh,
         primitive: request.primitive,

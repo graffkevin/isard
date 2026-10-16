@@ -21,13 +21,14 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
+      "isard-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./decoder.worker.js": "./dist/decoder.worker.js",
     "./basemap.worker.js": "./dist/basemap.worker.js",
-    "./isard_bg.wasm": "./dist/isard_bg.wasm"
+    "./isard_bg.wasm": "./dist/isard_bg.wasm",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

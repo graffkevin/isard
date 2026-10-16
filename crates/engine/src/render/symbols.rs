@@ -8,18 +8,14 @@ use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{stops, stops_of};
-use crate::render::gl::{self, Projection, bytes};
+use crate::render::gl::{self, Objects, Projection, TABLE_WIDTH as WIDTH, bytes};
+use crate::render::overlay::{self, ANCHOR, Anchor};
 use geo::collision;
 use glam::{DVec2, DVec4};
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
 const VERTEX: &str = r"
-uniform mat4 u_matrix;
-uniform vec2 u_plane_origin;
-uniform vec2 u_origin;
-uniform vec2 u_viewport;
-uniform float u_depth_bias;
 uniform float u_pixel_ratio;
 uniform vec2 u_atlas_size;
 uniform highp sampler2D u_labels;
@@ -46,7 +42,7 @@ void main() {
   v_halo = texelFetch(u_labels, texel(a_label * 4u + 2u), 0);
   float halo_width = texelFetch(u_labels, texel(a_label * 4u + 3u), 0).x;
   vec2 merc = u_origin + offset;
-  vec4 c = u_matrix * vec4(project_up(u_plane_origin + offset * u_world, merc, altitude(merc)), 1.0);
+  vec4 c = u_matrix * vec4(project_up(plane_of(offset), merc, altitude(merc)), 1.0);
   c.z -= u_depth_bias;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   vec2 q = (a_rect.xy + corner * a_rect.zw) * scale;
@@ -81,12 +77,7 @@ void main() {
   color = vec4((v_fill.rgb * a_fill + v_halo.rgb * a_halo) / a, a * u_opacity);
 }";
 
-const UNIFORMS: [&str; 11] = [
-    "u_matrix",
-    "u_plane_origin",
-    "u_origin",
-    "u_viewport",
-    "u_depth_bias",
+const UNIFORMS: [&str; 6] = [
     "u_pixel_ratio",
     "u_atlas_size",
     "u_labels",
@@ -102,7 +93,6 @@ pub const QUAD_FLOATS: usize = 10;
 /// hiding others), direction (Mercator; 0, 0: none, the text stays horizontal; else it runs along it, kept upright),
 /// then its scale as zoom stops (four zooms, four values: displayed size over shaped size)
 pub const LABEL_FLOATS: usize = 20;
-const WIDTH: usize = 4096;
 const LABELS_UNIT: u32 = 1;
 const VISIBLE_UNIT: u32 = 2;
 const ATLAS_UNIT: u32 = 3;
@@ -145,7 +135,8 @@ pub struct SymbolStyle {
 pub struct SymbolLayer {
     pub style: SymbolStyle,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 11],
+    uniforms: [Option<glow::UniformLocation>; 6],
+    anchor: Anchor,
     projection: Projection,
     drape_uniforms: DrapeUniforms,
     vao: glow::VertexArray,
@@ -156,6 +147,11 @@ pub struct SymbolLayer {
     labels: Vec<Label>,
     /// Per label, this frame: shown (1 or 0), angle on screen (radians, clockwise), scale, unused
     visible: Vec<f32>,
+    /// What the last placement depended on (`PlaceKey`), and the boxes it took in the collision grid: an unchanged
+    /// placement takes them again without working anything out
+    placed: Option<(PlaceKey, Vec<collision::Rect>)>,
+    /// The state texture holds `visible` (no upload needed)
+    uploaded: bool,
     origin: DVec2,
     min: DVec2,
     max: DVec2,
@@ -164,15 +160,18 @@ pub struct SymbolLayer {
 
 impl SymbolLayer {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
-        let program = gl::program(
-            gl,
-            &format!("#version 300 es\n{}{}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
+        // Everything created is deleted again if a step fails
+        let mut objects = Objects::new(gl);
+        let program = objects.program(
+            &format!("#version 300 es\n{}{}{ANCHOR}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
-        // SAFETY: object creation on a live context
+        let vao = objects.vertex_array()?;
+        let quads = objects.buffer()?;
+        let labels_texture = objects.texture()?;
+        let visible_texture = objects.texture()?;
+        // SAFETY: state setup of objects just created on a live context
         unsafe {
-            let vao = gl.create_vertex_array()?;
-            let quads = gl.create_buffer()?;
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(quads));
             let stride = size_of::<Quad>() as i32;
@@ -188,31 +187,35 @@ impl SymbolLayer {
                 gl.vertex_attrib_divisor(location, 1);
             }
             gl.bind_vertex_array(None);
-            Ok(Self {
-                style: SymbolStyle {
-                    size: [[0.0; 4], [1.0; 4]],
-                    opacity: [[0.0; 4], [1.0; 4]],
-                    min_zoom: 0.0,
-                    max_zoom: 24.0,
-                    visible: true,
-                },
-                program,
-                uniforms: gl::uniforms(gl, program, UNIFORMS),
-                projection: Projection::new(gl, program),
-                drape_uniforms: DrapeUniforms::new(gl, program),
-                vao,
-                quads,
-                quad_count: 0,
-                labels_texture: gl.create_texture()?,
-                visible_texture: gl.create_texture()?,
-                labels: Vec::new(),
-                visible: Vec::new(),
-                origin: DVec2::ZERO,
-                min: DVec2::ZERO,
-                max: DVec2::ZERO,
-                drape: Drape::new(),
-            })
         }
+        objects.keep();
+        Ok(Self {
+            style: SymbolStyle {
+                size: [[0.0; 4], [1.0; 4]],
+                opacity: [[0.0; 4], [1.0; 4]],
+                min_zoom: 0.0,
+                max_zoom: 24.0,
+                visible: true,
+            },
+            program,
+            uniforms: gl::uniforms(gl, program, UNIFORMS),
+            anchor: Anchor::new(gl, program),
+            projection: Projection::new(gl, program),
+            drape_uniforms: DrapeUniforms::new(gl, program),
+            vao,
+            quads,
+            quad_count: 0,
+            labels_texture,
+            visible_texture,
+            labels: Vec::new(),
+            visible: Vec::new(),
+            placed: None,
+            uploaded: false,
+            origin: DVec2::ZERO,
+            min: DVec2::ZERO,
+            max: DVec2::ZERO,
+            drape: Drape::new(),
+        })
     }
 
     /// Replaces the labels: anchors (Mercator, interleaved), their boxes (4 floats each), styles (`LABEL_FLOATS` each)
@@ -228,17 +231,9 @@ impl SymbolLayer {
         let n = (anchors.len() / 2)
             .min(boxes.len() / 4)
             .min(styles.len() / LABEL_FLOATS);
-        let merc: Vec<DVec2> = anchors
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .take(n)
-            .map(|&[x, y]| DVec2::new(x, y))
-            .collect();
-        let (min, max) = merc.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-            (a.min(p), b.max(p))
-        });
-        (self.min, self.max) = if n == 0 { (DVec2::ZERO, DVec2::ZERO) } else { (min, max) };
+        let mut merc = overlay::points(anchors);
+        merc.truncate(n);
+        (self.min, self.max) = overlay::bounds(&merc).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         self.origin = (self.min + self.max) / 2.0;
         self.labels = merc
             .iter()
@@ -255,8 +250,10 @@ impl SymbolLayer {
             })
             .collect();
         self.visible = vec![0.0; n * 4];
+        self.placed = None;
+        self.uploaded = false;
         // Per label: offset, fill, halo, halo width
-        let rows = (n * 4).div_ceil(WIDTH).max(1);
+        let rows = gl::table_rows(n * 4);
         let mut table = vec![0f32; rows * WIDTH * 4];
         for (i, m) in merc.iter().enumerate() {
             let o = (*m - self.origin).as_vec2();
@@ -278,35 +275,16 @@ impl SymbolLayer {
                 scale: q[9],
             })
             .collect();
-        // SAFETY: (re)allocation and uploads into objects owned by this layer
+        // SAFETY: deletion of textures owned by this layer, replaced right below
         unsafe {
             gl.delete_texture(self.labels_texture);
             gl.delete_texture(self.visible_texture);
-            self.labels_texture = gl.create_texture()?;
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.labels_texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA32F, WIDTH as i32, rows as i32);
-            nearest(gl);
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                WIDTH as i32,
-                rows as i32,
-                glow::RGBA,
-                glow::FLOAT,
-                glow::PixelUnpackData::Slice(Some(bytes(&table))),
-            );
-            self.visible_texture = gl.create_texture()?;
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_texture));
-            gl.tex_storage_2d(
-                glow::TEXTURE_2D,
-                1,
-                glow::RGBA32F,
-                WIDTH as i32,
-                n.div_ceil(WIDTH).max(1) as i32,
-            );
-            nearest(gl);
+        }
+        self.labels_texture = gl::table_texture(gl, glow::RGBA32F, n * 4)?;
+        gl::upload_table(gl, bytes(&table), rows * WIDTH, glow::RGBA, glow::FLOAT, 16);
+        self.visible_texture = gl::table_texture(gl, glow::RGBA32F, n)?;
+        // SAFETY: upload into the buffer owned by this layer
+        unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quads));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&data), glow::STATIC_DRAW);
         }
@@ -321,21 +299,101 @@ impl SymbolLayer {
     }
 }
 
-/// Nearest filtering on the bound texture
-unsafe fn nearest(gl: &glow::Context) {
-    // SAFETY: parameters of the bound texture
-    unsafe {
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+/// What a placement depends on: the camera (and the screen), the labels, the relief under them, the style, and the
+/// collision grid as the layers above left it
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PlaceKey {
+    camera: [u64; 9],
+    relief: (u64, u32),
+    style: [u32; 8],
+    grid: u64,
+}
+
+impl PlaceKey {
+    fn new(frame: &Frame, style: &SymbolStyle, grid: &collision::Grid) -> Self {
+        let c = frame.camera;
+        Self {
+            camera: [
+                c.center.x,
+                c.center.y,
+                c.zoom,
+                c.pitch,
+                c.bearing,
+                c.width,
+                c.height,
+                c.elevation,
+                f64::from(u8::from(c.globe)),
+            ]
+            .map(f64::to_bits),
+            relief: frame
+                .relief
+                .map_or((0, 0), |(source, e)| (source.generation(), e.to_bits())),
+            style: [
+                style.size[0][0],
+                style.size[0][1],
+                style.size[0][2],
+                style.size[0][3],
+                style.size[1][0],
+                style.size[1][1],
+                style.size[1][2],
+                style.size[1][3],
+            ]
+            .map(f32::to_bits),
+            grid: grid.fingerprint(),
+        }
     }
+}
+
+/// The box of a label on screen around its anchor `at`: its rect (CSS pixels at the shaped size) scaled and turned by
+/// `angle` (radians, clockwise on screen), as an axis-aligned box
+fn label_box(at: DVec2, rect: [f32; 4], scale: f64, angle: f64) -> collision::Rect {
+    let r = rect.map(|v| f64::from(v) * scale);
+    let (cs, sn) = (angle.cos(), angle.sin());
+    let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
+    for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
+        let p = DVec2::new(x * cs - y * sn, x * sn + y * cs);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    [at.x + lo.x, at.y + lo.y, at.x + hi.x, at.y + hi.y]
+}
+
+/// Angle on screen of a line from `at` to `ahead`, kept upright (turned half a turn if upside down)
+fn upright(at: DVec2, ahead: DVec2) -> f64 {
+    let d = ahead - at;
+    let mut angle = d.y.atan2(d.x);
+    if angle > std::f64::consts::FRAC_PI_2 {
+        angle -= std::f64::consts::PI;
+    } else if angle < -std::f64::consts::FRAC_PI_2 {
+        angle += std::f64::consts::PI;
+    }
+    angle
 }
 
 impl Layer for SymbolLayer {
     fn place(&mut self, frame: &Frame, grid: &mut collision::Grid) {
-        self.visible.fill(0.0);
         if !self.shows(frame.camera.zoom) {
+            self.placed = None;
+            if self.visible.iter().any(|&v| v != 0.0) {
+                self.visible.fill(0.0);
+                self.uploaded = false;
+            }
             return;
         }
+        // Nothing changed since the last placement: the same boxes again, the same states
+        let key = PlaceKey::new(frame, &self.style, grid);
+        if let Some((last, boxes)) = &self.placed
+            && *last == key
+        {
+            for &r in boxes {
+                grid.insert(r);
+            }
+            return;
+        }
+        let previous = std::mem::take(&mut self.visible);
+        let mut visible = vec![0f32; previous.len()];
+        let mut boxes = self.placed.take().map(|(_, b)| b).unwrap_or_default();
+        boxes.clear();
         let (camera, view) = (frame.camera, frame.view);
         let layer_scale = stops(&self.style.size, camera.zoom);
         // Screen point and distance to the eye (pixels of the local frame)
@@ -351,7 +409,7 @@ impl Layer for SymbolLayer {
                 (at, clip.w)
             })
         };
-        for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
+        for (label, state) in self.labels.iter().zip(visible.as_chunks_mut::<4>().0) {
             let altitude = frame
                 .relief
                 .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
@@ -368,72 +426,26 @@ impl Layer for SymbolLayer {
             if scale <= 0.0 {
                 continue;
             }
-            // Along its line, kept upright: the angle of the line on screen, turned half a turn if upside down
+            // Along its line, kept upright: the angle of the line on screen
             let mut angle = 0.0;
             if label.direction != DVec2::ZERO {
                 // A step of one pixel along the line
                 let step = label.direction.normalize() / view.world_size;
                 if let Some((ahead, _)) = screen(label.merc + step, altitude) {
-                    let d = ahead - at;
-                    angle = d.y.atan2(d.x);
-                    if angle > std::f64::consts::FRAC_PI_2 {
-                        angle -= std::f64::consts::PI;
-                    } else if angle < -std::f64::consts::FRAC_PI_2 {
-                        angle += std::f64::consts::PI;
-                    }
+                    angle = upright(at, ahead);
                 }
             }
-            // The box turned with the text, as an axis-aligned box
-            let r = label.rect.map(|v| f64::from(v) * scale);
-            let (cs, sn) = (angle.cos(), angle.sin());
-            let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
-            for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
-                let p = DVec2::new(x * cs - y * sn, x * sn + y * cs);
-                lo = lo.min(p);
-                hi = hi.max(p);
-            }
-            let rect = [at.x + lo.x, at.y + lo.y, at.x + hi.x, at.y + hi.y];
+            let rect = label_box(at, label.rect, scale, angle);
             if label.always || grid.place(rect) {
+                if !label.always {
+                    boxes.push(rect);
+                }
                 *state = [1.0, angle as f32, scale as f32, 0.0];
             }
         }
-        let texels = self.labels.len();
-        if texels == 0 {
-            return;
-        }
-        let (full, rest) = (texels / WIDTH, texels % WIDTH);
-        let data: &[u8] = bytes(&self.visible);
-        // SAFETY: upload into the state texture allocated for these labels
-        unsafe {
-            let gl = frame.gl;
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_texture));
-            if full > 0 {
-                gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    0,
-                    0,
-                    WIDTH as i32,
-                    full as i32,
-                    glow::RGBA,
-                    glow::FLOAT,
-                    glow::PixelUnpackData::Slice(Some(&data[..full * WIDTH * 16])),
-                );
-            }
-            if rest > 0 {
-                gl.tex_sub_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    0,
-                    full as i32,
-                    rest as i32,
-                    1,
-                    glow::RGBA,
-                    glow::FLOAT,
-                    glow::PixelUnpackData::Slice(Some(&data[full * WIDTH * 16..texels * 16])),
-                );
-            }
-        }
+        self.uploaded &= visible == previous;
+        self.visible = visible;
+        self.placed = Some((key, boxes));
     }
 
     fn draw(&mut self, frame: &Frame) -> bool {
@@ -456,38 +468,20 @@ impl Layer for SymbolLayer {
             let pad = DVec2::splat(1e-6);
             self.drape.update(gl, self.min - pad, self.max + pad, source);
         }
-        let [
-            matrix,
-            plane_origin,
-            origin,
-            viewport,
-            depth_bias,
-            ratio,
-            atlas_size_u,
-            labels,
-            visible,
-            atlas_u,
-            opacity,
-        ] = &self.uniforms;
-        let shift = -(self.origin.x - camera.center.x).round();
-        let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
+        if !self.uploaded {
+            // The states changed: one upload
+            // SAFETY: binding the state texture owned by this layer, for the upload inside its storage
+            unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_texture)) };
+            gl::upload_table(gl, bytes(&self.visible), self.labels.len(), glow::RGBA, glow::FLOAT, 16);
+            self.uploaded = true;
+        }
+        let [ratio, atlas_size_u, labels, visible, atlas_u, opacity] = &self.uniforms;
         // SAFETY: draw with objects owned by this layer and the engine's glyph atlas
         unsafe {
             gl.use_program(Some(self.program));
-            gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
-            gl.uniform_2_f32(plane_origin.as_ref(), plane.x as f32, plane.y as f32);
-            gl.uniform_2_f32(origin.as_ref(), self.origin.x as f32, self.origin.y as f32);
-            gl.uniform_2_f32(
-                viewport.as_ref(),
-                (camera.width * pixel_ratio / 2.0) as f32,
-                (camera.height * pixel_ratio / 2.0) as f32,
-            );
-            let bias = if relief.is_some() {
-                2.0 * view.near * DEPTH_BIAS
-            } else {
-                0.0
-            };
-            gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
+            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+            self.anchor.set_view(gl, view, viewport, relief.is_some(), DEPTH_BIAS);
+            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_f32(ratio.as_ref(), pixel_ratio as f32);
             gl.uniform_2_f32(atlas_size_u.as_ref(), atlas_size.0 as f32, atlas_size.1 as f32);
             gl.uniform_1_f32(opacity.as_ref(), stops(&self.style.opacity, camera.zoom) as f32);
@@ -577,15 +571,11 @@ impl Engine {
         max_zoom: f64,
         visible: bool,
     ) {
-        let pair = |s: &[f32]| -> Option<[[f32; 4]; 2]> {
-            let s: &[f32; 8] = s.get(..8)?.try_into().ok()?;
-            Some([[s[0], s[1], s[2], s[3]], [s[4], s[5], s[6], s[7]]])
-        };
         if let Some((layer, _)) = self.layer_mut::<SymbolLayer>(id) {
-            if let Some(size) = pair(size) {
+            if let Some(size) = stops_of(size) {
                 layer.style.size = size;
             }
-            if let Some(opacity) = pair(opacity) {
+            if let Some(opacity) = stops_of(opacity) {
                 layer.style.opacity = opacity;
             }
             layer.style.min_zoom = min_zoom;
@@ -599,6 +589,9 @@ impl Engine {
     #[wasm_bindgen(js_name = setGlyphAtlas)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_glyph_atlas(&mut self, width: i32, height: i32, data: Option<Box<[u8]>>) -> Result<(), JsValue> {
+        let len = gl::area(width, height)
+            .filter(|_| width > 0 && height > 0)
+            .ok_or("glyph atlas: a positive size expected")?;
         // SAFETY: (re)allocation and upload of the atlas on the live context
         unsafe {
             let gl = &self.gl;
@@ -616,7 +609,7 @@ impl Engine {
             ] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
             }
-            if let Some(data) = data.as_deref().filter(|d| d.len() >= (width * height) as usize) {
+            if let Some(data) = data.as_deref().filter(|d| d.len() >= len) {
                 gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
                 gl.tex_sub_image_2d(
                     glow::TEXTURE_2D,
@@ -627,7 +620,7 @@ impl Engine {
                     height,
                     glow::RED,
                     glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&data[..(width * height) as usize])),
+                    glow::PixelUnpackData::Slice(Some(&data[..len])),
                 );
                 gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
             }
@@ -645,7 +638,10 @@ impl Engine {
         let Some(atlas) = &self.glyphs else {
             return;
         };
-        if data.len() < (width * height) as usize || x + width > atlas.size.0 || y + height > atlas.size.1 {
+        let Some(len) = gl::area(width, height) else {
+            return;
+        };
+        if data.len() < len || !gl::region_fits(x, y, width, height, atlas.size) {
             return;
         }
         // SAFETY: upload inside the atlas
@@ -662,9 +658,41 @@ impl Engine {
                 height,
                 glow::RED,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(&data[..(width * height) as usize])),
+                glow::PixelUnpackData::Slice(Some(&data[..len])),
             );
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn label_boxes_turn_with_the_text() {
+        let at = DVec2::new(100.0, 50.0);
+        let rect = [-20.0, -5.0, 20.0, 5.0];
+        let flat = label_box(at, rect, 1.0, 0.0);
+        assert_eq!(flat, [80.0, 45.0, 120.0, 55.0]);
+        // Twice as large
+        assert_eq!(label_box(at, rect, 2.0, 0.0), [60.0, 40.0, 140.0, 60.0]);
+        // A quarter turn: the box stands up
+        let turned = label_box(at, rect, 1.0, FRAC_PI_2);
+        for (a, b) in turned.iter().zip([95.0, 30.0, 105.0, 70.0]) {
+            assert!((a - b).abs() < 1e-9, "{turned:?}");
+        }
+    }
+
+    #[test]
+    fn text_along_a_line_stays_upright() {
+        let o = DVec2::ZERO;
+        assert_eq!(upright(o, DVec2::new(1.0, 0.0)), 0.0);
+        // Running right to left: turned half a turn, read left to right
+        assert!(upright(o, DVec2::new(-1.0, 0.0)).abs() < 1e-12);
+        assert!((upright(o, DVec2::new(1.0, 1.0)) - PI / 4.0).abs() < 1e-12);
+        assert!((upright(o, DVec2::new(-1.0, -1.0)) - PI / 4.0).abs() < 1e-12);
+        assert!(upright(o, DVec2::new(0.0, -1.0)).abs() <= FRAC_PI_2);
     }
 }

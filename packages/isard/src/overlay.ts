@@ -114,7 +114,7 @@ export interface MarkerEvents {
 }
 
 /** An element at a position on the map, optionally draggable */
-export class Marker implements Positioned {
+export class Marker {
   private readonly element: HTMLElement;
   private readonly anchor: Anchor;
   private readonly events = new Emitter<MarkerEvents>();
@@ -306,7 +306,7 @@ export interface PopupEvents {
 }
 
 /** A box of content at a position, its tip pointing at it */
-export class Popup implements Positioned {
+export class Popup {
   private readonly container: HTMLElement;
   private readonly content: HTMLElement;
   private readonly closeButton: HTMLButtonElement | undefined;
