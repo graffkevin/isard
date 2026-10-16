@@ -8,6 +8,10 @@
 //! prisms are then drawn once more, coloring the counted pixels and clearing the count. The cost is a few full-screen
 //! passes at worst, whatever the relief, and the edges are exact to the pixel.
 //!
+//! The triangles are cut along a grid fine enough for the layer (`geo::shapes::square_for`) and sorted by square,
+//! their order kept within a square (triangles of different squares never overlap): only the squares in view are
+//! drawn, flat or in relief.
+//!
 //! Picking is done on the CPU: the ground position under the cursor tested against the polygons.
 
 use crate::engine::Engine;
@@ -15,6 +19,7 @@ use crate::layer::{Frame, Layer};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay;
+use geo::pieces::{self, Grid};
 use geo::shapes::{self, Mesh, Polygons};
 use glam::DVec2;
 use glow::HasContext;
@@ -99,13 +104,14 @@ pub struct FillLayer {
     vao: glow::VertexArray,
     vertices: glow::Buffer,
     indices: glow::Buffer,
-    /// Index counts: top cap, all
-    top: i32,
+    /// Index count
     all: i32,
     shapes: Vec<Shape>,
-    /// Bounds of the polygons (Mercator), to skip the layer out of view
-    min: DVec2,
-    max: DVec2,
+    /// The grid the triangles are sorted by, and the first index of each square in the top cap and in the rest (the
+    /// bottom cap and the walls), with the ends
+    grid: Grid,
+    top_start: Vec<u32>,
+    rest_start: Vec<u32>,
 }
 
 impl FillLayer {
@@ -146,11 +152,11 @@ impl FillLayer {
             vao,
             vertices,
             indices,
-            top: 0,
             all: 0,
             shapes: Vec::new(),
-            min: DVec2::ZERO,
-            max: DVec2::ZERO,
+            grid: Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0),
+            top_start: vec![0, 0],
+            rest_start: vec![0, 0],
         };
         layer.set_geometry(gl, polygons, feature);
         Ok(layer)
@@ -158,7 +164,10 @@ impl FillLayer {
 
     /// Replaces the polygons; `feature`: the feature of each polygon
     pub fn set_geometry(&mut self, gl: &glow::Context, polygons: &Polygons, feature: &[u32]) {
-        let mut mesh: Mesh = shapes::triangulate(polygons);
+        let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
+        let square = shapes::square_for(min, max);
+        let mut mesh: Mesh = shapes::triangulate_in(polygons, square);
+        let chunks = shapes::chunk(&mut mesh, square);
         // Polygon numbers to features
         for v in &mut mesh.vertices {
             v.polygon = feature.get(v.polygon as usize).copied().unwrap_or(u32::MAX);
@@ -188,7 +197,9 @@ impl FillLayer {
                 }
             })
             .collect();
-        (self.min, self.max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
+        self.grid = chunks.grid;
+        self.top_start = chunks.top;
+        self.rest_start = chunks.rest;
         // SAFETY: uploads into buffers owned by this layer
         unsafe {
             gl.bind_vertex_array(Some(self.vao));
@@ -198,7 +209,6 @@ impl FillLayer {
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&mesh.indices), glow::STATIC_DRAW);
             gl.bind_vertex_array(None);
         }
-        self.top = mesh.top as i32;
         self.all = mesh.indices.len() as i32;
     }
 
@@ -239,14 +249,35 @@ impl Layer for FillLayer {
             return false;
         }
         let volume = frame.relief.is_some();
-        // Out of view: nothing to draw (the prisms of a volume reach from `BOTTOM` to `TOP`)
+        // The squares in view (the prisms of a volume reach from `BOTTOM` to `TOP`, and their faces past the far plane
+        // still count: kept on it); the fills are drawn where they are, on no other copy of the world
         let heights = frame.relief.map_or((0.0, 0.0), |(_, e)| {
             let k = frame.view.vertical * f64::from(e.max(1.0));
             (f64::from(BOTTOM) * k, f64::from(TOP) * k)
         });
-        if !overlay::in_view(frame.view, self.min, self.max, heights) {
+        let squares = pieces::squares_in_view(&self.grid, frame.view, heights, 0.0, 0.0, !volume);
+        let top = pieces::ranges(&squares, &self.top_start);
+        if top.is_empty() {
             return false;
         }
+        // The bottom caps and the walls too, in relief
+        let mut all = top.clone();
+        if volume {
+            all.extend(pieces::ranges(&squares, &self.rest_start));
+        }
+        let draw = |ranges: &[(u32, u32)]| {
+            for &(first, end) in ranges {
+                // SAFETY: a draw of indices inside the index buffer, the vertex array bound by `set_uniforms`
+                unsafe {
+                    frame.gl.draw_elements(
+                        glow::TRIANGLES,
+                        (end - first) as i32,
+                        glow::UNSIGNED_INT,
+                        first as i32 * 4,
+                    );
+                }
+            }
+        };
         let gl = frame.gl;
         self.set_uniforms(frame, volume);
         // SAFETY: state changes and draws on the live context, set back at the end
@@ -264,17 +295,17 @@ impl Layer for FillLayer {
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LESS);
                 gl.depth_mask(false);
-                gl.draw_elements(glow::TRIANGLES, self.all, glow::UNSIGNED_INT, 0);
+                draw(&all);
                 // Color the counted ground, once per pixel
                 gl.color_mask(true, true, true, true);
                 gl.disable(glow::DEPTH_TEST);
                 gl.stencil_func(glow::NOTEQUAL, 0, 0xff);
                 gl.stencil_op(glow::ZERO, glow::ZERO, glow::ZERO);
-                gl.draw_elements(glow::TRIANGLES, self.all, glow::UNSIGNED_INT, 0);
+                draw(&all);
                 gl.disable(glow::STENCIL_TEST);
                 gl.depth_mask(true);
             } else {
-                gl.draw_elements(glow::TRIANGLES, self.top, glow::UNSIGNED_INT, 0);
+                draw(&top);
             }
             gl.bind_vertex_array(None);
             gl.enable(glow::CULL_FACE);

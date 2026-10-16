@@ -193,8 +193,18 @@ fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
 
 /// Conservative test of sample points against the frustum: out only if all are beyond the same plane
 pub(crate) fn in_frustum(view: &View, points: &[DVec3]) -> bool {
+    in_planes(view, points, ALL_PLANES)
+}
+
+/// The six planes of the frustum (`in_planes`): left, right, bottom, top, near, far
+pub(crate) const ALL_PLANES: u8 = 0b11_1111;
+/// The frustum's planes but the far one
+pub(crate) const NO_FAR_PLANE: u8 = 0b01_1111;
+
+/// `in_frustum` against some of the frustum's planes (one bit each, `ALL_PLANES`)
+pub(crate) fn in_planes(view: &View, points: &[DVec3], planes: u8) -> bool {
     // One bit per plane, kept while every point is beyond it
-    let mut outside = 0b11_1111u8;
+    let mut outside = planes;
     for p in points {
         let c = view.view_proj * p.extend(1.0);
         let bits = u8::from(c.x < -c.w)

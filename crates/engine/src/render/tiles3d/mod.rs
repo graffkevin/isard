@@ -70,6 +70,8 @@ enum Arrival {
 
 /// The virtual tile of the root tileset's arrival
 const ROOT: usize = usize::MAX;
+/// Requests of a frame fetched with a high priority (the first ones: the largest errors in view)
+const URGENT_REQUESTS: usize = 4;
 
 /// (tile, request number, arrival)
 type Inbox = Rc<RefCell<Vec<(usize, u32, Arrival)>>>;
@@ -174,7 +176,8 @@ impl Tiles3dLayer {
                 js::sleep(delay_ms as i32).await;
             }
             // After a failure, past the HTTP cache (it may hold the error)
-            let arrival = match fetch_bytes(&url, None, delay_ms > 0.0).await {
+            // Nothing shows before the root tileset: urgent
+            let arrival = match fetch_bytes(&url, None, delay_ms > 0.0, "high").await {
                 Ok(bytes) => Arrival::Tileset(bytes, url),
                 Err(_) => Arrival::Failed,
             };
@@ -308,7 +311,8 @@ impl Tiles3dLayer {
         }
     }
 
-    fn request(&mut self, tile: usize) {
+    /// Starts the download of a tile; `urgent`: with a high fetch priority (else low)
+    fn request(&mut self, tile: usize, urgent: bool) {
         // Implicit tiling: the levels of a subtree already in memory are grafted without a download
         if self.tree.expandable(tile) {
             if let Err(e) = self.graft(&[], "", Some(tile)) {
@@ -327,6 +331,7 @@ impl Tiles3dLayer {
         let (transform, y_up) = (node.transform, node.y_up);
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let reload = self.states.failed_before(tile);
+        let priority = if urgent { "high" } else { "low" };
         let id = next_request();
         let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
         // Meshes go to the worker pool when there is one: fetched and decoded off the main thread
@@ -334,7 +339,7 @@ impl Tiles3dLayer {
             && let Some(promise) = self
                 .loader
                 .as_ref()
-                .and_then(|l| load_in_worker(l, id, &url, &transform, y_up, reload))
+                .and_then(|l| load_in_worker(l, id, &url, &transform, (y_up, reload), priority))
         {
             self.states
                 .replace(tile, State::Loading(Loading { id, controller: None }));
@@ -363,7 +368,7 @@ impl Tiles3dLayer {
             }),
         );
         wasm_bindgen_futures::spawn_local(async move {
-            let arrival = match fetch_bytes(&url, Some(&signal), reload).await {
+            let arrival = match fetch_bytes(&url, Some(&signal), reload, priority).await {
                 // The content tells what it is when the URI does not
                 Ok(bytes) if is_tileset || tileset::sniff(&bytes) == tileset::Kind::Json => {
                     Arrival::Tileset(bytes, url)
@@ -422,8 +427,11 @@ impl Tiles3dLayer {
             loading.mesh_requests,
             &mut requests,
         );
-        for &i in &requests {
-            self.request(i);
+        // The first visible tiles of the frame (largest error first: the most visible gaps) are urgent; the others
+        // and the prefetched siblings are not
+        for (rank, &i) in requests.iter().enumerate() {
+            let urgent = rank < URGENT_REQUESTS && !selection.prefetch.contains(&i);
+            self.request(i, urgent);
         }
         self.requests = requests;
         self.states.touch(&selection.draw, frame);
@@ -581,8 +589,8 @@ export interface Tiles3dStats {
 #[wasm_bindgen]
 impl Engine {
     /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
-    /// `load(id, url, transform, yUp) → Promise<{ anchor, primitives }>` and `abort(id)`. Without it, tiles are
-    /// decoded on the main thread. Set it before adding 3D Tiles layers.
+    /// `load(id, url, transform, yUp, reload, priority) → Promise<{ anchor, primitives }>` and `abort(id)`. Without
+    /// it, tiles are decoded on the main thread. Set it before adding 3D Tiles layers.
     #[wasm_bindgen(js_name = setTileLoader)]
     pub fn set_tile_loader(&mut self, #[wasm_bindgen(unchecked_param_type = "TileLoaderLike | null")] loader: JsValue) {
         self.loader = (!loader.is_null() && !loader.is_undefined()).then_some(loader);

@@ -1,9 +1,9 @@
 /**
  * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
  * pass (wasm-opt), then the `@ign-junn/isard` package (packages/isard/dist: module, workers, type declarations), the
- * demo and the examples (bundled from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
+ * demo and the examples (bundled together from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
  */
-import { copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { $ } from 'bun';
@@ -39,48 +39,78 @@ const features = [
 const strip = ['--strip-debug', '--strip-producers'];
 await $`bun --bun ${join(root, 'node_modules/.bin/wasm-opt')} -O3 ${features} ${strip} ${wasm} -o ${wasm}`;
 
-/** Bundles an entry point with the workers next to it (they are loaded by URL, relative to the bundle). The output
- * folder is emptied first: files of an older build (renamed since) would ship with the package. */
-async function bundle(entries: string[], outdir: string): Promise<void> {
-  rmSync(join(root, outdir), { recursive: true, force: true });
-  const result = await Bun.build({
-    entrypoints: [
-      ...entries.map((entry) => join(root, entry)),
-      join(root, pkg, 'src/decoder.worker.ts'),
-      join(root, pkg, 'src/basemap.worker.ts'),
-    ],
-    outdir: join(root, outdir),
-    naming: '[name].[ext]',
+/** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle). The output
+ * folder is emptied first: files of an older build (renamed since) would ship. `split`: the entry points share the
+ * chunks of their common code (the package), loaded once by the browser for all of them. */
+async function bundle(entries: string[], outdir: string, options: { split?: boolean; empty?: boolean } = {}) {
+  const { split = false, empty = true } = options;
+  if (empty) rmSync(join(root, outdir), { recursive: true, force: true });
+  const common = {
     target: 'browser',
     format: 'esm',
     minify: true,
     sourcemap: 'linked',
     conditions: ['isard-source'],
-  });
-  if (!result.success) throw new AggregateError(result.logs, `bundling ${entries.join(', ')} failed`);
+  } satisfies Partial<Bun.BuildConfig>;
+  const workers = [join(root, pkg, 'src/decoder.worker.ts'), join(root, pkg, 'src/basemap.worker.ts')];
+  // Workers on their own (a worker cannot share the page's chunks), entry points split or not
+  const builds = split
+    ? [
+        Bun.build({ ...common, entrypoints: workers, outdir: join(root, outdir), naming: '[name].[ext]' }),
+        Bun.build({
+          ...common,
+          entrypoints: entries.map((entry) => join(root, entry)),
+          outdir: join(root, outdir),
+          root: join(root, outdir, '..'),
+          splitting: true,
+          naming: { entry: '[dir]/[name].[ext]', chunk: '[name]-[hash].[ext]' },
+        }),
+      ]
+    : [
+        Bun.build({
+          ...common,
+          entrypoints: [...entries.map((entry) => join(root, entry)), ...workers],
+          outdir: join(root, outdir),
+          naming: '[name].[ext]',
+        }),
+      ];
+  for (const result of await Promise.all(builds)) {
+    if (!result.success) throw new AggregateError(result.logs, `bundling ${entries.join(', ')} failed`);
+  }
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
 }
 
+/** The package: its modules as they are (an application's bundler keeps what it uses), the engine's bindings, the
+ * workers bundled (loaded by URL, they must stand alone) and the engine next to them */
+async function buildPackage(): Promise<void> {
+  const dist = join(root, pkg, 'dist');
+  rmSync(dist, { recursive: true, force: true });
+  await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
+  mkdirSync(join(dist, 'wasm'), { recursive: true });
+  copyFileSync(join(root, bindings, 'isard.js'), join(dist, 'wasm/isard.js'));
+  // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
+  const declarations = readFileSync(join(root, bindings, 'isard.d.ts'), 'utf8');
+  writeFileSync(join(dist, 'wasm/isard.d.ts'), declarations.replace(/^\s*\[Symbol\.dispose\]\(\): void;\n/gm, ''));
+  // After tsc: the workers it emitted module by module (imported for their types) are replaced
+  await bundle([], `${pkg}/dist`, { empty: false });
+}
+
 const bundles: Promise<void>[] = [
-  bundle([`${pkg}/src/index.ts`], `${pkg}/dist`),
+  buildPackage(),
   bundle(['apps/demo/src/main.ts'], 'apps/demo/dist'),
-  // Each example on its own, with the engine and workers next to it: a folder to copy as it is
-  ...[...new Bun.Glob('examples/*/main.ts').scanSync(root)].map((example) =>
-    bundle([example], example.replace(/main\.ts$/, 'dist')),
-  ),
+  // The examples together: each page loads its own entry, the package's code and the engine once for all of them
+  bundle([...new Bun.Glob('examples/*/main.ts').scanSync(root)], 'examples/dist', { split: true }),
 ];
 if (process.argv.includes('--bench')) {
   const pages = ['runner', 'itowns', 'isard', 'tiles-renderer'].map((page) => `apps/bench/src/${page}.ts`);
   bundles.push(bundle(pages, 'apps/bench/dist'));
 }
 await Promise.all(bundles);
-await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
-// The declarations of the package refer to the engine's (Camera, PickHit…): shipped with them
-mkdirSync(join(root, pkg, 'dist/wasm'), { recursive: true });
-copyFileSync(join(root, bindings, 'isard.d.ts'), join(root, pkg, 'dist/wasm/isard.d.ts'));
 
-const size = (path: string) => `${(Bun.file(join(root, path)).size / 1024).toFixed(0)} KB`;
+const kb = (path: string) => Bun.file(join(root, path)).size / 1024;
+const modules = [...new Bun.Glob('*.js').scanSync(join(root, pkg, 'dist'))].filter((f) => !f.endsWith('.worker.js'));
+const total = modules.reduce((sum, file) => sum + kb(`${pkg}/dist/${file}`), 0);
 console.log(
-  `engine ${size(wasm)}, package ${size(`${pkg}/dist/index.js`)} + worker ${size(`${pkg}/dist/decoder.worker.js`)}`,
+  `engine ${kb(wasm).toFixed(0)} KB, package ${modules.length} modules ${total.toFixed(0)} KB + worker ${kb(`${pkg}/dist/decoder.worker.js`).toFixed(0)} KB`,
 );

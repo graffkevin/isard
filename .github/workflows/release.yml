@@ -1,0 +1,32 @@
+# Publishes the package on npm when a v<version> tag is pushed (`bun run release`), with provenance: npm's trusted
+# publishing authenticates this workflow (configure it once on npmjs.com: organization ign-junn, package
+# @ign-junn/isard, repository and workflow release.yml), no token is stored anywhere
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - id: versions
+        run: echo "wasm-bindgen=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/release.ts --publish

@@ -16,6 +16,7 @@
     "lint": "biome check . && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo clippy --target wasm32-unknown-unknown -- -D warnings",
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test && bun test packages/isard",
+    "test:visual": "bun scripts/visual.ts",
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",
     "docs:dev": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs dev",
@@ -25,7 +26,11 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/bun": "^1.4.3",
+    "@types/pngjs": "6.0.5",
     "binaryen": "^132.0.0",
+    "pixelmatch": "7.1.0",
+    "pngjs": "7.0.0",
+    "puppeteer-core": "24.10.0",
     "typescript": "~6.0.2"
   },
   "overrides": {

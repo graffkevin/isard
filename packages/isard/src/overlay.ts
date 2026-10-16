@@ -335,7 +335,7 @@ export class Popup {
       this.closeButton = document.createElement('button');
       this.closeButton.type = 'button';
       this.closeButton.className = 'isard-popup-close';
-      this.closeButton.ariaLabel = 'Close popup';
+      this.closeButton.setAttribute('aria-label', 'Close popup');
       this.closeButton.textContent = '×';
       this.closeButton.addEventListener('click', () => this.remove());
       this.content.append(this.closeButton);

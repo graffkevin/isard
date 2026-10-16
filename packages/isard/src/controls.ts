@@ -32,7 +32,7 @@ function button(className: string, label: string, icon: string, onClick: () => v
   element.type = 'button';
   element.className = className;
   element.title = label;
-  element.ariaLabel = label;
+  element.setAttribute('aria-label', label);
   element.innerHTML = icon;
   element.addEventListener('click', onClick);
   return element;
@@ -120,8 +120,9 @@ export class AttributionControl implements Control {
       link.rel = 'noopener noreferrer';
     }
     const toggle = button('isard-attrib-button', 'Toggle attribution', INFO, () =>
-      element.classList.toggle('isard-attrib-open'),
+      toggle.setAttribute('aria-expanded', String(element.classList.toggle('isard-attrib-open'))),
     );
+    toggle.setAttribute('aria-expanded', 'false');
     element.append(inner, toggle);
     const { compact } = this.options;
     if (compact !== undefined) {
@@ -130,8 +131,10 @@ export class AttributionControl implements Control {
       // Follows the map's width; a narrowed map folds the text, starting closed
       const fold = () => {
         const narrow = map.getContainer().clientWidth < 640;
-        if (narrow !== element.classList.contains('isard-attrib-compact'))
+        if (narrow !== element.classList.contains('isard-attrib-compact')) {
           element.classList.remove('isard-attrib-open');
+          toggle.setAttribute('aria-expanded', 'false');
+        }
         element.classList.toggle('isard-attrib-compact', narrow);
       };
       fold();

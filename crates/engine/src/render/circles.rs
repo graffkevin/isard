@@ -1,7 +1,11 @@
 //! Circle layer: points drawn as discs with a stroke, styled per feature (fill and stroke colors, radius and stroke
 //! width as zoom stops, a value through the layer's ramp): gauges, stations, marks. Each point is an instanced quad,
 //! the disc worked out per pixel. Facing the screen (`MapLibre`'s `circle-pitch-alignment: viewport`) or lying on the
-//! ground (`map`); in relief, standing on the ground, the hills hiding them. Drawn in the order of the points.
+//! ground (`map`); in relief, standing on the ground, the hills hiding them.
+//!
+//! The points are sorted by square of a grid over the layer (as the pieces of the line layers), in their order within a
+//! square: only the squares in view are drawn. Circles of different squares overlapping may stack in another order
+//! than the points'.
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
@@ -9,6 +13,7 @@ use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay::{self, ANCHOR, Anchor};
+use geo::pieces::{self, Grid};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
@@ -93,6 +98,10 @@ const PICK_SLOP: f32 = 4.0;
 const CULL_MARGIN: f64 = 128.0;
 /// Bytes per point: offset (2 × f32), feature
 const STRIDE: i32 = 12;
+/// Squares of the culling grid along the longer side of the layer
+const SQUARES_ACROSS: f64 = 32.0;
+/// Smallest square of the culling grid, Mercator (about 100 m at the equator)
+const MIN_SQUARE: f64 = 100.0 / 40_075_016.686;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -116,6 +125,9 @@ pub struct CircleLayer {
     origin: DVec2,
     min: DVec2,
     max: DVec2,
+    /// The culling grid and the first point of each of its squares (and the end)
+    grid: Grid,
+    start: Vec<u32>,
     drape: Drape,
     count: usize,
 }
@@ -163,6 +175,8 @@ impl CircleLayer {
             origin: DVec2::ZERO,
             min: DVec2::ZERO,
             max: DVec2::ZERO,
+            grid: Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0),
+            start: vec![0, 0],
             drape: Drape::new(),
             count: 0,
         };
@@ -176,17 +190,22 @@ impl CircleLayer {
         let n = merc.len().min(feature.len());
         (self.min, self.max) = overlay::bounds(&merc[..n]).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         self.origin = (self.min + self.max) / 2.0;
-        let data: Vec<Point> = merc[..n]
+        // Sorted by square of the culling grid, in their order within a square
+        let extent = (self.max - self.min).max_element();
+        self.grid = Grid::over(self.min, self.max, (extent / SQUARES_ACROSS).max(MIN_SQUARE));
+        let squares: Vec<u32> = merc[..n].iter().map(|&p| self.grid.square(p)).collect();
+        let (order, start) = pieces::sort_by_square(&squares, self.grid.len());
+        let data: Vec<Point> = order
             .iter()
-            .zip(feature)
-            .map(|(&p, &feature)| {
-                let o = p - self.origin;
+            .map(|&k| {
+                let o = merc[k as usize] - self.origin;
                 Point {
                     offset: [o.x as f32, o.y as f32],
-                    feature,
+                    feature: feature[k as usize],
                 }
             })
             .collect();
+        self.start = start;
         // SAFETY: upload into the buffer owned by this layer
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
@@ -205,7 +224,8 @@ impl CircleLayer {
         }
     }
 
-    fn render(&self, frame: &Frame, pick: Option<u8>) {
+    /// Draws the points of `ranges`; `pick`: the picking pass, with this layer number
+    fn render(&self, frame: &Frame, ranges: &[(u32, u32)], pick: Option<u8>) {
         let &Frame {
             gl,
             camera,
@@ -229,25 +249,39 @@ impl CircleLayer {
             self.drape.bind(gl, &self.drape_uniforms, relief);
             self.features.bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
             gl.bind_vertex_array(Some(self.vao));
-            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, self.count as i32);
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
+            for &(first, end) in ranges {
+                let offset = first as i32 * STRIDE;
+                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, STRIDE, offset);
+                gl.vertex_attrib_pointer_i32(1, 1, glow::UNSIGNED_INT, STRIDE, offset + 8);
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, (end - first) as i32);
+            }
             gl.bind_vertex_array(None);
         }
     }
 
-    /// Whether the layer has anything to draw at this zoom, in view
-    fn shows(&self, frame: &Frame) -> bool {
+    /// The ranges of points in the squares in view (none if the layer has nothing to draw at this zoom)
+    fn visible(&self, frame: &Frame) -> Vec<(u32, u32)> {
         if self.count == 0 || !self.features.layer.shows(frame.camera.zoom) {
-            return false;
+            return Vec::new();
         }
-        let pad = DVec2::splat(CULL_MARGIN / frame.view.world_size);
-        let heights = overlay::heights(frame.view, frame.relief);
-        overlay::in_view(frame.view, self.min - pad, self.max + pad, heights)
+        let view = frame.view;
+        let squares = pieces::squares_in_view(
+            &self.grid,
+            view,
+            overlay::heights(view, frame.relief),
+            overlay::shift(self.origin, view),
+            CULL_MARGIN / view.world_size,
+            true,
+        );
+        pieces::ranges(&squares, &self.start)
     }
 }
 
 impl Layer for CircleLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
-        if !self.shows(frame) {
+        let ranges = self.visible(frame);
+        if ranges.is_empty() {
             return false;
         }
         self.update_drape(frame);
@@ -261,7 +295,7 @@ impl Layer for CircleLayer {
                 gl.depth_mask(false);
             }
         }
-        self.render(frame, None);
+        self.render(frame, &ranges, None);
         // SAFETY: state changes on the live context
         unsafe {
             gl.enable(glow::CULL_FACE);
@@ -276,11 +310,12 @@ impl Layer for CircleLayer {
     }
 
     fn draw_pick(&self, frame: &Frame, layer: u8) {
-        if !self.shows(frame) {
+        let ranges = self.visible(frame);
+        if ranges.is_empty() {
             return;
         }
         // The page table is the last frame's
-        self.render(frame, Some(layer));
+        self.render(frame, &ranges, Some(layer));
     }
 
     fn delete(&mut self, gl: &glow::Context) {

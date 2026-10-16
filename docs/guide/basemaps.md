@@ -36,6 +36,11 @@ tiles.raster({
 });
 ```
 
+The vector tiles of a map share its workers (cores - 1, 1 to 4, created on first use): a vector tile is downloaded
+and decoded once, whatever the styles or subsets drawn from it, by the vector basemap and by your own `vectorTiles()`.
+Asking for another `workers` count or `workerUrl` than the map's gives those tiles workers of their own. The tiles
+near the center of the view are fetched first (`fetch`'s `priority`).
+
 <LiveExample slug="vector" height="420px" />
 
 ## Relief

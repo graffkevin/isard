@@ -18,7 +18,10 @@ const CSS = `
   --isard-marker-color: #3a6fd8;
   --isard-attrib-bg: rgb(255 255 255 / 0.5);
   --isard-attrib-fg: rgb(0 0 0 / 0.75);
+  --isard-focus: #3a6fd8;
 }
+.isard-canvas:focus { outline: none; }
+.isard-canvas:focus-visible { outline: 2px solid var(--isard-focus); outline-offset: -2px; }
 .isard-overlay { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
 .isard-ctrl-top-left, .isard-ctrl-top-right, .isard-ctrl-bottom-left, .isard-ctrl-bottom-right {
   position: absolute; pointer-events: none; z-index: 2;
@@ -91,6 +94,9 @@ const CSS = `
   background: transparent; color: inherit; font: 18px/22px system-ui, sans-serif; cursor: pointer;
 }
 .isard-popup-close:hover { background: rgb(0 0 0 / 0.05); }
+.isard-popup-close:focus-visible, .isard-attrib-button:focus-visible, .isard-attrib a:focus-visible {
+  outline: 2px solid var(--isard-focus); outline-offset: -2px;
+}
 .isard-attrib {
   display: flex; align-items: center; gap: 4px; padding: 0 5px; border-radius: 4px; background: var(--isard-attrib-bg);
   color: var(--isard-attrib-fg); font: 12px/20px system-ui, sans-serif;

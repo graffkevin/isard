@@ -31,7 +31,7 @@ pub enum Fetch {
 }
 
 /// Fetches an image and decodes it off the main thread, without premultiplied alpha (the shader blends straight
-/// alpha)
+/// alpha). `priority`: the Fetch Priority (`"high"`, `"low"`).
 /// `reload`: bypass the HTTP cache. The Géoplateforme sends its error answers with a 21-day cache lifetime: a retry
 /// served from the cache would read the same error for weeks; reloading also replaces the cached error.
 pub async fn fetch_bitmap(
@@ -39,8 +39,9 @@ pub async fn fetch_bitmap(
     size: i32,
     signal: &web_sys::AbortSignal,
     reload: bool,
+    priority: &str,
 ) -> Result<web_sys::ImageBitmap, Fetch> {
-    let response = fetch_response(url, signal, reload)
+    let response = fetch_response(url, signal, reload, priority)
         .await
         .map_err(|_| Fetch::Transient)?;
     match response.status() {
@@ -84,8 +85,9 @@ pub async fn fetch_heights(
     geoid: bool,
     signal: &web_sys::AbortSignal,
     reload: bool,
+    priority: &str,
 ) -> Result<Vec<f32>, Fetch> {
-    let response = fetch_response(url, signal, reload)
+    let response = fetch_response(url, signal, reload, priority)
         .await
         .map_err(|_| Fetch::Transient)?;
     match response.status() {
@@ -111,12 +113,17 @@ pub async fn fetch_heights(
     Ok(heights)
 }
 
-async fn fetch_response(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<web_sys::Response, JsValue> {
+async fn fetch_response(
+    url: &str,
+    signal: &web_sys::AbortSignal,
+    reload: bool,
+    priority: &str,
+) -> Result<web_sys::Response, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_signal(Some(signal));
-    // The basemap first: it covers the whole screen
-    crate::js::fetch_priority(&init, "high");
+    // The tiles at the screen center first; always explicit (see `fetch_priority`)
+    crate::js::fetch_priority(&init, priority);
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }

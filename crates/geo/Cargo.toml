@@ -13,3 +13,11 @@ earcut = "0.4"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Benchmarks (benches/, criterion): `cargo bench -p isard-geo`; `cargo bench --no-run` only builds them
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "geo"
+harness = false

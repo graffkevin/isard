@@ -1,5 +1,7 @@
 [workspace]
 members = ["crates/engine", "crates/geo", "crates/tiles3d"]
+# The fuzz targets (cargo-fuzz, nightly) are a workspace of their own
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.lints.clippy]

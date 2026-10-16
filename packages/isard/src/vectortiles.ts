@@ -7,13 +7,14 @@
  * Any subset of the style can be drawn on its own raster layer (`raster({ layers })`), at its own place in the stack:
  * rivers from the basemap's data over a flood layer, for instance, restyled with `extraLayers`.
  */
-import type { BasemapRequest, BasemapResponse, Sprite } from './basemap.worker.ts';
+import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } from './basemap.worker.ts';
 import type { Feature, Size } from './features.ts';
 import type { RasterLayer } from './layers.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
 import type { SymbolLayer } from './symbols.ts';
 import type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
+import type { Camera } from './wasm/isard.js';
 
 /** PLAN.IGN vector styles of the Géoplateforme */
 export const PLAN_STYLES = {
@@ -30,9 +31,11 @@ export const VECTOR_BASEMAPS = {
 export interface VectorTilesOptions {
   /** A style URL or object (default the PLAN.IGN grey style) */
   style?: string | Style;
-  /** Workers drawing the tiles (default cores - 1, 1 to 4) */
+  /** Workers drawing the tiles (default cores - 1, 1 to 4). The vector tiles of a map share its workers (and their
+   * decoded tiles); another count gives these tiles workers of their own */
   workers?: number;
-  /** Where to load the worker from, when a bundler does not resolve the default URL */
+  /** Where to load the worker from, when a bundler does not resolve the default URL (default the map's
+   * `basemapWorkerUrl`); another URL than the map's gives these tiles workers of their own */
   workerUrl?: string | URL;
 }
 
@@ -55,27 +58,70 @@ async function json<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export class VectorTiles {
-  private readonly workers: Worker[];
+/** Default size of a basemap worker pool: cores - 1, 1 to 4 */
+export function defaultWorkerCount(): number {
+  return Math.min(4, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2) - 1));
+}
+
+/** Default URL of the basemap worker, next to the module */
+export function defaultWorkerUrl(): URL {
+  return new URL('./basemap.worker.js', import.meta.url);
+}
+
+/** Fetch priority of a raster tile drawn by the workers: 'high' near the center of the view, at the current zoom or
+ * coarser; 'low' far from it or finer (prefetch); 'auto' between */
+export function tilePriority(z: number, x: number, y: number, camera: Pick<Camera, 'center' | 'zoom'>): Priority {
+  // A raster tile of level z covers the map at zoom z - 1
+  if (z - 1 > camera.zoom + 1) return 'low';
+  const n = 2 ** z;
+  const [lon, lat] = camera.center;
+  const cx = ((lon + 180) / 360) * n;
+  const phi = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
+  const cy = ((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * n;
+  // Across the antimeridian, the short way
+  let dx = Math.abs(x + 0.5 - cx) % n;
+  dx = Math.min(dx, n - dx);
+  const d = Math.hypot(dx, y + 0.5 - cy);
+  if (d <= 1.5) return 'high';
+  return d >= 4 ? 'low' : 'auto';
+}
+
+/** The worker of a vector tile among `count`: always the same one */
+export function workerIndex(vz: number, vx: number, vy: number, count: number): number {
+  // Unsigned: every worker gets its share
+  return ((Math.imul(vx, 73856093) ^ Math.imul(vy, 19349663) ^ vz) >>> 0) % Math.max(1, count);
+}
+
+/** The worker-side key of a renderer: unique across the `VectorTiles` sharing a pool */
+export function rendererKey(namespace: string, n: number): string {
+  return `${namespace}:r${n}`;
+}
+
+/** What the pool needs of a worker (a `Worker`, or a stand-in in tests) */
+export type PoolWorker = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
+
+/**
+ * @internal Workers drawing vector tiles, shared by the `VectorTiles` of a map: each vector tile always goes to the
+ * same worker, which keeps it decoded for every style drawn from it. Requests are tracked one by one, with their
+ * owner, so that one `VectorTiles` going away cancels its own requests only.
+ */
+export class BasemapWorkers {
+  private readonly workers: PoolWorker[];
   private readonly pending = new Map<
     number,
-    { resolve: (r: BasemapResponse) => void; reject: (e: Error) => void; worker: Worker }
+    { resolve: (r: BasemapResponse) => void; reject: (e: Error) => void; worker: PoolWorker; owner: object }
   >();
-  private destroyed = false;
   private next = 1;
-  private keys = 0;
-  private readonly cleanup: (() => void)[] = [];
-  /** The style once loaded, with its source resolved */
-  readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number }>;
+  private namespaces = 0;
+  private terminated = false;
 
   constructor(
-    private readonly map: GeoMap,
-    options: VectorTilesOptions = {},
+    readonly count: number,
+    readonly url: string | URL,
+    create: (url: string | URL) => PoolWorker = (u) => new Worker(u, { type: 'module' }),
   ) {
-    const count = options.workers ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
-    const url = options.workerUrl ?? new URL('./basemap.worker.js', import.meta.url);
     this.workers = Array.from({ length: Math.max(1, count) }, () => {
-      const worker = new Worker(url, { type: 'module' });
+      const worker = create(url);
       worker.onmessage = ({ data }: MessageEvent<BasemapResponse>) => {
         const p = this.pending.get(data.id);
         if (!p) return;
@@ -91,15 +137,20 @@ export class VectorTiles {
       worker.onmessageerror = () => this.fail(worker, `the vector basemap worker ${url} sent an unreadable message`);
       return worker;
     });
-    this.ready = this.load(options.style ?? PLAN_STYLES.grey);
-    // Reported once here; `ready`, the raster tiles and the labels fail with it
-    this.ready.catch((error: unknown) => {
-      if (!this.destroyed) console.warn('isard: vector tiles', error);
-    });
+  }
+
+  /** A prefix for the renderer keys of one `VectorTiles` */
+  namespace(): string {
+    return `v${this.namespaces++}`;
+  }
+
+  /** Requests in progress */
+  get size(): number {
+    return this.pending.size;
   }
 
   /** Rejects the requests of a failed worker */
-  private fail(worker: Worker, message: string): void {
+  private fail(worker: PoolWorker, message: string): void {
     const error = new Error(
       `isard: ${message}. If a bundler moves the worker, give its URL in the \`basemapWorkerUrl\` option (see "With a bundler" in the guide)`,
     );
@@ -108,6 +159,102 @@ export class VectorTiles {
       this.pending.delete(id);
       p.reject(error);
     }
+  }
+
+  /** The worker of a vector tile */
+  worker(vz: number, vx: number, vy: number): PoolWorker {
+    return this.workers[workerIndex(vz, vx, vy, this.workers.length)] ?? (this.workers[0] as PoolWorker);
+  }
+
+  /** Sends a message to every worker (a renderer, or its removal) */
+  broadcast(message: Extract<BasemapRequest, { type: 'init' } | { type: 'drop' }>): void {
+    if (this.terminated) return;
+    // A sprite image is copied to each worker (structured clone)
+    for (const w of this.workers) w.postMessage(message);
+  }
+
+  /** Asks a worker for a tile's image or labels, on behalf of `owner` */
+  request(worker: PoolWorker, work: BasemapWork, owner: object, signal?: AbortSignal): Promise<BasemapResponse> {
+    return new Promise<BasemapResponse>((resolve, reject) => {
+      if (this.terminated) return reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+      if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'));
+      const id = this.next++;
+      const abort = () => {
+        if (!this.pending.delete(id)) return;
+        worker.postMessage({ type: 'abort', id } satisfies BasemapRequest);
+        reject(new DOMException('aborted', 'AbortError'));
+      };
+      // The listener goes once the request is settled
+      const settle = () => signal?.removeEventListener('abort', abort);
+      this.pending.set(id, {
+        resolve: (r) => {
+          settle();
+          resolve(r);
+        },
+        reject: (e) => {
+          settle();
+          reject(e);
+        },
+        worker,
+        owner,
+      });
+      signal?.addEventListener('abort', abort, { once: true });
+      worker.postMessage({ ...work, id } satisfies BasemapRequest);
+    });
+  }
+
+  /** Cancels the requests of an owner (the workers stop them) */
+  cancel(owner: object): void {
+    for (const [id, p] of this.pending) {
+      if (p.owner !== owner) continue;
+      this.pending.delete(id);
+      p.worker.postMessage({ type: 'abort', id } satisfies BasemapRequest);
+      p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+    }
+  }
+
+  /** Stops the workers; their requests fail */
+  terminate(): void {
+    if (this.terminated) return;
+    this.terminated = true;
+    for (const w of this.workers) w.terminate();
+    const pending = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of pending) p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+  }
+}
+
+export class VectorTiles {
+  private readonly pool: BasemapWorkers;
+  /** The pool is this instance's own (a worker count or URL other than the map's): stopped with it */
+  private readonly ownPool: boolean;
+  /** Prefix of its renderer keys in the pool's workers */
+  private readonly namespace: string;
+  private destroyed = false;
+  private keys = 0;
+  /** Renderers sent to the workers, dropped on destroy */
+  private readonly renderers: string[] = [];
+  private readonly cleanup: (() => void)[] = [];
+  /** The style once loaded, with its source resolved */
+  readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number }>;
+
+  /**
+   * Its workers are the map's (shared by every `VectorTiles` of the map, a vector tile decoded once for all of them),
+   * unless `workers` or `workerUrl` asks for others than the map's: then it has workers of its own
+   */
+  constructor(
+    private readonly map: GeoMap,
+    options: VectorTilesOptions = {},
+  ) {
+    const { pool, own } = map.basemapWorkers(options.workers, options.workerUrl);
+    this.pool = pool;
+    this.ownPool = own;
+    this.namespace = pool.namespace();
+    this.ready = this.load(options.style ?? PLAN_STYLES.grey);
+    // Reported once here; `ready`, the raster tiles and the labels fail with it
+    this.ready.catch((error: unknown) => {
+      if (!this.destroyed) console.warn('isard: vector tiles', error);
+    });
   }
 
   private async load(input: string | Style) {
@@ -127,14 +274,6 @@ export class VectorTiles {
     return { style, tiles: template, maxzoom: maxzoom ?? 14 };
   }
 
-  /** The worker of a vector tile: always the same one, which keeps it decoded for every raster tile and every label
-   * request drawn from it (one download per vector tile) */
-  private worker(vz: number, vx: number, vy: number): Worker {
-    // Unsigned: every worker gets its share
-    const k = ((Math.imul(vx, 73856093) ^ Math.imul(vy, 19349663) ^ vz) >>> 0) % this.workers.length;
-    return this.workers[k] ?? (this.workers[0] as Worker);
-  }
-
   /** The style's sprite (its JSON and its image), loaded once, for the renderers that draw fill patterns */
   private sprite: Promise<Sprite | undefined> | undefined;
 
@@ -151,51 +290,22 @@ export class VectorTiles {
     return this.sprite;
   }
 
-  private request(worker: Worker, message: BasemapRequest & { id: number }, signal?: AbortSignal) {
-    return new Promise<BasemapResponse>((resolve, reject) => {
-      if (this.destroyed) return reject(new Error('isard: vector tiles destroyed'));
-      if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'));
-      const abort = () => {
-        worker.postMessage({ type: 'abort', id: message.id } satisfies BasemapRequest);
-        this.pending.delete(message.id);
-        reject(new DOMException('aborted', 'AbortError'));
-      };
-      // The listener goes once the request is settled
-      const settle = () => signal?.removeEventListener('abort', abort);
-      this.pending.set(message.id, {
-        resolve: (r) => {
-          settle();
-          resolve(r);
-        },
-        reject: (e) => {
-          settle();
-          reject(e);
-        },
-        worker,
-      });
-      signal?.addEventListener('abort', abort, { once: true });
-      worker.postMessage(message);
-    });
+  private request(vz: number, vx: number, vy: number, work: BasemapWork, signal?: AbortSignal) {
+    if (this.destroyed) return Promise.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+    return this.pool.request(this.pool.worker(vz, vx, vy), work, this, signal);
   }
 
   /** Sends a renderer of these layers to every worker; returns its key */
   private async renderer(select: (layer: StyleLayer) => boolean, extra: StyleLayer[]) {
     const { style, tiles, maxzoom } = await this.ready;
-    const key = `r${this.keys++}`;
+    const key = rendererKey(this.namespace, this.keys++);
     const layers = [...style.layers.filter(select), ...extra];
     const patterns = layers.some((l) => l.paint?.['fill-pattern'] !== undefined);
+    // The image is downloaded once, copied to each worker
     const sprite = patterns && style.sprite ? await this.loadSprite(style.sprite) : undefined;
-    for (const w of this.workers) {
-      // The image is copied to each worker (structured clone), downloaded once
-      w.postMessage({
-        type: 'init',
-        key,
-        tiles,
-        maxzoom,
-        layers,
-        ...(sprite ? { sprite } : {}),
-      } satisfies BasemapRequest);
-    }
+    if (this.destroyed) throw new DOMException('isard: vector tiles destroyed', 'AbortError');
+    this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, ...(sprite ? { sprite } : {}) });
+    this.renderers.push(key);
     return { key, maxzoom };
   }
 
@@ -224,9 +334,12 @@ export class VectorTiles {
       // The vector tile it is drawn from (see the worker)
       const vz = Math.max(0, Math.min(z - 1, maxzoom));
       const shift = z - vz;
+      const priority = tilePriority(z, x, y, this.map.getCamera());
       const response = await this.request(
-        this.worker(vz, x >> shift, y >> shift),
-        { type: 'render', key, id: this.next++, z, x, y, size: texture },
+        vz,
+        x >> shift,
+        y >> shift,
+        { type: 'render', key, z, x, y, size: texture, priority },
         signal,
       );
       return 'image' in response ? response.image : null;
@@ -308,7 +421,7 @@ export class VectorTiles {
       const set = keys.join(' ');
       if (set === shown) return;
       const lists = await Promise.all(
-        keys.map((k) => {
+        keys.map((k, index) => {
           let p = tiles.get(k);
           if (p) {
             // Used again: the most recent
@@ -317,7 +430,9 @@ export class VectorTiles {
             return p;
           }
           const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
-          p = this.request(this.worker(tz, x, y), { type: 'labels', key, id: this.next++, z: tz, x, y }).then(
+          // The nearest tiles first: the others wait for the raster tiles
+          const priority: Priority = index < 4 ? 'auto' : 'low';
+          p = this.request(tz, x, y, { type: 'labels', key, z: tz, x, y, priority }).then(
             (r) => ('labels' in r ? r.labels : []),
             () => {
               // A network error is not kept: the tile is asked for again on the next update
@@ -381,9 +496,13 @@ export class VectorTiles {
     this.destroyed = true;
     for (const off of this.cleanup) off();
     this.cleanup.length = 0;
-    for (const w of this.workers) w.terminate();
-    const pending = [...this.pending.values()];
-    this.pending.clear();
-    for (const p of pending) p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+    if (this.ownPool) {
+      this.pool.terminate();
+    } else {
+      // Shared workers: only its requests stop and its renderers go
+      this.pool.cancel(this);
+      for (const key of this.renderers) this.pool.broadcast({ type: 'drop', key });
+    }
+    this.renderers.length = 0;
   }
 }

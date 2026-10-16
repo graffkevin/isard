@@ -29,13 +29,20 @@ export class TileLoader implements TileLoaderLike {
   ) {}
 
   /** Called by the engine: fetch and decode off the main thread, on the least busy worker */
-  load(id: number, url: string, transform: Float64Array, yUp: boolean, reload: boolean): Promise<DecodedTile> {
+  load(
+    id: number,
+    url: string,
+    transform: Float64Array,
+    yUp: boolean,
+    reload: boolean,
+    priority?: 'high' | 'low',
+  ): Promise<DecodedTile> {
     if (this.failed) return Promise.reject(this.failed);
     const worker = this.leastBusy();
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, worker });
-      this.send(worker, { type: 'load', id, url, transform, yUp, reload });
+      this.send(worker, { type: 'load', id, url, transform, yUp, reload, ...(priority ? { priority } : {}) });
     });
   }
 

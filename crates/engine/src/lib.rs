@@ -23,3 +23,9 @@ mod render;
 mod worker;
 
 pub use engine::Engine;
+
+/// Pure logic for the benchmarks (`cargo bench -p isard`), not part of the API
+#[doc(hidden)]
+pub mod bench {
+    pub use crate::render::raster::simulate_plans;
+}

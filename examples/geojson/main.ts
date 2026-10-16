@@ -50,8 +50,9 @@ map.addSymbols({
   minZoom: 10.5,
 });
 
-map.on('hover', ({ point }) => {
-  const hit = map.pickFeature(point, { layers: [fills] });
+// Picked without stalling the GPU, a frame after the pointer moved
+map.hoverPicking = { layers: [fills] };
+map.on('hoverfeature', ({ hit }) => {
   const index = hit?.index;
   hovered.setFilter((_, i) => i === index);
   const p = hit?.feature?.properties as Commune | undefined;

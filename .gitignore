@@ -13,3 +13,7 @@ docs/public/live/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 docs/reference/
+# Visual tests: the screenshots and diffs of a failed run
+tests/visual/out/
+# Worktrees of local agent sessions
+.claude/worktrees/

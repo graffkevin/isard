@@ -18,7 +18,9 @@ declarations.
 | `background` | `#f2f2f0` | behind the map |
 | `minZoom`, `maxZoom`, `maxPitch` | 0, 22, 70 | `maxPitch` up to 85 |
 | `loading` | `'immediate'` | `'smooth'`: fewer downloads during flights, fade-in |
-| `interactive` | true | mouse and touch controls |
+| `interactive` | true | mouse, touch and keyboard controls |
+| `keyboard` | true | arrows, `+`, `-`, `0` once the map has the focus ([keys](./guide/events#keyboard)) |
+| `ariaLabel` | `'Map'` | accessible name of the map |
 | `attributionControl` | true | `false`, or `{ compact, customAttribution }` |
 | `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread |
@@ -43,7 +45,7 @@ declarations.
 | `setBasemap(basemap, hillshade)` | under the other layers |
 | `setTerrain(terrain)` | `true`, `false` or its options |
 | `setAtmosphere(options)` | undefined to remove it |
-| `vectorTiles({ style, workers })` | `.raster({ layers, extraLayers, size, opacity, before })`, `.labels({ layers })` |
+| `vectorTiles({ style, workers })` (the map's workers, shared) | `.raster({ layers, extraLayers, size, opacity, before })`, `.labels({ layers })` |
 
 ## Layers
 

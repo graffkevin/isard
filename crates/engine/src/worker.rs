@@ -75,8 +75,18 @@ export interface DecodedTile {
 
 /** What the engine expects from a pool of decoding workers (`Engine.setTileLoader`) */
 export interface TileLoaderLike {
-  /** `reload`: bypass the HTTP cache (the tile failed before: the cache may hold the error) */
-  load(id: number, url: string, transform: Float64Array, yUp: boolean, reload: boolean): Promise<DecodedTile>;
+  /**
+   * `reload`: bypass the HTTP cache (the tile failed before: the cache may hold the error); `priority`: the Fetch
+   * Priority for the download (the first tiles in view of a frame are urgent)
+   */
+  load(
+    id: number,
+    url: string,
+    transform: Float64Array,
+    yUp: boolean,
+    reload: boolean,
+    priority?: 'high' | 'low',
+  ): Promise<DecodedTile>;
   abort(id: number): void;
 }
 "#;

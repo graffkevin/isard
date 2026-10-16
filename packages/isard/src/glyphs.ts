@@ -1,8 +1,12 @@
 /**
  * Glyphs for the symbol layers: signed distance fields in MapLibre's glyph format (ranges of 256 code points per
- * protobuf file, 24 px glyphs with a 3 px buffer), loaded from the Géoplateforme's fonts on first use, packed into one
+ * protobuf file, 24 px glyphs with a 3 px buffer), loaded from the Géoplateforme's fonts on first use, packed into an
  * atlas the engine samples; and the shaping of a label: its lines (explicit and wrapped), their glyphs placed around
  * the anchor.
+ *
+ * The atlas has pages of one size: the first one grows up to the page size limit, then pages are added, so it never
+ * runs out. A glyph's atlas row counts the rows of the pages before its own (`y + page × size`, the pages stacked):
+ * the coordinates of the glyphs placed so far stay valid as the atlas grows.
  */
 import type { Anchor } from './overlay.ts';
 import type { Engine } from './wasm/isard.js';
@@ -20,10 +24,19 @@ export interface Glyph {
   left: number;
   top: number;
   advance: number;
-  /** Place of its bitmap ((width + 6) × (height + 6)) in the atlas; undefined for an empty one (a space) */
+  /**
+   * Place of its bitmap ((width + 6) × (height + 6)) in the atlas, `y` counting the rows of the pages before its
+   * own; undefined for an empty one (a space)
+   */
   x?: number;
   y?: number;
+  /** Its page of the atlas */
+  page?: number;
 }
+
+/** Largest side of a page of the atlas, and most pages (WebGL2 guarantees 256 layers of a texture array) */
+const PAGE_MAX = 2048;
+const MAX_PAGES = 256;
 
 /** A protobuf reader, enough for the glyph files */
 class Reader {
@@ -116,37 +129,54 @@ function parse(buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Ar
   return out;
 }
 
+/** A shelf of the packer: its page, y, height, and the x of the next free place */
+interface Shelf {
+  page: number;
+  y: number;
+  height: number;
+  x: number;
+}
+
 /** The glyphs of a map and their atlas */
 export class Glyphs {
+  /** Side of the pages */
   private size = 512;
-  private atlas = new Uint8Array(512 * 512);
-  /** Shelves of the packer: y, height, x of the next free place */
-  private shelves: { y: number; height: number; x: number }[] = [];
+  private pages: Uint8Array[] = [new Uint8Array(512 * 512)];
+  /** Pages allocated in the engine (doubled when more are needed: fewer reallocations) */
+  private capacity = 1;
+  private shelves: Shelf[] = [];
   private readonly fonts = new Map<string, Map<number, Glyph>>();
   private readonly ranges = new Map<string, Promise<void>>();
   private engine: Engine | undefined;
-  /** Rows of the atlas changed since the last upload: first, end */
-  private dirty: [number, number] | undefined;
-  /** The atlas is full at its largest size: new glyphs stay blank */
+  /** Rows of each page changed since the last upload: first, end */
+  private readonly dirty = new Map<number, [number, number]>();
+  /** The atlas has its most pages: new glyphs stay blank */
   private full = false;
+  /** Largest side of a page */
   private readonly maxSize: number;
 
-  /** `maxSize`: the largest atlas, the GPU's texture size limit if known (at most 4096) */
+  /** `maxSize`: the GPU's texture size limit if known (the pages are at most 2048 × 2048) */
   constructor(
     private readonly url = GLYPHS_URL,
     maxSize = 4096,
   ) {
-    this.maxSize = Math.max(512, Math.min(4096, maxSize));
+    this.maxSize = Math.max(512, Math.min(PAGE_MAX, maxSize));
   }
 
   /** Sends the whole atlas to an engine (a new one after a context loss) */
   attach(engine: Engine): void {
     this.engine = engine;
-    engine.setGlyphAtlas(this.size, this.size, this.atlas);
+    this.dirty.clear();
+    this.upload();
   }
 
+  /** Side of the pages of the atlas */
   get atlasSize(): number {
     return this.size;
+  }
+
+  get pageCount(): number {
+    return this.pages.length;
   }
 
   /** Loads the glyphs of these code points in a font */
@@ -187,58 +217,92 @@ export class Glyphs {
     return pending;
   }
 
-  /** Sends the rows changed since the last upload to the engine */
-  private flush(): void {
-    if (!this.dirty) return;
-    const [y0, y1] = this.dirty;
-    this.dirty = undefined;
-    this.engine?.updateGlyphAtlas(0, y0, this.size, y1 - y0, this.atlas.subarray(y0 * this.size, y1 * this.size));
+  /** Allocates the pages in the engine and sends them all */
+  private upload(): void {
+    const engine = this.engine;
+    if (!engine) return;
+    engine.setGlyphPages(this.size, this.size, this.capacity);
+    this.pages.forEach((page, i) => {
+      engine.updateGlyphPage(i, 0, 0, this.size, this.size, page);
+    });
   }
 
-  /** Places a bitmap in the atlas (growing it if full, up to its largest size); `flush` sends it to the engine */
+  /** Sends the rows changed since the last upload to the engine */
+  private flush(): void {
+    for (const [page, [y0, y1]] of this.dirty) {
+      const data = this.pages[page];
+      if (data)
+        this.engine?.updateGlyphPage(page, 0, y0, this.size, y1 - y0, data.subarray(y0 * this.size, y1 * this.size));
+    }
+    this.dirty.clear();
+  }
+
+  /**
+   * Places a bitmap in the atlas (growing the first page, then adding pages when full); `flush` sends it to the
+   * engine
+   */
   private pack(glyph: Glyph, bitmap: Uint8Array): void {
     const w = glyph.width + 2 * BUFFER;
     const h = glyph.height + 2 * BUFFER;
     // One texel of padding between bitmaps: linear filtering never reads a neighbour
     let shelf = this.shelves.find((s) => s.height >= h && s.height <= h + 4 && s.x + w + 1 <= this.size);
     if (!shelf) {
+      const page = this.pages.length - 1;
+      // New shelves go on the last page only: the last shelf is on it, unless the page is new
       const last = this.shelves.at(-1);
-      const y = last ? last.y + last.height + 1 : 0;
+      const y = last && last.page === page ? last.y + last.height + 1 : 0;
       if (y + h > this.size) {
-        if (this.size * 2 > this.maxSize) {
+        if (this.pages.length === 1 && this.size * 2 <= this.maxSize) this.grow();
+        else if (this.pages.length < MAX_PAGES) this.addPage();
+        else {
           // Full: the glyph takes its room in the text but is not drawn
-          if (!this.full) console.warn(`isard: the glyph atlas is full (${this.size} × ${this.size})`);
+          if (!this.full) console.warn(`isard: the glyph atlas is full (${MAX_PAGES} pages)`);
           this.full = true;
           return;
         }
-        this.grow();
         this.pack(glyph, bitmap);
         return;
       }
-      shelf = { y, height: h, x: 0 };
+      shelf = { page, y, height: h, x: 0 };
       this.shelves.push(shelf);
     }
+    const data = this.pages[shelf.page];
+    if (!data) return;
     glyph.x = shelf.x;
-    glyph.y = shelf.y;
+    glyph.y = shelf.page * this.size + shelf.y;
+    glyph.page = shelf.page;
     shelf.x += w + 1;
     for (let row = 0; row < h; row += 1) {
-      this.atlas.set(bitmap.subarray(row * w, row * w + w), (glyph.y + row) * this.size + glyph.x);
+      data.set(bitmap.subarray(row * w, row * w + w), (shelf.y + row) * this.size + glyph.x);
     }
-    this.dirty = [Math.min(this.dirty?.[0] ?? glyph.y, glyph.y), Math.max(this.dirty?.[1] ?? 0, glyph.y + h)];
+    const dirty = this.dirty.get(shelf.page);
+    this.dirty.set(shelf.page, [Math.min(dirty?.[0] ?? shelf.y, shelf.y), Math.max(dirty?.[1] ?? 0, shelf.y + h)]);
   }
 
-  /** Doubles the atlas; the glyphs keep their places (texel coordinates) */
+  /** Doubles the only page; the glyphs keep their places (texel coordinates) */
   private grow(): void {
     const size = this.size * 2;
-    const atlas = new Uint8Array(size * size);
+    const old = this.pages[0] ?? new Uint8Array(this.size * this.size);
+    const page = new Uint8Array(size * size);
     for (let row = 0; row < this.size; row += 1) {
-      atlas.set(this.atlas.subarray(row * this.size, (row + 1) * this.size), row * size);
+      page.set(old.subarray(row * this.size, (row + 1) * this.size), row * size);
     }
     this.size = size;
-    this.atlas = atlas;
+    this.pages = [page];
     // The whole atlas is sent with what it holds so far
-    this.dirty = undefined;
-    this.engine?.setGlyphAtlas(size, size, atlas);
+    this.dirty.clear();
+    this.upload();
+  }
+
+  /** A new empty page, after the others; the engine's pages are allocated again only past its capacity */
+  private addPage(): void {
+    this.pages.push(new Uint8Array(this.size * this.size));
+    if (this.pages.length > this.capacity) {
+      this.capacity = Math.min(MAX_PAGES, this.capacity * 2);
+      // The pages are allocated again: everything is sent, pending changes included
+      this.dirty.clear();
+      this.upload();
+    }
   }
 }
 
