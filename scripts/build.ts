@@ -1,7 +1,7 @@
 /**
  * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
- * pass (wasm-opt), then the `isard` package (packages/isard/dist: module, decoding worker,
- * type declarations) and the demo (apps/demo/dist, bundled from the package sources).
+ * pass (wasm-opt), then the `@ign-junn/isard` package (packages/isard/dist: module, workers, type declarations), the
+ * demo, the benchmark and the examples (bundled from the package sources).
  */
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -59,6 +59,10 @@ async function bundle(entry: string, outdir: string): Promise<void> {
 
 await bundle(`${pkg}/src/index.ts`, `${pkg}/dist`);
 await bundle('apps/demo/src/main.ts', 'apps/demo/dist');
+// Each example on its own, with the engine and workers next to it: a folder to copy as it is
+for (const example of new Bun.Glob('examples/*/main.ts').scanSync(root)) {
+  await bundle(example, example.replace(/main\.ts$/, 'dist'));
+}
 for (const page of ['runner', 'itowns', 'isard', 'tiles-renderer'])
   await bundle(`apps/bench/src/${page}.ts`, 'apps/bench/dist');
 await $`bunx tsc -p ${pkg}/tsconfig.build.json`;

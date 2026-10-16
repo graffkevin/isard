@@ -1,0 +1,56 @@
+/* The page of an example: the map over the whole window, a panel in a corner */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font:
+    14px / 1.45 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  color: #1d2433;
+}
+#map {
+  position: absolute;
+  inset: 0;
+}
+.panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  max-width: 320px;
+  padding: 12px 14px;
+  background: rgb(255 255 255 / 0.92);
+  backdrop-filter: blur(8px);
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 0.15);
+}
+.panel h1 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.panel p {
+  margin: 4px 0;
+  color: #4a5263;
+}
+.panel output {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.panel input[type="range"] {
+  width: 100%;
+}
+.panel button {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid #ccd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.panel button.on {
+  background: #1d2433;
+  color: #fff;
+  border-color: #1d2433;
+}

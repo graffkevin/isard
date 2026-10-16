@@ -1,0 +1,8 @@
+{
+  "name": "@isard/examples",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ign-junn/isard": "workspace:*"
+  }
+}

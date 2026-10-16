@@ -4,12 +4,14 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "examples",
+    "docs"
   ],
   "scripts": {
     "build": "bun scripts/build.ts",
     "dev": "bun scripts/build.ts && bun scripts/serve.ts",
-    "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p scripts",
+    "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p examples && tsc -p scripts",
     "lint": "biome check . && cargo clippy --all-targets && cargo clippy --target wasm32-unknown-unknown",
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test",
