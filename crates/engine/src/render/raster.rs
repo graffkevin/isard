@@ -30,6 +30,8 @@ use wasm_bindgen_futures::JsFuture;
 const TILE: i32 = 256;
 /// Texture slots per layer (256 KB each): 256 slots = 64 MB of GPU memory
 const SLOTS: usize = 256;
+/// GPU memory of the pool of a layer with larger tiles (bytes): its slot count follows, from 96 to `SLOTS`
+const POOL_BYTES: usize = 96 << 20;
 /// Target size of a tile on screen, CSS pixels: tiles are shown between 181 and 362 px
 const TILE_PX: f64 = 362.0;
 /// Levels searched below a missing tile for stand-ins
@@ -200,6 +202,21 @@ pub struct RasterOptions {
     pub elevation: bool,
     /// Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles)
     pub geoid: bool,
+    /// Side of the textures of the tiles, pixels (256; more for tiles drawn by the page, sharper)
+    pub size: i32,
+    /// Draws the tiles instead of fetching `url`: `(z, x, y, signal) => Promise<ImageBitmap | null>` (null: no tile
+    /// here; a rejection: an error worth a retry)
+    pub loader: Option<js_sys::Function>,
+}
+
+impl RasterOptions {
+    /// Slots of the pool of this source
+    fn slots(&self) -> usize {
+        if self.size <= TILE {
+            return SLOTS;
+        }
+        (POOL_BYTES / (self.size as usize * self.size as usize * 4)).clamp(96, SLOTS)
+    }
 }
 
 /// What a raster layer needs to load a frame's tiles
@@ -327,7 +344,9 @@ impl RasterSource {
             } else {
                 (glow::RGBA8, glow::LINEAR)
             };
-            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, format, TILE, TILE, SLOTS as i32);
+            let size = if options.elevation { TILE } else { options.size.max(1) };
+            let slots = options.slots();
+            gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, format, size, size, slots as i32);
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, filter),
                 (glow::TEXTURE_MAG_FILTER, filter),
@@ -340,7 +359,7 @@ impl RasterSource {
                 options,
                 pool,
                 slots: HashMap::new(),
-                free: (0..SLOTS as u16).rev().collect(),
+                free: (0..slots as u16).rev().collect(),
                 in_flight: HashMap::new(),
                 failed: HashMap::new(),
                 inbox: Rc::default(),
@@ -392,6 +411,7 @@ impl RasterSource {
                 self.queue.insert(0, (tile, pixels));
                 break;
             };
+            let size = self.options.size;
             // SAFETY: upload into an allocated slot of the pool
             unsafe {
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.pool));
@@ -402,8 +422,8 @@ impl RasterSource {
                         0,
                         0,
                         i32::from(slot),
-                        TILE,
-                        TILE,
+                        size,
+                        size,
                         1,
                         glow::RGBA,
                         glow::UNSIGNED_BYTE,
@@ -506,7 +526,8 @@ impl RasterSource {
             .replace("{x}", &tile.x.to_string())
             .replace("{y}", &tile.y.to_string())
             .replace("{bbox}", &bbox(tile));
-        let (elevation, geoid) = (self.options.elevation, self.options.geoid);
+        let (elevation, geoid, size) = (self.options.elevation, self.options.geoid, self.options.size);
+        let loader = self.options.loader.clone();
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.failed.contains_key(&tile);
@@ -518,12 +539,14 @@ impl RasterSource {
             let mut pixels = Err(Fetch::Transient);
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
                 let reload = retried || attempt > 0;
-                let fetched = if elevation {
+                let fetched = if let Some(loader) = &loader {
+                    draw_tile(loader, tile, &signal).await.map(Pixels::Image)
+                } else if elevation {
                     fetch_heights(&url, tile, geoid, &signal, reload)
                         .await
                         .map(Pixels::Heights)
                 } else {
-                    fetch_bitmap(&url, &signal, reload).await.map(Pixels::Image)
+                    fetch_bitmap(&url, size, &signal, reload).await.map(Pixels::Image)
                 };
                 match fetched {
                     Ok(p) => {
@@ -856,7 +879,12 @@ enum Fetch {
 /// alpha)
 /// `reload`: bypass the HTTP cache. The Géoplateforme sends its error answers with a 21-day cache lifetime: a retry
 /// served from the cache would read the same error for weeks; reloading also replaces the cached error.
-async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) -> Result<web_sys::ImageBitmap, Fetch> {
+async fn fetch_bitmap(
+    url: &str,
+    size: i32,
+    signal: &web_sys::AbortSignal,
+    reload: bool,
+) -> Result<web_sys::ImageBitmap, Fetch> {
     let response = fetch_response(url, signal, reload)
         .await
         .map_err(|_| Fetch::Transient)?;
@@ -865,7 +893,31 @@ async fn fetch_bitmap(url: &str, signal: &web_sys::AbortSignal, reload: bool) ->
         200..=299 => {}
         _ => return Err(Fetch::Transient),
     }
-    decode(&response).await.map_err(|_| Fetch::Transient)
+    decode(&response, size).await.map_err(|_| Fetch::Transient)
+}
+
+/// A tile drawn by the page's loader: an image of the pool's size, `null` for no tile here
+async fn draw_tile(
+    loader: &js_sys::Function,
+    tile: TileId,
+    signal: &web_sys::AbortSignal,
+) -> Result<web_sys::ImageBitmap, Fetch> {
+    let promise = loader
+        .call4(
+            &JsValue::NULL,
+            &tile.z.into(),
+            &tile.x.into(),
+            &tile.y.into(),
+            signal.as_ref(),
+        )
+        .map_err(|_| Fetch::Transient)?;
+    let value = JsFuture::from(js_sys::Promise::resolve(&promise))
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    if value.is_null() || value.is_undefined() {
+        return Err(Fetch::Missing);
+    }
+    value.dyn_into().map_err(|_| Fetch::Transient)
 }
 
 /// Altitudes of a tile: a full grid of 256 × 256 little-endian f32. A server error may come as a 200 with an XML
@@ -969,15 +1021,15 @@ async fn fetch_response(url: &str, signal: &web_sys::AbortSignal, reload: bool) 
         .dyn_into()
 }
 
-async fn decode(response: &web_sys::Response) -> Result<web_sys::ImageBitmap, JsValue> {
+async fn decode(response: &web_sys::Response, size: i32) -> Result<web_sys::ImageBitmap, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let blob: web_sys::Blob = JsFuture::from(response.blob()?).await?.dyn_into()?;
     let options = web_sys::ImageBitmapOptions::new();
     options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
     options.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
-    // Every slot is 256 × 256: any other size (512 px tiles, an error image) is resized, never half-copied
-    options.set_resize_width(TILE as u32);
-    options.set_resize_height(TILE as u32);
+    // Every slot has the pool's size: any other size (512 px tiles, an error image) is resized, never half-copied
+    options.set_resize_width(size as u32);
+    options.set_resize_height(size as u32);
     let bitmap =
         JsFuture::from(window.create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &options)?).await?;
     bitmap.dyn_into()

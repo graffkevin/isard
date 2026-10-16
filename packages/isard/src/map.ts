@@ -601,9 +601,10 @@ export class GeoMap implements LayerHost {
   }
 
   /** Raster tiles in Web Mercator ({z}, {x}, {y} URL), over the layers already added */
-  addRaster(options: RasterOptions): RasterLayer {
-    const { url, minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1 } = options;
-    return this.add(new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation }));
+  addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
+    const { url, minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1, size, loader, before } = options;
+    const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader });
+    return this.place(layer, before);
   }
 
   /** Line network colored by a value per node; `layer.setValues` recolors it in one texture upload */

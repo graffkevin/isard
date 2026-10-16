@@ -30,7 +30,9 @@ export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 
   /** Font of the Géoplateforme (default `Source Sans Pro Regular`; also Bold, Italic, Semibold) */
   font: string;
   /** CSS pixels, or zoom stops (default 12) */
-  size: Size;
+  size: Styled<Size, P>;
+  /** `'point'` (default): horizontal text; `'line'`: along the line at its middle, kept upright */
+  placement: 'point' | 'line';
   color: Styled<string, P>;
   haloColor: Styled<string, P>;
   /** CSS pixels (default 0) */
@@ -52,8 +54,14 @@ export interface SymbolOptions<P = Properties> extends Partial<SymbolStyle<P>>, 
   data: FeatureData<P>;
 }
 
-/** Where a geometry is labelled: its points, the middle of its longest line, the centroid of its largest polygon */
-function anchors(geometry: Geometry | null): Position[] {
+/** Where a geometry is labelled: its points, the middle of its longest line (with the direction of the line there),
+ * the centroid of its largest polygon */
+function anchors(geometry: Geometry | null): { at: Position; along?: [number, number] }[] {
+  return points(geometry).map((p) => (p.length > 2 ? { at: [p[0], p[1]], along: [p[2] ?? 0, p[3] ?? 0] } : { at: p }));
+}
+
+/** Anchors as positions, a line's carrying the direction (lon, lat, dlon, dlat) */
+function points(geometry: Geometry | null): Position[] {
   if (!geometry) return [];
   switch (geometry.type) {
     case 'Point':
@@ -71,7 +79,9 @@ function anchors(geometry: Geometry | null): Position[] {
         const [a, b] = [line[i - 1], line[i]];
         if (!a || !b) continue;
         const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        if (d >= rest && d > 0) return [[a[0] + ((b[0] - a[0]) * rest) / d, a[1] + ((b[1] - a[1]) * rest) / d]];
+        if (d >= rest && d > 0) {
+          return [[a[0] + ((b[0] - a[0]) * rest) / d, a[1] + ((b[1] - a[1]) * rest) / d, b[0] - a[0], b[1] - a[1]]];
+        }
         rest -= d;
       }
       return line[0] ? [line[0]] : [];
@@ -100,7 +110,7 @@ function anchors(geometry: Geometry | null): Position[] {
       return best ? [best] : [];
     }
     case 'GeometryCollection':
-      return geometry.geometries.flatMap(anchors);
+      return geometry.geometries.flatMap(points);
   }
 }
 
@@ -189,9 +199,8 @@ export class SymbolLayer<P = Properties> extends Layer {
   }
 
   private build(parts: TextPart[][], loaded: Map<string, Map<number, Glyph>>) {
-    const { font, size, anchor, offset, maxWidth, lineHeight, color, haloColor, haloWidth, overlap } = this.style;
-    // Shaped at the largest size; the engine scales by the zoom stops
-    const shaped = typeof size === 'number' ? size : Math.max(...size.map(([, v]) => v), 1);
+    const { font, size, anchor, offset, maxWidth, lineHeight, color, haloColor, haloWidth, overlap, placement } =
+      this.style;
     const anchorList: number[] = [];
     const boxes: number[] = [];
     const styles: number[] = [];
@@ -200,25 +209,30 @@ export class SymbolLayer<P = Properties> extends Layer {
     this.list.forEach((f, i) => {
       const text = parts[i];
       if (!text?.length || text.every((p) => !p.text)) return;
+      // Shaped at its largest size; the engine scales by the zoom stops
+      const s0 = evaluate(size, f.properties, i);
+      const shaped = typeof s0 === 'number' ? s0 : Math.max(...s0.map(([, v]) => v), 1);
+      const scale: Size = typeof s0 === 'number' ? 1 : s0.map(([z, v]): [number, number] => [z, v / shaped]);
       const s = shape(text, (name) => loaded.get(name), { font, size: shaped, maxWidth, lineHeight, anchor, offset });
       if (!s.quads.length) return;
       const halo = evaluate(haloWidth, f.properties, i);
-      const style = [
-        ...parseColor(evaluate(color, f.properties, i)),
-        ...parseColor(evaluate(haloColor, f.properties, i)),
-        halo,
-        overlap ? 1 : 0,
-        0,
-        0,
-      ];
-      for (const position of anchors(f.geometry)) {
+      const fill = parseColor(evaluate(color, f.properties, i));
+      const haloRgba = parseColor(evaluate(haloColor, f.properties, i));
+      for (const { at, along } of anchors(f.geometry)) {
         const label = feature.length;
         feature.push(i);
-        anchorList.push(...merc(position));
+        const [x, y] = merc(at);
+        anchorList.push(x, y);
+        // Along the line: its direction in Mercator (y towards the south)
+        let direction: [number, number] = [0, 0];
+        if (placement === 'line' && along) {
+          const [x1, y1] = merc([at[0] + along[0], at[1] + along[1]]);
+          direction = [x1 - x, y1 - y];
+        }
         // The collision box: the ink, with the halo and a little room
         const pad = halo + 1;
         boxes.push(s.box[0] - pad, s.box[1] - pad, s.box[2] + pad, s.box[3] + pad);
-        styles.push(...style);
+        styles.push(...fill, ...haloRgba, halo, overlap ? 1 : 0, ...direction, ...stops(scale));
         for (const q of s.quads) quads.push(label, ...q);
       }
     });
@@ -228,7 +242,6 @@ export class SymbolLayer<P = Properties> extends Layer {
       styles: Float32Array.from(styles),
       quads: Float32Array.from(quads),
       feature,
-      shaped,
     };
   }
 
@@ -239,12 +252,11 @@ export class SymbolLayer<P = Properties> extends Layer {
   }
 
   private sendLayer(engine: Engine, id: number): void {
-    const { size, opacity, minZoom, maxZoom, visible } = this.style;
-    const shaped = typeof size === 'number' ? size : Math.max(...size.map(([, v]) => v), 1);
-    const scale: Size = typeof size === 'number' ? 1 : size.map(([z, v]): [number, number] => [z, v / shaped]);
+    const { opacity, minZoom, maxZoom, visible } = this.style;
+    // The sizes are per label; the layer's own scale stays 1
     engine.setSymbolLayer(
       id,
-      Float32Array.from(stops(scale)),
+      Float32Array.from(stops(1)),
       Float32Array.from(stops(opacity)),
       minZoom,
       maxZoom,
@@ -279,6 +291,7 @@ export function symbolStyle<P>(options: SymbolOptions<P>): SymbolStyle<P> {
     haloColor: '#fff',
     haloWidth: 0,
     anchor: 'center',
+    placement: 'point',
     offset: [0, 0],
     maxWidth: 10,
     lineHeight: 1.2,

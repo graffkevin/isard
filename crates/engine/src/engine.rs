@@ -289,6 +289,8 @@ impl Engine {
                         saturation: 1.0,
                         elevation: true,
                         geoid,
+                        size: 256,
+                        loader: None,
                     },
                 )?;
                 if let Some((old, _)) = self.terrain.replace((source, exaggeration)) {
@@ -450,8 +452,11 @@ impl Engine {
         Box::new([lo.x.max(-180.0), lo.y.max(-85.06), hi.x.min(180.0), hi.y.min(85.06)])
     }
 
-    /// Raster tiles in Web Mercator; `url` holds {z}, {x} and {y}
+    /// Raster tiles in Web Mercator; `url` holds {z}, {x} and {y}. `size`: side of the tiles' textures (256 by
+    /// default); `loader`: draws each tile instead of fetching `url`, `(z, x, y, signal) => Promise<ImageBitmap |
+    /// null>`, an image of `size` × `size` (null: nothing there)
     #[wasm_bindgen(js_name = addRaster)]
+    #[allow(clippy::too_many_arguments)]
     pub fn add_raster(
         &mut self,
         url: String,
@@ -459,6 +464,11 @@ impl Engine {
         max_z: u8,
         opacity: f32,
         saturation: f32,
+        size: Option<i32>,
+        #[wasm_bindgen(
+            unchecked_param_type = "((z: number, x: number, y: number, signal: AbortSignal) => Promise<ImageBitmap | null>) | undefined"
+        )]
+        loader: Option<js_sys::Function>,
     ) -> Result<u32, JsValue> {
         let layer = RasterSource::new(
             &self.gl,
@@ -470,6 +480,8 @@ impl Engine {
                 saturation,
                 elevation: false,
                 geoid: false,
+                size: size.unwrap_or(256).clamp(16, 1024),
+                loader,
             },
         )?;
         Ok(self.push(Slot::Raster(Box::new(layer))))

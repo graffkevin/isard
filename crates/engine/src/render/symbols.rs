@@ -7,7 +7,7 @@
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
-use crate::render::features::stops;
+use crate::render::features::{stops, stops_of};
 use crate::render::gl::{self, Projection, bytes};
 use geo::collision;
 use glam::{DVec2, DVec4};
@@ -20,7 +20,6 @@ uniform vec2 u_plane_origin;
 uniform vec2 u_origin;
 uniform vec2 u_viewport;
 uniform float u_depth_bias;
-uniform float u_size_scale;
 uniform float u_pixel_ratio;
 uniform vec2 u_atlas_size;
 uniform highp sampler2D u_labels;
@@ -38,7 +37,10 @@ flat out vec2 v_edges;
 ivec2 texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
 
 void main() {
-  if (texelFetch(u_visible, texel(a_label), 0).r < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  // Placed this frame: shown, its angle on screen and its scale (see `place`)
+  vec4 state = texelFetch(u_visible, texel(a_label), 0);
+  if (state.x < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  float scale = state.z;
   vec2 offset = texelFetch(u_labels, texel(a_label * 4u), 0).xy;
   v_fill = texelFetch(u_labels, texel(a_label * 4u + 1u), 0);
   v_halo = texelFetch(u_labels, texel(a_label * 4u + 2u), 0);
@@ -47,12 +49,14 @@ void main() {
   vec4 c = u_matrix * vec4(project_up(u_plane_origin + offset * u_world, merc, altitude(merc)), 1.0);
   c.z -= u_depth_bias;
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-  vec2 px = (a_rect.xy + corner * a_rect.zw) * u_size_scale * u_pixel_ratio;
+  vec2 q = (a_rect.xy + corner * a_rect.zw) * scale;
+  float cs = cos(state.y), sn = sin(state.y);
+  vec2 px = vec2(q.x * cs - q.y * sn, q.x * sn + q.y * cs) * u_pixel_ratio;
   // Screen y runs down, clip y up
   c.xy += vec2(px.x, -px.y) / u_viewport * c.w;
   gl_Position = c;
   v_uv = mix(a_uv.xy, a_uv.zw, corner) / u_atlas_size;
-  float font = a_scale * u_size_scale;
+  float font = a_scale * scale;
   v_edges = vec2(0.75 - halo_width / (font * 8.0), font);
 }";
 
@@ -77,13 +81,12 @@ void main() {
   color = vec4((v_fill.rgb * a_fill + v_halo.rgb * a_halo) / a, a * u_opacity);
 }";
 
-const UNIFORMS: [&str; 12] = [
+const UNIFORMS: [&str; 11] = [
     "u_matrix",
     "u_plane_origin",
     "u_origin",
     "u_viewport",
     "u_depth_bias",
-    "u_size_scale",
     "u_pixel_ratio",
     "u_atlas_size",
     "u_labels",
@@ -96,8 +99,9 @@ const UNIFORMS: [&str; 12] = [
 /// rect (u0, v0, u1, v1, texels), font scale (shaped size / 24)
 pub const QUAD_FLOATS: usize = 10;
 /// Floats per label from the page: fill RGBA, halo RGBA, halo width (CSS pixels), flags (1: always shown, never
-/// hiding others), 2 unused
-pub const LABEL_FLOATS: usize = 12;
+/// hiding others), direction (Mercator; 0, 0: none, the text stays horizontal; else it runs along it, kept upright),
+/// then its scale as zoom stops (four zooms, four values: displayed size over shaped size)
+pub const LABEL_FLOATS: usize = 20;
 const WIDTH: usize = 4096;
 const LABELS_UNIT: u32 = 1;
 const VISIBLE_UNIT: u32 = 2;
@@ -121,6 +125,10 @@ struct Label {
     /// CSS pixels from the anchor at the shaped size
     rect: [f32; 4],
     always: bool,
+    /// Direction of the line it runs along (Mercator), zero for none
+    direction: DVec2,
+    /// Scale as zoom stops
+    size: [[f32; 4]; 2],
 }
 
 /// Layer-wide style
@@ -137,7 +145,7 @@ pub struct SymbolStyle {
 pub struct SymbolLayer {
     pub style: SymbolStyle,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 12],
+    uniforms: [Option<glow::UniformLocation>; 11],
     projection: Projection,
     drape_uniforms: DrapeUniforms,
     vao: glow::VertexArray,
@@ -146,7 +154,8 @@ pub struct SymbolLayer {
     labels_texture: glow::Texture,
     visible_texture: glow::Texture,
     labels: Vec<Label>,
-    visible: Vec<u8>,
+    /// Per label, this frame: shown (1 or 0), angle on screen (radians, clockwise), scale, unused
+    visible: Vec<f32>,
     origin: DVec2,
     min: DVec2,
     max: DVec2,
@@ -238,9 +247,14 @@ impl SymbolLayer {
                 merc: m,
                 rect: [boxes[i * 4], boxes[i * 4 + 1], boxes[i * 4 + 2], boxes[i * 4 + 3]],
                 always: styles[i * LABEL_FLOATS + 9] > 0.5,
+                direction: DVec2::new(
+                    f64::from(styles[i * LABEL_FLOATS + 10]),
+                    f64::from(styles[i * LABEL_FLOATS + 11]),
+                ),
+                size: stops_of(&styles[i * LABEL_FLOATS + 12..i * LABEL_FLOATS + 20]).unwrap_or([[0.0; 4], [1.0; 4]]),
             })
             .collect();
-        self.visible = vec![0; n];
+        self.visible = vec![0.0; n * 4];
         // Per label: offset, fill, halo, halo width
         let rows = (n * 4).div_ceil(WIDTH).max(1);
         let mut table = vec![0f32; rows * WIDTH * 4];
@@ -288,7 +302,7 @@ impl SymbolLayer {
             gl.tex_storage_2d(
                 glow::TEXTURE_2D,
                 1,
-                glow::R8,
+                glow::RGBA32F,
                 WIDTH as i32,
                 n.div_ceil(WIDTH).max(1) as i32,
             );
@@ -318,45 +332,77 @@ unsafe fn nearest(gl: &glow::Context) {
 
 impl Layer for SymbolLayer {
     fn place(&mut self, frame: &Frame, grid: &mut collision::Grid) {
-        self.visible.fill(0);
+        self.visible.fill(0.0);
         if !self.shows(frame.camera.zoom) {
             return;
         }
         let (camera, view) = (frame.camera, frame.view);
-        let scale = stops(&self.style.size, camera.zoom);
-        for (label, visible) in self.labels.iter().zip(&mut self.visible) {
+        let layer_scale = stops(&self.style.size, camera.zoom);
+        let screen = |m: DVec2, altitude: f64| -> Option<DVec2> {
+            let shift = -(m.x - camera.center.x).round();
+            let p = view.position(m, shift) + glam::DVec3::Z * altitude * view.vertical;
+            let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
+            (clip.w > 0.0).then(|| {
+                DVec2::new(
+                    f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
+                    f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
+                )
+            })
+        };
+        for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
             let altitude = frame
                 .relief
                 .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
                 .unwrap_or(0.0);
-            let shift = -(label.merc.x - camera.center.x).round();
-            let p = view.position(label.merc, shift) + glam::DVec3::Z * altitude * view.vertical;
-            let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
-            if clip.w <= 0.0 {
+            let Some(at) = screen(label.merc, altitude) else {
+                continue;
+            };
+            if at.x < -MARGIN || at.y < -MARGIN || at.x > camera.width + MARGIN || at.y > camera.height + MARGIN {
                 continue;
             }
-            let (x, y) = (
-                f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
-                f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
-            );
-            if x < -MARGIN || y < -MARGIN || x > camera.width + MARGIN || y > camera.height + MARGIN {
+            let scale = layer_scale * stops(&label.size, camera.zoom);
+            if scale <= 0.0 {
                 continue;
             }
+            // Along its line, kept upright: the angle of the line on screen, turned half a turn if upside down
+            let mut angle = 0.0;
+            if label.direction != DVec2::ZERO {
+                // A step of one pixel along the line
+                let step = label.direction.normalize() / view.world_size;
+                if let Some(ahead) = screen(label.merc + step, altitude) {
+                    let d = ahead - at;
+                    angle = d.y.atan2(d.x);
+                    if angle > std::f64::consts::FRAC_PI_2 {
+                        angle -= std::f64::consts::PI;
+                    } else if angle < -std::f64::consts::FRAC_PI_2 {
+                        angle += std::f64::consts::PI;
+                    }
+                }
+            }
+            // The box turned with the text, as an axis-aligned box
             let r = label.rect.map(|v| f64::from(v) * scale);
-            let rect = [x + r[0], y + r[1], x + r[2], y + r[3]];
+            let (cs, sn) = (angle.cos(), angle.sin());
+            let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
+            for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
+                let p = DVec2::new(x * cs - y * sn, x * sn + y * cs);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            let rect = [at.x + lo.x, at.y + lo.y, at.x + hi.x, at.y + hi.y];
             if label.always || grid.place(rect) {
-                *visible = 255;
+                *state = [1.0, angle as f32, scale as f32, 0.0];
             }
         }
-        if self.visible.is_empty() {
+        let texels = self.labels.len();
+        if texels == 0 {
             return;
         }
-        let (full, rest) = (self.visible.len() / WIDTH, self.visible.len() % WIDTH);
-        // SAFETY: upload into the visibility texture allocated for these labels
+        let (full, rest) = (texels / WIDTH, texels % WIDTH);
+        let data: &[u8] = bytes(&self.visible);
+        // SAFETY: upload into the state texture allocated for these labels
         unsafe {
             let gl = frame.gl;
             gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_texture));
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             if full > 0 {
                 gl.tex_sub_image_2d(
                     glow::TEXTURE_2D,
@@ -365,9 +411,9 @@ impl Layer for SymbolLayer {
                     0,
                     WIDTH as i32,
                     full as i32,
-                    glow::RED,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&self.visible[..full * WIDTH])),
+                    glow::RGBA,
+                    glow::FLOAT,
+                    glow::PixelUnpackData::Slice(Some(&data[..full * WIDTH * 16])),
                 );
             }
             if rest > 0 {
@@ -378,12 +424,11 @@ impl Layer for SymbolLayer {
                     full as i32,
                     rest as i32,
                     1,
-                    glow::RED,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&self.visible[full * WIDTH..])),
+                    glow::RGBA,
+                    glow::FLOAT,
+                    glow::PixelUnpackData::Slice(Some(&data[full * WIDTH * 16..texels * 16])),
                 );
             }
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         }
     }
 
@@ -413,7 +458,6 @@ impl Layer for SymbolLayer {
             origin,
             viewport,
             depth_bias,
-            size_scale,
             ratio,
             atlas_size_u,
             labels,
@@ -440,7 +484,6 @@ impl Layer for SymbolLayer {
                 0.0
             };
             gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
-            gl.uniform_1_f32(size_scale.as_ref(), stops(&self.style.size, camera.zoom) as f32);
             gl.uniform_1_f32(ratio.as_ref(), pixel_ratio as f32);
             gl.uniform_2_f32(atlas_size_u.as_ref(), atlas_size.0 as f32, atlas_size.1 as f32);
             gl.uniform_1_f32(opacity.as_ref(), stops(&self.style.opacity, camera.zoom) as f32);
@@ -501,8 +544,7 @@ impl Engine {
     }
 
     /// Labels of a symbol layer, shaped by the page: anchors (Mercator, interleaved), boxes (min x, min y, max x, max y,
-    /// CSS pixels from the anchor), styles (12 floats each: fill RGBA, halo RGBA, halo width, 1 if always shown, 2
-    /// unused) and glyph quads (10 floats each: label, x, y, width, height from the anchor, atlas u0, v0, u1, v1 in
+    /// CSS pixels from the anchor), styles (20 floats each, see `LABEL_FLOATS`) and glyph quads (10 floats each: label, x, y, width, height from the anchor, atlas u0, v0, u1, v1 in
     /// texels, font scale)
     #[wasm_bindgen(js_name = setSymbols)]
     pub fn set_symbols(

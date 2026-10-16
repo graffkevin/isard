@@ -34,7 +34,10 @@ export abstract class Layer {
 export class RasterLayer extends Layer {
   constructor(
     map: LayerHost,
-    private readonly options: Required<RasterOptions>,
+    private readonly options: Required<Omit<RasterOptions, 'size' | 'loader'>> & {
+      size: number | undefined;
+      loader: RasterOptions['loader'] | undefined;
+    },
   ) {
     super(map);
   }
@@ -47,8 +50,8 @@ export class RasterLayer extends Layer {
   }
 
   protected create(engine: Engine): number {
-    const { url, minZoom, maxZoom, opacity, saturation } = this.options;
-    return engine.addRaster(url, minZoom, maxZoom, opacity, saturation);
+    const { url, minZoom, maxZoom, opacity, saturation, size, loader } = this.options;
+    return engine.addRaster(url, minZoom, maxZoom, opacity, saturation, size, loader);
   }
 }
 

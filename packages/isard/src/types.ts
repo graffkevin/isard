@@ -108,13 +108,18 @@ export interface FlyToOptions extends AnimationOptions {
 }
 
 export interface RasterOptions {
-  /** Tile URL with {z}, {x} and {y} (Web Mercator, 256 px tiles) */
+  /** Tile URL with {z}, {x} and {y} (Web Mercator, 256 px tiles); unused with a `loader` */
   url: string;
   minZoom?: number;
   maxZoom?: number;
   opacity?: number;
   /** 0 = greyscale, 1 = original colors */
   saturation?: number;
+  /** Side of the tiles' textures, pixels (default 256): more for sharper tiles drawn by a `loader` */
+  size?: number;
+  /** Draws each tile instead of fetching `url`: an image of `size` × `size`, null for nothing there; a rejection is
+   * retried like a network error */
+  loader?: (z: number, x: number, y: number, signal: AbortSignal) => Promise<ImageBitmap | null>;
 }
 
 export interface NetworkStyle {
