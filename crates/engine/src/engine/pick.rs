@@ -24,11 +24,14 @@ impl Engine {
     /// Feature under a screen point (CSS pixels), or the nearest one within `radius` CSS pixels: its layer and its
     /// index there (the edge of a network, the feature of a line, circle or fill layer), undefined if none. The
     /// pickable layers are drawn with each feature colored by its number; then the fills are tested on the ground.
+    /// `only`: the ids of the layers to look in (all if undefined): the others are not drawn and hide nothing
     #[wasm_bindgen(unchecked_return_type = "PickHit | undefined")]
-    pub fn pick(&mut self, x: f64, y: f64, radius: Option<f64>) -> JsValue {
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn pick(&mut self, x: f64, y: f64, radius: Option<f64>, only: Option<Box<[u32]>>) -> JsValue {
+        let only = only.as_deref();
         let hit = self
-            .pick_feature(x, y, radius.unwrap_or(0.0))
-            .or_else(|| self.pick_fill(x, y));
+            .pick_feature(x, y, radius.unwrap_or(0.0), only)
+            .or_else(|| self.pick_fill(x, y, only));
         hit.map_or(JsValue::UNDEFINED, |(layer, index)| {
             js::object(&[("layer", layer.into()), ("index", index.into())])
         })
@@ -101,23 +104,27 @@ impl Engine {
     }
 
     /// Fill under a screen point: the topmost layer whose polygons hold the ground position there
-    fn pick_fill(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
+    fn pick_fill(&mut self, x: f64, y: f64, only: Option<&[u32]>) -> Option<(u32, u32)> {
         let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
         let m = self.camera.ground_at(&self.camera.view(), x, y, altitude)?;
         let zoom = self.camera.zoom;
         self.layers.iter().rev().find_map(|(id, slot)| match slot {
-            Slot::Layer(layer) => layer.pick_ground(m, zoom).map(|index| (*id, index)),
-            Slot::Raster(_) => None,
+            Slot::Layer(layer) if only.is_none_or(|o| o.contains(id)) => {
+                layer.pick_ground(m, zoom).map(|index| (*id, index))
+            }
+            Slot::Layer(_) | Slot::Raster(_) => None,
         })
     }
 
     /// Layer id and feature index under a screen point, or nearest to it within `radius` CSS pixels (see `pick`)
-    fn pick_feature(&mut self, x: f64, y: f64, radius: f64) -> Option<(u32, u32)> {
+    fn pick_feature(&mut self, x: f64, y: f64, radius: f64, only: Option<&[u32]>) -> Option<(u32, u32)> {
         let pickable: Vec<(u32, usize)> = self
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, (_, slot))| matches!(slot, Slot::Layer(layer) if layer.pickable()))
+            .filter(|(_, (id, slot))| {
+                only.is_none_or(|o| o.contains(id)) && matches!(slot, Slot::Layer(layer) if layer.pickable())
+            })
             .map(|(i, (id, _))| (*id, i))
             .collect();
         // Their ordinal goes in the alpha channel

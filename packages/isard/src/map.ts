@@ -527,22 +527,23 @@ export class GeoMap implements LayerHost {
    * Network edge under a screen point (CSS pixels), undefined if none. Reads one pixel of an offscreen picking pass:
    * cheap whatever the number of features, call it on hover.
    */
-  pick(point: Point, radius = 0): PickHit | undefined {
-    return this.engine.pick(point[0], point[1], radius);
+  pick(point: Point, radius = 0, layers?: readonly Layer[]): PickHit | undefined {
+    const only = layers && Uint32Array.from(layers.map((l) => l.id));
+    return this.engine.pick(point[0], point[1], radius, only);
   }
 
   /**
    * The feature under a screen point (CSS pixels), or the nearest one within `radius` pixels: its layer handle, its
    * index there and, for line, circle and fill layers, the feature itself; undefined if none. `layers` restricts the
-   * answer to some layers (the others are still drawn into the picking pass, and may hide them).
+   * search to some layers (the others hide nothing).
    */
   pickFeature(
     point: Point,
     options: { radius?: number; layers?: readonly Layer[] } = {},
   ): { layer: Layer; index: number; feature: Feature | undefined } | undefined {
-    const hit = this.pick(point, options.radius ?? 0);
+    const hit = this.pick(point, options.radius ?? 0, options.layers);
     const layer = hit && this.layers.find((l) => l.id === hit.layer);
-    if (!hit || !layer || (options.layers && !options.layers.includes(layer))) return undefined;
+    if (!hit || !layer) return undefined;
     const feature =
       'featureAt' in layer && typeof layer.featureAt === 'function'
         ? (layer.featureAt(hit.index) as Feature | undefined)

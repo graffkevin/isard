@@ -39,10 +39,25 @@ export interface ExtrusionOptions<P = Properties> extends Partial<ExtrusionStyle
 
 type Key = string | number;
 
+/**
+ * Polygons as typed arrays, for tiles decoded in a worker (no GeoJSON in between): points in Mercator [0, 1] (x, y
+ * interleaved, y towards the south), the first point of each ring and the first ring of each polygon (one more entry
+ * than rings and polygons; the first ring of a polygon is its outline), the feature of each polygon
+ */
+export interface PolygonArrays {
+  points: Float64Array;
+  ringStart: Uint32Array;
+  polygonStart: Uint32Array;
+  feature: Uint32Array;
+}
+
 interface Tile<P> {
   /** Batch number in the engine: tiles are drawn, and their features numbered for picking, in this order */
   batch: number;
-  features: Feature<P>[];
+  /** The properties of the features, which the style reads */
+  properties: P[];
+  features: Feature<P>[] | undefined;
+  arrays: PolygonArrays | undefined;
   values: Float32Array | undefined;
   anchors: Float32Array | undefined;
 }
@@ -61,17 +76,43 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     private style: ExtrusionStyle<P>,
   ) {
     super(map);
-    if (data) this.tiles.set(DATA, { batch: 0, features: featuresOf(data), values: undefined, anchors: undefined });
+    if (data) {
+      const features = featuresOf(data);
+      const properties = features.map((f) => f.properties);
+      this.tiles.set(DATA, {
+        batch: 0,
+        properties,
+        features,
+        arrays: undefined,
+        values: undefined,
+        anchors: undefined,
+      });
+    }
   }
 
   /** Replaces the set given as `data` */
   setData(data: FeatureData<P>): void {
-    this.put(DATA, featuresOf(data));
+    const features = featuresOf(data);
+    this.put(
+      DATA,
+      features.map((f) => f.properties),
+      features,
+      undefined,
+    );
   }
 
-  /** Adds or replaces the buildings of a tile */
-  setTile(key: Key, data: FeatureData<P>): void {
-    this.put(key, featuresOf(data));
+  /** Adds or replaces the buildings of a tile: GeoJSON, or typed arrays with the properties of each feature */
+  setTile(key: Key, data: FeatureData<P> | { arrays: PolygonArrays; properties: P[] }): void {
+    if ('arrays' in data) this.put(key, data.properties, undefined, data.arrays);
+    else {
+      const features = featuresOf(data);
+      this.put(
+        key,
+        features.map((f) => f.properties),
+        features,
+        undefined,
+      );
+    }
   }
 
   removeTile(key: Key): void {
@@ -87,17 +128,32 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     return [...this.tiles.keys()].filter((k): k is Key => k !== DATA);
   }
 
-  /** The features of a tile (or of the data) */
-  features(key?: Key): readonly Feature<P>[] {
-    return this.tiles.get(key ?? DATA)?.features ?? [];
+  /** The properties of the features of a tile (or of the data) */
+  properties(key?: Key): readonly P[] {
+    return this.tiles.get(key ?? DATA)?.properties ?? [];
   }
 
-  /** The feature of a picked index: tiles are numbered one after the other, in the order they were added */
+  /** The feature of a picked index (its geometry if given as GeoJSON): tiles are numbered one after the other, in the
+   * order they were added */
   featureAt(index: number): Feature<P> | undefined {
     let rest = index;
     for (const tile of [...this.tiles.values()].sort((a, b) => a.batch - b.batch)) {
-      if (rest < tile.features.length) return tile.features[rest];
-      rest -= tile.features.length;
+      const n = tile.properties.length;
+      if (rest < n) {
+        const properties = tile.properties[rest] as P;
+        return tile.features?.[rest] ?? { type: 'Feature', properties, geometry: null };
+      }
+      rest -= n;
+    }
+    return undefined;
+  }
+
+  /** The tile and the index in it of a picked index */
+  tileAt(index: number): { key: Key | undefined; index: number } | undefined {
+    let rest = index;
+    for (const [key, tile] of [...this.tiles].sort((a, b) => a[1].batch - b[1].batch)) {
+      if (rest < tile.properties.length) return { key: key === DATA ? undefined : key, index: rest };
+      rest -= tile.properties.length;
     }
     return undefined;
   }
@@ -123,7 +179,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     tile.values = values;
     this.map.engine.setFeatureValues(
       this.id,
-      values ?? new Float32Array(tile.features.length).fill(Number.NaN),
+      values ?? new Float32Array(tile.properties.length).fill(Number.NaN),
       tile.batch,
     );
     this.map.requestRender();
@@ -149,11 +205,18 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     this.map.requestRender();
   }
 
-  private put(key: Key | typeof DATA, features: Feature<P>[]): void {
+  private put(
+    key: Key | typeof DATA,
+    properties: P[],
+    features: Feature<P>[] | undefined,
+    arrays: PolygonArrays | undefined,
+  ): void {
     const old = this.tiles.get(key);
     const tile: Tile<P> = {
       batch: old?.batch ?? (key === DATA ? 0 : this.nextBatch++),
+      properties,
       features,
+      arrays,
       values: undefined,
       anchors: undefined,
     };
@@ -164,17 +227,18 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
   private mask(tile: Tile<P>): Uint8Array {
     const { filter } = this.style;
-    const mask = new Uint8Array(tile.features.length).fill(255);
+    const mask = new Uint8Array(tile.properties.length).fill(255);
     if (filter)
-      tile.features.forEach((f, i) => {
-        if (!filter(f.properties, i)) mask[i] = 0;
+      tile.properties.forEach((p, i) => {
+        if (!filter(p, i)) mask[i] = 0;
       });
     return mask;
   }
 
   private sendTile(engine: Engine, id: number, tile: Tile<P>): void {
-    const g = polygonGeometry(tile.features);
-    engine.setExtrusionBatch(id, tile.batch, g.points, g.ringStart, g.polygonStart, g.feature, tile.features.length);
+    const g = tile.arrays ?? polygonGeometry(tile.features ?? []);
+    const n = tile.properties.length;
+    engine.setExtrusionBatch(id, tile.batch, g.points, g.ringStart, g.polygonStart, g.feature, n);
     this.sendStyle(engine, id, tile);
     if (tile.values) engine.setFeatureValues(id, tile.values, tile.batch);
     if (tile.anchors) engine.setExtrusionAnchors(id, tile.batch, tile.anchors);
@@ -182,12 +246,14 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
   private sendStyle(engine: Engine, id: number, tile: Tile<P>): void {
     const { color, height, base } = this.style;
-    const out = new Float32Array(tile.features.length * FLOATS);
-    tile.features.forEach((f, i) => {
+    const out = new Float32Array(tile.properties.length * FLOATS);
+    // Constant colors parsed once: a tile has thousands of buildings
+    const fixed = typeof color === 'string' ? parseColor(color) : undefined;
+    tile.properties.forEach((p, i) => {
       const o = i * FLOATS;
-      out.set(parseColor(evaluate(color, f.properties, i)), o);
-      out.set(stops(evaluate(height, f.properties, i)), o + 8);
-      out.set(stops(evaluate(base, f.properties, i)), o + 16);
+      out.set(fixed ?? parseColor(evaluate(color, p, i)), o);
+      out.set(stops(evaluate(height, p, i)), o + 8);
+      out.set(stops(evaluate(base, p, i)), o + 16);
     });
     engine.setFeatureStyle(id, out, tile.batch);
     engine.setFeatureMask(id, this.mask(tile), tile.batch);

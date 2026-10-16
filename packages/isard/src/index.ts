@@ -20,7 +20,7 @@ export {
   NavigationControl,
   type NavigationOptions,
 } from './controls.ts';
-export type { ExtrusionOptions, ExtrusionStyle } from './extrusions.ts';
+export type { ExtrusionOptions, ExtrusionStyle, PolygonArrays } from './extrusions.ts';
 export { ExtrusionLayer } from './extrusions.ts';
 export type {
   CircleOptions,
