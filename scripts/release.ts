@@ -1,7 +1,8 @@
 /**
  * Publishes `@ign-junn/isard` on npm: lint, types, tests and build first, then the README, changelog and licence of
- * the repository copied into the package, then `bun publish` with NPM_TOKEN (from `.env`, which Bun loads for its own
- * scripts; `packages/isard/.npmrc` reads it). `--dry-run` packs without publishing.
+ * the repository copied into the package, then `npm publish` with NPM_TOKEN (from `.env`, which Bun loads for its own
+ * scripts), given on the command line: npm ignores the `.npmrc` of a workspace package, and `bun publish` hangs
+ * behind the IGN proxy. `--dry-run` packs without publishing.
  */
 import { copyFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,4 +23,5 @@ await $`bun run test`;
 await $`bun run build`;
 for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
 $.cwd(pkg);
-await $`bun publish ${dry ? '--dry-run' : []}`.env({ ...process.env });
+const token = `--//registry.npmjs.org/:_authToken=${process.env.NPM_TOKEN ?? ''}`;
+await $`bunx npm@10 publish --access public --userconfig=/dev/null ${token} ${dry ? '--dry-run' : []}`;
