@@ -2,9 +2,9 @@
 //! shared), which fetch and decode the 3D Tiles content off the main thread. The results are typed arrays ready for
 //! the GPU, transferred to the main thread without copy.
 
-use crate::tiles3d::decode;
 use glam::DMat4;
 use js_sys::{Array, Float32Array, Float64Array, Object, Reflect, Uint8Array, Uint32Array};
+use tiles3d::decode;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 

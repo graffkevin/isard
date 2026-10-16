@@ -85,7 +85,7 @@ impl Projection {
     }
 
     /// Call with the program in use
-    pub fn set(&self, gl: &glow::Context, view: &crate::geo::camera::View) {
+    pub fn set(&self, gl: &glow::Context, view: &geo::camera::View) {
         let [factor, radius, east, north, up, world] = &self.0;
         let g = &view.globe;
         // SAFETY: uniform uploads on the program in use
@@ -177,7 +177,7 @@ impl Grid {
 
     /// Instanced draw of the mesh: in relief the full grid and its skirt, else the full grid on the globe and two
     /// triangles on the plane
-    pub fn draw(gl: &glow::Context, view: &crate::geo::camera::View, instances: i32, relief: bool) {
+    pub fn draw(gl: &glow::Context, view: &geo::camera::View, instances: i32, relief: bool) {
         let (offset, count) = if relief {
             (0, Self::FULL + Self::SKIRT)
         } else if view.globe.factor > 0.0 {

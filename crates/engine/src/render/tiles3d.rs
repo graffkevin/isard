@@ -1,20 +1,23 @@
 //! 3D Tiles layer: loads a tileset (b3dm / glb meshes, external tilesets) and draws its textured meshes.
 //!
-//! The tree and its traversal live in `tileset`, the decoding in `b3dm`; this module fetches, uploads and draws.
+//! The tree and its traversal live in `tiles3d::tileset`, the decoding in `tiles3d::decode`; this module fetches, uploads and draws.
 //! Tiles are fetched and decoded asynchronously (images by the browser, off the main thread), uploaded a few per
 //! frame, kept within a GPU memory budget (least recently drawn unloaded first), and their requests aborted when they
 //! leave the view. Each mesh is drawn with a matrix computed in f64 (`View::ecef_matrix`), its vertices in f32 around
 //! the tile's center: exact at any zoom, on the plane and on the globe.
 
-use crate::geo::camera::View;
+use crate::engine::Engine;
+use crate::js;
+use crate::layer::{Frame, Layer, Loading as Profile};
 use crate::render::gl::{self, bytes};
-use crate::render::raster::Loading as Profile;
-use crate::tiles3d::decode::{self, Mesh};
-use crate::tiles3d::tileset::{self, Content, Readiness, Tree};
+use geo::camera::View;
 use glow::HasContext;
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasm_bindgen::{JsCast, JsValue};
+use tiles3d::decode::{self, Mesh};
+use tiles3d::tileset::{self, Content, Readiness, Tree};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 /// After an error, a tile is asked again after this delay (ms)
@@ -332,7 +335,7 @@ impl Tiles3dLayer {
     }
 
     /// Selects, loads and draws; returns true while tiles are loading
-    pub fn draw(
+    fn draw_tiles(
         &mut self,
         gl: &glow::Context,
         raw: &web_sys::WebGl2RenderingContext,
@@ -487,8 +490,21 @@ impl Tiles3dLayer {
             gl.enable(glow::CULL_FACE);
         }
     }
+}
 
-    pub fn delete(&mut self, gl: &glow::Context) {
+impl Layer for Tiles3dLayer {
+    fn draw(&mut self, frame: &Frame) -> bool {
+        self.draw_tiles(
+            frame.gl,
+            frame.raw,
+            frame.view,
+            frame.number,
+            frame.redraw,
+            frame.loading,
+        )
+    }
+
+    fn delete(&mut self, gl: &glow::Context) {
         for i in 0..self.states.len() {
             match std::mem::replace(&mut self.states[i], State::Empty) {
                 State::Loading(loading) => self.abort(&loading),
@@ -825,5 +841,82 @@ impl Drop for Tiles3dLayer {
                 self.abort(loading);
             }
         }
+    }
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const TYPES: &str = r"
+/** Counters of a 3D Tiles layer */
+export interface Tiles3dStats {
+  /** Tiles drawn in the last frame */
+  drawn: number;
+  /** Meshes held on the GPU */
+  loaded: number;
+  /** Downloads of tiles in view */
+  inFlight: number;
+  /** Downloads of tiles just out of view (siblings of refined tiles), in the background */
+  prefetching: number;
+  /** GPU memory of the meshes, MB */
+  gpuMb: number;
+  /** Tiles known in the tree (external tilesets included once loaded) */
+  tiles: number;
+}
+";
+
+#[wasm_bindgen]
+impl Engine {
+    /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
+    /// `load(id, url, transform, yUp) → Promise<{ anchor, primitives }>` and `abort(id)`. Without it, tiles are
+    /// decoded on the main thread. Set it before adding 3D Tiles layers.
+    #[wasm_bindgen(js_name = setTileLoader)]
+    pub fn set_tile_loader(&mut self, #[wasm_bindgen(unchecked_param_type = "TileLoaderLike | null")] loader: JsValue) {
+        self.loader = (!loader.is_null() && !loader.is_undefined()).then_some(loader);
+    }
+
+    /// Compressed texture formats of the GPU (their WebGL extensions get enabled), for the KTX2 transcoding
+    #[wasm_bindgen(js_name = textureFormats, unchecked_return_type = "TextureFormats")]
+    #[must_use]
+    pub fn texture_formats(&self) -> JsValue {
+        let has = |names: &[&str]| names.iter().any(|n| self.raw.get_extension(n).ok().flatten().is_some());
+        js::object(&[
+            ("astc", has(&["WEBGL_compressed_texture_astc"]).into()),
+            ("bptc", has(&["EXT_texture_compression_bptc"]).into()),
+            ("etc", has(&["WEBGL_compressed_texture_etc"]).into()),
+            ("s3tc", has(&["WEBGL_compressed_texture_s3tc"]).into()),
+        ])
+    }
+
+    /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
+    /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
+    #[wasm_bindgen(js_name = addTiles3d)]
+    pub fn add_tiles3d(&mut self, url: String, max_error: f64) -> Result<u32, JsValue> {
+        let layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
+        Ok(self.add_layer(Box::new(layer)))
+    }
+
+    /// Screen-space error threshold and opacity of a 3D Tiles layer
+    #[wasm_bindgen(js_name = setTiles3dStyle)]
+    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32) {
+        if let Some((layer, _)) = self.layer_mut::<Tiles3dLayer>(id) {
+            layer.max_error = max_error;
+            layer.opacity = opacity;
+        }
+    }
+
+    /// Counters of a 3D Tiles layer, undefined if there is none with this id
+    #[wasm_bindgen(js_name = tiles3dStats, unchecked_return_type = "Tiles3dStats | undefined")]
+    #[must_use]
+    pub fn tiles3d_stats(&self, id: u32) -> JsValue {
+        self.layer::<Tiles3dLayer>(id).map_or(JsValue::UNDEFINED, |layer| {
+            let s = layer.stats;
+            js::object(&[
+                ("drawn", s.drawn.into()),
+                ("loaded", s.loaded.into()),
+                ("inFlight", s.in_flight.into()),
+                ("prefetching", s.prefetching.into()),
+                ("gpuMb", (s.gpu_bytes as f64 / 1_048_576.0).into()),
+                ("tiles", s.tiles.into()),
+            ])
+        })
     }
 }

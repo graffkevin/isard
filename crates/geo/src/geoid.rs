@@ -29,7 +29,11 @@ pub fn height(lon: f64, lat: f64) -> f64 {
     let x = (lon - WEST) / STEP_LON;
     let y = (NORTH - lat) / STEP_LAT;
     let (last_x, last_y) = ((COLUMNS - 1) as f64, (ROWS - 1) as f64);
-    if x < -MARGIN / STEP_LON || y < -MARGIN / STEP_LAT || x > last_x + MARGIN / STEP_LON || y > last_y + MARGIN / STEP_LAT {
+    if x < -MARGIN / STEP_LON
+        || y < -MARGIN / STEP_LAT
+        || x > last_x + MARGIN / STEP_LON
+        || y > last_y + MARGIN / STEP_LAT
+    {
         return 0.0;
     }
     let (x, y) = (x.clamp(0.0, last_x), y.clamp(0.0, last_y));
@@ -49,7 +53,11 @@ mod tests {
     fn matches_the_full_grid() {
         // Bilinear values of the full RAF20 grid
         for (lon, lat, expected) in [(3.06, 50.63, 43.944), (6.87, 45.92, 52.897)] {
-            assert!((height(lon, lat) - expected).abs() < 0.33, "{lon} {lat}: {}", height(lon, lat));
+            assert!(
+                (height(lon, lat) - expected).abs() < 0.33,
+                "{lon} {lat}: {}",
+                height(lon, lat)
+            );
         }
     }
 

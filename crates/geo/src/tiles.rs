@@ -5,7 +5,7 @@
 //! Tiles are tested through a grid of sample points projected like the GPU does (plane, sphere or a blend), so the
 //! same code serves both projections.
 
-use crate::geo::camera::View;
+use crate::camera::View;
 use glam::{DVec2, DVec3, DVec4};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -60,7 +60,7 @@ const GLOBE_MIN_Z: u8 = 2;
 
 /// Half-angle of the foveated cone around the view axis (radians): tiles inside it load even while the camera moves
 /// (Cesium's foveated loading)
-pub const FOVEA: f64 = crate::geo::camera::FOV * 0.3;
+pub const FOVEA: f64 = crate::camera::FOV * 0.3;
 
 /// A tile to draw, with its loading priority
 #[derive(Clone, Copy, Debug)]
@@ -93,7 +93,7 @@ pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> 
         if refine && out.len() + stack.len() < MAX_TILES {
             stack.extend(tile.children());
         } else if tile.z >= min_z {
-            let priority = distance * (1.0 + 3.0 * angle / (crate::geo::camera::FOV / 2.0));
+            let priority = distance * (1.0 + 3.0 * angle / (crate::camera::FOV / 2.0));
             out.push(Selected {
                 tile,
                 priority,
@@ -200,7 +200,7 @@ pub(crate) fn in_frustum(view: &View, points: &[DVec3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::camera::Camera;
+    use crate::camera::Camera;
 
     fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<TileId> {
         super::select(view, min_z, max_z, tile_px)

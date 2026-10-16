@@ -1,7 +1,7 @@
 //! Page table of a tile pool over an extent: for each cell of a fixed level, the deepest loaded tile covering it.
 //! Layers draped on the relief look their altitudes up through it (`render::drape`).
 
-use crate::geo::tiles::TileId;
+use crate::tiles::TileId;
 use glam::DVec2;
 
 /// Largest side of the table, in cells: wider extents take a coarser level
@@ -83,7 +83,12 @@ mod tests {
 
     #[test]
     fn finer_tiles_than_the_table_are_left_out() {
-        let t = table(DVec2::new(0.0, 0.0), DVec2::new(0.9, 0.9), 15, [(TileId::new(15, 0, 0), 1u16)].into_iter());
+        let t = table(
+            DVec2::new(0.0, 0.0),
+            DVec2::new(0.9, 0.9),
+            15,
+            [(TileId::new(15, 0, 0), 1u16)].into_iter(),
+        );
         assert!(t.level < 15);
         assert!(t.cells.iter().all(|c| c[2] == 0));
     }

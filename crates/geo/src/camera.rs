@@ -11,7 +11,7 @@
 //! Local frame of a view: pixels relative to the center, x east, y south, z up. The sphere touches the plane at the
 //! center, its own center at (0, 0, -radius).
 
-use crate::geo::geodesy;
+use crate::geodesy;
 use glam::{DMat4, DVec2, DVec3, DVec4};
 use std::f64::consts::PI;
 

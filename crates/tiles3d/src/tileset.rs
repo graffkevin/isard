@@ -7,8 +7,8 @@
 
 #![forbid(unsafe_code)]
 
-use crate::geo::camera::View;
-use crate::geo::geodesy;
+use geo::camera::View;
+use geo::geodesy;
 use glam::{DMat4, DVec3, DVec4};
 use serde::Deserialize;
 
@@ -381,7 +381,7 @@ fn frustum(view: &View) -> [DVec4; 6] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::camera::Camera;
+    use geo::camera::Camera;
 
     /// A small REPLACE tileset over Lille: a root, four children, one external tileset
     fn tree() -> (Tree, usize) {
@@ -575,7 +575,7 @@ mod tests {
         c.width = 1200.0;
         c.height = 800.0;
         // 0.5° away: nothing of the tileset in view
-        c.center = crate::geo::camera::mercator(3.56, 50.63);
+        c.center = geo::camera::mercator(3.56, 50.63);
         let s = select(&tree, root, &c.view(), 16.0, &|_| Readiness::Ready);
         assert!(s.draw.is_empty() && s.visible.is_empty());
     }

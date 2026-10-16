@@ -6,8 +6,8 @@
 //! the edge's costs. Pieces longer than a square are split, so that a piece never reaches further than half a square
 //! out of its own: the squares, widened by that much, bound everything drawn in them.
 
-use crate::geo::camera::View;
-use crate::geo::tiles::in_frustum;
+use crate::camera::View;
+use crate::tiles::in_frustum;
 use glam::{DVec2, DVec3};
 
 /// Squares along the longer side of the network
@@ -61,7 +61,13 @@ pub struct Lines<'a> {
 }
 
 /// The line of edge `e` from A to B: its points, or its two nodes (put in `ends`)
-fn line_of<'a>(e: usize, nodes: &[DVec2], edges: &[u32], lines: Option<&'a Lines>, ends: &'a mut [DVec2; 2]) -> &'a [DVec2] {
+fn line_of<'a>(
+    e: usize,
+    nodes: &[DVec2],
+    edges: &[u32],
+    lines: Option<&'a Lines>,
+    ends: &'a mut [DVec2; 2],
+) -> &'a [DVec2] {
     if let Some(lines) = lines
         && e + 1 < lines.start.len()
     {
@@ -114,11 +120,7 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
                 let (t0, t1) = (k as f64 / parts as f64, (k + 1) as f64 / parts as f64);
                 let (a, b) = (w[0].lerp(w[1], t0), w[0].lerp(w[1], t1));
                 let fraction = |t: f64| {
-                    if total > 0.0 {
-                        (along + length * t) / total
-                    } else {
-                        t
-                    }
+                    if total > 0.0 { (along + length * t) / total } else { t }
                 };
                 squares_of.push(grid.square((a + b) / 2.0));
                 unsorted.push(Piece {
@@ -209,7 +211,7 @@ fn visit(grid: &Grid, view: &View, heights: (f64, f64), shift: f64, block: (u32,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::camera::{Camera, mercator};
+    use crate::camera::{Camera, mercator};
 
     fn middle(q: &Piece) -> DVec2 {
         DVec2::new(f64::from(q.from[0] + q.to[0]), f64::from(q.from[1] + q.to[1])) / 2.0
@@ -286,7 +288,11 @@ mod tests {
         let view = c.view();
         let ranges = p.visible(&view, (0.0, 0.0), 0.0);
         let drawn: u32 = ranges.iter().map(|(a, b)| b - a).sum();
-        assert!(drawn > 0 && (drawn as usize) < p.pieces.len() / 50, "{drawn} of {}", p.pieces.len());
+        assert!(
+            drawn > 0 && (drawn as usize) < p.pieces.len() / 50,
+            "{drawn} of {}",
+            p.pieces.len()
+        );
         // Every piece on screen is drawn
         let center = c.center;
         let on_screen = p
@@ -317,7 +323,9 @@ mod bench {
     #[ignore = "timing"]
     fn build_a_million_edges() {
         let n = 1000u32;
-        let nodes: Vec<DVec2> = (0..n * 500).map(|k| DVec2::new(0.5 + f64::from(k % n) * 2e-6, 0.3 + f64::from(k / n) * 2e-6)).collect();
+        let nodes: Vec<DVec2> = (0..n * 500)
+            .map(|k| DVec2::new(0.5 + f64::from(k % n) * 2e-6, 0.3 + f64::from(k / n) * 2e-6))
+            .collect();
         let mut edges = Vec::new();
         let (mut start, mut points) = (vec![0u32], Vec::new());
         for k in 0..n * 500 {
@@ -330,7 +338,10 @@ mod bench {
                 }
             }
         }
-        let lines = Lines { start: &start, points: &points };
+        let lines = Lines {
+            start: &start,
+            points: &points,
+        };
         let t = std::time::Instant::now();
         let p = build(&nodes, &edges, Some(&lines), DVec2::new(0.5, 0.3));
         eprintln!("{} pieces in {:?}", p.pieces.len(), t.elapsed());

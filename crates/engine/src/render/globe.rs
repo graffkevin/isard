@@ -2,8 +2,8 @@
 //! (beyond 85°) and gives the globe its outline while tiles load. Drawn only in the globe projection, fading out with
 //! it.
 
-use crate::geo::camera::View;
 use crate::render::gl::{self, Grid};
+use geo::camera::View;
 use glow::HasContext;
 
 /// Patches of the sphere: longitude × latitude, each one a `Grid` mesh

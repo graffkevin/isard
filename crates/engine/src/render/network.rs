@@ -12,14 +12,18 @@
 //! first, so that the streets add up into a heat map. In relief, the pieces stand on the ground (`drape`) and the
 //! hills hide the lines behind them.
 
-use crate::geo::camera::{Camera, View};
-use crate::geo::pieces::{self, Grid, Lines};
+use crate::engine::Engine;
+use crate::js;
+use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::gl::{self, Projection, bytes as as_bytes};
 use crate::render::raster::RasterSource;
+use geo::camera::{Camera, View};
+use geo::pieces::{self, Grid, Lines};
 use glam::DVec2;
 use glow::HasContext;
 use std::cell::Cell;
+use wasm_bindgen::prelude::*;
 
 /// Width of the node and edge textures; 4096 is supported everywhere WebGL2 is
 const WIDTH: usize = 4096;
@@ -298,10 +302,19 @@ impl NetworkLayer {
         let edge_count = edges.len() / 2;
         let shaded = Pass::new(gl, "", FRAGMENT)?;
         let pick = Pass::new(gl, "#define PICK\n", PICK_FRAGMENT)?;
-        let points = |pairs: &[f64]| -> Vec<DVec2> { pairs.as_chunks::<2>().0.iter().map(|&[x, y]| DVec2::new(x, y)).collect() };
+        let points = |pairs: &[f64]| -> Vec<DVec2> {
+            pairs
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[x, y]| DVec2::new(x, y))
+                .collect()
+        };
         let merc = points(mercator);
         let line_points = lines.map(|(_, line)| points(line));
-        let lines = lines.zip(line_points.as_deref()).map(|((start, _), points)| Lines { start, points });
+        let lines = lines
+            .zip(line_points.as_deref())
+            .map(|((start, _), points)| Lines { start, points });
         let (min, max) = merc.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
             (a.min(p), b.max(p))
         });
@@ -397,65 +410,6 @@ impl NetworkLayer {
         (self.piece_count, self.drawn.get())
     }
 
-    /// Draws the halo then the lines; `relief`: the elevation source and its exaggeration, to stand the network on
-    /// the ground
-    pub fn draw(
-        &mut self,
-        gl: &glow::Context,
-        camera: &Camera,
-        view: &View,
-        pixel_ratio: f64,
-        relief: Option<(&RasterSource, f32)>,
-    ) {
-        if let Some((source, _)) = relief
-            && self.nodes > 0
-        {
-            let (lo, hi) = (
-                self.grid.min,
-                self.grid.min + DVec2::new(f64::from(self.grid.cols), f64::from(self.grid.rows)) * self.grid.size,
-            );
-            self.drape.update(gl, lo, hi, source);
-        }
-        let ranges = self.visible(view, relief);
-        self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
-        let style = self.style;
-        if style.halo > 0.0 && style.halo_opacity > 0.0 {
-            let halo = Width {
-                pixels: f64::from(style.halo),
-                halo: true,
-            };
-            self.render(gl, &self.shaded, camera, view, pixel_ratio, halo, relief, &ranges);
-        }
-        let lines = Width {
-            pixels: f64::from(style.width),
-            halo: false,
-        };
-        self.render(gl, &self.shaded, camera, view, pixel_ratio, lines, relief, &ranges);
-    }
-
-    /// Picking pass into the bound framebuffer: edge number + 1 in RGB, `layer` in alpha
-    pub fn draw_pick(
-        &self,
-        gl: &glow::Context,
-        camera: &Camera,
-        view: &View,
-        pixel_ratio: f64,
-        layer: u8,
-        relief: Option<(&RasterSource, f32)>,
-    ) {
-        // SAFETY: uniform on the picking program
-        unsafe {
-            gl.use_program(Some(self.pick.program));
-            gl.uniform_1_f32(self.pick.uniforms[10].as_ref(), f32::from(layer));
-        }
-        let ranges = self.visible(view, relief);
-        let width = Width {
-            pixels: f64::from(self.style.width) + PICK_SLOP,
-            halo: false,
-        };
-        self.render(gl, &self.pick, camera, view, pixel_ratio, width, relief, &ranges);
-    }
-
     /// Ranges of pieces in the squares in view
     fn visible(&self, view: &View, relief: Option<(&RasterSource, f32)>) -> Vec<(u32, u32)> {
         let heights = relief.map_or((0.0, 0.0), |(_, e)| {
@@ -513,7 +467,11 @@ impl NetworkLayer {
             pass.projection.set(gl, view);
             self.drape.bind(gl, &pass.drape, relief);
             // About 0.2 % of the distance: in clip space a constant (2 × near × fraction)
-            let bias = if relief.is_some() { 2.0 * view.near * DEPTH_BIAS } else { 0.0 };
+            let bias = if relief.is_some() {
+                2.0 * view.near * DEPTH_BIAS
+            } else {
+                0.0
+            };
             gl.uniform_1_f32(depth_bias.as_ref(), bias as f32);
             let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
             gl.uniform_1_i32(segments.as_ref(), parts);
@@ -549,8 +507,91 @@ impl NetworkLayer {
             gl.bind_vertex_array(None);
         }
     }
+}
 
-    pub fn delete(&self, gl: &glow::Context) {
+impl Layer for NetworkLayer {
+    /// Draws the halo then the lines; in relief, the network stands on the ground and the hills hide the lines behind
+    /// them (tested against the ground's depth, not written)
+    fn draw(&mut self, frame: &Frame) -> bool {
+        let &Frame {
+            gl,
+            camera,
+            view,
+            pixel_ratio,
+            relief,
+            ..
+        } = frame;
+        if let Some((source, _)) = relief
+            && self.nodes > 0
+        {
+            let (lo, hi) = (
+                self.grid.min,
+                self.grid.min + DVec2::new(f64::from(self.grid.cols), f64::from(self.grid.rows)) * self.grid.size,
+            );
+            self.drape.update(gl, lo, hi, source);
+        }
+        let ranges = self.visible(view, relief);
+        self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
+        // Line quads are built on screen, either way round
+        // SAFETY: state changes on the live context, set back below
+        unsafe {
+            gl.disable(glow::CULL_FACE);
+            if relief.is_some() {
+                gl.enable(glow::DEPTH_TEST);
+                gl.depth_func(glow::LEQUAL);
+                gl.depth_mask(false);
+            }
+        }
+        let style = self.style;
+        if style.halo > 0.0 && style.halo_opacity > 0.0 {
+            let halo = Width {
+                pixels: f64::from(style.halo),
+                halo: true,
+            };
+            self.render(gl, &self.shaded, camera, view, pixel_ratio, halo, relief, &ranges);
+        }
+        let lines = Width {
+            pixels: f64::from(style.width),
+            halo: false,
+        };
+        self.render(gl, &self.shaded, camera, view, pixel_ratio, lines, relief, &ranges);
+        // SAFETY: state changes on the live context
+        unsafe {
+            gl.enable(glow::CULL_FACE);
+            gl.disable(glow::DEPTH_TEST);
+            gl.depth_mask(true);
+        }
+        false
+    }
+
+    fn pickable(&self) -> bool {
+        true
+    }
+
+    /// Edge number + 1 in RGB, `layer` in alpha, lines widened a little to be easier to hit
+    fn draw_pick(&self, frame: &Frame, layer: u8) {
+        let &Frame {
+            gl,
+            camera,
+            view,
+            pixel_ratio,
+            relief,
+            ..
+        } = frame;
+        // SAFETY: uniform on the picking program
+        unsafe {
+            gl.use_program(Some(self.pick.program));
+            gl.uniform_1_f32(self.pick.uniforms[10].as_ref(), f32::from(layer));
+        }
+        let ranges = self.visible(view, relief);
+        let width = Width {
+            pixels: f64::from(self.style.width) + PICK_SLOP,
+            halo: false,
+        };
+        self.render(gl, &self.pick, camera, view, pixel_ratio, width, relief, &ranges);
+    }
+
+    fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
             gl.delete_program(self.shaded.program);
@@ -617,5 +658,104 @@ unsafe fn upload(gl: &glow::Context, data: &[f32], channels: usize, format: u32)
                 glow::PixelUnpackData::Slice(Some(as_bytes(&data[full * WIDTH * channels..texels * channels]))),
             );
         }
+    }
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const TYPES: &str = r"
+/** Pieces of a network layer: its edges cut along their lines, sorted by square; only the squares in view are drawn */
+export interface NetworkStats {
+  pieces: number;
+  /** Drawn in the last frame */
+  drawn: number;
+}
+";
+
+#[wasm_bindgen]
+impl Engine {
+    /// Network of `mercator.length / 2` nodes (Mercator [0, 1], y towards the south, interleaved: converted by the
+    /// JavaScript side, where `Math.tan` and `Math.log` are much faster than in WebAssembly) and `edges.length / 2`
+    /// edges (node index pairs, interleaved). `line_start` and `line_points`: the line of each edge from A to B, points
+    /// `line_start[e] .. line_start[e + 1]` of `line_points` (Mercator, interleaved; straight if fewer than two). `costs`: per edge, the
+    /// cost of travelling it from A to B then from B to A; without, values are interpolated along the edges.
+    #[wasm_bindgen(js_name = addNetwork)]
+    // Optional arrays only cross the boundary owned
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    pub fn add_network(
+        &mut self,
+        mercator: &[f64],
+        edges: &[u32],
+        line_start: Option<Box<[u32]>>,
+        line_points: Option<Box<[f64]>>,
+        costs: Option<Box<[f32]>>,
+        width: f32,
+        max: f32,
+        contour: f32,
+        opacity: f32,
+        halo: f32,
+        halo_opacity: f32,
+    ) -> Result<u32, JsValue> {
+        let style = NetworkStyle {
+            width,
+            max,
+            contour,
+            opacity,
+            halo,
+            halo_opacity,
+        };
+        let lines = line_start.as_deref().zip(line_points.as_deref());
+        let layer = NetworkLayer::new(&self.gl, mercator, edges, lines, costs.as_deref(), style)?;
+        Ok(self.add_layer(Box::new(layer)))
+    }
+
+    /// One value per node; negative = unreached
+    #[wasm_bindgen(js_name = setNetworkValues)]
+    pub fn set_network_values(&mut self, id: u32, values: &[f32]) {
+        if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
+            layer.set_values(gl, values);
+        }
+    }
+
+    /// Costs of a network's edges (see `addNetwork`), when the way it is travelled changes; null: interpolated values
+    #[wasm_bindgen(js_name = setNetworkCosts)]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_network_costs(&mut self, id: u32, costs: Option<Box<[f32]>>) {
+        if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
+            layer.set_costs(gl, costs.as_deref());
+        }
+    }
+
+    #[wasm_bindgen(js_name = setNetworkStyle)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_network_style(
+        &mut self,
+        id: u32,
+        width: f32,
+        max: f32,
+        contour: f32,
+        opacity: f32,
+        halo: f32,
+        halo_opacity: f32,
+    ) {
+        if let Some((layer, _)) = self.layer_mut::<NetworkLayer>(id) {
+            layer.style = NetworkStyle {
+                width,
+                max,
+                contour,
+                opacity,
+                halo,
+                halo_opacity,
+            };
+        }
+    }
+
+    /// Pieces of a network in all and drawn in the last frame (only the squares in view are)
+    #[wasm_bindgen(js_name = networkStats, unchecked_return_type = "NetworkStats | undefined")]
+    #[must_use]
+    pub fn network_stats(&self, id: u32) -> JsValue {
+        self.layer::<NetworkLayer>(id).map_or(JsValue::UNDEFINED, |layer| {
+            let (pieces, drawn) = layer.counts();
+            js::object(&[("pieces", (pieces as f64).into()), ("drawn", drawn.into())])
+        })
     }
 }

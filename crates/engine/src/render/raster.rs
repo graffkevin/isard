@@ -15,10 +15,11 @@
 //! lifts the grid of every tile by the heights read in it, three levels coarser than the imagery (a 16 × 16 grid
 //! needs far fewer samples than 256 px), and a skirt under the tile edges hides the cracks between levels.
 
-use crate::geo::camera::{View, lon_lat};
-use crate::geo::geoid;
-use crate::geo::tiles::{self, TileId};
+use crate::layer::Loading;
 use crate::render::gl::{self, Grid, Projection};
+use geo::camera::{View, lon_lat};
+use geo::geoid;
+use geo::tiles::{self, TileId};
 use glow::HasContext;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -185,44 +186,7 @@ pub struct RasterOptions {
     pub elevation: bool,
 }
 
-/// How tiles load and show: the engine's two profiles
-#[derive(Clone, Copy, Debug)]
-pub struct Loading {
-    /// New tiles fade in over their stand-in during this time (ms); 0: they show at once
-    pub fade_ms: f64,
-    /// During a camera flight, the levels flown through are skipped (Cesium's skip LOD)
-    pub skip_levels_in_flight: bool,
-    /// While the camera moves, covered tiles off the screen center wait (foveated loading)
-    pub defer_off_center: bool,
-    /// Time spent uploading arrived tiles to the GPU per frame and layer (ms; at least one tile)
-    pub upload_budget_ms: f64,
-    /// Requests in flight per raster layer, and per 3D Tiles layer
-    pub raster_requests: usize,
-    pub mesh_requests: usize,
-}
-
-impl Loading {
-    /// Everything visible loads and shows as soon as it arrives (the default)
-    pub const IMMEDIATE: Self = Self {
-        fade_ms: 0.0,
-        skip_levels_in_flight: false,
-        defer_off_center: false,
-        upload_budget_ms: 8.0,
-        raster_requests: 24,
-        mesh_requests: 20,
-    };
-    /// Fewer downloads while moving, tiles fading in: smoother on slow networks and GPUs
-    pub const SMOOTH: Self = Self {
-        fade_ms: 200.0,
-        skip_levels_in_flight: true,
-        defer_off_center: true,
-        upload_budget_ms: 3.0,
-        raster_requests: 16,
-        mesh_requests: 12,
-    };
-}
-
-/// What a layer needs to draw a frame
+/// What a raster layer needs to load a frame's tiles
 pub struct DrawContext<'a> {
     pub view: &'a View,
     pub frame: u64,
@@ -936,7 +900,9 @@ fn to_ellipsoid(tile: TileId, heights: &mut [f32]) {
     let (min, max) = tile.bounds();
     let size = TILE as usize;
     let at = |k: usize, lo: f64, hi: f64| lo + (hi - lo) * (k as f64 + 0.5) / size as f64;
-    let lons: Vec<f64> = (0..size).map(|i| lon_lat(glam::DVec2::new(at(i, min.x, max.x), 0.5)).x).collect();
+    let lons: Vec<f64> = (0..size)
+        .map(|i| lon_lat(glam::DVec2::new(at(i, min.x, max.x), 0.5)).x)
+        .collect();
     for (row, line) in heights.chunks_exact_mut(size).enumerate() {
         let lat = lon_lat(glam::DVec2::new(0.5, at(row, min.y, max.y))).y;
         for (h, &lon) in line.iter_mut().zip(&lons) {

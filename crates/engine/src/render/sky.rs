@@ -2,8 +2,8 @@
 //! globe, as in Google Earth) and an atmosphere halo around its silhouette. One full-screen triangle, no texture;
 //! drawn only in the globe projection, fading out with it.
 
-use crate::geo::camera::View;
 use crate::render::gl;
+use geo::camera::View;
 use glow::HasContext;
 
 const VERTEX: &str = r"#version 300 es

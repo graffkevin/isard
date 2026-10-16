@@ -1,15 +1,20 @@
-//! The engine exported to JavaScript
+//! The engine exported to JavaScript: the camera and its interactions, the ground (raster layers over the relief)
+//! and the frame loop. The layers drawn over the ground (`Layer`) export their own methods, next to them; the picking
+//! is in `pick`.
 
-use crate::geo::camera::{self, Camera, View};
+mod pick;
+
 use crate::js;
+use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
-use crate::render::network::{NetworkLayer, NetworkStyle};
-use crate::render::raster::{DrawContext, Loading, RasterOptions, RasterPass, RasterSource, STACK, unpack_depth};
+use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
 use crate::render::sky::Sky;
-use crate::tiles3d::layer::Tiles3dLayer;
+use geo::camera::{self, Camera, View};
 use glam::DVec2;
 use glow::HasContext;
+use pick::PickTarget;
+use std::any::Any;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
@@ -25,19 +30,12 @@ export interface Camera {
   bearing: number;
 }
 
-/** The network edge under a screen point */
+/** The feature under a screen point */
 export interface PickHit {
-  /** Id of the network layer */
+  /** Id of the layer */
   layer: number;
-  /** Index of the edge in the layer */
+  /** Index of the feature in the layer (the edge of a network) */
   index: number;
-}
-
-/** Pieces of a network layer: its edges cut along their lines, sorted by square; only the squares in view are drawn */
-export interface NetworkStats {
-  pieces: number;
-  /** Drawn in the last frame */
-  drawn: number;
 }
 
 /** Tile counters of a raster layer */
@@ -58,42 +56,28 @@ export interface RasterLayerStats {
   /** Not served (404), covered by an ancestor */
   missing: number;
 }
-
-/** Counters of a 3D Tiles layer */
-export interface Tiles3dStats {
-  /** Tiles drawn in the last frame */
-  drawn: number;
-  /** Meshes held on the GPU */
-  loaded: number;
-  /** Downloads of tiles in view */
-  inFlight: number;
-  /** Downloads of tiles just out of view (siblings of refined tiles), in the background */
-  prefetching: number;
-  /** GPU memory of the meshes, MB */
-  gpuMb: number;
-  /** Tiles known in the tree (external tilesets included once loaded) */
-  tiles: number;
-}
 "#;
 
-enum Layer {
-    Raster(RasterSource),
-    Network(Box<NetworkLayer>),
-    Tiles3d(Tiles3dLayer),
+/// What the engine draws, bottom to top
+enum Slot {
+    /// The ground: consecutive raster layers are composited in one pass over the relief
+    Raster(Box<RasterSource>),
+    /// Drawn over the ground
+    Layer(Box<dyn Layer>),
 }
 
 #[wasm_bindgen]
 pub struct Engine {
-    gl: glow::Context,
-    raw: web_sys::WebGl2RenderingContext,
+    pub(crate) gl: glow::Context,
+    pub(crate) raw: web_sys::WebGl2RenderingContext,
     /// Pool of decoding workers for 3D Tiles (`load`, `abort`), set by the JavaScript side
-    loader: Option<JsValue>,
+    pub(crate) loader: Option<JsValue>,
     camera: Camera,
     pixel_ratio: f64,
-    layers: Vec<(u32, Layer)>,
+    layers: Vec<(u32, Slot)>,
     next_id: u32,
     frame: u64,
-    redraw: Rc<dyn Fn()>,
+    pub(crate) redraw: Rc<dyn Fn()>,
     background: [f32; 3],
     globe: GlobeBase,
     sky: Sky,
@@ -123,15 +107,6 @@ pub struct Engine {
 /// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
 const TERRAIN_MIN_Z: u8 = 6;
 const TERRAIN_MAX_Z: u8 = 15;
-
-/// Framebuffer of the picking pass, at the size of the canvas
-struct PickTarget {
-    framebuffer: glow::Framebuffer,
-    texture: glow::Texture,
-    /// For the ground's depth (`pick_altitude`)
-    depth: glow::Renderbuffer,
-    size: (i32, i32),
-}
 
 /// The camera counts as moving until this long after its last change (ms)
 const MOVING_MS: f64 = 100.0;
@@ -239,19 +214,6 @@ impl Engine {
         self.camera.globe = globe;
     }
 
-    /// Compressed texture formats of the GPU (their WebGL extensions get enabled), for the KTX2 transcoding
-    #[wasm_bindgen(js_name = textureFormats, unchecked_return_type = "TextureFormats")]
-    #[must_use]
-    pub fn texture_formats(&self) -> JsValue {
-        let has = |names: &[&str]| names.iter().any(|n| self.raw.get_extension(n).ok().flatten().is_some());
-        js::object(&[
-            ("astc", has(&["WEBGL_compressed_texture_astc"]).into()),
-            ("bptc", has(&["EXT_texture_compression_bptc"]).into()),
-            ("etc", has(&["WEBGL_compressed_texture_etc"]).into()),
-            ("s3tc", has(&["WEBGL_compressed_texture_s3tc"]).into()),
-        ])
-    }
-
     /// How tiles load and show: `true`, immediately (everything visible loads, no fade, the default); `false`,
     /// smoothly (levels skipped during flights, off-center tiles waiting while the camera moves, fade-in)
     #[wasm_bindgen(js_name = setImmediateLoading)]
@@ -313,9 +275,9 @@ impl Engine {
         let terrain = self.terrain.as_ref().map(|(source, _)| (0, source));
         self.layers
             .iter()
-            .filter_map(|(id, layer)| match layer {
-                Layer::Raster(layer) => Some((*id, layer)),
-                _ => None,
+            .filter_map(|(id, slot)| match slot {
+                Slot::Raster(layer) => Some((*id, layer.as_ref())),
+                Slot::Layer(_) => None,
             })
             .chain(terrain)
             .map(|(id, layer)| {
@@ -349,18 +311,6 @@ impl Engine {
     #[wasm_bindgen(js_name = clearPreload)]
     pub fn clear_preload(&mut self) {
         self.preload = None;
-    }
-
-    /// Feature under a screen point (CSS pixels): the network layer and the index of its edge, undefined if none.
-    ///
-    /// The network layers are drawn once more into an offscreen target, each edge colored by its number, clipped to
-    /// the one pixel under the cursor (scissor), and that pixel is read back (as deck.gl does): the cost does not
-    /// grow with the number of features.
-    #[wasm_bindgen(unchecked_return_type = "PickHit | undefined")]
-    pub fn pick(&mut self, x: f64, y: f64) -> JsValue {
-        self.pick_edge(x, y).map_or(JsValue::UNDEFINED, |(layer, index)| {
-            js::object(&[("layer", layer.into()), ("index", index.into())])
-        })
     }
 
     /// Drags the ground from one screen point to another (CSS pixels); in relief, the ground point grabbed stays
@@ -445,154 +395,14 @@ impl Engine {
                 elevation: false,
             },
         )?;
-        Ok(self.push(Layer::Raster(layer)))
+        Ok(self.push(Slot::Raster(Box::new(layer))))
     }
 
     #[wasm_bindgen(js_name = setRasterStyle)]
     pub fn set_raster_style(&mut self, id: u32, opacity: f32, saturation: f32) {
-        if let Some(Layer::Raster(layer)) = self.layer(id) {
+        if let Some(Slot::Raster(layer)) = self.slot(id) {
             layer.options.opacity = opacity;
             layer.options.saturation = saturation;
-        }
-    }
-
-    /// Network of `mercator.length / 2` nodes (Mercator [0, 1], y towards the south, interleaved: converted by the
-    /// JavaScript side, where `Math.tan` and `Math.log` are much faster than in WebAssembly) and `edges.length / 2`
-    /// edges (node index pairs, interleaved). `line_start` and `line_points`: the line of each edge from A to B, points
-    /// `line_start[e] .. line_start[e + 1]` of `line_points` (Mercator, interleaved; straight if fewer than two). `costs`: per edge, the
-    /// cost of travelling it from A to B then from B to A; without, values are interpolated along the edges.
-    #[wasm_bindgen(js_name = addNetwork)]
-    // Optional arrays only cross the boundary owned
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-    pub fn add_network(
-        &mut self,
-        mercator: &[f64],
-        edges: &[u32],
-        line_start: Option<Box<[u32]>>,
-        line_points: Option<Box<[f64]>>,
-        costs: Option<Box<[f32]>>,
-        width: f32,
-        max: f32,
-        contour: f32,
-        opacity: f32,
-        halo: f32,
-        halo_opacity: f32,
-    ) -> Result<u32, JsValue> {
-        let style = NetworkStyle {
-            width,
-            max,
-            contour,
-            opacity,
-            halo,
-            halo_opacity,
-        };
-        let lines = line_start.as_deref().zip(line_points.as_deref());
-        let layer = NetworkLayer::new(&self.gl, mercator, edges, lines, costs.as_deref(), style)?;
-        Ok(self.push(Layer::Network(Box::new(layer))))
-    }
-
-    /// Costs of a network's edges (see `addNetwork`), when the way it is travelled changes; null: interpolated values
-    #[wasm_bindgen(js_name = setNetworkCosts)]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn set_network_costs(&mut self, id: u32, costs: Option<Box<[f32]>>) {
-        if let Some(index) = self.layers.iter().position(|(i, _)| *i == id)
-            && let Layer::Network(layer) = &mut self.layers[index].1
-        {
-            layer.set_costs(&self.gl, costs.as_deref());
-        }
-    }
-
-    /// Pieces of a network in all and drawn in the last frame (only the squares in view are)
-    #[wasm_bindgen(js_name = networkStats, unchecked_return_type = "NetworkStats | undefined")]
-    pub fn network_stats(&mut self, id: u32) -> JsValue {
-        match self.layer(id) {
-            Some(Layer::Network(layer)) => {
-                let (pieces, drawn) = layer.counts();
-                js::object(&[("pieces", (pieces as f64).into()), ("drawn", drawn.into())])
-            }
-            _ => JsValue::UNDEFINED,
-        }
-    }
-
-    /// Pool of workers that fetch and decode 3D Tiles content off the main thread: an object with
-    /// `load(id, url, transform, yUp) → Promise<{ anchor, primitives }>` and `abort(id)`. Without it, tiles are
-    /// decoded on the main thread. Set it before adding 3D Tiles layers.
-    #[wasm_bindgen(js_name = setTileLoader)]
-    pub fn set_tile_loader(&mut self, #[wasm_bindgen(unchecked_param_type = "TileLoaderLike | null")] loader: JsValue) {
-        self.loader = (!loader.is_null() && !loader.is_undefined()).then_some(loader);
-    }
-
-    /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
-    /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
-    #[wasm_bindgen(js_name = addTiles3d)]
-    pub fn add_tiles3d(&mut self, url: String, max_error: f64) -> Result<u32, JsValue> {
-        let layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
-        Ok(self.push(Layer::Tiles3d(layer)))
-    }
-
-    /// Screen-space error threshold and opacity of a 3D Tiles layer
-    #[wasm_bindgen(js_name = setTiles3dStyle)]
-    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32) {
-        if let Some(Layer::Tiles3d(layer)) = self.layer(id) {
-            layer.max_error = max_error;
-            layer.opacity = opacity;
-        }
-    }
-
-    /// Counters of a 3D Tiles layer, undefined if there is none with this id
-    #[wasm_bindgen(js_name = tiles3dStats, unchecked_return_type = "Tiles3dStats | undefined")]
-    #[must_use]
-    pub fn tiles3d_stats(&self, id: u32) -> JsValue {
-        self.layers
-            .iter()
-            .find_map(|(i, layer)| match layer {
-                Layer::Tiles3d(layer) if *i == id => {
-                    let s = layer.stats;
-                    Some(js::object(&[
-                        ("drawn", s.drawn.into()),
-                        ("loaded", s.loaded.into()),
-                        ("inFlight", s.in_flight.into()),
-                        ("prefetching", s.prefetching.into()),
-                        ("gpuMb", (s.gpu_bytes as f64 / 1_048_576.0).into()),
-                        ("tiles", s.tiles.into()),
-                    ]))
-                }
-                _ => None,
-            })
-            .unwrap_or(JsValue::UNDEFINED)
-    }
-
-    /// One value per node; negative = unreached
-    #[wasm_bindgen(js_name = setNetworkValues)]
-    pub fn set_network_values(&mut self, id: u32, values: &[f32]) {
-        if let Some(index) = self.layers.iter().position(|(i, _)| *i == id)
-            && let Layer::Network(layer) = &mut self.layers[index].1
-        {
-            layer.set_values(&self.gl, values);
-        }
-    }
-
-    #[wasm_bindgen(js_name = setNetworkStyle)]
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_network_style(
-        &mut self,
-        id: u32,
-        width: f32,
-        max: f32,
-        contour: f32,
-        opacity: f32,
-        halo: f32,
-        halo_opacity: f32,
-    ) {
-        if let Some(Layer::Network(layer)) = self.layer(id) {
-            layer.style = NetworkStyle {
-                width,
-                max,
-                contour,
-                opacity,
-                halo,
-                halo_opacity,
-            };
         }
     }
 
@@ -600,9 +410,8 @@ impl Engine {
     pub fn remove_layer(&mut self, id: u32) {
         if let Some(index) = self.layers.iter().position(|(i, _)| *i == id) {
             match self.layers.remove(index).1 {
-                Layer::Raster(layer) => layer.delete(&self.gl),
-                Layer::Network(layer) => layer.delete(&self.gl),
-                Layer::Tiles3d(mut layer) => layer.delete(&self.gl),
+                Slot::Raster(layer) => layer.delete(&self.gl),
+                Slot::Layer(mut layer) => layer.delete(&self.gl),
             }
         }
     }
@@ -672,31 +481,25 @@ impl Engine {
         if let Some((terrain, _)) = &mut self.terrain {
             loading |= terrain.prepare(&self.gl, &ctx);
         }
+        // Taken out while they draw: each layer gets the engine's state, the rasters the relief to drape on
+        let mut layers = std::mem::take(&mut self.layers);
         let mut i = 0;
-        while i < self.layers.len() {
-            if let Layer::Tiles3d(layer) = &mut self.layers[i].1 {
-                loading |= layer.draw(&self.gl, &self.raw, &view, self.frame, &self.redraw, self.loading);
-                i += 1;
-                continue;
-            }
-            if matches!(self.layers[i].1, Layer::Network(_)) {
-                if let Layer::Network(layer) = &mut self.layers[i].1 {
-                    let relief = self.terrain.as_ref().map(|(source, e)| (source, *e));
-                    draw_network(&self.gl, layer, &self.camera, &view, self.pixel_ratio, relief);
-                }
+        while i < layers.len() {
+            if let Slot::Layer(layer) = &mut layers[i].1 {
+                loading |= layer.draw(&self.frame_state(&view));
                 i += 1;
                 continue;
             }
             // Consecutive raster layers: one composited pass (up to STACK layers)
             let mut j = i;
-            while j < self.layers.len() && j - i < STACK && matches!(self.layers[j].1, Layer::Raster(_)) {
+            while j < layers.len() && j - i < STACK && matches!(layers[j].1, Slot::Raster(_)) {
                 j += 1;
             }
-            let mut stack: Vec<&mut RasterSource> = self.layers[i..j]
+            let mut stack: Vec<&mut RasterSource> = layers[i..j]
                 .iter_mut()
-                .filter_map(|(_, layer)| match layer {
-                    Layer::Raster(source) => Some(source),
-                    Layer::Network(_) | Layer::Tiles3d(_) => None,
+                .filter_map(|(_, slot)| match slot {
+                    Slot::Raster(source) => Some(source.as_mut()),
+                    Slot::Layer(_) => None,
                 })
                 .collect();
             for source in &mut stack {
@@ -713,6 +516,7 @@ impl Engine {
             }
             i = j;
         }
+        self.layers = layers;
         if let Some((terrain, _)) = &self.terrain {
             terrain.finish(&self.redraw);
         }
@@ -752,215 +556,52 @@ impl Engine {
         }
     }
 
-    /// Altitude (metres, exaggeration included) of the relief drawn under a screen point (CSS pixels), None without
-    /// relief or off the ground. The ground of the last frame is drawn again into the picking target, its depth
-    /// packed in the color, clipped to that pixel, and the pixel read back.
-    fn pick_altitude(&mut self, x: f64, y: f64) -> Option<f64> {
-        self.terrain.as_ref()?;
-        let view = self.drawn.clone()?;
-        let size = (
-            (self.camera.width * self.pixel_ratio).round() as i32,
-            (self.camera.height * self.pixel_ratio).round() as i32,
-        );
-        let (px, py) = (
-            (x * self.pixel_ratio) as i32,
-            size.1 - 1 - (y * self.pixel_ratio) as i32,
-        );
-        if px < 0 || py < 0 || px >= size.0 || py >= size.1 {
-            return None;
-        }
-        let target = self.pick_target(size).ok()?;
-        let (terrain, _) = self.terrain.as_ref()?;
-        let mut pixel = [0u8; 4];
-        // SAFETY: offscreen pass on the live context, default framebuffer and state restored after
-        unsafe {
-            let gl = &self.gl;
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
-            gl.viewport(0, 0, size.0, size.1);
-            gl.enable(glow::SCISSOR_TEST);
-            gl.scissor(px, py, 1, 1);
-            gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
-            gl.disable(glow::BLEND);
-            gl.disable(glow::CULL_FACE);
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LESS);
-            gl.depth_mask(true);
-            self.raster_pass.draw_depth(gl, &view, terrain);
-            gl.read_pixels(
-                px,
-                py,
-                1,
-                1,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut pixel)),
-            );
-            gl.disable(glow::DEPTH_TEST);
-            gl.disable(glow::SCISSOR_TEST);
-            gl.enable(glow::BLEND);
-            gl.enable(glow::CULL_FACE);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
-        if pixel[3] == 0 {
-            return None;
-        }
-        let depth = unpack_depth(pixel);
-        let ndc = glam::DVec4::new(
-            2.0 * x / self.camera.width - 1.0,
-            1.0 - 2.0 * y / self.camera.height,
-            2.0 * depth - 1.0,
-            1.0,
-        );
-        let p = view.inverse * ndc;
-        Some(Camera::altitude_of(&view, p.truncate() / p.w))
-    }
-
-    /// Network layer id and edge index under a screen point (see `pick`)
-    fn pick_edge(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
-        let networks: Vec<(u32, usize)> = self
-            .layers
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, layer))| matches!(layer, Layer::Network(_)))
-            .map(|(i, (id, _))| (*id, i))
-            .collect();
-        if networks.is_empty() || networks.len() > 255 {
-            return None;
-        }
-        let size = (
-            (self.camera.width * self.pixel_ratio).round() as i32,
-            (self.camera.height * self.pixel_ratio).round() as i32,
-        );
-        let (px, py) = (
-            (x * self.pixel_ratio) as i32,
-            size.1 - 1 - (y * self.pixel_ratio) as i32,
-        );
-        if px < 0 || py < 0 || px >= size.0 || py >= size.1 {
-            return None;
-        }
-        let target = self.pick_target(size).ok()?;
-        let view = self.camera.view();
-        let mut pixel = [0u8; 4];
-        // SAFETY: offscreen pass on the live context, default framebuffer restored after
-        unsafe {
-            let gl = &self.gl;
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
-            gl.viewport(0, 0, size.0, size.1);
-            gl.enable(glow::SCISSOR_TEST);
-            gl.scissor(px, py, 1, 1);
-            gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
-            gl.disable(glow::BLEND);
-            gl.disable(glow::CULL_FACE);
-            for (ordinal, &(_, index)) in networks.iter().enumerate() {
-                if let Layer::Network(layer) = &self.layers[index].1 {
-                    let relief = self.terrain.as_ref().map(|(source, e)| (source, *e));
-                    layer.draw_pick(gl, &self.camera, &view, self.pixel_ratio, (ordinal + 1) as u8, relief);
-                }
-            }
-            gl.read_pixels(
-                px,
-                py,
-                1,
-                1,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut pixel)),
-            );
-            gl.disable(glow::SCISSOR_TEST);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
-        let [r, g, b, layer] = pixel;
-        let id = u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16;
-        if layer == 0 || id == 0 {
-            return None;
-        }
-        let (layer_id, _) = networks.get(usize::from(layer) - 1)?;
-        Some((*layer_id, id - 1))
-    }
-
-    /// The picking framebuffer, (re)created at the canvas size
-    fn pick_target(&mut self, size: (i32, i32)) -> Result<glow::Framebuffer, String> {
-        if let Some(target) = &self.pick_target
-            && target.size == size
-        {
-            return Ok(target.framebuffer);
-        }
-        // SAFETY: object creation on the live context; the previous target is deleted
-        unsafe {
-            let gl = &self.gl;
-            if let Some(old) = self.pick_target.take() {
-                gl.delete_framebuffer(old.framebuffer);
-                gl.delete_texture(old.texture);
-                gl.delete_renderbuffer(old.depth);
-            }
-            let texture = gl.create_texture()?;
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, size.0, size.1);
-            let framebuffer = gl.create_framebuffer()?;
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                glow::TEXTURE_2D,
-                Some(texture),
-                0,
-            );
-            let depth = gl.create_renderbuffer()?;
-            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
-            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT24, size.0, size.1);
-            gl.framebuffer_renderbuffer(glow::FRAMEBUFFER, glow::DEPTH_ATTACHMENT, glow::RENDERBUFFER, Some(depth));
-            gl.bind_renderbuffer(glow::RENDERBUFFER, None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            self.pick_target = Some(PickTarget {
-                framebuffer,
-                texture,
-                depth,
-                size,
-            });
-            Ok(framebuffer)
+    /// What a layer gets to draw a frame of this view (`Layer::draw`, `Layer::draw_pick`)
+    fn frame_state<'a>(&'a self, view: &'a View) -> Frame<'a> {
+        Frame {
+            gl: &self.gl,
+            raw: &self.raw,
+            camera: &self.camera,
+            view,
+            pixel_ratio: self.pixel_ratio,
+            number: self.frame,
+            redraw: &self.redraw,
+            loading: self.loading,
+            relief: self.terrain.as_ref().map(|(source, e)| (source, *e)),
         }
     }
 
-    fn push(&mut self, layer: Layer) -> u32 {
+    /// Adds a layer on top; returns its id
+    pub(crate) fn add_layer(&mut self, layer: Box<dyn Layer>) -> u32 {
+        self.push(Slot::Layer(layer))
+    }
+
+    /// The layer of this id if it is a `T`, with the context to update it
+    pub(crate) fn layer_mut<T: Layer>(&mut self, id: u32) -> Option<(&mut T, &glow::Context)> {
+        let Some((_, Slot::Layer(layer))) = self.layers.iter_mut().find(|(i, _)| *i == id) else {
+            return None;
+        };
+        let layer: &mut dyn Any = layer.as_mut();
+        Some((layer.downcast_mut()?, &self.gl))
+    }
+
+    /// The layer of this id if it is a `T`
+    pub(crate) fn layer<T: Layer>(&self, id: u32) -> Option<&T> {
+        match self.layers.iter().find(|(i, _)| *i == id) {
+            Some((_, Slot::Layer(layer))) => (layer.as_ref() as &dyn Any).downcast_ref(),
+            _ => None,
+        }
+    }
+
+    fn push(&mut self, slot: Slot) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.layers.push((id, layer));
+        self.layers.push((id, slot));
         id
     }
 
-    fn layer(&mut self, id: u32) -> Option<&mut Layer> {
-        self.layers.iter_mut().find(|(i, _)| *i == id).map(|(_, l)| l)
-    }
-}
-
-/// Draws a network layer; `relief`: the elevation source and its exaggeration
-fn draw_network(
-    gl: &glow::Context,
-    layer: &mut NetworkLayer,
-    camera: &Camera,
-    view: &View,
-    pixel_ratio: f64,
-    relief: Option<(&RasterSource, f32)>,
-) {
-    // Line quads are built on screen, either way round; in relief the hills hide the lines behind them (tested
-    // against the ground's depth, not written)
-    // SAFETY: state changes on the live context
-    unsafe {
-        gl.disable(glow::CULL_FACE);
-        if relief.is_some() {
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(false);
-        }
-    }
-    layer.draw(gl, camera, view, pixel_ratio, relief);
-    // SAFETY: state changes on the live context
-    unsafe {
-        gl.enable(glow::CULL_FACE);
-        gl.disable(glow::DEPTH_TEST);
-        gl.depth_mask(true);
+    fn slot(&mut self, id: u32) -> Option<&mut Slot> {
+        self.layers.iter_mut().find(|(i, _)| *i == id).map(|(_, slot)| slot)
     }
 }
 

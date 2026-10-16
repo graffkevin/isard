@@ -108,12 +108,15 @@ bun run format     # Biome and rustfmt
 Demo URL parameters: `?projection=mercator`, `?workers=0` (3D Tiles decoded on the main thread, to compare).
 
 ```
-crates/engine/          Rust core (crate geo-render), compiled to WebAssembly
-  src/geo/              camera and projections, WGS 84 geodesy, tile selection        pure, tested natively
-  src/tiles3d/          3D Tiles tree, traversal and decoding (pure, tested); WebGL layer; worker entry point
-  src/render/           WebGL2 layers: raster stack, network, globe base, helpers
-  src/engine.rs         the Engine exported to JavaScript, with its TypeScript types
+crates/geo/             camera and projections, WGS 84 geodesy, RAF20 geoid, tile selection    no WebGL, tested natively
+crates/tiles3d/         3D Tiles tree, traversal and decoding                                 no WebGL, tested natively
   tests/data/           a tile of the Lille photomesh (MEL open data)
+crates/engine/          WebAssembly core (crate geo-render), on the two above
+  src/engine.rs         the Engine exported to JavaScript: camera, ground (raster layers over the relief), frame loop
+  src/engine/pick.rs    picking: features and ground under a screen point
+  src/layer.rs          the Layer trait: what is drawn over the ground (networks, 3D Tiles…)
+  src/render/           WebGL2 layers and helpers; each Layer exports its own methods of Engine, next to it
+  src/worker.rs         entry points of the 3D Tiles decoding workers
 packages/geo-render/    the npm package: GeoMap, layers, interactions, decoding workers
 apps/demo/              the demo, importing geo-render like any application
 apps/bench/             benchmark: geo-render, iTowns and 3DTilesRendererJS on the same scenario

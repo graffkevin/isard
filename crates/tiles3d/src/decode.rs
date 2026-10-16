@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::tiles3d::meshopt;
+use crate::meshopt;
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -473,10 +473,10 @@ impl Gltf<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::geodesy;
+    use geo::geodesy;
 
     /// A tile of the Lille photomesh (Métropole Européenne de Lille, 2020, 5 cm)
-    const LILLE: &[u8] = include_bytes!("../../tests/data/lille_L11_00.b3dm");
+    const LILLE: &[u8] = include_bytes!("../tests/data/lille_L11_00.b3dm");
 
     #[test]
     fn decodes_a_lille_tile() {
@@ -515,9 +515,9 @@ mod tests {
         let original = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         let o = &original.primitives[0];
         for (name, bytes, tolerance) in [
-            ("noq", &include_bytes!("../../tests/data/lille_noq.glb")[..], 0.01),
-            ("q", &include_bytes!("../../tests/data/lille_q.glb")[..], 0.6),
-            ("vpf", &include_bytes!("../../tests/data/lille_vpf.glb")[..], 0.6),
+            ("noq", &include_bytes!("../tests/data/lille_noq.glb")[..], 0.01),
+            ("q", &include_bytes!("../tests/data/lille_q.glb")[..], 0.6),
+            ("vpf", &include_bytes!("../tests/data/lille_vpf.glb")[..], 0.6),
         ] {
             // The glb were extracted from the b3dm without its RTC_CENTER: given back as the tile transform
             let rtc = DMat4::from_translation(DVec3::new(
@@ -565,7 +565,7 @@ mod tests {
     /// The tile compressed with Draco (gltf-pipeline): its geometry is decoded outside (workers), then given back
     #[test]
     fn draco_primitives_are_requested_then_used() {
-        let bytes = include_bytes!("../../tests/data/lille_draco.glb");
+        let bytes = include_bytes!("../tests/data/lille_draco.glb");
         let requests = draco_requests(bytes).unwrap();
         assert_eq!(requests.len(), 1);
         let r = &requests[0];
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn basisu_textures_prefer_the_ktx2_image() {
         let mesh = decode(
-            include_bytes!("../../tests/data/lille_ktx2.glb"),
+            include_bytes!("../tests/data/lille_ktx2.glb"),
             &DMat4::IDENTITY,
             true,
             &[],

@@ -3,8 +3,8 @@
 //! the slot and level of the deepest loaded tile at each place, so a vertex finds its altitude with two fetches and a
 //! bilinear read, as the ground does. The table is rebuilt only when the pool changes.
 
-use crate::geo::page::table;
 use crate::render::raster::RasterSource;
+use geo::page::table;
 use glam::DVec2;
 use glow::HasContext;
 

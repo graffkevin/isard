@@ -1,0 +1,12 @@
+[package]
+name = "geo-render-geo"
+version = "0.1.0"
+edition = "2024"
+description = "Camera and projections (Web Mercator, globe), WGS 84 geodesy, the French geoid and tile selection of geo-render"
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.30"
+
+[lints]
+workspace = true
