@@ -3,5 +3,3 @@ node_modules/
 **/dist/
 packages/isard/src/wasm/
 .idea/
-.claude/
-CLAUDE.md
