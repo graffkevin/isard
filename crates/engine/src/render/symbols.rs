@@ -7,6 +7,7 @@
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
+use crate::render::features::stops;
 use crate::render::gl::{self, Projection, bytes};
 use geo::collision;
 use glam::{DVec2, DVec4};
@@ -131,21 +132,6 @@ pub struct SymbolStyle {
     pub min_zoom: f64,
     pub max_zoom: f64,
     pub visible: bool,
-}
-
-/// Value of four zoom stops at a zoom (as the shaders' `stops`)
-fn stops([z, v]: &[[f32; 4]; 2], zoom: f64) -> f64 {
-    let zoom = zoom as f32;
-    if zoom <= z[0] {
-        return f64::from(v[0]);
-    }
-    for k in 1..4 {
-        if zoom <= z[k] {
-            let t = (zoom - z[k - 1]) / (z[k] - z[k - 1]).max(1e-6);
-            return f64::from(v[k - 1] + (v[k] - v[k - 1]) * t);
-        }
-    }
-    f64::from(v[3])
 }
 
 pub struct SymbolLayer {

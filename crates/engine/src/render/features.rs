@@ -82,6 +82,29 @@ pub const VALUES_UNIT: u32 = 9;
 pub const MASK_UNIT: u32 = 10;
 pub const RAMP_UNIT: u32 = 11;
 
+/// Value of four zoom stops (zooms, then values) at a zoom, as the shaders' `stops`
+#[must_use]
+pub fn stops([z, v]: &[[f32; 4]; 2], zoom: f64) -> f64 {
+    let zoom = zoom as f32;
+    if zoom <= z[0] {
+        return f64::from(v[0]);
+    }
+    for k in 1..4 {
+        if zoom <= z[k] {
+            let t = (zoom - z[k - 1]) / (z[k] - z[k - 1]).max(1e-6);
+            return f64::from(v[k - 1] + (v[k] - v[k - 1]) * t);
+        }
+    }
+    f64::from(v[3])
+}
+
+/// Four zoom stops from eight floats (zooms, then values)
+#[must_use]
+pub fn stops_of(s: &[f32]) -> Option<[[f32; 4]; 2]> {
+    let s: &[f32; 8] = s.get(..8)?.try_into().ok()?;
+    Some([[s[0], s[1], s[2], s[3]], [s[4], s[5], s[6], s[7]]])
+}
+
 /// Layer-wide style
 #[derive(Clone, Copy, Debug)]
 pub struct LayerStyle {

@@ -97,7 +97,7 @@ you zoom in.
 | `map.setBackground(color)` | `#rrggbb` behind the map |
 | `map.stats()` | tile counters per raster layer: drawn, kept on the GPU, loading, waiting for upload |
 | `map.addRaster({ url, minZoom, maxZoom, opacity, saturation })` | any XYZ/WMTS Web Mercator tiles (`{z}`, `{x}`, `{y}`) |
-| `map.addNetwork({ nodes, edges, lines, costs, width, max, contour, opacity, halo, haloOpacity })` | `lines`: `{ start, points }`, the line of each edge from A to B; `costs`: per edge, A → B then B → A (Infinity: closed); `layer.setValues(Float32Array)` (negative or 1e30 = unreached), `layer.setCosts(…)` (new profile, geometry kept), `layer.setStyle(…)`, `layer.stats()` (pieces, drawn), `layer.remove()` |
+| `map.addNetwork({ nodes, edges, lines, costs, edgeWidths, width, max, contour, opacity, halo, haloOpacity, ramp, unreachedColor, fade })` | `lines`: `{ start, points }`, the line of each edge from A to B; `costs`: per edge, A → B then B → A (Infinity: closed); `width` and `halo` in CSS pixels or zoom stops; `edgeWidths`: a width factor per edge; `ramp`: `[[fraction of max, color], …]`; `fade`: share of `max` over which the colors fade out; `layer.setValues(Float32Array)` (negative or 1e30 = unreached), `layer.setCosts(…)` (new profile, geometry kept), `layer.setEdgeWidths(…)`, `layer.setStyle(…)`, `layer.stats()` (pieces, drawn), `layer.remove()` |
 
 Controls: drag to pan (with inertia), wheel or double click to zoom (shift + double click out), right drag or
 ctrl/shift + drag to rotate and tilt, two fingers to pinch, turn and pan.

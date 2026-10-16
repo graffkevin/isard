@@ -16,6 +16,7 @@ use crate::engine::Engine;
 use crate::js;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
+use crate::render::features::{stops, stops_of};
 use crate::render::gl::{self, Projection, bytes as as_bytes};
 use crate::render::raster::RasterSource;
 use geo::camera::{Camera, View};
@@ -47,6 +48,10 @@ uniform bool u_with_costs;
 uniform highp sampler2D u_values;
 uniform highp usampler2D u_edges;
 uniform highp sampler2D u_costs;
+// Width factor of each edge (rail lines wider than streets)
+uniform highp sampler2D u_scales;
+uniform float u_max;
+uniform float u_halo;
 // From, to (Mercator offsets); fractions of the edge's length at both ends; the edge
 layout(location = 0) in vec4 a_piece;
 layout(location = 1) in vec2 a_fractions;
@@ -78,6 +83,12 @@ void main() {
   // An edge closed both ways is not drawn
   if (u_with_costs && costs.x >= 1e29 && costs.y >= 1e29) { hide(); return; }
   v_ends = vec4(texelFetch(u_values, texel(nodes.x), 0).r, texelFetch(u_values, texel(nodes.y), 0).r, costs);
+  // The halo of an edge reached at neither end within the maximum draws nothing: out of the clip space, it costs no
+  // pixel (a million wide quads zoomed out would saturate the graphics card)
+  bool near_a = v_ends.x >= 0.0 && v_ends.x <= u_max;
+  bool near_b = v_ends.y >= 0.0 && v_ends.y <= u_max;
+  if (u_halo > 0.0 && !near_a && !near_b) { hide(); return; }
+  float width = u_width * texelFetch(u_scales, texel(a_edge), 0).r;
   // The piece is a strip of `u_segments` parts (1 on flat ground; in relief each part follows the ground)
   int k = gl_VertexID >> 1;
   float side = float(gl_VertexID & 1) * 2.0 - 1.0;
@@ -92,7 +103,7 @@ void main() {
   dir = length(dir) > 1e-6 ? normalize(dir) : vec2(1.0, 0.0);
   vec2 normal = vec2(-dir.y, dir.x);
   // Half width plus one pixel for the antialiasing ramp; caps extended by the same amount
-  float half_width = u_width * 0.5 + 1.0;
+  float half_width = width * 0.5 + 1.0;
   float cap = k == 0 ? -1.0 : k == u_segments ? 1.0 : 0.0;
   s += normal * side * half_width + dir * cap * half_width * 0.5;
   gl_Position = vec4(s / u_viewport * c.w, c.z, c.w);
@@ -129,36 +140,31 @@ uniform float u_contour;
 uniform float u_opacity;
 // 0: the lines; 1: the halo (wide, faint, reached parts only)
 uniform float u_halo;
+uniform sampler2D u_ramp;
+// Color of the parts beyond the maximum (or unreached), straight alpha
+uniform vec4 u_unreached;
+// Share of the maximum over which the colors fade out before it, 0 for none
+uniform float u_fade;
 in float v_across;
 flat in float v_half;
 out vec4 color;
 
-vec3 ramp(float t) {
-  const vec3 c0 = vec3(0.000, 0.659, 0.420);
-  const vec3 c1 = vec3(0.608, 0.827, 0.294);
-  const vec3 c2 = vec3(1.000, 0.824, 0.247);
-  const vec3 c3 = vec3(1.000, 0.549, 0.196);
-  const vec3 c4 = vec3(0.910, 0.220, 0.310);
-  t = clamp(t, 0.0, 1.0) * 4.0;
-  if (t < 1.0) return mix(c0, c1, t);
-  if (t < 2.0) return mix(c1, c2, t - 1.0);
-  if (t < 3.0) return mix(c2, c3, t - 2.0);
-  return mix(c3, c4, t - 3.0);
-}
+vec3 ramp(float t) { return texture(u_ramp, vec2((clamp(t, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.5)).rgb; }
 
 void main() {
   float v = value();
   bool reached = v >= 0.0 && v <= u_max;
+  float fade = u_fade > 0.0 && reached ? 1.0 - smoothstep(u_max * (1.0 - u_fade), u_max, v) : 1.0;
   if (u_halo > 0.0) {
     if (!reached) discard;
     // Quadratic falloff from the middle of the line: overlapping streets add up and fill the blocks
     float d = 1.0 - clamp(abs(v_across) / v_half, 0.0, 1.0);
-    color = vec4(ramp(v / u_max), d * d * u_opacity);
+    color = vec4(ramp(v / u_max), d * d * u_opacity * fade);
     return;
   }
   float edge = clamp(v_half - abs(v_across), 0.0, 1.0);
-  vec3 rgb = reached ? ramp(v / u_max) : vec3(0.55);
-  float alpha = reached ? 1.0 : 0.25;
+  vec3 rgb = reached ? ramp(v / u_max) : u_unreached.rgb;
+  float alpha = reached ? fade : u_unreached.a;
   if (reached && u_contour > 0.0) {
     float d = abs(fract(v / u_contour + 0.5) - 0.5) * u_contour;
     float w = fwidth(v);
@@ -193,7 +199,7 @@ const RELIEF_SEGMENTS: i32 = 8;
 const RELIEF_RANGE: (f64, f64) = (-200.0, 5000.0);
 
 /// Uniforms of a pass, by name
-const UNIFORMS: [&str; 17] = [
+const UNIFORMS: [&str; 21] = [
     "u_matrix",
     "u_viewport",
     "u_width",
@@ -211,12 +217,16 @@ const UNIFORMS: [&str; 17] = [
     "u_edges",
     "u_costs",
     "u_halo",
+    "u_scales",
+    "u_ramp",
+    "u_unreached",
+    "u_fade",
 ];
 
 /// A program with its uniforms
 struct Pass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 17],
+    uniforms: [Option<glow::UniformLocation>; 21],
     projection: Projection,
     drape: DrapeUniforms,
 }
@@ -239,22 +249,57 @@ impl Pass {
 
 #[derive(Clone, Copy)]
 pub struct NetworkStyle {
-    /// CSS pixels
-    pub width: f32,
+    /// CSS pixels, as zoom stops (zooms, then values)
+    pub width: [[f32; 4]; 2],
+    /// Width of the halo, CSS pixels as zoom stops, 0 for none
+    pub halo: [[f32; 4]; 2],
     /// Values above are drawn as unreached
     pub max: f32,
     /// Darker line every `contour` value units, 0 for none
     pub contour: f32,
     pub opacity: f32,
-    /// Width of the halo, CSS pixels, 0 for none
-    pub halo: f32,
     pub halo_opacity: f32,
+    /// Color of the unreached parts, RGBA 0-1
+    pub unreached: [f32; 4],
+    /// Share of the maximum over which the colors fade out before it
+    pub fade: f32,
 }
+
+impl NetworkStyle {
+    /// From the floats of `setNetworkStyle`
+    fn from_floats(s: &[f32]) -> Option<Self> {
+        let s: &[f32; FLOATS] = s.get(..FLOATS)?.try_into().ok()?;
+        Some(Self {
+            width: stops_of(&s[0..8])?,
+            halo: stops_of(&s[8..16])?,
+            max: s[16],
+            contour: s[17],
+            opacity: s[18],
+            halo_opacity: s[19],
+            unreached: [s[20], s[21], s[22], s[23]],
+            fade: s[24],
+        })
+    }
+}
+
+/// Floats of a style for `setNetworkStyle`
+const FLOATS: usize = 25;
 
 /// Texture units of the layer's own textures (the drape takes 6 and 7)
 const VALUES_UNIT: u32 = 1;
 const EDGES_UNIT: u32 = 2;
 const COSTS_UNIT: u32 = 3;
+const SCALES_UNIT: u32 = 4;
+const RAMP_UNIT: u32 = 5;
+
+/// The ramp used without one given: green to red, five stops
+const DEFAULT_RAMP: [[f32; 3]; 5] = [
+    [0.000, 0.659, 0.420],
+    [0.608, 0.827, 0.294],
+    [1.000, 0.824, 0.247],
+    [1.000, 0.549, 0.196],
+    [0.910, 0.220, 0.310],
+];
 
 pub struct NetworkLayer {
     pub style: NetworkStyle,
@@ -266,6 +311,9 @@ pub struct NetworkLayer {
     values: glow::Texture,
     edges: glow::Texture,
     costs: glow::Texture,
+    /// Width factor of each edge (R32F), colors of the values (256 RGBA)
+    scales: glow::Texture,
+    ramp: glow::Texture,
     with_costs: bool,
     /// Mercator origin of the piece positions
     origin: DVec2,
@@ -340,6 +388,18 @@ impl NetworkLayer {
                 glow::PixelUnpackData::Slice(Some(as_bytes(&padded))),
             );
             let cost_texture = texture(gl, glow::RG32F, edge_rows)?;
+            let scales = texture(gl, glow::R32F, edge_rows)?;
+            let ramp = gl.create_texture()?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
+            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, 256, 1);
+            for (key, value) in [
+                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            ] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
+            }
             let vao = gl.create_vertex_array()?;
             let buffer = gl.create_buffer()?;
             gl.bind_vertex_array(Some(vao));
@@ -359,6 +419,8 @@ impl NetworkLayer {
                 values,
                 edges: edge_texture,
                 costs: cost_texture,
+                scales,
+                ramp,
                 with_costs: false,
                 origin,
                 grid: built.grid,
@@ -372,6 +434,8 @@ impl NetworkLayer {
             // Unreached until the first values
             layer.set_values(gl, &vec![-1.0; nodes]);
             layer.set_costs(gl, costs);
+            layer.set_scales(gl, None);
+            layer.set_ramp(gl, None);
             Ok(layer)
         }
     }
@@ -402,6 +466,52 @@ impl NetworkLayer {
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.costs));
             upload(gl, &clamped, 2, glow::RG);
+        }
+    }
+
+    /// Width factor of each edge (1 for all without)
+    pub fn set_scales(&mut self, gl: &glow::Context, scales: Option<&[f32]>) {
+        let mut all = vec![1.0f32; self.edge_count.max(1)];
+        if let Some(s) = scales {
+            let n = s.len().min(all.len());
+            all[..n].copy_from_slice(&s[..n]);
+        }
+        // SAFETY: upload inside the texture allocated for `edge_count` edges
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.scales));
+            upload(gl, &all[..self.edge_count], 1, glow::RED);
+        }
+    }
+
+    /// Colors of the values from 0 to the maximum: 256 RGBA texels; None: the default ramp, green to red
+    pub fn set_ramp(&mut self, gl: &glow::Context, rgba: Option<&[u8]>) {
+        let default: Vec<u8> = (0..256)
+            .flat_map(|i| {
+                let t = i as f32 / 255.0 * 4.0;
+                let k = (t.floor() as usize).min(3);
+                let f = t - k as f32;
+                let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
+                [0, 1, 2]
+                    .map(|c| ((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8)
+                    .into_iter()
+                    .chain([255])
+            })
+            .collect();
+        let data = rgba.filter(|r| r.len() >= 1024).unwrap_or(&default);
+        // SAFETY: upload of the whole ramp texture
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.ramp));
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                0,
+                256,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&data[..1024])),
+            );
         }
     }
 
@@ -458,6 +568,10 @@ impl NetworkLayer {
             edges,
             costs,
             halo,
+            scales,
+            ramp,
+            unreached,
+            fade,
         ] = &pass.uniforms;
         let shift = -(self.origin.x - camera.center.x).round();
         let plane = (DVec2::new(self.origin.x + shift, self.origin.y) - camera.center) * view.world_size;
@@ -489,10 +603,14 @@ impl NetworkLayer {
             gl.uniform_1_f32(opacity.as_ref(), alpha);
             gl.uniform_1_f32(halo.as_ref(), if width.halo { 1.0 } else { 0.0 });
             gl.uniform_1_i32(with_costs.as_ref(), i32::from(self.with_costs));
+            gl.uniform_4_f32_slice(unreached.as_ref(), &style.unreached);
+            gl.uniform_1_f32(fade.as_ref(), style.fade);
             for (unit, location, texture) in [
                 (VALUES_UNIT, values, self.values),
                 (EDGES_UNIT, edges, self.edges),
                 (COSTS_UNIT, costs, self.costs),
+                (SCALES_UNIT, scales, self.scales),
+                (RAMP_UNIT, ramp, self.ramp),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -548,15 +666,16 @@ impl Layer for NetworkLayer {
             }
         }
         let style = self.style;
-        if style.halo > 0.0 && style.halo_opacity > 0.0 {
+        let halo_width = stops(&style.halo, camera.zoom);
+        if halo_width > 0.0 && style.halo_opacity > 0.0 {
             let halo = Width {
-                pixels: f64::from(style.halo),
+                pixels: halo_width,
                 halo: true,
             };
             self.render(gl, &self.shaded, camera, view, pixel_ratio, halo, relief, &ranges);
         }
         let lines = Width {
-            pixels: f64::from(style.width),
+            pixels: stops(&style.width, camera.zoom),
             halo: false,
         };
         self.render(gl, &self.shaded, camera, view, pixel_ratio, lines, relief, &ranges);
@@ -590,7 +709,7 @@ impl Layer for NetworkLayer {
         }
         let ranges = self.visible(view, relief);
         let width = Width {
-            pixels: f64::from(self.style.width) + PICK_SLOP,
+            pixels: stops(&self.style.width, camera.zoom) + PICK_SLOP,
             halo: false,
         };
         self.render(gl, &self.pick, camera, view, pixel_ratio, width, relief, &ranges);
@@ -606,6 +725,8 @@ impl Layer for NetworkLayer {
             gl.delete_texture(self.values);
             gl.delete_texture(self.edges);
             gl.delete_texture(self.costs);
+            gl.delete_texture(self.scales);
+            gl.delete_texture(self.ramp);
         }
         self.drape.delete(gl);
     }
@@ -685,7 +806,7 @@ impl Engine {
     /// cost of travelling it from A to B then from B to A; without, values are interpolated along the edges.
     #[wasm_bindgen(js_name = addNetwork)]
     // Optional arrays only cross the boundary owned
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn add_network(
         &mut self,
         mercator: &[f64],
@@ -693,21 +814,9 @@ impl Engine {
         line_start: Option<Box<[u32]>>,
         line_points: Option<Box<[f64]>>,
         costs: Option<Box<[f32]>>,
-        width: f32,
-        max: f32,
-        contour: f32,
-        opacity: f32,
-        halo: f32,
-        halo_opacity: f32,
+        style: &[f32],
     ) -> Result<u32, JsValue> {
-        let style = NetworkStyle {
-            width,
-            max,
-            contour,
-            opacity,
-            halo,
-            halo_opacity,
-        };
+        let style = NetworkStyle::from_floats(style).ok_or("a network style is 25 numbers")?;
         let lines = line_start.as_deref().zip(line_points.as_deref());
         let layer = NetworkLayer::new(&self.gl, mercator, edges, lines, costs.as_deref(), style)?;
         Ok(self.add_layer(Box::new(layer)))
@@ -730,27 +839,32 @@ impl Engine {
         }
     }
 
+    /// Style of a network: width (CSS pixels) and halo width as zoom stops (8 numbers each: four zooms, four values),
+    /// then the maximum, the contour interval, the opacity, the halo opacity, the color of the unreached parts (RGBA
+    /// 0-1) and the share of the maximum over which the colors fade out: 25 numbers
     #[wasm_bindgen(js_name = setNetworkStyle)]
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_network_style(
-        &mut self,
-        id: u32,
-        width: f32,
-        max: f32,
-        contour: f32,
-        opacity: f32,
-        halo: f32,
-        halo_opacity: f32,
-    ) {
-        if let Some((layer, _)) = self.layer_mut::<NetworkLayer>(id) {
-            layer.style = NetworkStyle {
-                width,
-                max,
-                contour,
-                opacity,
-                halo,
-                halo_opacity,
-            };
+    pub fn set_network_style(&mut self, id: u32, style: &[f32]) {
+        if let (Some((layer, _)), Some(style)) = (self.layer_mut::<NetworkLayer>(id), NetworkStyle::from_floats(style))
+        {
+            layer.style = style;
+        }
+    }
+
+    /// Width factor of each edge (1 without): rail lines wider than streets
+    #[wasm_bindgen(js_name = setNetworkScales)]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_network_scales(&mut self, id: u32, scales: Option<Box<[f32]>>) {
+        if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
+            layer.set_scales(gl, scales.as_deref());
+        }
+    }
+
+    /// Colors of the values from 0 to the maximum, 256 RGBA texels (1024 bytes); undefined: green to red
+    #[wasm_bindgen(js_name = setNetworkRamp)]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_network_ramp(&mut self, id: u32, rgba: Option<Box<[u8]>>) {
+        if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
+            layer.set_ramp(gl, rgba.as_deref());
         }
     }
 

@@ -1,6 +1,7 @@
 /** Public types of the `isard` package */
 import type { AttributionOptions } from './controls.ts';
 import type { DecoderUrls } from './decoders.ts';
+import type { Ramp, Size } from './features.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
 export type LonLat = [lon: number, lat: number];
@@ -117,18 +118,24 @@ export interface RasterOptions {
 }
 
 export interface NetworkStyle {
-  /** Line width, CSS pixels (default 2) */
-  width: number;
+  /** Line width, CSS pixels, or zoom stops `[[zoom, width], …]` (default 2) */
+  width: Size;
   /** Values above are drawn as unreached (default 1800) */
   max: number;
   /** Darker line every `contour` value units, 0 for none (default 0) */
   contour: number;
   opacity: number;
-  /** Width of the halo drawn under the lines, CSS pixels, 0 for none (default 0): wide and faint, the reached
-   * streets add up into a heat map that fills the blocks */
-  halo: number;
+  /** Width of the halo drawn under the lines, CSS pixels or zoom stops, 0 for none (default 0): wide and faint, the
+   * reached streets add up into a heat map that fills the blocks */
+  halo: Size;
   /** Opacity of the halo at the middle of a line, fading quadratically to its sides (default 0.11) */
   haloOpacity: number;
+  /** Colors from 0 to `max`: `[[fraction of max, color], …]` (default green to red) */
+  ramp: Ramp | undefined;
+  /** Color of the parts beyond `max` or unreached (default `rgba(140, 140, 140, 0.25)`) */
+  unreachedColor: string;
+  /** Share of `max` over which the colors fade out before it, 0 to 1 (default 0) */
+  fade: number;
 }
 
 export interface NetworkOptions extends Partial<NetworkStyle> {
@@ -143,6 +150,8 @@ export interface NetworkOptions extends Partial<NetworkStyle> {
    * closed both ways: not drawn). A point along an edge then takes the quickest way there, min(value(A) + cost from
    * A, value(B) + cost from B), as a travel time does. Without costs, values are interpolated along the edges. */
   costs?: Float32Array;
+  /** Width factor of each edge (default 1): rail lines wider than streets */
+  edgeWidths?: Float32Array;
 }
 
 export interface Tiles3dStyle {

@@ -2,6 +2,7 @@
  * Handles of the layers added to a map. Each one keeps what it needs to be created again: after a WebGL context loss,
  * the map recreates its engine and every layer in order, with the same handle (its id is updated).
  */
+import { parseColor, rampTexels, stops } from './features.ts';
 import type { LayerHost, LonLat, NetworkOptions, NetworkStyle, RasterOptions, Tiles3dStyle } from './types.ts';
 import type { Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
 
@@ -62,6 +63,7 @@ export class NetworkLayer extends Layer {
     private readonly geometry: { nodes: Float64Array; edges: Uint32Array; lines: NetworkOptions['lines'] | undefined },
     private costs: Float32Array | undefined,
     private style: NetworkStyle,
+    private edgeWidths: Float32Array | undefined,
   ) {
     super(map);
   }
@@ -83,9 +85,18 @@ export class NetworkLayer extends Layer {
   }
 
   setStyle(style: Partial<NetworkStyle>): void {
+    const ramp = this.style.ramp;
     this.style = { ...this.style, ...style };
-    const { width, max, contour, opacity, halo, haloOpacity } = this.style;
-    this.map.engine.setNetworkStyle(this.id, width, max, contour, opacity, halo, haloOpacity);
+    this.map.engine.setNetworkStyle(this.id, networkStyle(this.style));
+    if (this.style.ramp !== ramp)
+      this.map.engine.setNetworkRamp(this.id, this.style.ramp && rampTexels(this.style.ramp).rgba);
+    this.map.requestRender();
+  }
+
+  /** Width factor of each edge (undefined: 1 for all) */
+  setEdgeWidths(widths: Float32Array | undefined): void {
+    this.edgeWidths = widths;
+    this.map.engine.setNetworkScales(this.id, widths);
     this.map.requestRender();
   }
 
@@ -96,7 +107,6 @@ export class NetworkLayer extends Layer {
 
   protected create(engine: Engine): number {
     const { nodes, edges, lines } = this.geometry;
-    const { width, max, contour, opacity, halo, haloOpacity } = this.style;
     // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
     this.mercator ??= { nodes: toMercator(nodes), lines: lines && toMercator(lines.points) };
     const id = engine.addNetwork(
@@ -105,16 +115,28 @@ export class NetworkLayer extends Layer {
       lines?.start,
       this.mercator.lines,
       this.costs,
-      width,
-      max,
-      contour,
-      opacity,
-      halo,
-      haloOpacity,
+      networkStyle(this.style),
     );
+    if (this.style.ramp) engine.setNetworkRamp(id, rampTexels(this.style.ramp).rgba);
+    if (this.edgeWidths) engine.setNetworkScales(id, this.edgeWidths);
     if (this.values) engine.setNetworkValues(id, this.values);
     return id;
   }
+}
+
+/** The 25 numbers of a network style for the engine */
+function networkStyle(style: NetworkStyle): Float32Array {
+  const { width, halo, max, contour, opacity, haloOpacity, unreachedColor, fade } = style;
+  return Float32Array.from([
+    ...stops(width),
+    ...stops(halo),
+    max,
+    contour,
+    opacity,
+    haloOpacity,
+    ...parseColor(unreachedColor),
+    fade,
+  ]);
 }
 
 const MAX_LAT = 85.051128779806589;
