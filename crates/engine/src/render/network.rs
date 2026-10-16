@@ -350,24 +350,17 @@ impl NetworkLayer {
         let edge_count = edges.len() / 2;
         let shaded = Pass::new(gl, "", FRAGMENT)?;
         let pick = Pass::new(gl, "#define PICK\n", PICK_FRAGMENT)?;
-        let points = |pairs: &[f64]| -> Vec<DVec2> {
-            pairs
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|&[x, y]| DVec2::new(x, y))
-                .collect()
-        };
-        let merc = points(mercator);
-        let line_points = lines.map(|(_, line)| points(line));
-        let lines = lines
-            .zip(line_points.as_deref())
-            .map(|((start, _), points)| Lines { start, points });
+        // The points as they came, no copy (millions for a region): pairs of f64 are a DVec2
+        let merc: &[DVec2] = bytemuck::cast_slice(&mercator[..nodes * 2]);
+        let lines = lines.map(|(start, line)| Lines {
+            start,
+            points: bytemuck::cast_slice(&line[..line.len() / 2 * 2]),
+        });
         let (min, max) = merc.iter().fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
             (a.min(p), b.max(p))
         });
         let origin = if nodes == 0 { DVec2::ZERO } else { (min + max) / 2.0 };
-        let built = pieces::build(&merc, edges, lines.as_ref(), origin);
+        let built = pieces::build(merc, edges, lines.as_ref(), origin);
         // SAFETY: object creation and uploads on a live WebGL2 context
         unsafe {
             let node_rows = nodes.div_ceil(WIDTH).max(1);

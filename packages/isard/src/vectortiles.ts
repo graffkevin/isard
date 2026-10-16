@@ -217,10 +217,19 @@ export class VectorTiles {
         return Math.floor(((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * n);
       };
       const [cx, cy] = [((camera.center[0] + 180) / 360) * n, ty(camera.center[1])];
+      // The tiles of the bounds, within a window around the center: a tilted view's bounds reach far, and only the
+      // nearest `maxTiles` are kept anyway
+      const reach = Math.ceil(Math.sqrt(maxTiles)) + 2;
+      const [x0, x1] = [
+        Math.max(0, tx(west), Math.floor(cx) - reach),
+        Math.min(n - 1, tx(east), Math.floor(cx) + reach),
+      ];
+      const [y0, y1] = [
+        Math.max(0, ty(north), Math.floor(cy) - reach),
+        Math.min(n - 1, ty(south), Math.floor(cy) + reach),
+      ];
       const wanted: [number, number][] = [];
-      for (let y = Math.max(0, ty(north)); y <= Math.min(n - 1, ty(south)); y += 1) {
-        for (let x = Math.max(0, tx(west)); x <= Math.min(n - 1, tx(east)); x += 1) wanted.push([x, y]);
-      }
+      for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) wanted.push([x, y]);
       // Nearest to the center first, at most `maxTiles` (tilted views reach far)
       wanted.sort(
         (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),

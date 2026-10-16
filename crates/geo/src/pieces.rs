@@ -105,48 +105,50 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
         cols: (extent.x / size) as u32 + 1,
         rows: (extent.y / size) as u32 + 1,
     };
-    // Pieces with their square, then a counting sort by square
-    let mut squares_of: Vec<u32> = Vec::with_capacity(edge_count * 2);
-    let mut unsorted: Vec<Piece> = Vec::with_capacity(edge_count * 2);
+    // Two passes over the edges: the pieces of each square counted, then written straight at their place (no
+    // unsorted copy: millions of pieces for a region)
     let f32s = |p: DVec2| [p.x as f32, p.y as f32];
-    for e in 0..edge_count {
-        let points = line_of(e, nodes, edges, lines, &mut ends);
-        let total: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
-        let mut along = 0.0;
-        for w in points.windows(2) {
-            let length = w[0].distance(w[1]);
-            let parts = (length / size).ceil().max(1.0) as usize;
-            for k in 0..parts {
-                let (t0, t1) = (k as f64 / parts as f64, (k + 1) as f64 / parts as f64);
-                let (a, b) = (w[0].lerp(w[1], t0), w[0].lerp(w[1], t1));
-                let fraction = |t: f64| {
-                    if total > 0.0 { (along + length * t) / total } else { t }
-                };
-                squares_of.push(grid.square((a + b) / 2.0));
-                unsorted.push(Piece {
-                    from: f32s(a - origin),
-                    to: f32s(b - origin),
-                    fractions: [fraction(t0) as f32, fraction(t1) as f32],
-                    edge: e as u32,
-                });
+    let each = |visit: &mut dyn FnMut(u32, Piece)| {
+        let mut ends = [DVec2::ZERO; 2];
+        for e in 0..edge_count {
+            let points = line_of(e, nodes, edges, lines, &mut ends);
+            let total: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+            let mut along = 0.0;
+            for w in points.windows(2) {
+                let length = w[0].distance(w[1]);
+                let parts = (length / size).ceil().max(1.0) as usize;
+                for k in 0..parts {
+                    let (t0, t1) = (k as f64 / parts as f64, (k + 1) as f64 / parts as f64);
+                    let (a, b) = (w[0].lerp(w[1], t0), w[0].lerp(w[1], t1));
+                    let fraction = |t: f64| {
+                        if total > 0.0 { (along + length * t) / total } else { t }
+                    };
+                    visit(
+                        grid.square((a + b) / 2.0),
+                        Piece {
+                            from: f32s(a - origin),
+                            to: f32s(b - origin),
+                            fractions: [fraction(t0) as f32, fraction(t1) as f32],
+                            edge: e as u32,
+                        },
+                    );
+                }
+                along += length;
             }
-            along += length;
         }
-    }
+    };
     let squares = (grid.cols * grid.rows) as usize;
     let mut start = vec![0u32; squares + 1];
-    for &s in &squares_of {
-        start[s as usize + 1] += 1;
-    }
+    each(&mut |s, _| start[s as usize + 1] += 1);
     for s in 0..squares {
         start[s + 1] += start[s];
     }
     let mut fill = start.clone();
-    let mut pieces = vec![Piece::default(); unsorted.len()];
-    for (&s, piece) in squares_of.iter().zip(unsorted) {
+    let mut pieces = vec![Piece::default(); start[squares] as usize];
+    each(&mut |s, piece| {
         pieces[fill[s as usize] as usize] = piece;
         fill[s as usize] += 1;
-    }
+    });
     Pieces { grid, start, pieces }
 }
 

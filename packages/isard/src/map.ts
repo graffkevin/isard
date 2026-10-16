@@ -47,6 +47,21 @@ import { VECTOR_BASEMAPS, VectorTiles, type VectorTilesOptions } from './vectort
 import type { Camera, PickHit, RasterLayerStats } from './wasm/isard.js';
 import init, { Engine } from './wasm/isard.js';
 
+/** The engine of a destroyed map: every method a no-op returning undefined, but the camera (the last one) and the
+ * bounds, which late callers read */
+function destroyed(camera: Camera): Engine {
+  return new Proxy(
+    {},
+    {
+      get: (_, name) => {
+        if (name === 'camera') return () => camera;
+        if (name === 'bounds') return () => Float64Array.of(-180, -85, 180, 85);
+        return () => undefined;
+      },
+    },
+  ) as Engine;
+}
+
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
 /** The engine, compiled once per page and shared with the decoding workers */
@@ -793,12 +808,17 @@ export class GeoMap implements LayerHost {
   }
 
   destroy(): void {
+    const camera = this.getCamera();
     cancelAnimationFrame(this.frameRequest);
     this.vector?.tiles.destroy();
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
     this.loader?.destroy();
     this.engine.free();
+    // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
+    // that does nothing, and nothing is drawn again
+    this.#engine = destroyed(camera);
+    this.lost = true;
     for (const control of [...this.controls.keys()]) this.removeControl(control);
     this.positioned.clear();
     this.canvas.remove();

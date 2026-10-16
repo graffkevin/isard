@@ -1,10 +1,11 @@
 /**
  * Styles of the DOM overlays (markers, popups, controls), injected once per document so the package needs no CSS
- * file. Colors are custom properties: an application restyles them on `.isard-map` or any ancestor.
+ * file. Colors are custom properties, defaults on the root with no specificity: an application restyles them on any
+ * element around the map (its container's class may be replaced by a framework: nothing depends on it).
  */
 
 const CSS = `
-.isard-map {
+:where(:root) {
   --isard-ctrl-bg: #fff;
   --isard-ctrl-fg: #333;
   --isard-ctrl-hover: rgb(0 0 0 / 0.05);

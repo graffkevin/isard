@@ -63,12 +63,13 @@ export class RasterLayer extends Layer {
 /** Line network colored by a value per node (travel time, water depth…) */
 export class NetworkLayer extends Layer {
   private values: Float32Array | undefined;
-  /** Node and line positions in Mercator, kept for a context loss */
-  private mercator: { nodes: Float64Array; lines: Float64Array | undefined } | undefined;
+  /** Node and line positions in Mercator, kept for a context loss: f32 offsets from an origin (exact to the centimetre
+   * across a region, half the memory of f64) */
+  private kept: { origin: [number, number]; nodes: Float32Array; lines: Float32Array | undefined } | undefined;
 
   constructor(
     map: LayerHost,
-    private readonly geometry: { nodes: Float64Array; edges: Uint32Array; lines: NetworkOptions['lines'] | undefined },
+    private geometry: { nodes: Float64Array; edges: Uint32Array; lines: NetworkOptions['lines'] | undefined },
     private costs: Float32Array | undefined,
     private style: NetworkStyle,
     private edgeWidths: Float32Array | undefined,
@@ -115,13 +116,27 @@ export class NetworkLayer extends Layer {
 
   protected create(engine: Engine): number {
     const { nodes, edges, lines } = this.geometry;
-    // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
-    this.mercator ??= { nodes: toMercator(nodes), lines: lines && toMercator(lines.points) };
+    let mercator: { nodes: Float64Array; lines: Float64Array | undefined };
+    if (this.kept) {
+      const { origin, nodes: n, lines: l } = this.kept;
+      mercator = { nodes: unpack(n, origin), lines: l && unpack(l, origin) };
+    } else {
+      // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
+      mercator = { nodes: toMercator(nodes), lines: lines && toMercator(lines.points) };
+      const origin: [number, number] = [mercator.nodes[0] ?? 0, mercator.nodes[1] ?? 0];
+      this.kept = {
+        origin,
+        nodes: pack(mercator.nodes, origin),
+        lines: mercator.lines && pack(mercator.lines, origin),
+      };
+      // The degrees are not needed again: millions of points for a region
+      this.geometry = { nodes: EMPTY, edges, lines: lines && { start: lines.start, points: EMPTY } };
+    }
     const id = engine.addNetwork(
-      this.mercator.nodes,
+      mercator.nodes,
       edges,
       lines?.start,
-      this.mercator.lines,
+      mercator.lines,
       this.costs,
       networkStyle(this.style),
     );
@@ -145,6 +160,27 @@ function networkStyle(style: NetworkStyle): Float32Array {
     ...parseColor(unreachedColor),
     fade,
   ]);
+}
+
+const EMPTY = new Float64Array(0);
+
+/** Interleaved points as f32 offsets from an origin, and back */
+function pack(points: Float64Array, [ox, oy]: [number, number]): Float32Array {
+  const out = new Float32Array(points.length);
+  for (let i = 0; i < points.length; i += 2) {
+    out[i] = (points[i] ?? 0) - ox;
+    out[i + 1] = (points[i + 1] ?? 0) - oy;
+  }
+  return out;
+}
+
+function unpack(points: Float32Array, [ox, oy]: [number, number]): Float64Array {
+  const out = new Float64Array(points.length);
+  for (let i = 0; i < points.length; i += 2) {
+    out[i] = (points[i] ?? 0) + ox;
+    out[i + 1] = (points[i + 1] ?? 0) + oy;
+  }
+  return out;
 }
 
 const MAX_LAT = 85.051128779806589;
