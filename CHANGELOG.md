@@ -3,6 +3,14 @@
 Every notable change of `@ign-junn/isard`. The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [0.1.1] - 2026-10-16
+
+### Fixed
+
+- Vector basemaps: the style's sprite is downloaded once, and only for the layers drawing fill patterns (it was by
+  every worker of every renderer); a vector tile always goes to the same worker, which keeps it decoded for all the
+  raster tiles drawn from it.
+
 ## [0.1.0] - 2026-10-16
 
 First published version.

@@ -28,7 +28,8 @@ export type BasemapRequest =
       tiles: string;
       maxzoom: number;
       layers: StyleLayer[];
-      sprite?: string;
+      /** The style's sprite, for the fill patterns (loaded once by the page) */
+      sprite?: Sprite;
     }
   | { type: 'render'; key: string; id: number; z: number; x: number; y: number; size: number }
   | { type: 'labels'; key: string; id: number; z: number; x: number; y: number }
@@ -66,10 +67,10 @@ interface Renderer {
   maxzoom: number;
   layers: StyleLayer[];
   sourceLayers: Set<string>;
-  sprite: Promise<Sprite | undefined> | undefined;
+  sprite: Sprite | undefined;
 }
 
-interface Sprite {
+export interface Sprite {
   image: ImageBitmap;
   icons: Record<string, { x: number; y: number; width: number; height: number; pixelRatio?: number }>;
 }
@@ -111,16 +112,6 @@ function tile(url: string, sourceLayers: Set<string>): Promise<Map<string, TileL
   return pending;
 }
 
-async function loadSprite(url: string): Promise<Sprite | undefined> {
-  try {
-    const [json, png] = await Promise.all([fetch(`${url}.json`), fetch(`${url}.png`)]);
-    if (!json.ok || !png.ok) return undefined;
-    return { icons: await json.json(), image: await createImageBitmap(await png.blob()) };
-  } catch {
-    return undefined;
-  }
-}
-
 /** The vector tile to draw a raster tile from, and where the raster tile lies in it (tile units) */
 function source(r: Renderer, z: number, x: number, y: number) {
   const vz = Math.max(0, Math.min(z - 1, r.maxzoom));
@@ -155,7 +146,7 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
   const s = source(r, z, x, y);
   const layers = await tile(s.url, r.sourceLayers);
   if (aborted.has(id)) return undefined;
-  const sprite = await r.sprite;
+  const sprite = r.sprite;
   const zoom = Math.max(0, z - 1);
   const canvas = new OffscreenCanvas(size, size);
   // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
@@ -377,7 +368,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       maxzoom: data.maxzoom,
       layers: data.layers,
       sourceLayers,
-      sprite: data.sprite ? loadSprite(data.sprite) : undefined,
+      sprite: data.sprite,
     });
     return;
   }

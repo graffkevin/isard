@@ -6,6 +6,7 @@ Géoplateforme, no key needed.
 
 | | |
 |---|---|
+| [The globe](./globe) | turning in its atmosphere, a flight to a click |
 | [A map](./basic) | the vector basemap, controls, a draggable marker and its popup |
 | [Travel times on hover](./network) | a network recolored at every move |
 | [GeoJSON layers](./geojson) | fills by value, outlines, labels, picking |

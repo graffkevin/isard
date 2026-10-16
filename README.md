@@ -19,7 +19,7 @@ Rust core in WebAssembly, a small TypeScript API.
 **[API](https://graffkevin.github.io/isard/api)** ·
 **[Changelog](CHANGELOG.md)**
 
-<img src="docs/public/screenshots/hero.jpg" alt="Isard: rings drawn by a shader over the relief of the Mont Blanc, buildings colored by height, communes colored by population, an accessibility map recoloring streets and buildings" />
+<img src="docs/public/screenshots/hero.jpg" alt="Isard: rings drawn by a shader over the relief of the Mont Blanc, buildings colored by height, communes colored by population, the globe" />
 
 </div>
 
@@ -62,14 +62,19 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 
 <table>
   <tr>
-    <td width="33%"><a href="https://graffkevin.github.io/isard/examples/network"><img src="docs/public/screenshots/network.jpg" alt="" /></a><br /><b>Travel times on hover</b><br />a network recolored at every move</td>
+    <td width="33%"><a href="https://graffkevin.github.io/isard/examples/globe"><img src="docs/public/screenshots/globe.jpg" alt="" /></a><br /><b>The globe</b><br />turning in its atmosphere, a flight to a click</td>
     <td width="33%"><a href="https://graffkevin.github.io/isard/examples/geojson"><img src="docs/public/screenshots/geojson.jpg" alt="" /></a><br /><b>GeoJSON layers</b><br />fills by value, outlines, labels, picking</td>
     <td width="33%"><a href="https://graffkevin.github.io/isard/examples/buildings"><img src="docs/public/screenshots/buildings.jpg" alt="" /></a><br /><b>Buildings</b><br />raised to their height, colored by it</td>
   </tr>
   <tr>
     <td><a href="https://graffkevin.github.io/isard/examples/relief"><img src="docs/public/screenshots/relief.jpg" alt="" /></a><br /><b>Relief and a ground shader</b><br />your GLSL over the mountains</td>
-    <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/network"><img src="docs/public/screenshots/network.jpg" alt="" /></a><br /><b>Travel times on hover</b><br />a network recolored at every move</td>
     <td><a href="https://graffkevin.github.io/isard/examples/vector"><img src="docs/public/screenshots/vector.jpg" alt="" /></a><br /><b>Vector basemaps</b><br />the PLAN.IGN styles, a restyled subset</td>
+  </tr>
+  <tr>
+    <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/basic"><img src="docs/public/screenshots/basic.jpg" alt="" /></a><br /><b>A map</b><br />the vector basemap, a marker and its popup</td>
+    <td></td>
   </tr>
 </table>
 
@@ -88,18 +93,11 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in
 the [API reference](https://graffkevin.github.io/isard/api).
 
-## Measured on a real application
+## Fast by design
 
-[geo-reach](https://github.com/IGNF/geo-reach), an accessibility map of the French regions with their transit, on
-MapLibre and on Isard (a trial branch), Intel UHD, Chromium, 1280 × 800:
-
-| | MapLibre | Isard |
-|---|---|---|
-| Ready | 8.5 – 9.9 s | 6.7 – 8.4 s |
-| Hover sweep, 95th percentile frame | 30 – 37 ms | 18 – 35 ms |
-| JavaScript downloaded | 1.25 MB + 508 KB worker | 285 KB + 654 KB of WebAssembly |
-
-How it gets there: [Performance](https://graffkevin.github.io/isard/guide/performance).
+Geometry uploaded once and only the view drawn, values in textures, the ground composited in one pass, frames on
+demand, decoding and vector tiles in workers. The details and the measures:
+[Performance](https://graffkevin.github.io/isard/guide/performance).
 
 ## Develop
 
@@ -132,7 +130,7 @@ More in [Develop and release](https://graffkevin.github.io/isard/guide/develop).
 
 ## Roadmap
 
-- Move geo-flood (flood maps over the relief) onto the engine, after geo-reach.
+- Flood maps over the relief (water depth as a ground shader) as a full example.
 - Icons of the basemaps' symbol layers (sprites), text along curved lines.
 - Labels fading in and out instead of popping.
 

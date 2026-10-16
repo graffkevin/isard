@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress';
 
 const examples = [
+  ['The globe', 'globe'],
   ['A map', 'basic'],
   ['Travel times on hover', 'network'],
   ['GeoJSON layers', 'geojson'],

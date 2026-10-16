@@ -5,6 +5,7 @@ comes from the Géoplateforme (WFS of BD TOPO and ADMIN EXPRESS, vector tiles, W
 
 | Example | Shows |
 |---|---|
+| [`globe`](globe/main.ts) | the globe turning in its atmosphere, a flight to a click |
 | [`basic`](basic/main.ts) | a map, the vector basemap, controls, a draggable marker and its popup |
 | [`network`](network/main.ts) | a network recolored at every move: walking times from the cursor, computed in the page |
 | [`geojson`](geojson/main.ts) | fills colored by values through a ramp, outlines, labels, picking |

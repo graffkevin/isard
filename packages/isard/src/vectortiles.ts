@@ -7,7 +7,7 @@
  * Any subset of the style can be drawn on its own raster layer (`raster({ layers })`), at its own place in the stack:
  * rivers from the basemap's data over a flood layer, for instance, restyled with `extraLayers`.
  */
-import type { BasemapRequest, BasemapResponse, LabelCandidate } from './basemap.worker.ts';
+import type { BasemapRequest, BasemapResponse, LabelCandidate, Sprite } from './basemap.worker.ts';
 import type { Feature, Size } from './features.ts';
 import type { RasterLayer } from './layers.ts';
 import type { GeoMap } from './map.ts';
@@ -101,12 +101,27 @@ export class VectorTiles {
     return { style, tiles: template, maxzoom: maxzoom ?? 14 };
   }
 
-  /** A worker for a tile: the same one for the tiles of a vector tile, which it keeps decoded */
-  private worker(z: number, x: number, y: number, shift: number): Worker {
-    const vx = x >> shift;
-    const vy = y >> shift;
-    const k = (Math.abs(vx * 73856093) ^ Math.abs(vy * 19349663) ^ z) % this.workers.length;
+  /** The worker of a vector tile: always the same one, which keeps it decoded for every raster tile and every label
+   * request drawn from it (one download per vector tile) */
+  private worker(vz: number, vx: number, vy: number): Worker {
+    const k = (Math.abs(vx * 73856093) ^ Math.abs(vy * 19349663) ^ vz) % this.workers.length;
     return this.workers[k] ?? (this.workers[0] as Worker);
+  }
+
+  /** The style's sprite (its JSON and its image), loaded once, for the renderers that draw fill patterns */
+  private sprite: Promise<Sprite | undefined> | undefined;
+
+  private loadSprite(url: string): Promise<Sprite | undefined> {
+    this.sprite ??= (async () => {
+      try {
+        const [json, png] = await Promise.all([fetch(`${url}.json`), fetch(`${url}.png`)]);
+        if (!json.ok || !png.ok) return undefined;
+        return { icons: await json.json(), image: await createImageBitmap(await png.blob()) };
+      } catch {
+        return undefined;
+      }
+    })();
+    return this.sprite;
   }
 
   private request(worker: Worker, message: BasemapRequest & { id: number }, signal?: AbortSignal) {
@@ -126,14 +141,17 @@ export class VectorTiles {
     const { style, tiles, maxzoom } = await this.ready;
     const key = `r${this.keys++}`;
     const layers = [...style.layers.filter(select), ...extra];
+    const patterns = layers.some((l) => l.paint?.['fill-pattern'] !== undefined);
+    const sprite = patterns && style.sprite ? await this.loadSprite(style.sprite) : undefined;
     for (const w of this.workers) {
+      // The image is copied to each worker (structured clone), downloaded once
       w.postMessage({
         type: 'init',
         key,
         tiles,
         maxzoom,
         layers,
-        ...(style.sprite ? { sprite: style.sprite } : {}),
+        ...(sprite ? { sprite } : {}),
       } satisfies BasemapRequest);
     }
     return { key, maxzoom };
@@ -159,9 +177,11 @@ export class VectorTiles {
     const renderer = this.renderer(drawn, extraLayers);
     const loader = async (z: number, x: number, y: number, signal: AbortSignal) => {
       const { key, maxzoom } = await renderer;
-      const shift = Math.max(0, z - Math.min(z - 1, maxzoom));
+      // The vector tile it is drawn from (see the worker)
+      const vz = Math.max(0, Math.min(z - 1, maxzoom));
+      const shift = z - vz;
       const response = await this.request(
-        this.worker(z, x, y, shift),
+        this.worker(vz, x >> shift, y >> shift),
         { type: 'render', key, id: this.next++, z, x, y, size: texture },
         signal,
       );
@@ -240,7 +260,7 @@ export class VectorTiles {
           let p = tiles.get(k);
           if (!p) {
             const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
-            p = this.request(this.worker(tz, x, y, 0), { type: 'labels', key, id: this.next++, z: tz, x, y }).then(
+            p = this.request(this.worker(tz, x, y), { type: 'labels', key, id: this.next++, z: tz, x, y }).then(
               (r) => ('labels' in r ? r.labels : []),
               () => [],
             );
