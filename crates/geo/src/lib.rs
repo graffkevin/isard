@@ -8,4 +8,5 @@ pub mod geodesy;
 pub mod geoid;
 pub mod page;
 pub mod pieces;
+pub mod shapes;
 pub mod tiles;

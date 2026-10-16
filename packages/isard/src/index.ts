@@ -20,7 +20,28 @@ export {
   NavigationControl,
   type NavigationOptions,
 } from './controls.ts';
-export { NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+export type {
+  CircleOptions,
+  CircleStyle,
+  Feature,
+  FeatureCollection,
+  FeatureData,
+  FeatureLayerStyle,
+  FillOptions,
+  FillStyle,
+  Geometry,
+  LineOptions,
+  LineStyle,
+  Placement,
+  Position,
+  Properties,
+  Ramp,
+  Size,
+  Stops,
+  Styled,
+} from './features.ts';
+export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
+export { Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 export { GeoMap } from './map.ts';
 export {
   type Anchor,

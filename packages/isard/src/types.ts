@@ -187,4 +187,8 @@ export interface LayerHost {
   requestRender(): void;
   /** Forgets a removed layer */
   detach(layer: object): void;
+  /** Moves a layer under `before`, or on top */
+  moveLayer(layer: object, before: object | undefined): void;
+  /** A layer created again in the engine (new id): put at the place of its old id, which is removed */
+  replaceLayer(layer: object, old: number): void;
 }

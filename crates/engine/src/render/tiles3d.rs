@@ -464,6 +464,9 @@ impl Tiles3dLayer {
             gl.enable(glow::DEPTH_TEST);
             gl.depth_func(glow::LEQUAL);
             gl.disable(glow::CULL_FACE);
+            // Layers drawn before may have left counts in the stencil
+            gl.clear_stencil(0);
+            gl.clear(glow::STENCIL_BUFFER_BIT);
             gl.enable(glow::STENCIL_TEST);
             gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
             gl.stencil_func(glow::ALWAYS, 255, 0xff);

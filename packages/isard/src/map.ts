@@ -6,6 +6,18 @@
 import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
+import {
+  CircleLayer,
+  type CircleOptions,
+  circleStyle,
+  type Feature,
+  FillLayer,
+  type FillOptions,
+  fillStyle,
+  LineLayer,
+  type LineOptions,
+  lineStyle,
+} from './features.ts';
 import { Interaction } from './interaction.ts';
 import { type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 import { TileLoader } from './loader.ts';
@@ -289,6 +301,24 @@ export class GeoMap implements LayerHost {
     return layer;
   }
 
+  /** @internal Moves a layer under `before`, or on top of all */
+  moveLayer(layer: object, before: object | undefined): void {
+    const handle = layer as Layer;
+    this.detach(handle);
+    const index = before ? this.layers.indexOf(before as Layer) : -1;
+    const at = index < 0 ? this.layers.length : index;
+    this.layers.splice(at, 0, handle);
+    this.engine.moveLayer(handle.id, at);
+    this.requestRender();
+  }
+
+  /** @internal See `LayerHost.replaceLayer` */
+  replaceLayer(layer: object, old: number): void {
+    this.engine.removeLayer(old);
+    const index = this.layers.indexOf(layer as Layer);
+    if (index >= 0) this.engine.moveLayer((layer as Layer).id, index);
+  }
+
   /** Moves a layer under all the others */
   private toBottom(layer: Layer): void {
     this.engine.moveLayer(layer.id, 0);
@@ -475,8 +505,24 @@ export class GeoMap implements LayerHost {
    * Network edge under a screen point (CSS pixels), undefined if none. Reads one pixel of an offscreen picking pass:
    * cheap whatever the number of features, call it on hover.
    */
-  pick(point: Point): PickHit | undefined {
-    return this.engine.pick(point[0], point[1]);
+  pick(point: Point, radius = 0): PickHit | undefined {
+    return this.engine.pick(point[0], point[1], radius);
+  }
+
+  /**
+   * The feature under a screen point (CSS pixels), or the nearest one within `radius` pixels: its layer handle, its
+   * index there and, for line, circle and fill layers, the feature itself; undefined if none. `layers` restricts the
+   * answer to some layers (the others are still drawn into the picking pass, and may hide them).
+   */
+  pickFeature(
+    point: Point,
+    options: { radius?: number; layers?: readonly Layer[] } = {},
+  ): { layer: Layer; index: number; feature: Feature | undefined } | undefined {
+    const hit = this.pick(point, options.radius ?? 0);
+    const layer = hit && this.layers.find((l) => l.id === hit.layer);
+    if (!hit || !layer || (options.layers && !options.layers.includes(layer))) return undefined;
+    const feature = 'features' in layer ? (layer.features as readonly Feature[])[hit.index] : undefined;
+    return { layer, index: hit.index, feature };
   }
 
   /** Screen point (CSS pixels) of a position, undefined behind the camera */
@@ -556,6 +602,28 @@ export class GeoMap implements LayerHost {
     const { halo = 0, haloOpacity = 0.11 } = options;
     const style = { width, max, contour, opacity, halo, haloOpacity };
     return this.add(new NetworkLayer(this, { nodes, edges, lines }, costs, style));
+  }
+
+  /** Lines from GeoJSON (line strings, and polygon outlines), styled per feature */
+  addLines<P = Record<string, unknown>>(options: LineOptions<P>): LineLayer<P> {
+    return this.place(new LineLayer<P>(this, options.data, lineStyle(options)), options.before);
+  }
+
+  /** Discs from GeoJSON points, styled per feature */
+  addCircles<P = Record<string, unknown>>(options: CircleOptions<P>): CircleLayer<P> {
+    return this.place(new CircleLayer<P>(this, options.data, circleStyle(options)), options.before);
+  }
+
+  /** Filled polygons from GeoJSON (holes included), styled per feature; over the relief they lie on the ground */
+  addFills<P = Record<string, unknown>>(options: FillOptions<P>): FillLayer<P> {
+    return this.place(new FillLayer<P>(this, options.data, fillStyle(options)), options.before);
+  }
+
+  /** Adds a layer, under `before` if given */
+  private place<L extends Layer>(layer: L, before: Layer | undefined): L {
+    this.add(layer);
+    if (before) this.moveLayer(layer, before);
+    return layer;
   }
 
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */

@@ -78,6 +78,11 @@ pub trait Layer: Any {
     /// (24 bits, little end in red) and `layer` in alpha
     fn draw_pick(&self, _frame: &Frame, _layer: u8) {}
 
+    /// Feature at a ground position (Mercator), for the layers picked on the CPU (fills), at the camera's zoom
+    fn pick_ground(&self, _m: glam::DVec2, _zoom: f64) -> Option<u32> {
+        None
+    }
+
     /// Frees its GPU objects and stops its downloads; the layer is dropped right after
     fn delete(&mut self, gl: &glow::Context);
 }

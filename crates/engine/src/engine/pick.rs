@@ -1,6 +1,7 @@
-//! Picking: what is under a screen point. The scene is drawn once more into an offscreen target, clipped to the one
-//! pixel under the cursor (scissor), and that pixel is read back (as deck.gl does): the cost does not grow with the
-//! number of features.
+//! Picking: what is under a screen point. The scene is drawn once more into an offscreen target, clipped to the
+//! pixels around the cursor (scissor), and those pixels are read back (as deck.gl does): the cost does not grow with
+//! the number of features. Within the radius, the feature nearest to the cursor wins. Fills are picked on the CPU
+//! instead: the ground position under the cursor tested against their polygons.
 
 use super::{Engine, Slot};
 use crate::js;
@@ -20,11 +21,15 @@ pub(super) struct PickTarget {
 
 #[wasm_bindgen]
 impl Engine {
-    /// Feature under a screen point (CSS pixels): its layer and its index there (the edge of a network), undefined if
-    /// none. The pickable layers are drawn with each feature colored by its number.
+    /// Feature under a screen point (CSS pixels), or the nearest one within `radius` CSS pixels: its layer and its
+    /// index there (the edge of a network, the feature of a line, circle or fill layer), undefined if none. The
+    /// pickable layers are drawn with each feature colored by its number; then the fills are tested on the ground.
     #[wasm_bindgen(unchecked_return_type = "PickHit | undefined")]
-    pub fn pick(&mut self, x: f64, y: f64) -> JsValue {
-        self.pick_feature(x, y).map_or(JsValue::UNDEFINED, |(layer, index)| {
+    pub fn pick(&mut self, x: f64, y: f64, radius: Option<f64>) -> JsValue {
+        let hit = self
+            .pick_feature(x, y, radius.unwrap_or(0.0))
+            .or_else(|| self.pick_fill(x, y));
+        hit.map_or(JsValue::UNDEFINED, |(layer, index)| {
             js::object(&[("layer", layer.into()), ("index", index.into())])
         })
     }
@@ -95,8 +100,19 @@ impl Engine {
         Some(Camera::altitude_of(&view, p.truncate() / p.w))
     }
 
-    /// Layer id and feature index under a screen point (see `pick`)
-    fn pick_feature(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
+    /// Fill under a screen point: the topmost layer whose polygons hold the ground position there
+    fn pick_fill(&mut self, x: f64, y: f64) -> Option<(u32, u32)> {
+        let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
+        let m = self.camera.ground_at(&self.camera.view(), x, y, altitude)?;
+        let zoom = self.camera.zoom;
+        self.layers.iter().rev().find_map(|(id, slot)| match slot {
+            Slot::Layer(layer) => layer.pick_ground(m, zoom).map(|index| (*id, index)),
+            Slot::Raster(_) => None,
+        })
+    }
+
+    /// Layer id and feature index under a screen point, or nearest to it within `radius` CSS pixels (see `pick`)
+    fn pick_feature(&mut self, x: f64, y: f64, radius: f64) -> Option<(u32, u32)> {
         let pickable: Vec<(u32, usize)> = self
             .layers
             .iter()
@@ -119,16 +135,21 @@ impl Engine {
         if px < 0 || py < 0 || px >= size.0 || py >= size.1 {
             return None;
         }
+        // The block of pixels around the cursor, inside the canvas
+        let r = (radius.max(0.0) * self.pixel_ratio).round() as i32;
+        let (x0, y0) = ((px - r).max(0), (py - r).max(0));
+        let (x1, y1) = ((px + r).min(size.0 - 1), (py + r).min(size.1 - 1));
+        let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
         let target = self.pick_target(size).ok()?;
         let view = self.camera.view();
-        let mut pixel = [0u8; 4];
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
         // SAFETY: offscreen pass on the live context, default framebuffer restored after
         unsafe {
             let gl = &self.gl;
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
             gl.viewport(0, 0, size.0, size.1);
             gl.enable(glow::SCISSOR_TEST);
-            gl.scissor(px, py, 1, 1);
+            gl.scissor(x0, y0, w, h);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.disable(glow::BLEND);
@@ -140,18 +161,29 @@ impl Engine {
                 }
             }
             gl.read_pixels(
-                px,
-                py,
-                1,
-                1,
+                x0,
+                y0,
+                w,
+                h,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelPackData::Slice(Some(&mut pixel)),
+                glow::PixelPackData::Slice(Some(&mut pixels)),
             );
             gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            gl.enable(glow::CULL_FACE);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
-        let [r, g, b, layer] = pixel;
+        // The hit nearest to the cursor
+        let mut best: Option<(i32, [u8; 4])> = None;
+        for (k, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            let (i, j) = (k as i32 % w + x0, k as i32 / w + y0);
+            let d = (i - px).pow(2) + (j - py).pow(2);
+            if pixel[3] != 0 && d <= r * r && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, *pixel));
+            }
+        }
+        let [r, g, b, layer] = best?.1;
         let id = u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16;
         if layer == 0 || id == 0 {
             return None;
