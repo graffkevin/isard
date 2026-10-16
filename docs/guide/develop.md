@@ -37,7 +37,7 @@ bun run docs:dev   # this site, with the examples live
 
 ```sh
 bun run release:dry   # lint, types, tests, build, the package packed: its file list
-bun run release       # the same, then published on npm (token in .env, see .env.example)
+bun run release       # the same, then published on npm (NPM_TOKEN in .env)
 ```
 
 Set the version in `packages/isard/package.json` and describe it in `CHANGELOG.md` first.

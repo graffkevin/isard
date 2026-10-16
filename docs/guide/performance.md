@@ -20,8 +20,8 @@ Isard is built for maps where everything changes at every mouse move. What makes
 
 ## Measured
 
-geo-reach, an accessibility map of the whole Île-de-France (13 regions of networks with transit), moved from MapLibre
-to Isard on an Intel UHD (TGL GT1), Chromium, 1280 × 800:
+geo-reach, an accessibility map of the French regions with their transit networks, on MapLibre and on Isard (a
+trial branch), on an Intel UHD (TGL GT1), Chromium, 1280 × 800:
 
 | | MapLibre | Isard |
 |---|---|---|
@@ -30,5 +30,28 @@ to Isard on an Intel UHD (TGL GT1), Chromium, 1280 × 800:
 | Hover sweep, 95th percentile | 30 – 37 ms | 18 – 35 ms |
 | JavaScript downloaded | 1.25 MB + 508 KB worker | 285 KB + 654 KB of WebAssembly |
 
-The repository's benchmark (`/bench/`) plays the same flight and orbit over the Lille photomesh with Isard, iTowns
-and 3DTilesRendererJS.
+## The benchmark of the repository
+
+`bun run dev`, then open http://127.0.0.1:5180/bench/ (or the "Benchmark" link of the demo) and press **Run the
+benchmark**. The same scenario plays with each engine in turn, in a 1280 × 800 frame:
+
+| Engine | Setup |
+|---|---|
+| Isard | this repository |
+| iTowns 2.46.1-next.72 | the version of junn-apps, with 3d-tiles-renderer 0.5.3 forced as junn-apps does (`overrides`): with its own 0.4.28 the 3D Tiles queue never starts |
+| 3DTilesRendererJS 0.5.3 | three.js 0.182, ortho through `XYZTilesOverlay` on a `GeneratedSurfacePlugin` ellipsoid, continuous rendering as in its examples |
+
+Same data (Géoplateforme ortho, Lille photomesh), same screen-space error (8 px), same field of view (36.87°), poses
+given as target, distance, tilt and heading and converted for each engine. Phases: view of France until complete,
+6 s flight to Lille, wait until complete, 10 s orbit, wait until complete, 6 s flight back.
+
+Measured per phase on the main thread: frames per second, frame interval (median, 95th and 99th percentiles), share of
+frames over 33 ms, long tasks (over 50 ms), time until the basemap, the 3D mesh and both are complete; and the
+JavaScript heap.
+
+Two rounds, about 10 minutes: the first warms the servers and the browser cache (the Lille mesh server answers a cold
+file in about 15 s, which would penalize whichever engine runs first), the second, in reverse order, is the reference.
+
+Run it on a real GPU: in a headless browser rendering on the CPU (SwiftShader), the GPU-heavy engines are penalized
+far beyond reality, and 3DTilesRendererJS sometimes draws a black frame there. Pages can be opened alone, holding a pose
+to check what an engine shows: `/bench/itowns.html?still=lille` (`still=france`, `?logdepth=1` for 3DTilesRendererJS).

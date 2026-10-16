@@ -14,7 +14,7 @@ const dry = process.argv.includes('--dry-run');
 $.cwd(root);
 
 if (!dry && !process.env.NPM_TOKEN) {
-  console.error('NPM_TOKEN is empty: copy .env.example to .env and paste the npm token after NPM_TOKEN=');
+  console.error('NPM_TOKEN is empty: put NPM_TOKEN=<npm token> in .env (read and write on the ign-junn organization)');
   process.exit(1);
 }
 await $`bun run lint`;
