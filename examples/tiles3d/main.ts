@@ -10,6 +10,8 @@ const map = await GeoMap.create(element('map'), {
   basemap: 'ortho',
   hillshade: 0,
   projection: 'mercator',
+  // 3D Tiles at once: the engine that draws them from the start, not after the one without them
+  tiles3d: true,
 });
 
 const mesh = map.addTiles3d({

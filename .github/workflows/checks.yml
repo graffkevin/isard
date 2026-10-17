@@ -6,9 +6,15 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push on the same branch or pull request replaces the run in progress
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       # The toolchain of rust-toolchain.toml (components and target included)
@@ -21,6 +27,8 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run lint
@@ -31,7 +39,9 @@ jobs:
   # Visual regression tests: the examples rendered by headless Chrome (SwiftShader), the network answered from
   # tests/visual/fixtures, compared with tests/visual/baseline. The Chrome of puppeteer-core's revision, pinned.
   visual:
-    runs-on: ubuntu-latest
+    # The system pinned as Chrome is: the baselines depend on its rendering libraries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
@@ -42,6 +52,8 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.versions.outputs.wasm-bindgen }}
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run build
       # Its system libraries are on the runner already (Google Chrome is preinstalled)

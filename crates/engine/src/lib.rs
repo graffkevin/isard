@@ -13,13 +13,20 @@
 //!   over the ground exports its own methods of `Engine`
 //! - `worker`: the entry points of the 3D Tiles decoding workers
 //!
+//! The 3D Tiles layer and the workers' entry points are behind the `tiles3d` feature (on by default): without it, the
+//! module is a third smaller, and the package loads that one first (see scripts/build.ts).
+//!
 //! The crate also compiles natively, for the unit tests of its pure logic: what needs the browser (the WebGL2
 //! context, image uploads) is behind `cfg(target_arch = "wasm32")` in `render::gl`.
+
+// Without 3D Tiles, what only they read (the frame's raw context, their loading settings) is left unused
+#![cfg_attr(not(feature = "tiles3d"), allow(dead_code))]
 
 mod engine;
 mod js;
 mod layer;
 mod render;
+#[cfg(feature = "tiles3d")]
 mod worker;
 
 pub use engine::Engine;

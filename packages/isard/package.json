@@ -28,6 +28,7 @@
     "./decoder.worker.js": "./dist/decoder.worker.js",
     "./basemap.worker.js": "./dist/basemap.worker.js",
     "./isard_bg.wasm": "./dist/isard_bg.wasm",
+    "./isard_core_bg.wasm": "./dist/isard_core_bg.wasm",
     "./package.json": "./package.json"
   },
   "files": [

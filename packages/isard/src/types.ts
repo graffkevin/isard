@@ -53,8 +53,17 @@ export interface GeoMapOptions extends Partial<Camera> {
   keyboard?: boolean;
   /** Accessible name of the map, read by screen readers (default 'Map') */
   ariaLabel?: string;
-  /** Where to load the engine from, when a bundler does not resolve the default URL */
+  /** Where to load the engine with 3D Tiles from (`isard_bg.wasm`), when a bundler does not resolve the default URL.
+   * Given without `coreWasmUrl`, maps load this engine from the start */
   wasmUrl?: string | URL;
+  /** Where to load the engine without 3D Tiles from (`isard_core_bg.wasm`, a third smaller), when a bundler does not
+   * resolve the default URL. Maps load it first, and the engine with 3D Tiles (`wasmUrl`) for their first 3D Tiles
+   * layer only */
+  coreWasmUrl?: string | URL;
+  /** Load the engine with 3D Tiles from the start (default false: it is loaded when the first 3D Tiles layer is added,
+   * the map then moving its camera and layers onto it). For a map that shows 3D Tiles at once: one engine downloaded
+   * instead of two */
+  tiles3d?: boolean;
   /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
   basemapWorkerUrl?: string | URL;
   /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default the

@@ -52,8 +52,7 @@ import {
   VectorTiles,
   type VectorTilesOptions,
 } from './vectortiles.ts';
-import type { Camera, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
-import init, { Engine } from './wasm/isard.js';
+import type { Camera, Engine, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
 
 /** The engine of a destroyed map: every method a no-op returning undefined, but the camera (the last one) and the
  * bounds, which late callers read */
@@ -81,8 +80,38 @@ function report(error: unknown): void {
 
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
-/** The engine, compiled once per page and shared with the decoding workers */
-let compiled: Promise<WebAssembly.Module> | undefined;
+type EngineClass = new (canvas: HTMLCanvasElement, redraw: () => void) => Engine;
+
+/** An engine loaded: its compiled module and its class */
+interface Bindings {
+  module: WebAssembly.Module;
+  Engine: EngineClass;
+}
+
+/** The two builds of the engine, each compiled once per page: `core` without 3D Tiles (a third smaller), loaded by
+ * every map; `full` with them, loaded for the first 3D Tiles layer, its module shared with the decoding workers. The
+ * core engine has the same API but the 3D Tiles methods: its class is typed as the full one. */
+const engines: { core?: Promise<Bindings>; full?: Promise<Bindings> } = {};
+
+function loadEngine(kind: 'core' | 'full', url: string | URL): Promise<Bindings> {
+  const loaded = engines[kind];
+  if (loaded) return loaded;
+  const loading = (async () => {
+    // The bindings by dynamic import: an application bundles the ones it loads only
+    const [module, bindings] = await Promise.all([
+      compile(url),
+      kind === 'core' ? import('./wasm/isard_core.js') : import('./wasm/isard.js'),
+    ]);
+    await bindings.default({ module_or_path: module });
+    return { module, Engine: bindings.Engine as unknown as EngineClass };
+  })().catch((error: unknown) => {
+    // A later call tries again (a network error, a wrong URL fixed)
+    delete engines[kind];
+    throw error;
+  });
+  engines[kind] = loading;
+  return loading;
+}
 
 async function compile(url: string | URL): Promise<WebAssembly.Module> {
   const response = await fetch(url);
@@ -217,6 +246,15 @@ export class GeoMap {
   private readonly resizeObserver: ResizeObserver;
   private readonly interaction: Interaction | undefined;
   private loader: TileLoader | undefined;
+  /** The class of the engine: without 3D Tiles until a 3D Tiles layer is added, unless asked for from the start */
+  private engineClass: EngineClass;
+  /** The module of the engine with 3D Tiles once it runs this map (the decoding workers run it too) */
+  private tiles3dModule: WebAssembly.Module | undefined;
+  /** The engine with 3D Tiles is loading, for the 3D Tiles layers added on the core engine */
+  private upgrading: Promise<void> | undefined;
+  /** What loading the engine with 3D Tiles and its workers needs */
+  private readonly tiles3dOptions: Pick<GeoMapOptions, 'wasmUrl' | 'workers' | 'workerUrl' | 'decoders'>;
+  private gone = false;
   private basemap: RasterLayer | undefined;
   private hillshade: RasterLayer | undefined;
   private animation: ((now: number) => boolean) | undefined;
@@ -241,34 +279,23 @@ export class GeoMap {
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
-    compiled ??= compile(options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url)).then(
-      async (module) => {
-        await init({ module_or_path: module });
-        return module;
-      },
-      (error: unknown) => {
-        // A later call tries again (a network error, a wrong URL fixed)
-        compiled = undefined;
-        throw error;
-      },
-    );
-    const module = await compiled;
-    const map = new GeoMap(container, options);
-    const workers = options.workers ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
-    if (workers !== false && workers > 0 && typeof Worker !== 'undefined') {
-      map.loader = new TileLoader(
-        module,
-        options.workerUrl ?? new URL('./decoder.worker.js', import.meta.url),
-        workers,
-        { ...DEFAULT_DECODERS, ...options.decoders },
-        map.engine.textureFormats(),
-      );
-      map.engine.setTileLoader(map.loader);
-    }
-    return map;
+    // With 3D Tiles from the start when asked, or when only that engine's URL is given (as before the core engine)
+    const full = options.tiles3d === true || (options.wasmUrl !== undefined && options.coreWasmUrl === undefined);
+    const bindings = full
+      ? await loadEngine('full', options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url))
+      : await loadEngine('core', options.coreWasmUrl ?? new URL('./isard_core_bg.wasm', import.meta.url));
+    return new GeoMap(container, options, bindings.Engine, full ? bindings.module : undefined);
   }
 
-  private constructor(container: HTMLElement, options: GeoMapOptions) {
+  private constructor(
+    container: HTMLElement,
+    options: GeoMapOptions,
+    engineClass: EngineClass,
+    tiles3dModule: WebAssembly.Module | undefined,
+  ) {
+    this.engineClass = engineClass;
+    this.tiles3dModule = tiles3dModule;
+    this.tiles3dOptions = { ...options };
     this.glyphsUrl = options.glyphs;
     this.basemapWorkerUrl = options.basemapWorkerUrl;
     this.container = container;
@@ -348,7 +375,7 @@ export class GeoMap {
   }
 
   private createEngine(): Engine {
-    const engine = new Engine(this.canvas, () => this.requestRender());
+    const engine = new this.engineClass(this.canvas, () => this.requestRender());
     const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setMaxPitch(maxPitch);
@@ -359,8 +386,45 @@ export class GeoMap {
     engine.setImmediateLoading(loading === 'immediate');
     engine.setBackground(...background);
     engine.setGlobeColor(...globeColor);
+    this.loader ??= this.startLoader(engine);
     if (this.loader) engine.setTileLoader(this.loader);
     return engine;
+  }
+
+  /** The decoding workers of 3D Tiles, with the engine that has them (they run its module) and unless turned off */
+  private startLoader(engine: Engine): TileLoader | undefined {
+    const { workers: count, workerUrl, decoders } = this.tiles3dOptions;
+    const workers = count ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+    if (!this.tiles3dModule || workers === false || workers <= 0 || typeof Worker === 'undefined') return undefined;
+    return new TileLoader(
+      this.tiles3dModule,
+      workerUrl ?? new URL('./decoder.worker.js', import.meta.url),
+      workers,
+      { ...DEFAULT_DECODERS, ...decoders },
+      engine.textureFormats(),
+    );
+  }
+
+  /** A 3D Tiles layer on the core engine: loads the engine with 3D Tiles, then rebuilds the map on it (camera,
+   * settings and layers kept, as after a context loss); the layer is created then */
+  private upgrade(): void {
+    const url = this.tiles3dOptions.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url);
+    this.upgrading ??= loadEngine('full', url).then(
+      ({ module, Engine }) => {
+        this.upgrading = undefined;
+        if (this.gone) return;
+        this.engineClass = Engine;
+        this.tiles3dModule = module;
+        // A lost context: the engine is rebuilt on it once restored
+        if (!this.lost) this.restore();
+      },
+      (error: unknown) => {
+        // The 3D Tiles layers stay empty; the next one added tries again
+        this.upgrading = undefined;
+        report(error);
+        this.requestRender();
+      },
+    );
   }
 
   /** After a context loss: a new engine with the same camera, settings and layers (same handles, same order) */
@@ -383,7 +447,9 @@ export class GeoMap {
   }
 
   private add<L extends Layer>(layer: L): L {
-    layer.attach(this.engine);
+    // On the core engine, a 3D Tiles layer waits for the engine with 3D Tiles: it is created with the others on it
+    if (layer instanceof Tiles3dLayer && !this.tiles3dModule) this.upgrade();
+    else layer.attach(this.engine);
     this.layers.push(layer);
     // Under the layers kept on top (the basemap's labels)
     const top = this.layers.find((l) => this.onTop.has(l) && l !== layer);
@@ -404,7 +470,7 @@ export class GeoMap {
     const index = before ? this.layers.indexOf(before as Layer) : -1;
     const at = index < 0 ? this.layers.length : index;
     this.layers.splice(at, 0, handle);
-    this.engine.moveLayer(handle.id, at);
+    if (handle.id >= 0) this.engine.moveLayer(handle.id, this.engineIndex(at));
     this.requestRender();
   }
 
@@ -412,7 +478,14 @@ export class GeoMap {
   replaceLayer(layer: object, old: number): void {
     this.engine.removeLayer(old);
     const index = this.layers.indexOf(layer as Layer);
-    if (index >= 0) this.engine.moveLayer((layer as Layer).id, index);
+    if (index >= 0) this.engine.moveLayer((layer as Layer).id, this.engineIndex(index));
+  }
+
+  /** Index in the engine of the layer at `index`: the layers waiting for the engine with 3D Tiles are not in it yet */
+  private engineIndex(index: number): number {
+    let count = 0;
+    for (let i = 0; i < index; i += 1) if ((this.layers[i]?.id ?? -1) >= 0) count += 1;
+    return count;
   }
 
   /** Moves a layer under all the others */
@@ -918,8 +991,9 @@ export class GeoMap {
     this.inFrame = false;
     // A move goes on until a frame finds the camera still: that frame sends 'moveend'
     if (this.animation || (moved && this.moving)) this.requestRender();
-    // Idle: nothing loading, no animation, no frame asked for (uploads waiting, fades, listeners)
-    if (loading || this.animation || this.frameRequest !== 0) {
+    // Idle: nothing loading (the engine with 3D Tiles neither), no animation, no frame asked for (uploads waiting,
+    // fades, listeners)
+    if (loading || this.upgrading || this.animation || this.frameRequest !== 0) {
       this.settled = false;
     } else if (!this.settled) {
       this.settled = true;
@@ -956,6 +1030,7 @@ export class GeoMap {
   }
 
   destroy(): void {
+    this.gone = true;
     const camera = this.getCamera();
     cancelAnimationFrame(this.frameRequest);
     this.cancelHoverPick();

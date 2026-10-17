@@ -39,6 +39,10 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Circles and fills drawn by the squares in view only.
 - The package ships its modules as they are (an application's bundler keeps what it uses), the workers and the
   engine next to them; releases are published from the Release workflow, with provenance.
+- A map without 3D Tiles downloads a third less WebAssembly: maps load the engine without 3D Tiles
+  (`isard_core_bg.wasm`, 220 KB gzipped instead of 330 KB) and the full one for their first 3D Tiles layer only
+  (`tiles3d: true` to load it from the start, `coreWasmUrl` for bundlers). Given `wasmUrl` alone, a map loads the full
+  engine from the start, as before.
 
 ## [0.1.1] - 2026-10-16
 

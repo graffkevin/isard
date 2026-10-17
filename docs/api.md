@@ -22,7 +22,8 @@ declarations.
 | `keyboard` | true | arrows, `+`, `-`, `0` once the map has the focus ([keys](./guide/events#keyboard)) |
 | `ariaLabel` | `'Map'` | accessible name of the map |
 | `attributionControl` | true | `false`, or `{ compact, customAttribution }` |
-| `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers |
+| `coreWasmUrl`, `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start |
+| `tiles3d` | false | load the engine with 3D Tiles from the start (else with the first 3D Tiles layer) |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread |
 | `decoders`, `glyphs` | official builds, Géoplateforme fonts | to self-host them |
 

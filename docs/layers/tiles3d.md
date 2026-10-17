@@ -11,6 +11,10 @@ Draco geometry and KTX2 (Basis Universal) textures decoded in workers by the off
 KTX2 textures stay compressed on the GPU (ASTC, BC7, ETC2 or S3TC). Traversal by screen-space error, children
 replacing their parent only once all are ready, downloads aborted when they leave the view, a GPU memory budget.
 
+The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer loads
+the full one (the layer shows once it is there, `stats()` is undefined until then). `tiles3d: true` in the map's
+options loads it from the start, for a map that shows 3D Tiles at once.
+
 With the relief on, its altitudes get the geoid height so that the meshes (ellipsoidal heights) sit on the ground.
 The decoders come from gstatic.com and jsDelivr by default: `decoders` to self-host them.
 

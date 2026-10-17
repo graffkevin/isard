@@ -19,6 +19,7 @@ const map = await GeoMap.create(container, {
   center: [START.lon, START.lat],
   zoom: zoom(START.range, START.lat),
   interactive: false,
+  tiles3d: true,
 });
 const mesh = map.addTiles3d({ url: LILLE_MESH, maxScreenSpaceError: SSE });
 // For inspection from the console
