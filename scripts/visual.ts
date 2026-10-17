@@ -1,7 +1,9 @@
 /**
  * Visual regression tests of the examples: each built example (`bun run build` first) is opened in headless Chrome
  * (SwiftShader, 640×400), every network request answered from recorded fixtures (tests/visual/fixtures), and the map
- * canvas compared with tests/visual/baseline/<name>.png (pixelmatch). Diffs go to tests/visual/out.
+ * canvas compared with tests/visual/baseline/<name>.png (pixelmatch). Diffs go to tests/visual/out. A request without
+ * fixture is answered 404 and reported, without failing: how many tiles past the screen edge a map asks for depends on
+ * timing (an example that starts a little earlier asks for one more), only the pixels decide.
  *
  *   bun run test:visual                 compare every example
  *   bun run test:visual basic globe     only these
@@ -257,7 +259,11 @@ for (const name of examples) {
     ratio = count / (a.width * a.height);
     if (ratio > 0) writeFileSync(join(out, `${name}.diff.png`), PNG.sync.write(diff));
   }
-  const ok = ratio <= MAX_DIFF && missing.size === 0;
+  const ok = ratio <= MAX_DIFF;
+  // Shown on the run's summary in CI: fixtures to record if it keeps coming back
+  if (missing.size && process.env.GITHUB_ACTIONS) {
+    console.log(`::warning title=${name}: requests without fixture::${[...missing].join(' ')}`);
+  }
   if (!ok) {
     failed++;
     writeFileSync(join(out, `${name}.png`), shot);
