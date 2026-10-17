@@ -32,7 +32,7 @@
     "pixelmatch": "7.1.0",
     "pngjs": "7.0.0",
     "puppeteer-core": "24.10.0",
-    "typescript": "~6.0.2"
+    "typescript": "~7.0.2"
   },
   "overrides": {
     "3d-tiles-renderer": "0.5.3"
