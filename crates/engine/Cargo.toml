@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 bytemuck = "1"
 geo = { package = "isard-geo", path = "../geo" }
-glam = { version = "0.30", features = ["bytemuck"] }
+glam = { version = "0.34", features = ["bytemuck"] }
 glow = "0.16"
 tiles3d = { package = "isard-tiles3d", path = "../tiles3d", optional = true }
 js-sys = "0.3.106"

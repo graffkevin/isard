@@ -8,7 +8,7 @@ description = "Camera and projections (Web Mercator, globe), WGS 84 geodesy, the
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
-glam = { version = "0.30", features = ["bytemuck"] }
+glam = { version = "0.34", features = ["bytemuck"] }
 earcut = "0.4"
 
 [lints]
