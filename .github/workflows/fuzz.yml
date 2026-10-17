@@ -12,9 +12,15 @@ on:
         description: Seconds per target
         default: '300'
 
+concurrency:
+  group: fuzz
+  cancel-in-progress: true
+
 jobs:
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # The build and the run, with room: a hang in a target must not hold the runner for hours
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

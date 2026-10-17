@@ -9,12 +9,13 @@ Rust, `biome.json` (format and lint) and `tsconfig.base.json` for TypeScript.
 ```
 crates/geo/        camera and projections, WGS 84 geodesy, RAF20 geoid, tile selection, label placement, polygons
 crates/tiles3d/    3D Tiles tree, traversal and decoding (meshopt, quantization, b3dm, glb)
-crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking
+crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking; built twice, with and
+                   without the 3D Tiles (its `tiles3d` feature)
 packages/isard/    the npm package @ign-junn/isard: GeoMap, layer handles, overlays, workers
 apps/demo/         the demo; apps/bench/: isard, iTowns and 3DTilesRendererJS on the same scenario
 examples/          one page per example, as an application would write it
 docs/              this site (VitePress)
-scripts/           build, dev server, release
+scripts/           build (and its size budget), dev server, release
 ```
 
 `crates/geo` and `crates/tiles3d` have no WebGL and no I/O; `crates/engine` keeps its WebGL and browser calls apart
@@ -39,6 +40,12 @@ bun run docs:check   # the API reference: every type a public signature uses is 
 ```
 
 The checks run on every push and pull request; the site is deployed once they pass on `main`.
+
+`bun run build` ends with the sizes of what the package ships, gzipped: the two engines (`isard_core_bg.wasm`
+without 3D Tiles, `isard_bg.wasm` with them), the package's modules, the engines' bindings and the workers. Each has a
+budget about 5 % above its size when it was set, in `scripts/size.ts`: over one, the build fails, and so do the
+checks. A growth is then raised there deliberately, in the commit that makes the code bigger (`bun scripts/size.ts`
+checks the last build again).
 
 ## Release
 

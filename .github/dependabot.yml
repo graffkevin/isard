@@ -1,0 +1,38 @@
+# Weekly updates, grouped (one pull request per ecosystem for minor and patch releases), checked by the Checks
+# workflow like any pull request. Left out on purpose:
+# - wasm-bindgen and its companions (js-sys, web-sys, wasm-bindgen-futures): pinned together, the bindings generator
+#   of the CI and of every machine must match (scripts/build.ts), raised by hand;
+# - puppeteer-core: it goes with the Chrome revision pinned in checks.yml and with the visual baselines;
+# - the Rust toolchain (rust-toolchain.toml), raised by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: cargo
+    directories: [/, /fuzz]
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: wasm-bindgen
+      - dependency-name: wasm-bindgen-futures
+      - dependency-name: js-sys
+      - dependency-name: web-sys
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: puppeteer-core
+    groups:
+      bun:
+        update-types: [minor, patch]

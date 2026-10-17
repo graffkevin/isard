@@ -7,6 +7,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { $ } from 'bun';
+import { checkSizes } from './size.ts';
 
 const root = join(import.meta.dir, '..');
 const bin = join(process.env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin');
@@ -16,6 +17,7 @@ $.cwd(root);
 const pkg = 'packages/isard';
 const bindings = `${pkg}/src/wasm`;
 const wasm = `${bindings}/isard_bg.wasm`;
+const coreWasm = `${bindings}/isard_core_bg.wasm`;
 
 // The bindings generator must be the version of the wasm-bindgen crate (Cargo.lock), or the module does not load
 const locked = /name = "wasm-bindgen"\nversion = "([^"]+)"/.exec(readFileSync(join(root, 'Cargo.lock'), 'utf8'))?.[1];
@@ -27,8 +29,13 @@ if (!installed || installed !== locked) {
   process.exit(1);
 }
 
+// The engine twice: without 3D Tiles (isard_core, a third smaller), which every map loads first, and with them (isard),
+// loaded once a 3D Tiles layer is added, and by the decoding workers. The same output file: built and bound in turn
+const target = 'target/wasm32-unknown-unknown/release/isard.wasm';
+await $`cargo build -p isard --target wasm32-unknown-unknown --release --no-default-features`;
+await $`wasm-bindgen --target web --out-dir ${bindings} --out-name isard_core ${target}`;
 await $`cargo build -p isard --target wasm32-unknown-unknown --release`;
-await $`wasm-bindgen --target web --out-dir ${bindings} target/wasm32-unknown-unknown/release/isard.wasm`;
+await $`wasm-bindgen --target web --out-dir ${bindings} ${target}`;
 // Size and speed pass (binaryen, a dev dependency, run by Bun): about a third smaller, without the debug sections
 const features = [
   '--enable-bulk-memory',
@@ -37,7 +44,8 @@ const features = [
   '--enable-mutable-globals',
 ];
 const strip = ['--strip-debug', '--strip-producers'];
-await $`bun --bun ${join(root, 'node_modules/.bin/wasm-opt')} -O3 ${features} ${strip} ${wasm} -o ${wasm}`;
+const wasmOpt = join(root, 'node_modules/.bin/wasm-opt');
+await Promise.all([wasm, coreWasm].map((file) => $`bun --bun ${wasmOpt} -O3 ${features} ${strip} ${file} -o ${file}`));
 
 /** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle). The output
  * folder is emptied first: files of an older build (renamed since) would ship. `split`: the entry points share the
@@ -79,6 +87,7 @@ async function bundle(entries: string[], outdir: string, options: { split?: bool
   }
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
+  copyFileSync(join(root, coreWasm), join(root, outdir, 'isard_core_bg.wasm'));
 }
 
 /** The package: its modules as they are (an application's bundler keeps what it uses), the engine's bindings, the
@@ -88,10 +97,12 @@ async function buildPackage(): Promise<void> {
   rmSync(dist, { recursive: true, force: true });
   await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
   mkdirSync(join(dist, 'wasm'), { recursive: true });
-  copyFileSync(join(root, bindings, 'isard.js'), join(dist, 'wasm/isard.js'));
-  // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
-  const declarations = readFileSync(join(root, bindings, 'isard.d.ts'), 'utf8');
-  writeFileSync(join(dist, 'wasm/isard.d.ts'), declarations.replace(/^\s*\[Symbol\.dispose\]\(\): void;\n/gm, ''));
+  for (const name of ['isard', 'isard_core']) {
+    copyFileSync(join(root, bindings, `${name}.js`), join(dist, `wasm/${name}.js`));
+    // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
+    const declarations = readFileSync(join(root, bindings, `${name}.d.ts`), 'utf8');
+    writeFileSync(join(dist, `wasm/${name}.d.ts`), declarations.replace(/^\s*\[Symbol\.dispose\]\(\): void;\n/gm, ''));
+  }
   // After tsc: the workers it emitted module by module (imported for their types) are replaced
   await bundle([], `${pkg}/dist`, { empty: false });
 }
@@ -108,9 +119,5 @@ if (process.argv.includes('--bench')) {
 }
 await Promise.all(bundles);
 
-const kb = (path: string) => Bun.file(join(root, path)).size / 1024;
-const modules = [...new Bun.Glob('*.js').scanSync(join(root, pkg, 'dist'))].filter((f) => !f.endsWith('.worker.js'));
-const total = modules.reduce((sum, file) => sum + kb(`${pkg}/dist/${file}`), 0);
-console.log(
-  `engine ${kb(wasm).toFixed(0)} KB, package ${modules.length} modules ${total.toFixed(0)} KB + worker ${kb(`${pkg}/dist/decoder.worker.js`).toFixed(0)} KB`,
-);
+// What the package ships, gzipped, against its budgets (scripts/size.ts): over one, the build fails
+if (!checkSizes()) process.exit(1);

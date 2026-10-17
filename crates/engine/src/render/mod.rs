@@ -14,4 +14,5 @@ pub(crate) mod overlay;
 pub(crate) mod raster;
 pub(crate) mod sky;
 pub(crate) mod symbols;
+#[cfg(feature = "tiles3d")]
 pub(crate) mod tiles3d;

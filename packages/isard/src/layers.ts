@@ -31,7 +31,8 @@ export abstract class Layer {
   protected abstract create(engine: Engine): number;
 
   remove(): void {
-    this.map.engine.removeLayer(this.#id);
+    // Not created yet: a 3D Tiles layer waiting for the engine with 3D Tiles
+    if (this.#id >= 0) this.map.engine.removeLayer(this.#id);
     this.map.detach(this);
     this.map.requestRender();
   }
@@ -220,13 +221,16 @@ export class Tiles3dLayer extends Layer {
 
   setStyle(style: Partial<Tiles3dStyle>): void {
     this.style = { ...this.style, ...style };
+    // Kept for its creation while the engine with 3D Tiles loads
+    if (this.id < 0) return;
     this.map.engine.setTiles3dStyle(this.id, this.style.maxScreenSpaceError, this.style.opacity);
     this.map.requestRender();
   }
 
-  /** Loading counters; undefined once the layer is removed */
+  /** Loading counters; undefined once the layer is removed, and while the engine with 3D Tiles loads (see
+   * `GeoMapOptions.tiles3d`) */
   stats(): Tiles3dStats | undefined {
-    return this.map.engine.tiles3dStats(this.id);
+    return this.id < 0 ? undefined : this.map.engine.tiles3dStats(this.id);
   }
 
   /** @internal */
