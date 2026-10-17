@@ -13,7 +13,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-glam = "0.30"
+glam = "0.34"
 geo = { package = "isard-geo", path = "../crates/geo" }
 tiles3d = { package = "isard-tiles3d", path = "../crates/tiles3d" }
 
