@@ -65,7 +65,7 @@ void main() {
   v_uv[3] = uv(a_uv3, a_back3); v_slot[3] = a_slot3;
   vec2 merc = mix(a_merc.xy, a_merc.zw, g);
   float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
-  float width = (a_merc.z - a_merc.x) * 40075016.686 * cos(lat);
+  float width = (a_merc.z - a_merc.x) * u_body.x * cos(lat);
   v_plane = mix(a_rect.xy, a_rect.zw, g);
   vec3 p = project_up(v_plane, merc, height() - skirt * 0.05 * width);
   v_distance = distance(p, u_eye);

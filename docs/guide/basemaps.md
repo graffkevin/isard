@@ -69,3 +69,29 @@ map.setMaxPitch(78);
 On the globe, stars and an atmosphere halo surround the Earth (`sky: false` to turn them off).
 
 <LiveExample slug="relief" height="420px" />
+
+## The Moon and other bodies
+
+```ts
+const map = await GeoMap.create(container, { body: 'moon', center: [23.47, 0.67], zoom: 1.2 });
+map.addRaster({
+  url: 'https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{z}/{y}/{x}.jpg',
+  grid: 'equirectangular',
+  maxZoom: 8,
+});
+```
+
+`body` sets what the map is drawn on, at its creation: `'earth'` (WGS 84, the default), `'moon'` (a sphere of
+1 737 400 m) or any ellipsoid, `{ radius, flattening, atmosphere, color }` (equatorial radius in metres, flattening 0 for
+a sphere, whether it has an atmosphere, the color of the globe past the tiles). Zoom levels keep their meaning on
+screen, the Web Mercator tile pyramid, and longitudes and latitudes are the body's own (on the Moon, the mean Earth
+frame: longitude 0 faces the Earth). What is measured in metres follows the body: the scale between zoom levels and
+the ground, the relief, buildings, 3D Tiles.
+
+Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no hillshade, no IGN credits (add the
+imagery's with `attributionControl: { customAttribution }`), a black background, and no halo around a body without an
+atmosphere (the stars stay, `sky: false` hides them). A relief needs its `url`, its altitudes taken as served (no
+geoid). The planetary services mostly serve tiles in longitudes and latitudes: `grid: 'equirectangular'` reprojects
+them in the page (see [rasters](../layers/rasters#equirectangular-tiles)).
+
+<LiveExample slug="moon" height="460px" />

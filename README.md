@@ -74,7 +74,7 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
   <tr>
     <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
     <td><a href="https://graffkevin.github.io/isard/examples/basic"><img src="docs/public/screenshots/basic.jpg" alt="" /></a><br /><b>A map</b><br />the vector basemap, a marker and its popup</td>
-    <td></td>
+    <td><a href="https://graffkevin.github.io/isard/examples/moon"><img src="docs/public/screenshots/moon.jpg" alt="" /></a><br /><b>The Moon</b><br />another body, the LRO mosaic, the Apollo sites</td>
   </tr>
 </table>
 

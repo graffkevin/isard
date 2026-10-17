@@ -4,7 +4,7 @@ version = "0.1.1"
 publish = false
 edition = "2024"
 license = "MIT"
-description = "Camera and projections (Web Mercator, globe), WGS 84 geodesy, the French geoid and tile selection of isard"
+description = "Camera and projections (Web Mercator, globe), geodesy of the body (WGS 84, the Moon), the French geoid and tile selection of isard"
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }

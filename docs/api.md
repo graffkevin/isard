@@ -8,6 +8,7 @@ declarations.
 
 | Option | Default | |
 |---|---|---|
+| `body` | `'earth'` | `'moon'`, or `{ radius, flattening, atmosphere, color }` ([other bodies](./guide/basemaps#the-moon-and-other-bodies)) |
 | `center`, `zoom`, `pitch`, `bearing` | Saint-Mandé, 13, 0, 0 | the camera, MapLibre's conventions |
 | `projection` | `'globe'` | or `'mercator'` |
 | `basemap` | `'plan-grey'` | `'plan'`, `'plan-grey-vector'`, `'plan-vector'`, `'ortho'`, `'none'` |

@@ -7,7 +7,8 @@ the demo, the benchmark, the examples, these docs), side by side at the root, wi
 Rust, `biome.json` (format and lint) and `tsconfig.base.json` for TypeScript.
 
 ```
-crates/geo/        camera and projections, WGS 84 geodesy, RAF20 geoid, tile selection, label placement, polygons
+crates/geo/        camera and projections, geodesy (WGS 84, the Moon), RAF20 geoid, tile selection, label placement,
+                   polygons
 crates/tiles3d/    3D Tiles tree, traversal and decoding (meshopt, quantization, b3dm, glb)
 crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking; built twice, with and
                    without the 3D Tiles (its `tiles3d` feature)

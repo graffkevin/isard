@@ -107,6 +107,8 @@ describe('loading the engine', () => {
 describe('options', () => {
   test('defaults reach the engine', async () => {
     const { engine, map } = await create();
+    // The Earth, WGS 84, first: the layers' shaders may take its size
+    expect(engine.calls[0]).toEqual(['setBody', [6378137, 1 / 298.257223563, true]]);
     expect(engine.last('setZoomRange')).toEqual([0, 22]);
     expect(engine.last('setMaxPitch')).toEqual([70]);
     expect(engine.last('setGlobe')).toEqual([true]);
@@ -169,6 +171,51 @@ describe('options', () => {
     const { engine, map } = await create();
     map.setBackground('not a color');
     expect(engine.last('setBackground')).toEqual([0, 0, 0]);
+  });
+
+  test('the Moon: its sphere, no atmosphere, none of the Géoplateforme defaults', async () => {
+    // The map's own defaults, not those of `create`
+    const container = new FakeElement('div');
+    const map = await GeoMap.create(container as unknown as HTMLElement, {
+      body: 'moon',
+      workers: false,
+      attributionControl: { customAttribution: 'NASA' },
+    });
+    maps.push(map);
+    const engine = map.engine as unknown as FakeEngine;
+    expect(engine.last('setBody')).toEqual([1737400, 0, false]);
+    expect(engine.args('addRaster')).toEqual([]);
+    expect(engine.last('setBackground')).toEqual([0, 0, 0]);
+    expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([0x77, 0x75, 0x6f]);
+    expect(map.getCamera()).toEqual({ center: [0, 0], zoom: 2, pitch: 0, bearing: 0 });
+    // The credits of the page only
+    const credits = (element: FakeElement): FakeElement | undefined =>
+      element.className === 'isard-attrib-inner' ? element : element.children.map(credits).find(Boolean);
+    expect(credits(container)?.innerHTML).toBe('NASA');
+    // No IGN relief there: a url is needed, its altitudes left as served
+    expect(() => map.setTerrain(true)).toThrow(/needs a url/);
+    map.setTerrain({ url: 'https://moon.example/{z}/{x}/{y}.bil' });
+    expect(engine.last('setTerrain')).toEqual(['https://moon.example/{z}/{x}/{y}.bil', 1, 15, false]);
+  });
+
+  test('another body: its radius and flattening, its atmosphere and color', async () => {
+    const { engine } = await create({
+      body: { radius: 3396190, flattening: 0.00589, atmosphere: true, color: '#c1440e' },
+    });
+    expect(engine.last('setBody')).toEqual([3396190, 0.00589, true]);
+    expect(engine.last('setGlobeColor')).toEqual([0xc1 / 255, 0x44 / 255, 0x0e / 255]);
+    const { engine: sphere } = await create({ body: { radius: 1000 } });
+    expect(sphere.last('setBody')).toEqual([1000, 0, false]);
+  });
+
+  test('an equirectangular raster is reprojected by a loader, one level finer in Web Mercator', async () => {
+    const { engine, map } = await create();
+    map.addRaster({ url: 'https://trek.example/{z}/{y}/{x}.jpg', grid: 'equirectangular', maxZoom: 8 });
+    const [url, minZoom, maxZoom, , , size, loader] = engine.last('addRaster') ?? [];
+    expect([url, minZoom, maxZoom, size]).toEqual(['https://trek.example/{z}/{y}/{x}.jpg', 0, 9, undefined]);
+    expect(loader).toBeInstanceOf(Function);
+    map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png' });
+    expect(engine.last('addRaster')?.slice(2)).toEqual([19, 1, 1, undefined, undefined]);
   });
 
   test('setMinZoom and setMaxZoom keep the other end', async () => {
@@ -571,7 +618,7 @@ describe('networks', () => {
 
 describe('context loss', () => {
   test('nothing is drawn while lost; a new engine gets the settings, the camera and the layers back', async () => {
-    const { map, engine } = await create({ maxPitch: 50, projection: 'mercator' });
+    const { map, engine } = await create({ maxPitch: 50, projection: 'mercator', body: 'moon' });
     const line = map.addLines({
       data: { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: {} },
     });
@@ -587,6 +634,7 @@ describe('context loss', () => {
     const fresh = map.engine as unknown as FakeEngine;
     expect(fresh).not.toBe(engine);
     expect(engine.freed).toBe(true);
+    expect(fresh.calls[0]).toEqual(['setBody', [1737400, 0, false]]);
     expect(fresh.last('setZoomRange')).toEqual([3, 22]);
     expect(fresh.last('setMaxPitch')).toEqual([50]);
     expect(fresh.last('setGlobe')).toEqual([false]);

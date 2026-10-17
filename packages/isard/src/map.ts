@@ -7,6 +7,7 @@ import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
 import { parseCssColor } from './color.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
+import { equirectangularLoader } from './equirectangular.ts';
 import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './extrusions.ts';
 import {
   CircleLayer,
@@ -31,6 +32,8 @@ import type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
+  BodyOptions,
+  CelestialBody,
   FeatureHit,
   FlyToOptions,
   GeoMapOptions,
@@ -135,15 +138,29 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
   }
 }
 
-/** Relief settings from the option: undefined when off */
-function terrainSettings(terrain: boolean | TerrainOptions | undefined): Settings['terrain'] {
+/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap) */
+const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>> = {
+  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca' },
+  moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f' },
+};
+
+/** A body from the option, its defaults filled in */
+function bodySettings(body: CelestialBody | undefined): Required<BodyOptions> {
+  if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
+  return { flattening: 0, atmosphere: false, color: '#808080', ...body };
+}
+
+/** Relief settings from the option: undefined when off. The IGN terrain model by default, on the Earth only */
+function terrainSettings(terrain: boolean | TerrainOptions | undefined, earth: boolean): Settings['terrain'] {
   if (!terrain) return undefined;
   const options = terrain === true ? {} : terrain;
+  const url = options.url ?? (earth ? TERRAIN_URL : undefined);
+  if (url === undefined) throw new Error('isard: the relief of a body other than the Earth needs a url');
   return {
-    url: options.url ?? TERRAIN_URL,
+    url,
     exaggeration: options.exaggeration ?? 1,
     maxZoom: options.maxZoom ?? 15,
-    geoid: options.geoid ?? true,
+    geoid: options.geoid ?? earth,
   };
 }
 
@@ -194,6 +211,7 @@ function rgb(color: string): [r: number, g: number, b: number] {
 
 /** Settings replayed on a new engine after a WebGL context loss */
 interface Settings {
+  body: Required<BodyOptions>;
   zoomRange: [min: number, max: number];
   maxPitch: number;
   globe: boolean;
@@ -255,6 +273,8 @@ export class GeoMap {
   /** What loading the engine with 3D Tiles and its workers needs */
   private readonly tiles3dOptions: Pick<GeoMapOptions, 'wasmUrl' | 'workers' | 'workerUrl' | 'decoders'>;
   private gone = false;
+  /** The map is of the Earth: the Géoplateforme basemaps, relief and credits by default */
+  private readonly earth: boolean;
   private basemap: RasterLayer | undefined;
   private hillshade: RasterLayer | undefined;
   private animation: ((now: number) => boolean) | undefined;
@@ -319,16 +339,19 @@ export class GeoMap {
       'bottom-right': corner('bottom-right'),
     };
     container.append(this.canvas, this.overlay, ...CORNERS.map((position) => this.corners[position]));
+    this.earth = (options.body ?? 'earth') === 'earth';
+    const body = bodySettings(options.body);
     this.settings = {
+      body,
       zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
       maxPitch: options.maxPitch ?? 70,
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
       atmosphere: atmosphereSettings(options.atmosphere),
-      terrain: terrainSettings(options.terrain),
+      terrain: terrainSettings(options.terrain, this.earth),
       loading: options.loading ?? 'immediate',
-      background: rgb(options.background ?? '#f2f2f0'),
-      globeColor: SEA['plan-grey'],
+      background: rgb(options.background ?? (this.earth ? '#f2f2f0' : '#000000')),
+      globeColor: this.earth ? SEA['plan-grey'] : rgb(body.color),
     };
     this.#engine = this.createEngine();
     // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
@@ -339,8 +362,14 @@ export class GeoMap {
       this.frameRequest = 0;
     });
     this.canvas.addEventListener('webglcontextrestored', () => this.restore());
-    this.setCamera({ center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0, ...options });
-    this.setBasemap(options.basemap ?? 'plan-grey', options.hillshade ?? 0.4);
+    const start: Camera = this.earth
+      ? { center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0 }
+      : { center: [0, 0], zoom: 2, pitch: 0, bearing: 0 };
+    this.setCamera({ ...start, ...options });
+    this.setBasemap(
+      options.basemap ?? (this.earth ? 'plan-grey' : 'none'),
+      options.hillshade ?? (this.earth ? 0.4 : 0),
+    );
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.watchRatio();
@@ -356,7 +385,7 @@ export class GeoMap {
     if (keyboard) this.canvas.tabIndex = 0;
     const attribution = options.attributionControl ?? true;
     if (attribution !== false) {
-      this.addControl(new AttributionControl(attribution === true ? {} : attribution), 'bottom-right');
+      this.addControl(new AttributionControl(attribution === true ? {} : attribution, this.earth), 'bottom-right');
     }
   }
 
@@ -376,6 +405,9 @@ export class GeoMap {
 
   private createEngine(): Engine {
     const engine = new this.engineClass(this.canvas, () => this.requestRender());
+    // The body first: the layers' shaders may take its size
+    const { radius, flattening, atmosphere: air } = this.settings.body;
+    engine.setBody(radius, flattening, air);
     const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setMaxPitch(maxPitch);
@@ -656,9 +688,10 @@ export class GeoMap {
     this.requestRender();
   }
 
-  /** Relief under the basemap: true for the IGN terrain model, its options, or false */
+  /** Relief under the basemap: true for the IGN terrain model, its options, or false; off the Earth, its options
+   * with a `url` */
   setTerrain(terrain: boolean | TerrainOptions): void {
-    this.settings.terrain = terrainSettings(terrain);
+    this.settings.terrain = terrainSettings(terrain, this.earth);
     const t = this.settings.terrain;
     this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid);
     this.requestRender();
@@ -789,8 +822,9 @@ export class GeoMap {
 
   // ── Layers ──
 
-  /** Replaces the Géoplateforme basemap and hillshade, under the other layers */
-  setBasemap(basemap: Basemap, hillshade = 0.4): void {
+  /** Replaces the Géoplateforme basemap and hillshade, under the other layers (hillshade by default: 0.4 on the
+   * Earth, 0 elsewhere) */
+  setBasemap(basemap: Basemap, hillshade = this.earth ? 0.4 : 0): void {
     this.basemap?.remove();
     this.hillshade?.remove();
     if (this.vector) {
@@ -810,17 +844,25 @@ export class GeoMap {
     } else {
       this.basemap = basemap === 'none' ? undefined : this.addRaster(BASEMAPS[basemap as keyof typeof BASEMAPS]);
     }
-    this.settings.globeColor = SEA[basemap];
+    // Off the Earth, the body's own color
+    if (this.earth) this.settings.globeColor = SEA[basemap];
     this.engine.setGlobeColor(...this.settings.globeColor);
     this.hillshade = hillshade > 0 ? this.addRaster({ ...HILLSHADE, opacity: hillshade }) : undefined;
     if (this.hillshade) this.toBottom(this.hillshade);
     if (this.basemap) this.toBottom(this.basemap);
   }
 
-  /** Raster tiles in Web Mercator ({z}, {x}, {y} URL), over the layers already added */
+  /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from an equirectangular `grid`), over the layers
+   * already added */
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
-    const { url, minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1, size, loader, before } = options;
-    const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader });
+    const { url, grid = 'mercator', minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1, size, before } = options;
+    if (grid === 'equirectangular' && !options.loader) {
+      // The source's level n has the pixel size of Mercator level n + 1 at the equator
+      const loader = equirectangularLoader(url, maxZoom, size ?? 256);
+      const layer = new RasterLayer(this, { url, minZoom, maxZoom: maxZoom + 1, opacity, saturation, size, loader });
+      return this.place(layer, before);
+    }
+    const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader: options.loader });
     return this.place(layer, before);
   }
 

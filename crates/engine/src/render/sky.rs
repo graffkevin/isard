@@ -1,6 +1,6 @@
-//! Space behind the globe: a deep blue to black sky, procedural stars fixed to the Earth's frame (they turn with the
-//! globe, as in Google Earth) and an atmosphere halo around its silhouette. One full-screen triangle, no texture;
-//! drawn only in the globe projection, fading out with it.
+//! Space behind the globe: a deep blue to black sky, procedural stars fixed to the body's frame (they turn with the
+//! globe, as in Google Earth) and an atmosphere halo around its silhouette (none around an airless body). One
+//! full-screen triangle, no texture; drawn only in the globe projection, fading out with it.
 //!
 //! Over the plane, an optional `Atmosphere` (`MapLibre`'s sky): a gradient from the horizon up to the sky, and fog
 //! below the horizon, where a tilted camera sees past the end of the ground; the ground itself fades into the fog
@@ -28,6 +28,8 @@ uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
 uniform float u_factor;
+// 1 with an atmosphere, 0 without
+uniform float u_halo;
 in vec2 v_ndc;
 out vec4 color;
 
@@ -53,7 +55,7 @@ void main() {
   vec4 near = u_inverse * vec4(v_ndc, -1.0, 1.0);
   vec4 far = u_inverse * vec4(v_ndc, 1.0, 1.0);
   vec3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
-  // Local frame (x east, y south, z up) to the Earth's frame: the sky turns with the globe
+  // Local frame (x east, y south, z up) to the body's frame: the sky turns with the globe
   vec3 earth = normalize(u_east * dir.x - u_north * dir.y + u_up * dir.z);
 
   float s = stars(earth, 140.0, 0.08, 0.10) + stars(earth, 320.0, 0.05, 0.12) * 0.7 + stars(earth, 60.0, 0.03, 0.06);
@@ -66,7 +68,7 @@ void main() {
   float miss = length(toCenter - dir * along) / u_radius;
   // Thin and bright at the limb, fading fast into space
   float glow = step(1.0, miss) * exp(-(miss - 1.0) * 28.0);
-  space = mix(space, vec3(0.42, 0.66, 1.0), glow * 0.9);
+  space = mix(space, vec3(0.42, 0.66, 1.0), glow * 0.9 * u_halo);
 
   color = vec4(space, u_factor);
 }";
@@ -120,9 +122,11 @@ impl Atmosphere {
 
 pub struct Sky {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 7],
+    uniforms: [Option<glow::UniformLocation>; 8],
     vao: glow::VertexArray,
     pub enabled: bool,
+    /// The atmosphere halo around the globe (none around an airless body)
+    pub halo: bool,
     atmosphere_program: glow::Program,
     atmosphere_uniforms: [Option<glow::UniformLocation>; 6],
     pub atmosphere: Option<Atmosphere>,
@@ -144,6 +148,7 @@ impl Sky {
                 "u_north",
                 "u_up",
                 "u_factor",
+                "u_halo",
             ],
         );
         let atmosphere_program = objects.program(VERTEX, ATMOSPHERE)?;
@@ -159,6 +164,7 @@ impl Sky {
             uniforms,
             vao,
             enabled: true,
+            halo: true,
             atmosphere_program,
             atmosphere_uniforms,
             atmosphere: None,
@@ -171,7 +177,7 @@ impl Sky {
         if !self.enabled || g.factor <= 0.0 {
             return;
         }
-        let [inverse, eye, radius, east, north, up, factor] = &self.uniforms;
+        let [inverse, eye, radius, east, north, up, factor, halo] = &self.uniforms;
         // SAFETY: draw with objects owned by the sky
         unsafe {
             gl.use_program(Some(self.program));
@@ -182,6 +188,7 @@ impl Sky {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
+            gl.uniform_1_f32(halo.as_ref(), if self.halo { 1.0 } else { 0.0 });
             // The screen triangle turns the other way round than the globe's front faces
             gl.disable(glow::CULL_FACE);
             gl.bind_vertex_array(Some(self.vao));

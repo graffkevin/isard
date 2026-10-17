@@ -19,6 +19,12 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Labels never run out of glyph space: the atlas grows into pages.
 - Keyboard navigation (arrows, +/-, Shift to rotate and pitch, 0 to reset), `keyboard` and `ariaLabel` options, a
   focusable map with a visible focus.
+- Maps of other bodies than the Earth: the `body` option, `'moon'` (a sphere of 1 737 400 m, no atmosphere) or any
+  ellipsoid (`BodyOptions`: radius, flattening, atmosphere, color); the metres of the camera, relief, buildings and
+  3D Tiles follow it. Off the Earth, none of the Géoplateforme defaults (basemap, hillshade, relief, geoid, credits)
+  and a black background; `AttributionControl` without the IGN credits. A `moon` example (NASA's LRO mosaic).
+- Raster tiles in longitudes and latitudes (`grid: 'equirectangular'`, the grid of NASA's Trek and of WorldCRS84Quad),
+  reprojected in the page into Web Mercator tiles.
 
 ### Fixed
 

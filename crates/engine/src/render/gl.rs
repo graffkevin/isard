@@ -186,16 +186,18 @@ uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
 uniform float u_world;
+// The body: its circumference and radius (metres)
+uniform vec2 u_body;
 
 vec3 project_up(vec2 plane, vec2 merc, float h) {
   float lat = atan(sinh(3.1415927 * (1.0 - 2.0 * merc.y)));
   // Pixels per metre on the plane at this latitude (Web Mercator scale), as View::pixels_per_metre
-  vec3 flat_ = vec3(plane, h * u_world / (40075016.686 * cos(lat)));
+  vec3 flat_ = vec3(plane, h * u_world / (u_body.x * cos(lat)));
   if (u_globe <= 0.0) return flat_;
   float lon = merc.x * 6.2831853 - 3.1415927;
   vec3 n = vec3(cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat));
   vec3 local = vec3(dot(n, u_east), -dot(n, u_north), dot(n, u_up));
-  vec3 sphere = u_radius * (local + vec3(0.0, 0.0, -1.0)) + local * (h * u_radius / 6378137.0);
+  vec3 sphere = u_radius * (local + vec3(0.0, 0.0, -1.0)) + local * (h * u_radius / u_body.y);
   return mix(flat_, sphere, u_globe);
 }
 
@@ -203,26 +205,27 @@ vec3 project(vec2 plane, vec2 merc) { return project_up(plane, merc, 0.0); }
 ";
 
 /// Uniforms of `PROJECT`
-pub struct Projection([Option<glow::UniformLocation>; 6]);
+pub struct Projection([Option<glow::UniformLocation>; 7]);
 
 impl Projection {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         Self(uniforms(
             gl,
             program,
-            ["u_globe", "u_radius", "u_east", "u_north", "u_up", "u_world"],
+            ["u_globe", "u_radius", "u_east", "u_north", "u_up", "u_world", "u_body"],
         ))
     }
 
     /// Call with the program in use
     pub fn set(&self, gl: &glow::Context, view: &geo::camera::View) {
-        let [factor, radius, east, north, up, world] = &self.0;
+        let [factor, radius, east, north, up, world, body] = &self.0;
         let g = &view.globe;
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
             gl.uniform_1_f32(radius.as_ref(), g.radius as f32);
             gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
+            gl.uniform_2_f32(body.as_ref(), view.body.circumference() as f32, view.body.radius as f32);
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }

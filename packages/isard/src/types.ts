@@ -22,21 +22,44 @@ export type LoadingMode = 'immediate' | 'smooth';
 /** 'globe': a sphere at low zoom, blending into Web Mercator between zooms 5 and 7 */
 export type Projection = 'globe' | 'mercator';
 
+/** A body to draw the map on, other than the named ones (`CelestialBody`) */
+export interface BodyOptions {
+  /** Equatorial radius, metres */
+  radius: number;
+  /** Flattening of its ellipsoid, 0 for a sphere (default 0) */
+  flattening?: number;
+  /** An atmosphere: its halo around the globe (default false) */
+  atmosphere?: boolean;
+  /** Color of the globe where no tile covers it (past the Web Mercator latitudes, 85°), a CSS color (default
+   * `#808080`) */
+  color?: string;
+}
+
+/**
+ * The body the map is drawn on: 'earth' (WGS 84, the default), 'moon' (a sphere of 1 737 400 m, no atmosphere) or
+ * another one. Zoom levels keep their meaning on screen (the Web Mercator tile pyramid), their metres follow the body:
+ * altitudes, relief, buildings, 3D Tiles. Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no
+ * hillshade, no default relief or geoid, no IGN credits, and space for its background.
+ */
+export type CelestialBody = 'earth' | 'moon' | BodyOptions;
+
 export interface GeoMapOptions extends Partial<Camera> {
+  /** The body the map is drawn on (default 'earth'); set at creation */
+  body?: CelestialBody;
   /** Default 'globe' */
   projection?: Projection;
   /** Default 'immediate' */
   loading?: LoadingMode;
-  /** Géoplateforme basemap (default 'plan-grey') */
+  /** Géoplateforme basemap (default 'plan-grey'; 'none' off the Earth) */
   basemap?: Basemap;
-  /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4) */
+  /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4; 0 off the Earth) */
   hillshade?: number;
-  /** Color behind the map (sky of tilted flat views), a CSS color (default `#f2f2f0`) */
+  /** Color behind the map (sky of tilted flat views), a CSS color (default `#f2f2f0`; black off the Earth) */
   background?: string;
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
   /** Relief under the basemap: true for the IGN terrain model (Géoplateforme, RGE ALTI), or its options (default
-   * false). Network layers are draped on it */
+   * false; off the Earth, its `url` is required). Network layers are draped on it */
   terrain?: boolean | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;
@@ -93,7 +116,7 @@ export interface TerrainOptions {
   /** Finest level of the relief, 6 to 15 (default 15) */
   maxZoom?: number;
   /** Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles); false keeps the
-   * altitudes as served (NGF-IGN69 over France) (default true) */
+   * altitudes as served (NGF-IGN69 over France) (default true on the Earth, false elsewhere) */
   geoid?: boolean;
 }
 
@@ -128,9 +151,19 @@ export interface FlyToOptions extends AnimationOptions {
   speed?: number;
 }
 
+/**
+ * Tile grid of a raster's URL. 'mercator': Web Mercator (XYZ, WMTS PM), the engine's own. 'equirectangular':
+ * longitudes and latitudes (Plate Carrée, EPSG:4326-like), two 256 px tiles side by side at level 0, rows from the
+ * north (NASA's Trek WMTS, WorldCRS84Quad), reprojected in the page into Web Mercator tiles.
+ */
+export type RasterGrid = 'mercator' | 'equirectangular';
+
 export interface RasterOptions {
-  /** Tile URL with {z}, {x} and {y} (Web Mercator, 256 px tiles); unused with a `loader` */
+  /** Tile URL with {z}, {x} and {y} (256 px tiles); unused with a `loader` */
   url: string;
+  /** Tile grid of `url` (default 'mercator'); with 'equirectangular', `minZoom` and `maxZoom` are levels of that
+   * grid */
+  grid?: RasterGrid;
   minZoom?: number;
   maxZoom?: number;
   opacity?: number;

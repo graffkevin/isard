@@ -106,7 +106,11 @@ export interface AttributionOptions {
 export class AttributionControl implements Control {
   private observer: ResizeObserver | undefined;
 
-  constructor(private readonly options: AttributionOptions = {}) {}
+  /** `ign`: the Géoplateforme credits first (`DEFAULT_ATTRIBUTION`; false on a map of another body than the Earth) */
+  constructor(
+    private readonly options: AttributionOptions = {},
+    private readonly ign = true,
+  ) {}
 
   onAdd(map: GeoMap): HTMLElement {
     const element = document.createElement('div');
@@ -114,7 +118,8 @@ export class AttributionControl implements Control {
     const inner = document.createElement('div');
     inner.className = 'isard-attrib-inner';
     const custom = this.options.customAttribution ?? [];
-    inner.innerHTML = [DEFAULT_ATTRIBUTION, ...(typeof custom === 'string' ? [custom] : custom)].join(' | ');
+    const credits = [...(this.ign ? [DEFAULT_ATTRIBUTION] : []), ...(typeof custom === 'string' ? [custom] : custom)];
+    inner.innerHTML = credits.join(' | ');
     for (const link of inner.querySelectorAll('a')) {
       link.target = '_blank';
       link.rel = 'noopener noreferrer';

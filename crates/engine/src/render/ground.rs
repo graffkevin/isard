@@ -37,11 +37,8 @@ in vec2 v_plane;
 in float v_distance;
 out vec4 isard_color;
 
-// Length of the Mercator world in Mercator metres (offsets times this: metres of EPSG:3857)
-const float ISARD_EARTH = 40075016.686;
 // Mercator offset of this pixel from the layer's anchor
 vec2 ground_offset() { return u_anchor_offset + v_plane / u_world; }
-#line 1
 ";
 
 /// What comes after it
@@ -148,11 +145,21 @@ pub struct GroundLayer {
 }
 
 impl GroundLayer {
-    pub fn new(gl: &glow::Context, code: &str, anchor: DVec2, min: DVec2, max: DVec2) -> Result<Self, String> {
+    /// `circumference`: the body's, in metres (`ISARD_EARTH`)
+    pub fn new(
+        gl: &glow::Context,
+        code: &str,
+        circumference: f64,
+        anchor: DVec2,
+        min: DVec2,
+        max: DVec2,
+    ) -> Result<Self, String> {
+        // Length of the Mercator world in metres of the body (offsets times this: metres of EPSG:3857 on the Earth)
+        let earth = format!("const float ISARD_EARTH = {circumference:.3};\n");
         let program = gl::program(
             gl,
             &format!("#version 300 es\n{}{}", gl::PROJECT, raster::VERTEX),
-            &format!("{PRELUDE}{code}\n{MAIN}"),
+            &format!("{PRELUDE}{earth}#line 1\n{code}\n{MAIN}"),
         )?;
         let mut custom = HashMap::new();
         // SAFETY: queries on a linked program
@@ -385,7 +392,7 @@ impl GroundLayer {
 
 /// Uniforms of `PROJECT`, set by `Projection`
 fn is_projection(name: &str) -> bool {
-    matches!(name, "u_globe" | "u_radius" | "u_east" | "u_north" | "u_up")
+    matches!(name, "u_globe" | "u_radius" | "u_east" | "u_north" | "u_up" | "u_body")
 }
 
 impl Layer for GroundLayer {
@@ -500,6 +507,7 @@ impl Engine {
         let layer = GroundLayer::new(
             &self.gl,
             code,
+            self.body().circumference(),
             DVec2::new(anchor_x, anchor_y),
             DVec2::new(min_x, min_y),
             DVec2::new(max_x, max_y),

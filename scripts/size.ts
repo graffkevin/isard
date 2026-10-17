@@ -17,7 +17,7 @@ const BUDGETS = {
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   'isard_bg.wasm': 341,
   /** The package's modules (dist/*.js but the workers), all together */
-  modules: 61,
+  modules: 64, // 61 until the equirectangular grid (the Moon), about 2 KB
   /** The engines' JavaScript bindings (wasm-bindgen) */
   bindings: 38,
   'decoder.worker.js': 13,

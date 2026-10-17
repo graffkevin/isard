@@ -241,6 +241,17 @@ impl Engine {
         self.loading = if immediate { Loading::IMMEDIATE } else { Loading::SMOOTH };
     }
 
+    /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), and whether it
+    /// has an atmosphere (its halo around the globe). WGS 84 and an atmosphere by default; set before the layers,
+    /// whose shaders may take its size (`ISARD_EARTH` of the ground layers)
+    #[wasm_bindgen(js_name = setBody)]
+    pub fn set_body(&mut self, radius: f64, flattening: f64, atmosphere: bool) {
+        if radius.is_finite() && radius > 0.0 && (0.0..1.0).contains(&flattening) {
+            self.camera.body = geo::geodesy::Body { radius, flattening };
+        }
+        self.sky.halo = atmosphere;
+    }
+
     /// Space behind the globe (stars, atmosphere halo), in the globe projection
     #[wasm_bindgen(js_name = setSky)]
     pub fn set_sky(&mut self, enabled: bool) {
@@ -433,7 +444,7 @@ impl Engine {
             .and_then(|(terrain, exaggeration)| terrain.altitude(m).map(|h| h * f64::from(*exaggeration)))
             .unwrap_or(0.0);
         // On the plane or the sphere, on the copy of the world nearest to the center; past the horizon of the
-        // globe, hidden by the Earth
+        // globe, hidden by the body
         let shift = -(m.x - self.camera.center.x).round();
         let p = view.position(m, shift);
         if view.globe.factor > 0.0 && !view.faces_camera(p) {
@@ -656,6 +667,11 @@ impl Engine {
 }
 
 impl Engine {
+    /// The body the map is drawn on
+    pub(crate) fn body(&self) -> geo::geodesy::Body {
+        self.camera.body
+    }
+
     /// Clears the canvas and sets the state every layer starts from
     fn begin_frame(&self, w: f64, h: f64) {
         // SAFETY: frame setup on the live context

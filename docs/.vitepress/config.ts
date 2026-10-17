@@ -14,6 +14,7 @@ const examples = [
   ['Relief and a ground shader', 'relief'],
   ['3D Tiles', 'tiles3d'],
   ['Vector basemaps', 'vector'],
+  ['The Moon', 'moon'],
 ];
 
 export default defineConfig({

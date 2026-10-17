@@ -11,7 +11,7 @@
 //! Local frame of a view: pixels relative to the center, x east, y south, z up. The sphere touches the plane at the
 //! center, its own center at (0, 0, -radius).
 
-use crate::geodesy;
+use crate::geodesy::{self, Body};
 use glam::{DMat4, DVec2, DVec3, DVec4};
 use std::f64::consts::PI;
 
@@ -52,7 +52,7 @@ pub fn lon_lat(m: DVec2) -> DVec2 {
     DVec2::new(m.x * 360.0 - 180.0, lat)
 }
 
-/// Unit vector from the Earth center (x: lon 0 lat 0, y: lon 90° E, z: north pole) of a Mercator point
+/// Unit vector from the body's center (x: lon 0 lat 0, y: lon 90° E, z: north pole) of a Mercator point
 #[must_use]
 pub fn unit(m: DVec2) -> DVec3 {
     let lon = m.x * 2.0 * PI - PI;
@@ -80,6 +80,8 @@ pub struct Camera {
     pub globe: bool,
     /// Altitude of the center (metres): the camera turns around the ground of the relief, not sea level
     pub elevation: f64,
+    /// The body the map is drawn on: its size turns zoom levels into metres
+    pub body: Body,
 }
 
 /// Sphere of a view, in the local frame
@@ -89,7 +91,7 @@ pub struct Globe {
     pub factor: f64,
     /// Pixels
     pub radius: f64,
-    /// Local axes at the center, in Earth coordinates (`unit`)
+    /// Local axes at the center, in body coordinates (`unit`)
     pub east: DVec3,
     pub north: DVec3,
     pub up: DVec3,
@@ -115,6 +117,7 @@ pub struct View {
     pub world_size: f64,
     pub center: DVec2,
     pub globe: Globe,
+    pub body: Body,
 }
 
 impl View {
@@ -155,11 +158,11 @@ impl View {
     }
 
     /// Pixels per metre at a latitude (degrees): on the plane, as Web Mercator scales it; on the sphere, its radius
-    /// over the Earth's
+    /// over the body's
     #[must_use]
     pub fn pixels_per_metre(&self, lat: f64) -> f64 {
-        let plane = self.world_size / (2.0 * PI * geodesy::A * lat.to_radians().cos().max(1e-6));
-        let sphere = self.globe.radius / geodesy::A;
+        let plane = self.world_size / (2.0 * PI * self.body.radius * lat.to_radians().cos().max(1e-6));
+        let sphere = self.globe.radius / self.body.radius;
         plane + (sphere - plane) * self.globe.factor
     }
 
@@ -168,7 +171,7 @@ impl View {
     /// at the anchor, a tile-sized neighbourhood stays well under a pixel.
     #[must_use]
     pub fn ecef_matrix(&self, anchor: DVec3) -> DMat4 {
-        let g = geodesy::from_ecef(anchor);
+        let g = self.body.from_ecef(anchor);
         let m = mercator(g.x, g.y);
         let [east, north, up] = geodesy::enu(g.x, g.y);
         let k = self.pixels_per_metre(g.y);
@@ -197,7 +200,7 @@ impl View {
     /// Position in the local frame of an ECEF point
     #[must_use]
     pub fn ecef(&self, p: DVec3) -> DVec3 {
-        self.geodetic(geodesy::from_ecef(p))
+        self.geodetic(self.body.from_ecef(p))
     }
 
     /// Position in the local frame of a longitude, latitude (degrees) and ellipsoidal height (m): the origin of
@@ -228,7 +231,7 @@ impl View {
         if self.globe.factor < 0.999 {
             return false;
         }
-        let r = self.globe.radius * (1.0 - 1e3 / geodesy::A);
+        let r = self.globe.radius * (1.0 - 1e3 / self.body.radius);
         let to_globe = self.sphere_center() - self.eye;
         let d = to_globe.length();
         let to_tile = center - self.eye;
@@ -267,6 +270,7 @@ impl Camera {
             max_pitch: MAX_PITCH,
             globe: false,
             elevation: 0.0,
+            body: Body::EARTH,
         }
     }
 
@@ -331,8 +335,8 @@ impl Camera {
         let proj = glam::dcamera::rh::proj::opengl::perspective(FOV, self.width / self.height, near, far);
         // The center stands at its altitude: the local frame goes down under the camera
         let lat = (PI * (1.0 - 2.0 * self.center.y)).sinh().atan();
-        let plane = self.world_size() / (2.0 * PI * geodesy::A * lat.cos().max(1e-6));
-        let vertical = plane + (globe.radius / geodesy::A - plane) * globe.factor;
+        let plane = self.world_size() / (2.0 * PI * self.body.radius * lat.cos().max(1e-6));
+        let vertical = plane + (globe.radius / self.body.radius - plane) * globe.factor;
         let lift = self.elevation * vertical;
         // Local frame (y south, z up) to eye space (y up, looking down -z)
         let view = DMat4::from_translation(DVec3::new(0.0, 0.0, -center_distance))
@@ -354,6 +358,7 @@ impl Camera {
             world_size: self.world_size(),
             center: self.center,
             globe,
+            body: self.body,
         }
     }
 
@@ -724,7 +729,7 @@ mod tests {
         assert!(v.faces_camera(v.sphere(v.center)));
         assert!(!v.faces_camera(v.sphere(antipode)));
         // Spheres: the antipode hidden, the center and a huge sphere around the antipode not
-        let k = v.globe.radius / geodesy::A;
+        let k = v.globe.radius / v.body.radius;
         assert!(v.behind_horizon(v.sphere(antipode), 1000.0 * k));
         assert!(!v.behind_horizon(v.sphere(v.center), 1000.0 * k));
         assert!(!v.behind_horizon(v.sphere(antipode), 8e6 * k));
@@ -770,38 +775,70 @@ mod tests {
     #[test]
     fn ecef_points_land_where_the_basemap_puts_them() {
         // A ground point 300 m east of the center, through the ECEF map, lands where the Mercator plane has it
-        for globe_zoom in [None, Some(3.0), Some(6.0)] {
-            let mut c = camera();
-            if let Some(z) = globe_zoom {
-                c.globe = true;
-                c.zoom = z;
+        for body in [Body::EARTH, Body::MOON] {
+            for globe_zoom in [None, Some(3.0), Some(6.0)] {
+                let mut c = camera();
+                c.body = body;
+                if let Some(z) = globe_zoom {
+                    c.globe = true;
+                    c.zoom = z;
+                }
+                let v = c.view();
+                let center = lon_lat(c.center);
+                let anchor = body.to_ecef(center.x, center.y, 0.0);
+                assert!(v.ecef(anchor).length() < 1e-6, "anchor at the center");
+                // Degrees of longitude for 300 m along the parallel
+                let lon = center.x + 300.0 / (body.circumference() / 360.0 * center.y.to_radians().cos());
+                let east = body.to_ecef(lon, center.y, 0.0);
+                let through_matrix = v.ecef_matrix(anchor).transform_point3(east - anchor);
+                let direct = v.position(mercator(lon, center.y), 0.0);
+                let scale = v.pixels_per_metre(center.y) * 300.0;
+                assert!(
+                    (through_matrix - direct).length() < 0.02 * scale + 0.01,
+                    "{body:?} {globe_zoom:?}: {through_matrix} vs {direct}"
+                );
+                // Up is up, scaled like the ground
+                let high = v.ecef(body.to_ecef(center.x, center.y, 100.0));
+                assert!(
+                    (high.z - 100.0 * v.pixels_per_metre(center.y)).abs() < 1e-3 * high.z.abs().max(1.0),
+                    "{body:?}: {high}"
+                );
             }
-            let v = c.view();
-            let center = lon_lat(c.center);
-            let anchor = geodesy::to_ecef(center.x, center.y, 0.0);
-            assert!(v.ecef(anchor).length() < 1e-6, "anchor at the center");
-            let east = geodesy::to_ecef(
-                center.x + 300.0 / (111_320.0 * center.y.to_radians().cos()),
-                center.y,
-                0.0,
-            );
-            let through_matrix = v.ecef_matrix(anchor).transform_point3(east - anchor);
-            let direct = v.position(
-                mercator(center.x + 300.0 / (111_320.0 * center.y.to_radians().cos()), center.y),
-                0.0,
-            );
-            let scale = v.pixels_per_metre(center.y) * 300.0;
-            assert!(
-                (through_matrix - direct).length() < 0.02 * scale + 0.01,
-                "{globe_zoom:?}: {through_matrix} vs {direct}"
-            );
-            // Up is up, scaled like the ground
-            let high = v.ecef(geodesy::to_ecef(center.x, center.y, 100.0));
-            assert!(
-                (high.z - 100.0 * v.pixels_per_metre(center.y)).abs() < 1e-3 * high.z.abs().max(1.0),
-                "{high}"
-            );
         }
+    }
+
+    #[test]
+    fn metres_follow_the_body() {
+        // A zoom level is the same Web Mercator pyramid on any body: its pixels hold fewer metres of a smaller one
+        for globe_on in [false, true] {
+            let mut earth = camera();
+            earth.globe = globe_on;
+            earth.zoom = if globe_on { 3.0 } else { 14.0 };
+            let mut moon = earth.clone();
+            moon.body = Body::MOON;
+            let (e, m) = (earth.view(), moon.view());
+            let lat = lon_lat(earth.center).y;
+            // The Earth's scale as before: Web Mercator's on the plane, the sphere's on the globe
+            let expected = if globe_on {
+                e.globe.radius / 6_378_137.0
+            } else {
+                e.world_size / (2.0 * PI * 6_378_137.0 * lat.to_radians().cos())
+            };
+            assert!((e.pixels_per_metre(lat) / expected - 1.0).abs() < 1e-12);
+            assert!((e.vertical / expected - 1.0).abs() < 1e-12);
+            // The Moon's, its radius over the Earth's larger; the globe itself the same size on screen
+            let ratio = 6_378_137.0 / 1_737_400.0;
+            assert!((m.pixels_per_metre(lat) / e.pixels_per_metre(lat) / ratio - 1.0).abs() < 1e-12);
+            assert!((m.vertical / e.vertical / ratio - 1.0).abs() < 1e-12);
+            assert!((m.globe.radius - e.globe.radius).abs() < 1e-9);
+            assert_eq!(m.view_proj, e.view_proj);
+        }
+        // A camera over the relief stands the same number of metres higher: more pixels on the Moon
+        let mut c = camera();
+        c.elevation = 1000.0;
+        let earth = c.view().lift;
+        c.body = Body::MOON;
+        assert!((c.view().lift / earth - 6_378_137.0 / 1_737_400.0).abs() < 1e-9);
     }
 
     #[test]
