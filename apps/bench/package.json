@@ -4,7 +4,7 @@
   "type": "module",
   "dependencies": {
     "@ign-junn/isard": "workspace:*",
-    "itowns": "2.46.1-next.72",
+    "itowns": "2.46.1-next.74",
     "postprocessing": "6.39.5",
     "proj4": "^2.20.4",
     "three": "^0.186.1",
