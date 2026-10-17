@@ -328,7 +328,7 @@ impl Camera {
             far *= 1.25;
         }
         let near = self.height / 50.0;
-        let proj = DMat4::perspective_rh_gl(FOV, self.width / self.height, near, far);
+        let proj = glam::dcamera::rh::proj::opengl::perspective(FOV, self.width / self.height, near, far);
         // The center stands at its altitude: the local frame goes down under the camera
         let lat = (PI * (1.0 - 2.0 * self.center.y)).sinh().atan();
         let plane = self.world_size() / (2.0 * PI * geodesy::A * lat.cos().max(1e-6));
