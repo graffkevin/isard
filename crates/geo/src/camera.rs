@@ -225,13 +225,14 @@ impl View {
 
     /// Whether a sphere (local frame, radius in pixels) lies wholly behind the globe as the camera sees it: inside the
     /// cone of the globe's shadow, beyond its horizon. Only on the sphere (`globe.factor` near 1), false otherwise.
-    /// The occluder is the globe shrunk by 1 km, for ground below the ellipsoid.
+    /// The occluder is the globe shrunk by 1 km, or by the depth of the body's lowest ground, for ground below the
+    /// ellipsoid.
     #[must_use]
     pub fn behind_horizon(&self, center: DVec3, radius: f64) -> bool {
         if self.globe.factor < 0.999 {
             return false;
         }
-        let r = self.globe.radius * (1.0 - 1e3 / self.body.radius);
+        let r = self.globe.radius * (1.0 - (-self.body.relief.0).max(1e3) / self.body.radius);
         let to_globe = self.sphere_center() - self.eye;
         let d = to_globe.length();
         let to_tile = center - self.eye;
@@ -736,6 +737,28 @@ mod tests {
         // The ECEF position without the matrix is the matrix's origin
         let p = geodesy::to_ecef(3.06, 50.63, 120.0);
         assert!((v.ecef(p) - v.ecef_matrix(p).w_axis.truncate()).length() < 1e-9);
+    }
+
+    #[test]
+    fn deep_ground_of_the_body_is_not_hidden() {
+        // A point 5 km under the sphere, where its horizon passes: inside the globe shrunk by 1 km, hidden; Mars's
+        // ground goes 8 km deep (Hellas), its globe is shrunk by as much and the point shows
+        let mut c = globe(1.5);
+        c.body = Body::MARS;
+        let deep = |c: &Camera| {
+            let v = c.view();
+            let (center, r) = (v.sphere_center(), v.globe.radius);
+            let to_eye = v.eye - center;
+            let d = to_eye.length();
+            let u = to_eye / d;
+            let w = u.cross(DVec3::X).normalize();
+            let a = (r / d).acos();
+            let p = center + (u * a.cos() + w * a.sin()) * r * (1.0 - 5e3 / v.body.radius);
+            v.behind_horizon(p, 1e-6)
+        };
+        assert!(!deep(&c));
+        c.body.relief.0 = -200.0;
+        assert!(deep(&c));
     }
 
     #[test]

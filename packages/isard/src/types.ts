@@ -34,6 +34,9 @@ export interface BodyOptions {
   /** Color of the globe where no tile covers it (past the Web Mercator latitudes, 85°), a CSS color (default
    * `#808080`) */
   color?: string;
+  /** Lowest and highest altitudes of its ground, metres around the ellipsoid: what its relief may raise into view
+   * (default ±1 % of the radius) */
+  relief?: [lowest: number, highest: number];
 }
 
 /**
@@ -41,7 +44,8 @@ export interface BodyOptions {
  * 'mars' (a sphere of 3 396 190 m, its equatorial radius, a thin dusty halo; planetocentric latitudes) or another
  * one. Zoom levels keep their meaning on screen (the Web Mercator tile pyramid), their metres follow the body:
  * altitudes, relief, buildings, 3D Tiles. Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no
- * hillshade, no default relief or geoid, no IGN credits, and space for its background.
+ * hillshade, no geoid, no IGN credits, and space for its background; the Moon and Mars have NASA's relief for
+ * `terrain: true`.
  */
 export type CelestialBody = 'earth' | 'moon' | 'mars' | BodyOptions;
 
@@ -60,8 +64,9 @@ export interface GeoMapOptions extends Partial<Camera> {
   background?: string;
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
-  /** Relief under the basemap: true for the IGN terrain model (Géoplateforme, RGE ALTI), or its options (default
-   * false; off the Earth, its `url` is required). Network layers are draped on it */
+  /** Relief under the basemap: true for the body's terrain model (the IGN's on the Earth: Géoplateforme, RGE ALTI;
+   * NASA's on the Moon and Mars: LOLA, MOLA), or its options (default false; on another body, its `url` is required).
+   * Network layers are draped on it */
   terrain?: boolean | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;
@@ -109,13 +114,16 @@ export interface GeoMapOptions extends Partial<Camera> {
 }
 
 export interface TerrainOptions {
-  /** Raw altitudes, 256 × 256 `image/x-bil;bits=32`: a WMS GetMap URL with {bbox} (EPSG:3857) or a tile URL with {z},
-   * {x} and {y} (default: the Géoplateforme WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES). Altitudes over mainland
-   * France (NGF-IGN69) are raised by the RAF20 geoid height to meet the ellipsoidal heights of 3D Tiles */
+  /** Raw altitudes, 256 × 256 `image/x-bil;bits=32`: a WMS GetMap URL with {bbox} (EPSG:3857 on the Earth, the
+   * body's Mercator metres elsewhere: the sphere of its radius), a tile URL with {z}, {x} and {y}, or an ArcGIS image
+   * service (a URL ending in `/ImageServer`), asked for raw altitudes in the body's Mercator (default: the Géoplateforme
+   * WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES; on the Moon and Mars, NASA's Trek LOLA and MOLA models). Altitudes
+   * over mainland France (NGF-IGN69) are raised by the RAF20 geoid height to meet the ellipsoidal heights of 3D Tiles */
   url?: string;
   /** Vertical exaggeration, 1 for the true relief (default 1) */
   exaggeration?: number;
-  /** Finest level of the relief, 6 to 15 (default 15) */
+  /** Finest level of the relief, up to 15 (default 15; 8 for the Moon's and Mars's models). It starts at level 6 on
+   * the Earth, coarser on bodies of a larger relief for their size (2 on the Moon, 3 on Mars) */
   maxZoom?: number;
   /** Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles); false keeps the
    * altitudes as served (NGF-IGN69 over France) (default true on the Earth, false elsewhere) */

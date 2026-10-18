@@ -11,7 +11,7 @@
 //! whole stack, each pixel shaded once, whatever the number of tiles and layers. A tile fading in is mixed with its
 //! stand-in in the same shader.
 //!
-//! An elevation source (raw altitudes, `image/x-bil;bits=32`, in an R32F pool) gives the relief: the vertex shader
+//! An elevation source (raw altitudes, `image/x-bil;bits=32` or an `ArcGIS` raw grid, in an R32F pool) gives the relief: the vertex shader
 //! lifts the grid of every tile by the heights read in it, three levels coarser than the imagery (a 16 × 16 grid
 //! needs far fewer samples than 256 px), and a skirt under the tile edges hides the cracks between levels.
 //!
@@ -27,7 +27,7 @@ mod pass;
 mod shaders;
 
 pub use cache::simulate_plans;
-pub use data::unpack_depth;
+pub use data::{terrain_levels, unpack_depth};
 pub use pass::RasterPass;
 pub use shaders::VERTEX;
 
@@ -75,11 +75,10 @@ pub const STACK: usize = 4;
 const INSTANCE: usize = 8 + STACK * 11 + 4;
 /// Elevation tiles are chosen this many times larger on screen than imagery tiles: three levels coarser
 const ELEVATION_SCALE: f64 = 8.0;
-/// Below this, an altitude is the no-data of the server (-99999 on the Géoplateforme)
-const NO_DATA: f32 = -1000.0;
 
 pub struct RasterOptions {
-    /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857: west, south, east, north in metres)
+    /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857, `ArcGIS` `exportImage`: west,
+    /// south, east, north in Mercator metres of the body)
     pub url: String,
     pub min_z: u8,
     pub max_z: u8,
@@ -87,6 +86,8 @@ pub struct RasterOptions {
     pub saturation: f32,
     /// Raw altitudes (`image/x-bil;bits=32`) rather than images: the relief
     pub elevation: bool,
+    /// The body the tiles cover: its size for `{bbox}`, its relief for the no-data of the altitudes
+    pub body: geo::geodesy::Body,
     /// Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles)
     pub geoid: bool,
     /// Side of the textures of the tiles, pixels (256; more for tiles drawn by the page, sharper)
@@ -341,8 +342,9 @@ impl RasterSource {
         let Ok(controller) = web_sys::AbortController::new() else {
             return;
         };
-        let url = data::tile_url(&self.options.url, tile);
+        let url = data::tile_url(&self.options.url, tile, &self.options.body);
         let (elevation, geoid, size) = (self.options.elevation, self.options.geoid, self.options.size);
+        let no_data = data::no_data(&self.options.body);
         let loader = self.options.loader.clone();
         let signal = controller.signal();
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
@@ -359,7 +361,7 @@ impl RasterSource {
                 let fetched = if let Some(loader) = &loader {
                     fetch::draw_tile(loader, tile, &signal).await.map(Pixels::Image)
                 } else if elevation {
-                    fetch::fetch_heights(&url, tile, geoid, &signal, reload, priority)
+                    fetch::fetch_heights(&url, tile, geoid, no_data, &signal, reload, priority)
                         .await
                         .map(Pixels::Heights)
                 } else {

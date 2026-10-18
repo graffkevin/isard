@@ -108,7 +108,10 @@ describe('options', () => {
   test('defaults reach the engine', async () => {
     const { engine, map } = await create();
     // The Earth, WGS 84, first: the layers' shaders may take its size
-    expect(engine.calls[0]).toEqual(['setBody', [6378137, 1 / 298.257223563, Float32Array.of(0.42, 0.66, 1, 1)]]);
+    expect(engine.calls[0]).toEqual([
+      'setBody',
+      [6378137, 1 / 298.257223563, Float32Array.of(0.42, 0.66, 1, 1), -200, 5000],
+    ]);
     expect(engine.last('setZoomRange')).toEqual([0, 22]);
     expect(engine.last('setMaxPitch')).toEqual([70]);
     expect(engine.last('setGlobe')).toEqual([true]);
@@ -183,7 +186,7 @@ describe('options', () => {
     });
     maps.push(map);
     const engine = map.engine as unknown as FakeEngine;
-    expect(engine.last('setBody')).toEqual([1737400, 0, undefined]);
+    expect(engine.last('setBody')).toEqual([1737400, 0, undefined, -9200, 10800]);
     expect(engine.args('addRaster')).toEqual([]);
     expect(engine.last('setBackground')).toEqual([0, 0, 0]);
     expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([0x77, 0x75, 0x6f]);
@@ -192,10 +195,38 @@ describe('options', () => {
     const credits = (element: FakeElement): FakeElement | undefined =>
       element.className === 'isard-attrib-inner' ? element : element.children.map(credits).find(Boolean);
     expect(credits(container)?.innerHTML).toBe('NASA');
-    // No IGN relief there: a url is needed, its altitudes left as served
-    expect(() => map.setTerrain(true)).toThrow(/needs a url/);
-    map.setTerrain({ url: 'https://moon.example/{z}/{x}/{y}.bil' });
-    expect(engine.last('setTerrain')).toEqual(['https://moon.example/{z}/{x}/{y}.bil', 1, 15, false]);
+    // NASA's LOLA model, from its image service in the Moon's Mercator, its altitudes left as served
+    map.setTerrain(true);
+    const [url, exaggeration, maxZoom, geoid] = engine.last('setTerrain') ?? [];
+    expect([exaggeration, maxZoom, geoid]).toEqual([1, 8, false]);
+    expect(url).toStartWith(
+      'https://trek.nasa.gov/moon/trekarcgis/rest/services/LRO_LOLA_DEM_Global_128ppd_v04/ImageServer/exportImage?',
+    );
+    expect(url).toContain('format=bsq&pixelType=F32&size=256,256');
+    expect(url).toEndWith('&bbox={bbox}');
+    const wkt = JSON.parse(decodeURIComponent(/imageSR=([^&]+)/.exec(url as string)?.[1] ?? '')).wkt as string;
+    expect(wkt).toContain('SPHEROID["S",1737400,0]');
+    expect(wkt).toContain('PROJECTION["Mercator"]');
+    // The braces of the WKT are escaped: only {bbox} is filled
+    expect((url as string).match(/[{}]/g)).toEqual(['{', '}']);
+    // A url of the page's own: its finest level 15 by default
+    map.setTerrain({ url: 'https://moon.example/{z}/{x}/{y}.bil', exaggeration: 3 });
+    expect(engine.last('setTerrain')).toEqual(['https://moon.example/{z}/{x}/{y}.bil', 3, 15, false]);
+  });
+
+  test('an ArcGIS image service gives raw altitudes in the Mercator of the body', async () => {
+    const { engine, map } = await create({
+      terrain: { url: 'https://dem.example/arcgis/rest/services/D/ImageServer/' },
+    });
+    expect(engine.last('setTerrain')).toEqual([
+      'https://dem.example/arcgis/rest/services/D/ImageServer/exportImage?f=image&format=bsq&pixelType=F32' +
+        '&size=256,256&bboxSR=3857&imageSR=3857&bbox={bbox}',
+      1,
+      15,
+      true,
+    ]);
+    map.setTerrain({ url: 'https://dem.example/D/ImageServer?token=1' });
+    expect(engine.last('setTerrain')?.[0]).toBe('https://dem.example/D/ImageServer?token=1');
   });
 
   test('another body: its radius and flattening, its atmosphere and color', async () => {
@@ -203,15 +234,19 @@ describe('options', () => {
       body: { radius: 3396190, flattening: 0.00589, atmosphere: true, color: '#c1440e' },
     });
     // The Earth's halo
-    expect(engine.last('setBody')).toEqual([3396190, 0.00589, Float32Array.of(0.42, 0.66, 1, 1)]);
+    expect(engine.last('setBody')).toEqual([3396190, 0.00589, Float32Array.of(0.42, 0.66, 1, 1), -33961.9, 33961.9]);
     expect(engine.last('setGlobeColor')).toEqual([0xc1 / 255, 0x44 / 255, 0x0e / 255]);
     const { engine: sphere } = await create({ body: { radius: 1000 } });
-    expect(sphere.last('setBody')).toEqual([1000, 0, undefined]);
+    expect(sphere.last('setBody')).toEqual([1000, 0, undefined, -10, 10]);
+    // No relief of its own: a url is needed
+    await expect(create({ body: { radius: 1000 }, terrain: true })).rejects.toThrow(/needs a url/);
+    const { engine: rough } = await create({ body: { radius: 1000, relief: [-50, 120] } });
+    expect(rough.last('setBody')?.slice(3)).toEqual([-50, 120]);
     // A halo of its own color, its alpha the strength; none for what is not a color
     const { engine: tinted } = await create({ body: { radius: 1000, atmosphere: 'rgb(255 102 0 / 50%)' } });
-    expect(tinted.last('setBody')).toEqual([1000, 0, Float32Array.of(1, 0.4, 0, 0.5)]);
+    expect(tinted.last('setBody')).toEqual([1000, 0, Float32Array.of(1, 0.4, 0, 0.5), -10, 10]);
     const { engine: wrong } = await create({ body: { radius: 1000, atmosphere: 'dusty' } });
-    expect(wrong.last('setBody')).toEqual([1000, 0, undefined]);
+    expect(wrong.last('setBody')).toEqual([1000, 0, undefined, -10, 10]);
   });
 
   test('Mars: the sphere of its equatorial radius, a thin dusty halo, none of the Géoplateforme defaults', async () => {
@@ -219,7 +254,10 @@ describe('options', () => {
     const map = await GeoMap.create(container as unknown as HTMLElement, { body: 'mars', workers: false });
     maps.push(map);
     const engine = map.engine as unknown as FakeEngine;
-    expect(engine.calls[0]).toEqual(['setBody', [3396190, 0, Float32Array.of(232 / 255, 168 / 255, 120 / 255, 0.6)]]);
+    expect(engine.calls[0]).toEqual([
+      'setBody',
+      [3396190, 0, Float32Array.of(232 / 255, 168 / 255, 120 / 255, 0.6), -8300, 21300],
+    ]);
     // Butterscotch, warmer and fainter than the Earth's blue
     const [r = 0, g = 0, b = 0, strength = 0] = (engine.last('setBody')?.[2] ?? []) as Float32Array;
     expect(r).toBeGreaterThan(g);
@@ -229,7 +267,14 @@ describe('options', () => {
     expect(engine.last('setBackground')).toEqual([0, 0, 0]);
     expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([0xb5, 0x71, 0x4a]);
     expect(map.getCamera()).toEqual({ center: [0, 0], zoom: 2, pitch: 0, bearing: 0 });
-    expect(() => map.setTerrain(true)).toThrow(/needs a url/);
+    // NASA's MOLA model, in the Mercator of Mars's sphere
+    map.setTerrain({ exaggeration: 2 });
+    const [url, exaggeration, maxZoom, geoid] = engine.last('setTerrain') ?? [];
+    expect([exaggeration, maxZoom, geoid]).toEqual([2, 8, false]);
+    expect(url).toStartWith(
+      'https://trek.nasa.gov/mars/trekarcgis/rest/services/mola128_mola64_merge_90Nto90S_SimpleC_clon0/',
+    );
+    expect(decodeURIComponent(url as string)).toContain('SPHEROID[\\"S\\",3396190,0]');
   });
 
   test('an equirectangular raster is reprojected by a loader, one level finer in Web Mercator', async () => {
@@ -658,7 +703,7 @@ describe('context loss', () => {
     const fresh = map.engine as unknown as FakeEngine;
     expect(fresh).not.toBe(engine);
     expect(engine.freed).toBe(true);
-    expect(fresh.calls[0]).toEqual(['setBody', [1737400, 0, undefined]]);
+    expect(fresh.calls[0]).toEqual(['setBody', [1737400, 0, undefined, -9200, 10800]]);
     expect(fresh.last('setZoomRange')).toEqual([3, 22]);
     expect(fresh.last('setMaxPitch')).toEqual([50]);
     expect(fresh.last('setGlobe')).toEqual([false]);

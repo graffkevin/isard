@@ -8,7 +8,7 @@ use crate::js;
 use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
-use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
+use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_levels};
 use crate::render::sky::{self, Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
@@ -111,10 +111,6 @@ pub struct Engine {
     /// The collision grid of the labels, kept from frame to frame
     label_grid: Option<geo::collision::Grid>,
 }
-
-/// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
-const TERRAIN_MIN_Z: u8 = 6;
-const TERRAIN_MAX_Z: u8 = 15;
 
 /// The camera counts as moving until this long after its last change (ms)
 const MOVING_MS: f64 = 100.0;
@@ -241,15 +237,26 @@ impl Engine {
         self.loading = if immediate { Loading::IMMEDIATE } else { Loading::SMOOTH };
     }
 
-    /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), and the halo of
-    /// its atmosphere around the globe (RGB 0-1 and its strength, 4 numbers; `undefined` for an airless body). WGS 84
-    /// and the Earth's blue halo by default; set before the layers, whose shaders may take its size (`ISARD_EARTH` of
-    /// the ground layers)
+    /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), the halo of its
+    /// atmosphere around the globe (RGB 0-1 and its strength, 4 numbers; `undefined` for an airless body), and the
+    /// lowest and highest altitudes of its ground (metres: what its relief may raise into view). WGS 84, the Earth's
+    /// blue halo and the relief of France by default; set before the layers and the relief, whose shaders may take its
+    /// size (`ISARD_EARTH` of the ground layers)
     #[wasm_bindgen(js_name = setBody)]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>) {
+    pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>, lowest: f64, highest: f64) {
         if radius.is_finite() && radius > 0.0 && (0.0..1.0).contains(&flattening) {
-            self.camera.body = geo::geodesy::Body { radius, flattening };
+            // Not a range around the ellipsoid: 1 % of the radius up and down
+            let relief = if lowest.is_finite() && highest.is_finite() && lowest <= 0.0 && highest >= 0.0 {
+                (lowest, highest)
+            } else {
+                (-0.01 * radius, 0.01 * radius)
+            };
+            self.camera.body = geo::geodesy::Body {
+                radius,
+                flattening,
+                relief,
+            };
         }
         self.sky.halo = sky::halo(halo.as_deref());
     }
@@ -287,10 +294,12 @@ impl Engine {
         self.camera.clamp();
     }
 
-    /// Relief under the raster layers, from raw altitudes (`image/x-bil;bits=32`, 256 × 256): `url` is a template with
-    /// `{bbox}` (WMS `GetMap` in EPSG:3857) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
-    /// heights (1: true relief); `max_z`: finest level loaded (6 to 15); `geoid`: altitudes raised by the RAF20 geoid
-    /// height (heights above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France)
+    /// Relief under the raster layers, from raw altitudes (`image/x-bil;bits=32`, 256 × 256, or the same followed by
+    /// the validity mask of an `ArcGIS` raw grid): `url` is a template with `{bbox}` (WMS `GetMap` in EPSG:3857, or in
+    /// the Mercator metres of another body) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
+    /// heights (1: true relief); `max_z`: finest level loaded (up to 15, from 6 on the Earth, coarser on bodies of a
+    /// larger relief for their size: `terrain_levels`); `geoid`: altitudes raised by the RAF20 geoid height (heights
+    /// above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France)
     #[wasm_bindgen(js_name = setTerrain)]
     pub fn set_terrain(
         &mut self,
@@ -300,11 +309,15 @@ impl Engine {
         geoid: Option<bool>,
     ) -> Result<(), JsValue> {
         let exaggeration = exaggeration.max(0.0) as f32;
-        let max_z = max_z.unwrap_or(TERRAIN_MAX_Z).clamp(TERRAIN_MIN_Z, TERRAIN_MAX_Z);
+        let body = self.body();
+        let (min_z, max_z) = terrain_levels(&body, max_z);
         let geoid = geoid.unwrap_or(true);
         match (url, &mut self.terrain) {
             (Some(url), Some((source, current)))
-                if source.options.url == url && source.options.max_z == max_z && source.options.geoid == geoid =>
+                if source.options.url == url
+                    && source.options.max_z == max_z
+                    && source.options.geoid == geoid
+                    && source.options.body == body =>
             {
                 *current = exaggeration;
             }
@@ -313,11 +326,12 @@ impl Engine {
                     &self.gl,
                     RasterOptions {
                         url,
-                        min_z: TERRAIN_MIN_Z,
+                        min_z,
                         max_z,
                         opacity: 1.0,
                         saturation: 1.0,
                         elevation: true,
+                        body,
                         geoid,
                         size: 256,
                         loader: None,
@@ -516,6 +530,7 @@ impl Engine {
                 opacity,
                 saturation,
                 elevation: false,
+                body: self.body(),
                 geoid: false,
                 size: size.unwrap_or(256).clamp(16, 1024),
                 loader,

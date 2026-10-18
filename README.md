@@ -36,7 +36,8 @@ General-purpose map libraries spend their time on things these maps do not need.
   exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
 - 🪐 **The Moon, Mars, any body.** `body: 'moon'`, `'mars'` or an ellipsoid of your own: the globe at its radius
   with its own atmosphere halo (or none), its metres in the camera, the relief and 3D Tiles, NASA's planetary mosaics
-  reprojected in the page from longitudes and latitudes.
+  reprojected in the page from longitudes and latitudes, and their relief: `terrain: true` raises Olympus Mons and
+  digs Valles Marineris and the lunar craters from NASA's LOLA and MOLA models.
 - 🏙️ **Buildings and 3D Tiles.** Buildings colored by a value or by a network's travel times, photomeshes and city
   models in 3D Tiles (Draco, meshopt, KTX2).
 - 🦀 **Small and exact.** 220 KB of WebAssembly gzipped (330 KB once a 3D Tiles layer is added), f64 on the CPU and f32 relative to the camera on the GPU
@@ -81,8 +82,8 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
     <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
   </tr>
   <tr>
-    <td><a href="https://graffkevin.github.io/isard/examples/moon"><img src="docs/public/screenshots/moon.jpg" alt="" /></a><br /><b>The Moon</b><br />another body, the LRO mosaic, the Apollo sites</td>
-    <td><a href="https://graffkevin.github.io/isard/examples/mars"><img src="docs/public/screenshots/mars.jpg" alt="" /></a><br /><b>Mars</b><br />its thin dusty halo, the Viking mosaic, famous sites</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/moon"><img src="docs/public/screenshots/moon.jpg" alt="" /></a><br /><b>The Moon</b><br />another body, the LRO mosaic over LOLA's relief, the Apollo sites</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/mars"><img src="docs/public/screenshots/mars.jpg" alt="" /></a><br /><b>Mars</b><br />its thin dusty halo, the Viking mosaic over MOLA's relief, famous sites</td>
   </tr>
 </table>
 

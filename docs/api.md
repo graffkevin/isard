@@ -8,12 +8,12 @@ declarations.
 
 | Option | Default | |
 |---|---|---|
-| `body` | `'earth'` | `'moon'`, `'mars'`, or `{ radius, flattening, atmosphere, color }` ([other bodies](./guide/basemaps#the-moon-mars-and-other-bodies)) |
+| `body` | `'earth'` | `'moon'`, `'mars'`, or `{ radius, flattening, atmosphere, color, relief }` ([other bodies](./guide/basemaps#the-moon-mars-and-other-bodies)) |
 | `center`, `zoom`, `pitch`, `bearing` | Saint-Mandé, 13, 0, 0 | the camera, MapLibre's conventions |
 | `projection` | `'globe'` | or `'mercator'` |
 | `basemap` | `'plan-grey'` | `'plan'`, `'plan-grey-vector'`, `'plan-vector'`, `'ortho'`, `'none'` |
 | `hillshade` | 0.4 | opacity of the IGN hillshade, 0 for none |
-| `terrain` | off | `true` or `{ url, exaggeration, maxZoom, geoid }` |
+| `terrain` | off | `true` (the IGN's model; NASA's on the Moon and Mars) or `{ url, exaggeration, maxZoom, geoid }` ([relief](./guide/basemaps#relief)) |
 | `atmosphere` | none | sky and ground fog: `{ skyColor, horizonColor, fogColor, skyHorizonBlend, horizonFogBlend, fogGroundBlend }` |
 | `sky` | true | stars and halo around the globe |
 | `background` | `#f2f2f0` | behind the map |

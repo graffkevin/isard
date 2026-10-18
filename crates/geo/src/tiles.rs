@@ -89,8 +89,12 @@ pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> 
         };
         let fine_enough = apparent <= tile_px;
         let refine = if tile.z < min_z {
-            // Below the layer's first level: go down only if that level would be about the right size
-            apparent / 2f64.powi(i32::from(min_z - tile.z)) > tile_px / 2.0
+            // Below the layer's first level: go down only if that level would be about the right size, as this tile
+            // measures it, or at the view center, where a tile of that level has its size on the plane (large tiles of
+            // the globe seen from a pitched camera have their samples far away, and measure too small)
+            let first = 2f64.powi(i32::from(min_z - tile.z));
+            apparent / first > tile_px / 2.0
+                || (contains(tile, view.center) && view.world_size / 2f64.powi(i32::from(min_z)) > tile_px / 2.0)
         } else {
             tile.z < max_z && (!fine_enough || (globe && tile.z < GLOBE_MIN_Z))
         };
@@ -107,6 +111,12 @@ pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> 
     }
     out.sort_by(|p, q| p.priority.total_cmp(&q.priority));
     out
+}
+
+/// Whether a tile holds a Mercator point (on any copy of the world)
+fn contains(tile: TileId, m: DVec2) -> bool {
+    let (min, max) = tile.bounds();
+    (min.x..max.x).contains(&m.x.rem_euclid(1.0)) && (min.y..max.y).contains(&m.y)
 }
 
 /// Size on screen (CSS pixels), distance to the camera and angle from the view axis (radians, of its point nearest
@@ -239,6 +249,25 @@ mod tests {
         c.height = 900.0;
         c.pitch = pitch;
         c
+    }
+
+    #[test]
+    fn a_coarse_first_level_shows_under_a_pitched_globe() {
+        // The relief of Mars from level 3 (elevation tiles of 2896 px): over Olympus Mons at zoom 6, pitched, on the
+        // globe; the tiles of level 0 to 2 measure too small there (their samples far from the camera)
+        let mut c = Camera::new(-133.5, 14.0, 6.0);
+        c.globe = true;
+        c.width = 960.0;
+        c.height = 600.0;
+        c.pitch = 75.0;
+        let tiles = select(&c.view(), 3, 8, 2896.0);
+        assert!(tiles.iter().any(|&t| contains(t, c.center)), "{tiles:?}");
+        // Zoomed out, still none: the Earth's relief from level 6 does not load on the globe
+        c.zoom = 4.0;
+        assert_eq!(select(&c.view(), 3, 8, 2896.0), Vec::new());
+        let mut earth = camera(6.5, 60.0);
+        earth.globe = true;
+        assert_eq!(select(&earth.view(), 6, 15, 2896.0), Vec::new());
     }
 
     #[test]

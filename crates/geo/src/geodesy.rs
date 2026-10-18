@@ -4,13 +4,16 @@
 use glam::DVec3;
 use std::f64::consts::PI;
 
-/// A celestial body: its ellipsoid of revolution (a sphere when not flattened), in metres
+/// A celestial body: its ellipsoid of revolution (a sphere when not flattened) and the range of its relief, in metres
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Body {
     /// Equatorial radius (semi-major axis)
     pub radius: f64,
     /// Flattening, 0 for a sphere
     pub flattening: f64,
+    /// Lowest and highest altitudes of its ground: what its relief may raise into view, below and above the
+    /// ellipsoid (before exaggeration)
+    pub relief: (f64, f64),
 }
 
 impl Body {
@@ -18,18 +21,24 @@ impl Body {
     pub const EARTH: Self = Self {
         radius: 6_378_137.0,
         flattening: 1.0 / 298.257_223_563,
+        // The relief of the IGN terrain model: France, from its depressions up past Mont Blanc
+        relief: (-200.0, 5000.0),
     };
-    /// The Moon's mean sphere (IAU)
+    /// The Moon's mean sphere (IAU); its relief from the floor of the South Pole-Aitken basin (-9.1 km) to the
+    /// Selenean summit (10.8 km), as LOLA measures them
     pub const MOON: Self = Self {
         radius: 1_737_400.0,
         flattening: 0.0,
+        relief: (-9200.0, 10_800.0),
     };
     /// Mars: the sphere of its IAU 2000 equatorial radius. Its data (Viking and MOLA mosaics, the landing sites) take
     /// planetocentric latitudes, which an ellipsoid here would read as geodetic (up to 0.33°, 20 km, apart); on the
-    /// sphere both agree, and the globe is drawn as one anyway
+    /// sphere both agree, and the globe is drawn as one anyway. Its relief from the floor of Hellas (-8.2 km) to the
+    /// summit of Olympus Mons (21.2 km), above the areoid of MOLA
     pub const MARS: Self = Self {
         radius: 3_396_190.0,
         flattening: 0.0,
+        relief: (-8300.0, 21_300.0),
     };
 
     /// Square of the first eccentricity
@@ -41,6 +50,19 @@ impl Body {
     #[must_use]
     pub fn circumference(&self) -> f64 {
         2.0 * PI * self.radius
+    }
+
+    /// Half the width of the Web Mercator world (m): its bounds in the body's Mercator metres (EPSG:3857 on the Earth)
+    #[must_use]
+    pub fn half_world(&self) -> f64 {
+        PI * self.radius
+    }
+
+    /// Height of its relief over its radius, as many times the Earth's: a larger one shows from further away
+    #[must_use]
+    pub fn relief_scale(&self) -> f64 {
+        let span = |b: &Self| (b.relief.1 - b.relief.0) / b.radius;
+        span(self) / span(&Self::EARTH)
     }
 
     /// Longitude, latitude (degrees) and ellipsoidal height (m) to body-centered coordinates
@@ -154,6 +176,22 @@ mod tests {
         let pole = Body::EARTH.to_ecef(0.0, 90.0, 0.0);
         assert!((pole.z - 6_356_752.314_245).abs() < 1e-3, "{pole}");
         assert!((Body::EARTH.circumference() - 40_075_016.686).abs() < 1e-3);
+        // The bounds of EPSG:3857, to the last bit
+        assert_eq!(Body::EARTH.half_world(), 20_037_508.342_789_244);
+        assert_eq!(Body::EARTH.relief_scale(), 1.0);
+    }
+
+    #[test]
+    fn relief_follows_the_body() {
+        // The Moon and Mars: some 20 to 30 km of relief, 14 and 11 times the Earth's for their size
+        for (body, deepest, highest, scale) in [
+            (Body::MOON, -9126.0, 10_767.0, 14.1),
+            (Body::MARS, -8201.0, 21_241.0, 10.7),
+        ] {
+            assert!(body.relief.0 < deepest && body.relief.1 > highest, "{body:?}");
+            assert!((body.relief_scale() - scale).abs() < 0.1, "{}", body.relief_scale());
+        }
+        assert!((Body::MOON.half_world() * 2.0 - Body::MOON.circumference()).abs() < 1e-6);
     }
 
     #[test]

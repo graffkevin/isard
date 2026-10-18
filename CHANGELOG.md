@@ -21,16 +21,24 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   focusable map with a visible focus.
 - Maps of other bodies than the Earth: the `body` option, `'moon'` (a sphere of 1 737 400 m, no atmosphere) or any
   ellipsoid (`BodyOptions`: radius, flattening, atmosphere, color); the metres of the camera, relief, buildings and
-  3D Tiles follow it. Off the Earth, none of the Géoplateforme defaults (basemap, hillshade, relief, geoid, credits)
+  3D Tiles follow it. Off the Earth, none of the Géoplateforme defaults (basemap, hillshade, IGN relief, geoid, credits)
   and a black background; `AttributionControl` without the IGN credits. A `moon` example (NASA's LRO mosaic).
 - Mars: `body: 'mars'` (a sphere of its equatorial radius, 3 396 190 m, for the planetocentric latitudes of its data)
   with a thin dusty halo. The halo is the body's: `BodyOptions.atmosphere` takes a CSS color (its alpha the strength)
   besides true (the Earth's blue) and false. A `mars` example (the Viking colour mosaic of NASA's Mars Trek).
 - Raster tiles in longitudes and latitudes (`grid: 'equirectangular'`, the grid of NASA's Trek and of WorldCRS84Quad),
   reprojected in the page into Web Mercator tiles.
+- Relief of the Moon and Mars: `terrain: true` there takes NASA's terrain models from the image services of its Trek
+  (LOLA, 237 m; MOLA, 463 m), asked for raw floats in the body's Mercator. `terrain.url` takes an ArcGIS image service
+  (`…/ImageServer`) on any body, and `{bbox}` is in the body's Mercator metres. `BodyOptions.relief` (its lowest and
+  highest ground) bounds what the relief may raise into view, the prisms of draped fills, the no-data and the horizon;
+  the relief starts at a coarser level on a body of a larger relief for its size (2 on the Moon, 3 on Mars). The
+  `moon` and `mars` examples have relief and pitched views (Tycho, Copernicus, Olympus Mons, Valles Marineris).
 
 ### Fixed
 
+- Layers whose first level is coarse for the view (the relief of the Moon and Mars) load under a pitched camera on the
+  globe: the tile under the view center no longer measures too small to refine to it.
 - A listener that throws no longer stops the map from drawing; a failed engine download can be retried.
 - Workers that fail to load reject their requests with an explanation instead of leaving them pending.
 - 3D Tiles content and network arrays that are malformed are errors instead of a crash of the engine; a tileset whose

@@ -2,7 +2,7 @@
 //! page's loader; and the timer of the retries
 
 use super::TILE;
-use super::data::{fill_no_data, to_ellipsoid};
+use super::data::{apply_mask, fill_no_data, to_ellipsoid};
 use geo::tiles::TileId;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -76,13 +76,15 @@ pub async fn draw_tile(
     value.dyn_into().map_err(|_| Fetch::Transient)
 }
 
-/// Altitudes of a tile: a full grid of 256 × 256 little-endian f32. A server error may come as a 200 with an XML
-/// exception: only a grid counts. No-data (outside the coverage) takes the lowest altitude of the tile: neither pit
-/// nor wall at the coast
+/// Altitudes of a tile: a full grid of 256 × 256 little-endian f32, maybe followed by the validity mask of an `ArcGIS`
+/// image service (1 bit per pixel). A server error may come as a 200 with an XML exception: only a grid counts.
+/// No-data (outside the coverage, under `no_data`) takes the lowest altitude of the tile: neither pit nor wall at the
+/// coast
 pub async fn fetch_heights(
     url: &str,
     tile: TileId,
     geoid: bool,
+    no_data: f32,
     signal: &web_sys::AbortSignal,
     reload: bool,
     priority: &str,
@@ -99,14 +101,22 @@ pub async fn fetch_heights(
         .await
         .map_err(|_| Fetch::Transient)?;
     let buffer: js_sys::ArrayBuffer = buffer.dyn_into().map_err(|_| Fetch::Transient)?;
-    if buffer.byte_length() as usize != (TILE * TILE * 4) as usize {
+    let (grid, mask) = ((TILE * TILE * 4) as u32, (TILE * TILE / 8) as u32);
+    let length = buffer.byte_length();
+    if length != grid && length != grid + mask {
         return Err(Fetch::Transient);
     }
     // One copy, straight into the floats: a Float32Array reads the platform's byte order, little-endian in
     // WebAssembly, that of the grid
     let mut heights = vec![0f32; (TILE * TILE) as usize];
-    js_sys::Float32Array::new(&buffer).copy_to(&mut heights);
-    fill_no_data(&mut heights);
+    js_sys::Float32Array::new_with_byte_offset_and_length(&buffer, 0, grid / 4).copy_to(&mut heights);
+    if length > grid {
+        apply_mask(
+            &mut heights,
+            &js_sys::Uint8Array::new_with_byte_offset(&buffer, grid).to_vec(),
+        );
+    }
+    fill_no_data(&mut heights, no_data);
     if geoid {
         to_ellipsoid(tile, &mut heights);
     }

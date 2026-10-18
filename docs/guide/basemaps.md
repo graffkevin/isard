@@ -56,6 +56,11 @@ ground, three levels coarser than the imagery. Altitudes get the RAF20 geoid hei
 labels and buildings stand on the ground and the hills hide what lies behind them; fills and ground shaders are draped
 exactly.
 
+`url` takes raw 32-bit altitudes, 256 × 256: a WMS `GetMap` with `{bbox}` (EPSG:3857 metres), tiles with `{z}`, `{x}`,
+`{y}`, or an ArcGIS image service (a URL ending in `/ImageServer`), which the map asks for raw altitudes
+(`exportImage`, `format=bsq`, its validity mask marking the no-data). On the Moon and Mars, `terrain: true` takes NASA's
+models (see [below](#relief-of-the-moon-and-mars)).
+
 ## Sky and fog
 
 A tilted camera sees the horizon: `atmosphere` draws a sky over the plane and fades the ground into fog, with the
@@ -91,9 +96,9 @@ the ground, the relief, buildings, 3D Tiles.
 
 Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no hillshade, no IGN credits (add the
 imagery's with `attributionControl: { customAttribution }`), a black background, and no halo around a body without an
-atmosphere (the stars stay, `sky: false` hides them). A relief needs its `url`, its altitudes taken as served (no
-geoid). The planetary services mostly serve tiles in longitudes and latitudes: `grid: 'equirectangular'` reprojects
-them in the page (see [rasters](../layers/rasters#equirectangular-tiles)).
+atmosphere (the stars stay, `sky: false` hides them). The relief's altitudes are taken as served (no geoid). The
+planetary services mostly serve tiles in longitudes and latitudes: `grid: 'equirectangular'` reprojects them in the
+page (see [rasters](../layers/rasters#equirectangular-tiles)).
 
 <LiveExample slug="moon" height="460px" />
 
@@ -113,3 +118,32 @@ sites give planetocentric latitudes, which an ellipsoid would read as geodetic o
 sphere both agree. A body of your own with its `flattening` takes geodetic latitudes, as WGS 84 does.
 
 <LiveExample slug="mars" height="460px" />
+
+### Relief of the Moon and Mars
+
+```ts
+const map = await GeoMap.create(container, {
+  body: 'mars',
+  center: [-133.6, 15.6],
+  zoom: 6.3,
+  pitch: 66,
+  terrain: true,
+});
+```
+
+`terrain: true` lifts the ground by NASA's terrain models, from the image services of its Moon and Mars Trek (ArcGIS,
+CORS open, public domain): on the Moon, LOLA's global model (128 pixels per degree, 237 m, heights above the sphere of
+1 737 400 m); on Mars, MOLA's (128 and 64 pixels per degree merged, 463 m, above the areoid). They are asked for raw
+32-bit floats directly in the body's Mercator (a Mercator on its sphere, given in WKT), so that nothing is reprojected
+in the page, finest at level 8. `exaggeration` and `maxZoom` apply as on the Earth; another model is a `url`: a
+`/ImageServer` of the body (Trek serves the Mercury, Vesta or Ceres ones), or tiles whose `{bbox}` is in the body's
+Mercator metres (its half circumference, π × radius, at the edges of the world).
+
+The relief of a body sets what may rise into view: `BodyOptions.relief`, the lowest and highest altitudes of its ground
+(the Moon: -9.2 to 10.8 km, the South Pole-Aitken basin to the Selenean summit; Mars: -8.3 to 21.3 km, Hellas to
+Olympus Mons; ±1 % of the radius for a body of your own). It bounds the layers in view, the prisms of draped fills, what
+counts as no-data (below it), the horizon of the globe; and since 20 km of relief show from much further away on a body
+of a few thousand kilometres, the relief starts at a coarser level than on the Earth (2 on the Moon, 3 on Mars, 6 on the
+Earth). The examples fly to Tycho and Copernicus, Olympus Mons and Valles Marineris (`#tycho`, `#olympus-mons`… in
+their URL). There is no hillshade computed from the relief: the mosaics carry the Sun's own shading, and Trek's shaded
+reliefs can be added with `addRaster` like any equirectangular layer.

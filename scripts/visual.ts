@@ -6,7 +6,7 @@
  * timing (an example that starts a little earlier asks for one more), only the pixels decide.
  *
  *   bun run test:visual                 compare every example
- *   bun run test:visual basic globe     only these
+ *   bun run test:visual basic globe     only these (an example and its views: mars, mars-olympus-mons)
  *   bun run test:visual --record        fetch the real URLs once and store them as fixtures (rewrites the set)
  *   bun run test:visual --update        rewrite the baselines
  *
@@ -49,20 +49,44 @@ const TIMEOUT_MS = 90_000;
  */
 const FROZEN = new Set(['globe']);
 
+/**
+ * Views of an example opened at another camera (the `#view` of its URL), run with it: the pitched views over the relief
+ * of the Moon and Mars
+ */
+const VIEWS: Record<string, [example: string, view: string]> = {
+  'moon-tycho': ['moon', 'tycho'],
+  'mars-olympus-mons': ['mars', 'olympus-mons'],
+  'mars-valles-marineris': ['mars', 'valles-marineris'],
+};
+
 /** Smaller viewports where the data is heavy (the fixtures stay small): terrain and hillshade under a pitched camera */
-const VIEWPORTS: Record<string, [number, number]> = { relief: [320, 200], tiles3d: [320, 200] };
+const VIEWPORTS: Record<string, [number, number]> = {
+  relief: [320, 200],
+  tiles3d: [320, 200],
+  'moon-tycho': [240, 150],
+  'mars-olympus-mons': [240, 150],
+  'mars-valles-marineris': [320, 200],
+};
 
 /**
  * Examples run only when named (`bun run test:visual tiles3d`, after `--record tiles3d`): the Lille photomesh refines
  * down to 5 cm tiles under its pitched camera whatever the viewport, ~110 b3dm (~12 MB even gzipped), too heavy for the
- * fixtures in the repository. Its fixtures and baseline are not committed.
+ * fixtures in the repository. Its fixtures and baseline are not committed. Valles Marineris likewise (~4 MB more of Mars
+ * tiles): the relief of Mars is tested over Olympus Mons.
  */
-const OPT_IN = new Set(['tiles3d']);
+const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris']);
 
-const examples = readdirSync(join(root, 'examples'), { withFileTypes: true })
+const built = readdirSync(join(root, 'examples'), { withFileTypes: true })
   .filter((e) => e.isDirectory() && existsSync(join(root, 'examples/dist', e.name, 'main.js')))
-  .map((e) => e.name)
-  .filter((name) => (only.length === 0 ? !OPT_IN.has(name) : only.includes(name)))
+  .map((e) => e.name);
+const views = Object.entries(VIEWS)
+  .filter(([, [example]]) => built.includes(example))
+  .map(([name]) => name);
+const examples = [...built, ...views]
+  .filter((name) => {
+    if (only.length === 0) return !OPT_IN.has(name);
+    return only.includes(name) || (only.includes(VIEWS[name]?.[0] ?? '') && !OPT_IN.has(name));
+  })
   .sort();
 if (examples.length === 0) {
   console.error('no built example: bun run build');
@@ -213,7 +237,8 @@ for (const name of examples) {
   served.requests = 0;
   served.bytes = 0;
   const start = Date.now();
-  await page.goto(`${origin}/examples/${name}/`, { waitUntil: 'load' });
+  const [example, view] = VIEWS[name] ?? [name, ''];
+  await page.goto(`${origin}/examples/${example}/${view ? `#${view}` : ''}`, { waitUntil: 'load' });
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second
   let frames = -1;

@@ -14,8 +14,8 @@ Mars's from NASA's Trek, no key needed.
 | [`relief`](relief/main.ts) | the relief, a sky, and a fragment shader of the page drawn over the ground |
 | [`tiles3d`](tiles3d/main.ts) | a photomesh streamed as 3D Tiles |
 | [`vector`](vector/main.ts) | the PLAN.IGN vector styles, a restyled subset on its own layer |
-| [`moon`](moon/main.ts) | a map of the Moon: NASA's LRO mosaic reprojected from longitudes and latitudes, the Apollo sites |
-| [`mars`](mars/main.ts) | a map of Mars in its dusty halo: the Viking colour mosaic, Olympus Mons, Valles Marineris, the rovers |
+| [`moon`](moon/main.ts) | a map of the Moon: NASA's LRO mosaic reprojected from longitudes and latitudes over LOLA's relief, the Apollo sites, Tycho and Copernicus in 3D |
+| [`mars`](mars/main.ts) | a map of Mars in its dusty halo: the Viking colour mosaic over MOLA's relief, Olympus Mons and Valles Marineris in 3D, the rovers |
 
 `bun run dev` at the root builds them and serves them on http://127.0.0.1:5180/examples/. They are also live in the
 documentation, next to their code.

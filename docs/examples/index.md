@@ -14,5 +14,5 @@ Géoplateforme (the Moon's and Mars's from NASA), no key needed.
 | [Relief and a ground shader](./relief) | your GLSL over the mountains |
 | [3D Tiles](./tiles3d) | the Lille photomesh |
 | [Vector basemaps](./vector) | the PLAN.IGN styles, a restyled subset |
-| [The Moon](./moon) | another body: the LRO mosaic reprojected, the Apollo sites |
-| [Mars](./mars) | a body with an atmosphere: its dusty halo, the Viking mosaic, famous sites |
+| [The Moon](./moon) | another body: the LRO mosaic reprojected over LOLA's relief, the Apollo sites, its craters in 3D |
+| [Mars](./mars) | a body with an atmosphere: its dusty halo, the Viking mosaic over MOLA's relief, Olympus Mons in 3D |

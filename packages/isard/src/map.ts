@@ -3,7 +3,7 @@
  * nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are drawn in the
  * same frame.
  */
-import { BASEMAPS, HILLSHADE, SEA, TERRAIN_URL } from './basemaps.ts';
+import { BASEMAPS, BODY_TERRAINS, HILLSHADE, IMAGE_SERVER, imageServerTerrain, SEA, TERRAIN_URL } from './basemaps.ts';
 import { parseCssColor } from './color.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
@@ -138,12 +138,19 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
   }
 }
 
-/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap). Mars:
- * the sphere of its equatorial radius (its data take planetocentric latitudes), a faint butterscotch halo of dust */
+/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap), its
+ * `relief` the range of its ground (the Earth's: France's, that of the IGN terrain model). Mars: the sphere of its
+ * equatorial radius (its data take planetocentric latitudes), a faint butterscotch halo of dust */
 const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>> = {
-  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca' },
-  moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f' },
-  mars: { radius: 3396190, flattening: 0, atmosphere: 'rgba(232, 168, 120, 0.6)', color: '#b5714a' },
+  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca', relief: [-200, 5000] },
+  moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f', relief: [-9200, 10800] },
+  mars: {
+    radius: 3396190,
+    flattening: 0,
+    atmosphere: 'rgba(232, 168, 120, 0.6)',
+    color: '#b5714a',
+    relief: [-8300, 21300],
+  },
 };
 
 /** The Earth's halo, RGB 0-1 and its strength: what `atmosphere: true` draws */
@@ -152,7 +159,8 @@ const EARTH_HALO = Float32Array.of(0.42, 0.66, 1, 1);
 /** A body from the option, its defaults filled in */
 function bodySettings(body: CelestialBody | undefined): Required<BodyOptions> {
   if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
-  return { flattening: 0, atmosphere: false, color: '#808080', ...body };
+  const relief: [number, number] = [-0.01 * body.radius, 0.01 * body.radius];
+  return { flattening: 0, atmosphere: false, color: '#808080', relief, ...body };
 }
 
 /** The halo of an atmosphere for the engine (RGB 0-1 and its strength, the color's alpha): undefined for none */
@@ -162,16 +170,23 @@ function haloSettings(atmosphere: boolean | string): Float32Array | undefined {
   return color && Float32Array.from(color);
 }
 
-/** Relief settings from the option: undefined when off. The IGN terrain model by default, on the Earth only */
-function terrainSettings(terrain: boolean | TerrainOptions | undefined, earth: boolean): Settings['terrain'] {
+/** Relief settings from the option: undefined when off. The IGN terrain model by default on the Earth, NASA's on the
+ * Moon and Mars; an ArcGIS image service asked for in the body's Mercator */
+function terrainSettings(
+  terrain: boolean | TerrainOptions | undefined,
+  body: CelestialBody | undefined,
+  radius: number,
+): Settings['terrain'] {
   if (!terrain) return undefined;
   const options = terrain === true ? {} : terrain;
-  const url = options.url ?? (earth ? TERRAIN_URL : undefined);
-  if (url === undefined) throw new Error('isard: the relief of a body other than the Earth needs a url');
+  const earth = (body ?? 'earth') === 'earth';
+  const preset = body === 'moon' || body === 'mars' ? BODY_TERRAINS[body] : undefined;
+  const url = options.url ?? (earth ? TERRAIN_URL : preset?.url);
+  if (url === undefined) throw new Error('isard: the relief of this body needs a url');
   return {
-    url,
+    url: IMAGE_SERVER.test(url) ? imageServerTerrain(url, earth, radius) : url,
     exaggeration: options.exaggeration ?? 1,
-    maxZoom: options.maxZoom ?? 15,
+    maxZoom: options.maxZoom ?? (options.url === undefined && preset ? preset.maxZoom : 15),
     geoid: options.geoid ?? earth,
   };
 }
@@ -287,6 +302,8 @@ export class GeoMap {
   private gone = false;
   /** The map is of the Earth: the Géoplateforme basemaps, relief and credits by default */
   private readonly earth: boolean;
+  /** The body, as the option named it */
+  private readonly body: CelestialBody | undefined;
   private basemap: RasterLayer | undefined;
   private hillshade: RasterLayer | undefined;
   private animation: ((now: number) => boolean) | undefined;
@@ -352,6 +369,7 @@ export class GeoMap {
     };
     container.append(this.canvas, this.overlay, ...CORNERS.map((position) => this.corners[position]));
     this.earth = (options.body ?? 'earth') === 'earth';
+    this.body = options.body;
     const body = bodySettings(options.body);
     this.settings = {
       body,
@@ -360,7 +378,7 @@ export class GeoMap {
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
       atmosphere: atmosphereSettings(options.atmosphere),
-      terrain: terrainSettings(options.terrain, this.earth),
+      terrain: terrainSettings(options.terrain, options.body, body.radius),
       loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? (this.earth ? '#f2f2f0' : '#000000')),
       globeColor: this.earth ? SEA['plan-grey'] : rgb(body.color),
@@ -418,8 +436,8 @@ export class GeoMap {
   private createEngine(): Engine {
     const engine = new this.engineClass(this.canvas, () => this.requestRender());
     // The body first: the layers' shaders may take its size
-    const { radius, flattening, atmosphere: air } = this.settings.body;
-    engine.setBody(radius, flattening, haloSettings(air));
+    const { radius, flattening, atmosphere: air, relief } = this.settings.body;
+    engine.setBody(radius, flattening, haloSettings(air), ...relief);
     const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setMaxPitch(maxPitch);
@@ -700,10 +718,10 @@ export class GeoMap {
     this.requestRender();
   }
 
-  /** Relief under the basemap: true for the IGN terrain model, its options, or false; off the Earth, its options
-   * with a `url` */
+  /** Relief under the basemap: true for the body's terrain model (the IGN's on the Earth, NASA's on the Moon and
+   * Mars), its options, or false; on another body, its options with a `url` */
   setTerrain(terrain: boolean | TerrainOptions): void {
-    this.settings.terrain = terrainSettings(terrain, this.earth);
+    this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius);
     const t = this.settings.terrain;
     this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid);
     this.requestRender();

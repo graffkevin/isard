@@ -91,8 +91,6 @@ bool strip_vertex(float width, float cap_length, out StripVertex v) {
 pub const LINE_DEPTH_BIAS: f64 = 0.002;
 /// Parts of each piece in relief: a straight piece would cut through the bumps of the ground between its ends
 pub const RELIEF_SEGMENTS: i32 = 8;
-/// Altitudes the layers may stand at in relief (metres, before exaggeration), to bound what is in view
-pub const RELIEF_RANGE: (f64, f64) = (-200.0, 5000.0);
 /// Bytes per piece (`geo::pieces::Piece`)
 pub const PIECE_STRIDE: i32 = 28;
 
@@ -128,12 +126,14 @@ pub fn shift(origin: DVec2, view: &View) -> f64 {
     -(origin.x - view.center.x).round()
 }
 
-/// Lowest and highest altitudes (pixels of the local frame) a layer may stand at: 0 on flat ground
+/// Lowest and highest altitudes (pixels of the local frame) a layer may stand at: 0 on flat ground, the range of the
+/// body's relief in relief
 #[must_use]
 pub fn heights(view: &View, relief: Option<(&RasterSource, f32)>) -> (f64, f64) {
     relief.map_or((0.0, 0.0), |(_, e)| {
         let k = view.vertical * f64::from(e);
-        (RELIEF_RANGE.0 * k, RELIEF_RANGE.1 * k)
+        let (low, high) = view.body.relief;
+        (low * k, high * k)
     })
 }
 

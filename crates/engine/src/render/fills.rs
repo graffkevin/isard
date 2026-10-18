@@ -62,10 +62,16 @@ void main() { color = v_color; }";
 
 const UNIFORMS: [&str; 5] = ["u_matrix", "u_center_hi", "u_center_lo", "u_heights", "u_volume"];
 
-/// Prisms from this far below the sea (metres): deep valleys, and the chords of the globe sagging under the sphere
-const BOTTOM: f32 = -3000.0;
-/// …to this high above it, times the exaggeration (above Mont Blanc)
-const TOP: f32 = 5500.0;
+/// Prisms from this far below the body's lowest ground (metres): the chords of the globe sagging under the sphere
+/// (-3000 m on the Earth)
+const BOTTOM_MARGIN: f64 = 2800.0;
+/// …to this high above its highest, times the exaggeration (5500 m on the Earth, above Mont Blanc)
+const TOP_MARGIN: f64 = 500.0;
+
+/// Altitudes the prisms reach from and to (metres, before exaggeration)
+fn prism_range(body: &geo::geodesy::Body) -> (f64, f64) {
+    (body.relief.0 - BOTTOM_MARGIN, body.relief.1 + TOP_MARGIN)
+}
 
 /// One polygon kept on the CPU for picking: its rings and bounds
 struct Shape {
@@ -224,6 +230,7 @@ impl FillLayer {
         let [matrix, center_hi, center_lo, heights, volume_u] = &self.uniforms;
         let ((xh, xl), (yh, yl)) = (overlay::split(camera.center.x), overlay::split(camera.center.y));
         let exaggeration = relief.map_or(1.0, |(_, e)| e);
+        let (bottom, top) = prism_range(&view.body);
         // SAFETY: uniforms on the program in use
         unsafe {
             gl.use_program(Some(self.program));
@@ -232,8 +239,8 @@ impl FillLayer {
             gl.uniform_2_f32(center_lo.as_ref(), xl, yl);
             gl.uniform_2_f32(
                 heights.as_ref(),
-                BOTTOM * exaggeration.max(1.0),
-                TOP * exaggeration.max(1.0),
+                bottom as f32 * exaggeration.max(1.0),
+                top as f32 * exaggeration.max(1.0),
             );
             gl.uniform_1_i32(volume_u.as_ref(), i32::from(volume));
             self.projection.set(gl, view);
@@ -249,11 +256,12 @@ impl Layer for FillLayer {
             return false;
         }
         let volume = frame.relief.is_some();
-        // The squares in view (the prisms of a volume reach from `BOTTOM` to `TOP`, and their faces past the far plane
+        // The squares in view (the prisms of a volume reach through `prism_range`, and their faces past the far plane
         // still count: kept on it); the fills are drawn where they are, on no other copy of the world
         let heights = frame.relief.map_or((0.0, 0.0), |(_, e)| {
             let k = frame.view.vertical * f64::from(e.max(1.0));
-            (f64::from(BOTTOM) * k, f64::from(TOP) * k)
+            let (bottom, top) = prism_range(&frame.view.body);
+            (bottom * k, top * k)
         });
         let squares = pieces::squares_in_view(&self.grid, frame.view, heights, 0.0, 0.0, !volume);
         let top = pieces::ranges(&squares, &self.top_start);
@@ -379,6 +387,15 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::geodesy::Body;
+
+    #[test]
+    fn prisms_reach_through_the_relief_of_the_body() {
+        // The Earth's as before the bodies; Mars's from under Hellas to above Olympus Mons
+        assert_eq!(prism_range(&Body::EARTH), (-3000.0, 5500.0));
+        let (bottom, top) = prism_range(&Body::MARS);
+        assert!(bottom < -8201.0 - 2000.0 && top > 21_241.0, "{bottom} {top}");
+    }
 
     #[test]
     fn shapes_hold_their_inside_holes_cut_out() {

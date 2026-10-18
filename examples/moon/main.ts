@@ -1,18 +1,30 @@
 /**
  * The Moon: a map of another body. The globe takes the Moon's radius (no atmosphere, no Géoplateforme basemap), the
  * Lunar Reconnaissance Orbiter's wide-angle mosaic comes from NASA's Moon Trek in longitudes and latitudes, reprojected
- * in the page into Web Mercator tiles; the Apollo landing sites as circles and labels. A click flies to the point.
+ * in the page into Web Mercator tiles; its relief is LOLA's terrain model, from Trek too (`terrain: true` on the Moon).
+ * The Apollo landing sites as circles and labels; pitched views over the craters Tycho and Copernicus (a link opens
+ * one: #tycho). A click flies to the point.
  */
-import { type Feature, GeoMap } from '@ign-junn/isard';
+import { type Camera, type Feature, GeoMap } from '@ign-junn/isard';
 import { element } from '../shared/wfs.ts';
+
+const globe: Camera = { center: [5, 0], zoom: 1.2, pitch: 0, bearing: 0 };
+const views: Record<string, Camera> = {
+  // 85 km wide and 4.8 km deep, its central peak 2 km high, from the north
+  tycho: { center: [-11.4, -42.6], zoom: 7.4, pitch: 62, bearing: 180 },
+  // 93 km wide and 3.8 km deep, its terraced walls, from the south-east
+  copernicus: { center: [-20.1, 9.0], zoom: 7.4, pitch: 62, bearing: -30 },
+};
 
 const map = await GeoMap.create(element('map'), {
   body: 'moon',
-  center: [5, 0],
-  zoom: 1.2,
+  ...(views[location.hash.slice(1)] ?? globe),
+  maxPitch: 75,
+  terrain: true,
   attributionControl: {
     customAttribution:
-      '<a href="https://trek.nasa.gov/moon/">NASA Moon Trek</a>: LRO WAC mosaic, NASA/GSFC/Arizona State University',
+      '<a href="https://trek.nasa.gov/moon/">NASA Moon Trek</a>: LRO WAC mosaic, NASA/GSFC/Arizona State University; ' +
+      'LOLA terrain model, NASA/GSFC/MIT',
   },
 });
 
@@ -50,5 +62,13 @@ map.addSymbols({
 });
 
 map.on('click', ({ lonLat }) => {
-  if (lonLat) map.flyTo({ center: lonLat, zoom: 7, pitch: 30 }, { duration: 4000 });
+  if (lonLat) map.flyTo({ center: lonLat, zoom: 7, pitch: 45 }, { duration: 4000 });
 });
+
+for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-view]')) {
+  button.addEventListener('click', () => {
+    const view = button.dataset.view ?? '';
+    history.replaceState(null, '', view === 'globe' ? location.pathname : `#${view}`);
+    map.flyTo(views[view] ?? globe, { duration: 5000 });
+  });
+}
