@@ -12,7 +12,7 @@ crates/geo/        camera and projections, geodesy (WGS 84, Moon, Mars), RAF20 g
 crates/tiles3d/    3D Tiles tree, traversal and decoding (meshopt, quantization, b3dm, glb)
 crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking; built twice, with and
                    without the 3D Tiles (its `tiles3d` feature)
-packages/isard/    the npm package @ign-junn/isard: GeoMap, layer handles, overlays, workers
+packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
 apps/demo/         the demo; apps/bench/: isard, iTowns and 3DTilesRendererJS on the same scenario
 examples/          one page per example, as an application would write it
 docs/              this site (VitePress)

@@ -1,5 +1,5 @@
-//! isard: a WebGL2 map engine built for large, interactive data layers (accessibility, flooding, 3D meshes) on
-//! Géoplateforme basemaps. Rendering only happens on demand: an idle map costs nothing.
+//! isard: a WebGL2 map engine built for large, interactive data layers (accessibility, flooding, 3D meshes) over
+//! raster or vector basemaps. Rendering only happens on demand: an idle map costs nothing.
 //!
 //! This crate is the WebAssembly core. The `isard` JavaScript package wraps it with the interactions (pan, zoom,
 //! rotate, inertia), the resize handling, the decoding workers and a typed API. What needs neither WebGL nor the

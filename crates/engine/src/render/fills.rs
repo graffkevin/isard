@@ -63,9 +63,9 @@ void main() { color = v_color; }";
 const UNIFORMS: [&str; 5] = ["u_matrix", "u_center_hi", "u_center_lo", "u_heights", "u_volume"];
 
 /// Prisms from this far below the body's lowest ground (metres): the chords of the globe sagging under the sphere
-/// (-3000 m on the Earth)
+/// (-3250 m on the Earth)
 const BOTTOM_MARGIN: f64 = 2800.0;
-/// …to this high above its highest, times the exaggeration (5500 m on the Earth, above Mont Blanc)
+/// …to this high above its highest, times the exaggeration (9400 m on the Earth, above Everest)
 const TOP_MARGIN: f64 = 500.0;
 
 /// Altitudes the prisms reach from and to (metres, before exaggeration)
@@ -391,8 +391,8 @@ mod tests {
 
     #[test]
     fn prisms_reach_through_the_relief_of_the_body() {
-        // The Earth's as before the bodies; Mars's from under Hellas to above Olympus Mons
-        assert_eq!(prism_range(&Body::EARTH), (-3000.0, 5500.0));
+        // The Earth's from under the Dead Sea to above Everest; Mars's from under Hellas to above Olympus Mons
+        assert_eq!(prism_range(&Body::EARTH), (-3250.0, 9400.0));
         let (bottom, top) = prism_range(&Body::MARS);
         assert!(bottom < -8201.0 - 2000.0 && top > 21_241.0, "{bottom} {top}");
     }

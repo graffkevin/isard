@@ -5,8 +5,8 @@
  * and labels; two pitched views over the relief, Olympus Mons and Valles Marineris (a link opens one: #olympus-mons).
  * A click flies to the point.
  */
-import { type Camera, type Feature, GeoMap } from '@ign-junn/isard';
-import { element } from '../shared/wfs.ts';
+import { type Camera, type Feature, GeoMap } from 'isard';
+import { element } from '../shared/page.ts';
 
 // Tharsis and Valles Marineris, the whole globe
 const globe: Camera = { center: [-80, 0], zoom: 1.2, pitch: 0, bearing: 0 };

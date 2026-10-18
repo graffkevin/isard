@@ -1,5 +1,5 @@
-//! Symbol layer: text labels at points, drawn from signed distance field glyphs (the Géoplateforme's fonts, in the
-//! format of `MapLibre`'s glyph ranges), with a halo. The page shapes the text (`glyphs.ts`: lines, wrapping, anchors)
+//! Symbol layer: text labels at points, drawn from signed distance field glyphs (in the format of `MapLibre`'s
+//! glyph ranges), with a halo. The page shapes the text (`glyphs.ts`: lines, wrapping, anchors)
 //! and keeps the glyph atlas; the engine places the labels each frame, every symbol layer sharing one collision grid
 //! from the top layer down (a label showing only where no label placed before it does), and draws each glyph as an
 //! instanced quad facing the screen. In relief a label stands on the ground, and the hills hide it; on the globe, a

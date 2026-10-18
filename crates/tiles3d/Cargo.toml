@@ -4,6 +4,8 @@ version = "0.1.1"
 publish = false
 edition = "2024"
 license = "MIT"
+authors = ["Kevin Graff"]
+repository = "https://github.com/graffkevin/isard"
 description = "3D Tiles tileset tree, traversal and b3dm / glb decoding of isard"
 
 [dependencies]

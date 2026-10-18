@@ -1,20 +1,21 @@
 /**
- * GeoJSON layers: the communes around Paris (ADMIN EXPRESS) as fills colored by their population through a ramp,
+ * GeoJSON layers: the communes around Paris (the IGN's ADMIN EXPRESS, from the Géoplateforme's WFS) as fills colored by their population through a ramp,
  * their outlines and their names; the commune under the cursor outlined and described.
  */
-import { GeoMap } from '@ign-junn/isard';
-import { element, wfs } from '../shared/wfs.ts';
+import { GeoMap, geoplateformeWfs, IGN_ATTRIBUTION } from 'isard';
+import { element } from '../shared/page.ts';
 
 type Commune = { nom_officiel: string; population: number; code_insee: string };
 
 const map = await GeoMap.create(element('map'), {
   center: [2.39, 48.84],
   zoom: 10.6,
-  basemap: 'plan-grey-vector',
   projection: 'mercator',
+  // The communes are the IGN's data
+  attributionControl: { customAttribution: IGN_ATTRIBUTION },
 });
 
-const communes = await wfs<Commune>('ADMINEXPRESS-COG.LATEST:commune', [2.15, 48.72, 2.62, 48.95]);
+const communes = await geoplateformeWfs<Commune>('ADMINEXPRESS-COG.LATEST:commune', [2.15, 48.72, 2.62, 48.95]);
 const fills = map.addFills({
   data: communes,
   color: '#999',

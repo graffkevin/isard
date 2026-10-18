@@ -1,9 +1,9 @@
 /**
- * Buildings: BD TOPO buildings raised to their height and colored by it through a ramp, with depth; the building under
+ * Buildings: the IGN's BD TOPO buildings (Géoplateforme WFS), over PLAN.IGN, raised to their height and colored by it through a ramp, with depth; the building under
  * the cursor described. A tilted view, the relief off.
  */
-import { GeoMap } from '@ign-junn/isard';
-import { element, wfs } from '../shared/wfs.ts';
+import { GeoMap, geoplateformeWfs } from 'isard';
+import { element } from '../shared/page.ts';
 
 type Building = { hauteur: number | null; usage_1: string | null; nombre_de_logements: number | null };
 
@@ -12,11 +12,11 @@ const map = await GeoMap.create(element('map'), {
   zoom: 16.4,
   pitch: 60,
   bearing: -25,
-  basemap: 'plan-grey-vector',
+  basemap: 'ign-plan-grey-vector',
   projection: 'mercator',
 });
 
-const buildings = await wfs<Building>('BDTOPO_V3:batiment', [2.414, 48.84, 2.432, 48.851]);
+const buildings = await geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.414, 48.84, 2.432, 48.851]);
 const layer = map.addExtrusions({
   data: buildings,
   height: (p) => p.hauteur ?? 6,

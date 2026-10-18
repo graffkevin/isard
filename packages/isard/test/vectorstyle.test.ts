@@ -1,5 +1,15 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { type Context, color, evaluate, filter, isExpression, type Json, text } from '../src/vectorstyle.ts';
+import {
+  type Context,
+  color,
+  evaluate,
+  filter,
+  isExpression,
+  type Json,
+  labelFont,
+  text,
+  zoomStops,
+} from '../src/vectorstyle.ts';
 
 const ctx: Context = {
   zoom: 12,
@@ -136,5 +146,34 @@ describe('text and color', () => {
     expect(color('#ff0000')).toEqual([1, 0, 0, 1]);
     expect(color('navy')?.[2]).toBeCloseTo(0x80 / 255, 6);
     expect(color(['get', 'x'])).toBeUndefined();
+  });
+});
+
+describe('zoomStops', () => {
+  test('a zoom interpolation as stops: its own, and the whole zooms between', () => {
+    expect(zoomStops(['interpolate', ['linear'], ['zoom'], 8, 9, 12, 10])).toEqual([
+      [8, 9],
+      [9, 9.25],
+      [10, 9.5],
+      [11, 9.75],
+      [12, 10],
+    ]);
+    // Exponential: followed at the whole zooms
+    const curve = zoomStops(['interpolate', ['exponential', 2], ['zoom'], 0, 0, 2, 3]);
+    expect(curve.map(([z]) => z)).toEqual([0, 1, 2]);
+    expect(curve[1]?.[1]).toBeCloseTo(1, 6);
+  });
+
+  test('a step kept sharp; a constant, one stop', () => {
+    expect(zoomStops(['step', ['zoom'], 10, 12, 14])).toEqual([
+      [11.99, 10],
+      [12, 14],
+    ]);
+    expect(zoomStops(['+', 1, 2])).toEqual([[0, 3]]);
+  });
+
+  test('fonts without a weight take the regular one', () => {
+    expect(labelFont('Noto Sans')).toBe('Noto Sans Regular');
+    expect(labelFont('Noto Sans Italic')).toBe('Noto Sans Italic');
   });
 });

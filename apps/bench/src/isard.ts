@@ -1,5 +1,5 @@
 /** isard running the benchmark scenario */
-import { GeoMap } from '@ign-junn/isard';
+import { GeoMap } from 'isard';
 import { benchmark, FOV, LILLE_MESH, type Pose, SSE, START } from './scenario.ts';
 
 const found = document.getElementById('view');
@@ -14,8 +14,7 @@ function zoom(range: number, lat: number): number {
 }
 
 const map = await GeoMap.create(container, {
-  basemap: 'ortho',
-  hillshade: 0,
+  basemap: 'ign-ortho',
   center: [START.lon, START.lat],
   zoom: zoom(START.range, START.lat),
   interactive: false,

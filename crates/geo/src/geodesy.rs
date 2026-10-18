@@ -21,8 +21,8 @@ impl Body {
     pub const EARTH: Self = Self {
         radius: 6_378_137.0,
         flattening: 1.0 / 298.257_223_563,
-        // The relief of the IGN terrain model: France, from its depressions up past Mont Blanc
-        relief: (-200.0, 5000.0),
+        // Its dry land, from the shore of the Dead Sea (-430 m) up past the summit of Everest (8849 m)
+        relief: (-450.0, 8900.0),
     };
     /// The Moon's mean sphere (IAU); its relief from the floor of the South Pole-Aitken basin (-9.1 km) to the
     /// Selenean summit (10.8 km), as LOLA measures them
@@ -183,10 +183,10 @@ mod tests {
 
     #[test]
     fn relief_follows_the_body() {
-        // The Moon and Mars: some 20 to 30 km of relief, 14 and 11 times the Earth's for their size
+        // The Moon and Mars: some 20 to 30 km of relief, 8 and 6 times the Earth's for their size
         for (body, deepest, highest, scale) in [
-            (Body::MOON, -9126.0, 10_767.0, 14.1),
-            (Body::MARS, -8201.0, 21_241.0, 10.7),
+            (Body::MOON, -9126.0, 10_767.0, 7.85),
+            (Body::MARS, -8201.0, 21_241.0, 5.95),
         ] {
             assert!(body.relief.0 < deepest && body.relief.1 > highest, "{body:?}");
             assert!((body.relief_scale() - scale).abs() < 0.1, "{}", body.relief_scale());

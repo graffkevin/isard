@@ -2,6 +2,7 @@
  * Controls: elements in a corner of the map. A control is anything with `onAdd` and `onRemove`, as in MapLibre, so
  * applications write their own; the navigation buttons and the attribution are built in.
  */
+import { IGN_ATTRIBUTION } from './geoplateforme.ts';
 import type { GeoMap } from './map.ts';
 
 export type ControlPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -91,26 +92,24 @@ export class NavigationControl implements Control {
   }
 }
 
-/** The Géoplateforme basemaps, terrain and hillshade the map loads by default */
-export const DEFAULT_ATTRIBUTION =
-  '<a href="https://www.ign.fr/">© IGN</a> – <a href="https://geoservices.ign.fr/">Géoplateforme</a>';
+/** @deprecated The Géoplateforme's credits, now `IGN_ATTRIBUTION`: the attribution control shows those of the sources
+ * in use */
+export const DEFAULT_ATTRIBUTION = IGN_ATTRIBUTION;
 
 export interface AttributionOptions {
   /** Folded into a small (i) button that shows the text on click (default: when the map is narrower than 640 px) */
   compact?: boolean;
-  /** Attributions shown after the default one, HTML allowed (links open in a new tab) */
+  /** Attributions shown after those of the map's sources, HTML allowed (links open in a new tab) */
   customAttribution?: string | string[];
 }
 
-/** Credits of the data shown */
+/** Credits of the data shown: those of the map's basemap, hillshade and relief (OpenFreeMap and OpenStreetMap, IGN,
+ * the Terrain Tiles…, followed as they change), then the page's own */
 export class AttributionControl implements Control {
   private observer: ResizeObserver | undefined;
+  private stopListening: (() => void) | undefined;
 
-  /** `ign`: the Géoplateforme credits first (`DEFAULT_ATTRIBUTION`; false on a map of another body than the Earth) */
-  constructor(
-    private readonly options: AttributionOptions = {},
-    private readonly ign = true,
-  ) {}
+  constructor(private readonly options: AttributionOptions = {}) {}
 
   onAdd(map: GeoMap): HTMLElement {
     const element = document.createElement('div');
@@ -118,12 +117,15 @@ export class AttributionControl implements Control {
     const inner = document.createElement('div');
     inner.className = 'isard-attrib-inner';
     const custom = this.options.customAttribution ?? [];
-    const credits = [...(this.ign ? [DEFAULT_ATTRIBUTION] : []), ...(typeof custom === 'string' ? [custom] : custom)];
-    inner.innerHTML = credits.join(' | ');
-    for (const link of inner.querySelectorAll('a')) {
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-    }
+    const render = () => {
+      inner.innerHTML = [...map.attributions(), ...(typeof custom === 'string' ? [custom] : custom)].join(' | ');
+      for (const link of inner.querySelectorAll('a')) {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+    };
+    render();
+    this.stopListening = map.onAttributionChange(render);
     const toggle = button('isard-attrib-button', 'Toggle attribution', INFO, () =>
       toggle.setAttribute('aria-expanded', String(element.classList.toggle('isard-attrib-open'))),
     );
@@ -152,5 +154,7 @@ export class AttributionControl implements Control {
   onRemove(): void {
     this.observer?.disconnect();
     this.observer = undefined;
+    this.stopListening?.();
+    this.stopListening = undefined;
   }
 }

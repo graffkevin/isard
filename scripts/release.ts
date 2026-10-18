@@ -1,5 +1,5 @@
 /**
- * Releases `@ign-junn/isard`. On a machine, `bun run release` checks the release (clean tree on main, version
+ * Releases `isard`. On a machine, `bun run release` checks the release (clean tree on main, version
  * described in the changelog, same version in the crates, not yet tagged), runs lint, types, tests and build, then
  * tags `v<version>` and pushes the tag: the Release workflow publishes it on npm, with provenance, through npm's
  * trusted publishing (no token on any machine). `--dry-run` checks and packs without tagging. `--publish` is the
@@ -57,7 +57,7 @@ if (dry) {
   $.cwd(pkg);
   await $`npx --yes npm@11 pack --dry-run`;
 } else {
-  await $`git tag -a v${version} -m ${`@ign-junn/isard ${version}`}`;
+  await $`git tag -a v${version} -m ${`isard ${version}`}`;
   await $`git push origin v${version}`;
   console.log(`tagged and pushed v${version}: the Release workflow publishes it on npm`);
 }

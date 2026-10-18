@@ -17,11 +17,14 @@ const BUDGETS = {
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   'isard_bg.wasm': 341,
   /** The package's modules (dist/*.js but the workers), all together */
-  modules: 64, // 61 until the equirectangular grid (the Moon), about 2 KB
+  // 61 until the equirectangular grid (the Moon), about 2 KB; 64 until the OpenFreeMap basemaps, the Terrarium decoding
+  // of the worldwide relief, the credits by source, the glyphs of a style and the Géoplateforme helpers, about 5.5 KB
+  modules: 71,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   bindings: 38,
   'decoder.worker.js': 13,
-  'basemap.worker.js': 8.6,
+  // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes
+  'basemap.worker.js': 9.2,
 } as const;
 
 const root = join(import.meta.dir, '..');

@@ -48,7 +48,7 @@ export class RasterLayer extends Layer {
   /** @internal */
   constructor(
     map: LayerHost,
-    private readonly options: Required<Omit<RasterOptions, 'size' | 'loader' | 'grid'>> & {
+    private readonly options: Required<Omit<RasterOptions, 'size' | 'loader' | 'grid' | 'attribution'>> & {
       size: number | undefined;
       loader: RasterOptions['loader'] | undefined;
     },

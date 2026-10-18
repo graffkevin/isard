@@ -3,9 +3,9 @@
 ## Install
 
 ```sh
-bun add @ign-junn/isard
+bun add isard
 # or
-npm install @ign-junn/isard
+npm install isard
 ```
 
 The package is ES modules with their types (your bundler keeps what you use), the engine in two builds
@@ -20,14 +20,16 @@ current browser.
 ```
 
 ```ts
-import { GeoMap } from '@ign-junn/isard';
+import { GeoMap } from 'isard';
 
 const map = await GeoMap.create(document.getElementById('map')!, {
   center: [2.4246, 48.8457], // longitude, latitude
   zoom: 14,
-  basemap: 'plan-grey-vector',
 });
 ```
+
+The basemap is OpenFreeMap's Positron by default (OpenStreetMap data, worldwide, no key); `basemap` picks another
+([basemaps](./basemaps)), and the attribution control credits the data shown.
 
 `GeoMap.create` loads the engine once per page (it is compiled once), creates a canvas filling the container and
 returns the map. The engine it loads has no 3D Tiles, a third smaller: the first 3D Tiles layer loads the full one
@@ -47,11 +49,11 @@ By default the engines and the workers are looked up next to the module (`new UR
 import.meta.url)`). A bundler that moves files around is given their URLs instead. With Vite:
 
 ```ts
-import { GeoMap } from '@ign-junn/isard';
-import basemapWorkerUrl from '@ign-junn/isard/basemap.worker.js?url';
-import decoderWorkerUrl from '@ign-junn/isard/decoder.worker.js?url';
-import wasmUrl from '@ign-junn/isard/isard_bg.wasm?url';
-import coreWasmUrl from '@ign-junn/isard/isard_core_bg.wasm?url';
+import { GeoMap } from 'isard';
+import basemapWorkerUrl from 'isard/basemap.worker.js?url';
+import decoderWorkerUrl from 'isard/decoder.worker.js?url';
+import wasmUrl from 'isard/isard_bg.wasm?url';
+import coreWasmUrl from 'isard/isard_core_bg.wasm?url';
 
 const map = await GeoMap.create(container, { coreWasmUrl, wasmUrl, workerUrl: decoderWorkerUrl, basemapWorkerUrl });
 ```
@@ -61,7 +63,7 @@ Given `wasmUrl` without `coreWasmUrl`, the map loads the full engine from the st
 ```ts [vite.config.ts]
 export default defineConfig({
   // The engine is loaded by URL: kept out of the dependency pre-bundling
-  optimizeDeps: { exclude: ['@ign-junn/isard'] },
+  optimizeDeps: { exclude: ['isard'] },
 });
 ```
 
@@ -76,7 +78,7 @@ function Map({ onReady }: { onReady: (map: GeoMap) => void }) {
   useEffect(() => {
     let map: GeoMap | undefined;
     let gone = false;
-    GeoMap.create(ref.current!, { basemap: 'plan-grey-vector' }).then((m) => {
+    GeoMap.create(ref.current!).then((m) => {
       if (gone) return m.destroy();
       map = m;
       onReady(m);

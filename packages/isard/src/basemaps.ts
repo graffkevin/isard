@@ -1,25 +1,56 @@
-/** Géoplateforme basemaps (WMTS, Web Mercator), and the relief of each body */
-import type { Basemap, RasterOptions } from './types.ts';
+/** The basemaps by name: OpenFreeMap's vector styles (OpenStreetMap data, worldwide) and the Géoplateforme's (IGN,
+ * France), the credits of the sources, and the relief of each body */
+import { geoplateformeWmts, IGN_ATTRIBUTION } from './geoplateforme.ts';
+import type { Basemap, BasemapName, LegacyBasemap, RasterOptions } from './types.ts';
 
-const WMTS =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM' +
-  '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
-const PLAN = `${WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&FORMAT=image/png`;
+export { IGN_ATTRIBUTION };
 
-export const BASEMAPS: Record<Exclude<Basemap, 'none' | 'plan-vector' | 'plan-grey-vector'>, RasterOptions> = {
-  plan: { url: PLAN, maxZoom: 19 },
-  'plan-grey': { url: PLAN, maxZoom: 19, saturation: 0 },
-  ortho: { url: `${WMTS}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&FORMAT=image/jpeg`, maxZoom: 19 },
+const PLAN = 'GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2';
+
+/** The raster basemaps of the Géoplateforme (WMTS, Web Mercator), crediting the IGN */
+export const BASEMAPS: Record<'ign-plan' | 'ign-plan-grey' | 'ign-ortho', RasterOptions> = {
+  'ign-plan': geoplateformeWmts(PLAN),
+  'ign-plan-grey': geoplateformeWmts(PLAN, { saturation: 0 }),
+  'ign-ortho': geoplateformeWmts('ORTHOIMAGERY.ORTHOPHOTOS', { format: 'image/jpeg' }),
 };
+
+/** The former names of the Géoplateforme basemaps, still accepted */
+const LEGACY: Record<LegacyBasemap, BasemapName> = {
+  plan: 'ign-plan',
+  'plan-grey': 'ign-plan-grey',
+  ortho: 'ign-ortho',
+  'plan-vector': 'ign-plan-vector',
+  'plan-grey-vector': 'ign-plan-grey-vector',
+};
+const warned = new Set<string>();
+
+/** A basemap by its current name: a former one is warned about once, then taken under its new name */
+export function basemapName(basemap: Basemap): BasemapName {
+  const renamed = LEGACY[basemap as LegacyBasemap];
+  if (!renamed) return basemap as BasemapName;
+  if (!warned.has(basemap)) {
+    warned.add(basemap);
+    console.warn(`isard: the basemap '${basemap}' is deprecated, it is now named '${renamed}'`);
+  }
+  return renamed;
+}
+
+/** Credits of OpenFreeMap's basemaps, as its TileJSON gives them */
+export const OPENFREEMAP_ATTRIBUTION =
+  '<a href="https://openfreemap.org">OpenFreeMap</a> <a href="https://www.openmaptiles.org/">© OpenMapTiles</a> ' +
+  'Data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+
+/** Credits of the Terrain Tiles of AWS's open data registry (Mapzen's Terrarium tiles) and of their sources */
+export const TERRAIN_TILES_ATTRIBUTION =
+  '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Terrain Tiles</a> (Mapzen, AWS)';
 
 /** IGN hillshade, grey on transparent, zooms 6 to 17 */
-export const HILLSHADE: RasterOptions = {
-  url: `${WMTS}&LAYER=IGNF_ELEVATION.ELEVATIONGRIDCOVERAGE.SHADOW&FORMAT=image/png`,
+export const HILLSHADE: RasterOptions = geoplateformeWmts('IGNF_ELEVATION.ELEVATIONGRIDCOVERAGE.SHADOW', {
   minZoom: 6,
   maxZoom: 17,
-};
+});
 
-/** IGN terrain model (RGE ALTI and its fill-ins), raw altitudes in metres from the Géoplateforme WMS */
+/** IGN terrain model (RGE ALTI and its fill-ins, France), raw altitudes in metres from the Géoplateforme WMS */
 export const TERRAIN_URL =
   'https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES' +
   '&STYLES=&CRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32';
@@ -64,12 +95,22 @@ export function imageServerTerrain(url: string, earth: boolean, radius: number):
   );
 }
 
+/** The Earth's relief for `terrain: true`: the Terrain Tiles of AWS's open data registry, worldwide (SRTM, EU-DEM,
+ * GMTED… merged by Mapzen), Terrarium PNGs of 256 px to level 15, altitudes above the mean sea level */
+export const TERRAIN_TILES = {
+  url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+  maxZoom: 14,
+} as const;
+
 /** Sea color of each basemap, for the globe under the tiles (polar caps), RGB 0-1 */
-export const SEA: Record<Basemap, [r: number, g: number, b: number]> = {
-  plan: [0.667, 0.835, 0.914],
-  'plan-grey': [0.792, 0.792, 0.792],
-  'plan-vector': [0.667, 0.835, 0.914],
-  'plan-grey-vector': [0.792, 0.792, 0.792],
-  ortho: [0.039, 0.231, 0.349],
+export const SEA: Record<BasemapName, [r: number, g: number, b: number]> = {
+  'osm-positron': [0.761, 0.784, 0.792],
+  'osm-liberty': [0.62, 0.741, 1],
+  'osm-bright': [0.682, 0.812, 0.886],
+  'ign-plan': [0.667, 0.835, 0.914],
+  'ign-plan-grey': [0.792, 0.792, 0.792],
+  'ign-plan-vector': [0.667, 0.835, 0.914],
+  'ign-plan-grey-vector': [0.792, 0.792, 0.792],
+  'ign-ortho': [0.039, 0.231, 0.349],
   none: [0.85, 0.85, 0.83],
 };

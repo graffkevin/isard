@@ -18,7 +18,7 @@ import {
   type Styled,
   stops,
 } from './features.ts';
-import { codes, type Glyph, type Glyphs, shape, type TextPart } from './glyphs.ts';
+import { codes, DEFAULT_FONT, type Glyph, type Glyphs, shape, type TextPart } from './glyphs.ts';
 import { Layer } from './layers.ts';
 import type { Anchor } from './overlay.ts';
 import type { LayerHost } from './types.ts';
@@ -27,7 +27,7 @@ import type { Engine } from './wasm/isard.js';
 export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 'ramp'> {
   /** The text: a string (`\n` breaks lines) or runs with their own scale and font; empty: no label */
   text: Styled<string | TextPart[], P>;
-  /** Font of the Géoplateforme (default `Source Sans Pro Regular`; also Bold, Italic, Semibold) */
+  /** A font of the map's glyphs (default `Noto Sans Regular`; also Bold and Italic with the default glyphs) */
   font: Styled<string, P>;
   /** CSS pixels, or zoom stops (default 12) */
   size: Styled<Size, P>;
@@ -180,7 +180,7 @@ export class SymbolLayer<P = Properties> extends Layer {
     });
     const byFont = new Map<string, Set<number>>();
     for (const p of parts.flat()) {
-      const key = p.font ?? 'Source Sans Pro Regular';
+      const key = p.font ?? DEFAULT_FONT;
       const set = byFont.get(key) ?? new Set<number>();
       for (const code of codes([p])) set.add(code);
       byFont.set(key, set);
@@ -299,7 +299,7 @@ export function symbolStyle<P>(options: SymbolOptions<P>): SymbolStyle<P> {
     visible: true,
     filter: undefined,
     text: '',
-    font: 'Source Sans Pro Regular',
+    font: DEFAULT_FONT,
     size: 12,
     color: '#000',
     haloColor: '#fff',

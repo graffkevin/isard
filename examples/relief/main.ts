@@ -1,10 +1,11 @@
 /**
- * Relief and a ground shader: the IGN terrain model under the Mont Blanc, a sky and fog, and a fragment shader of the
+ * Relief and a ground shader: the IGN terrain model (RGE ALTI) and PLAN.IGN with its hillshade under the Mont Blanc,
+ * from the Géoplateforme, a sky and fog, and a fragment shader of the
  * page run over the ground itself (rings every 500 m around the cursor), so that it lies on the mountains exactly as
  * the basemap does. The shader gets the Mercator offset of each pixel from its anchor, exact at any zoom.
  */
-import { GeoMap } from '@ign-junn/isard';
-import { element } from '../shared/wfs.ts';
+import { GeoMap } from 'isard';
+import { element } from '../shared/page.ts';
 
 const MONT_BLANC: [number, number] = [6.8652, 45.8326];
 
@@ -14,9 +15,9 @@ const map = await GeoMap.create(element('map'), {
   pitch: 68,
   bearing: -140,
   maxPitch: 80,
-  basemap: 'plan',
+  basemap: 'ign-plan',
   hillshade: 0.5,
-  terrain: { exaggeration: 1.5 },
+  terrain: { model: 'ign', exaggeration: 1.5 },
   atmosphere: {},
   projection: 'mercator',
 });

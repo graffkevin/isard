@@ -6,10 +6,10 @@
 
 **Maps that recolor at every mouse move.**
 
-A WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps.<br />
+A WebGL2 map engine for large, interactive data layers, labels and 3D Tiles.<br />
 Rust core in WebAssembly, a small TypeScript API.
 
-[![npm](https://img.shields.io/npm/v/@ign-junn/isard?color=2f6fd1)](https://www.npmjs.com/package/@ign-junn/isard)
+[![npm](https://img.shields.io/npm/v/isard?color=2f6fd1)](https://www.npmjs.com/package/isard)
 [![Documentation](https://img.shields.io/badge/docs-graffkevin.github.io%2Fisard-2f6fd1)](https://graffkevin.github.io/isard/)
 [![Checks](https://github.com/graffkevin/isard/actions/workflows/checks.yml/badge.svg)](https://github.com/graffkevin/isard/actions/workflows/checks.yml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
@@ -30,8 +30,10 @@ General-purpose map libraries spend their time on things these maps do not need.
 
 - ⚡ **One upload, millions of features.** A network of 2 million street pieces recolors from a single texture upload
   of 4 bytes per node, drawn in the very frame of the mouse move; only the squares in view are drawn.
-- 🗺️ **Géoplateforme basemaps.** PLAN.IGN raster or vector (its MapLibre styles drawn in workers, the labels above your
-  data), orthophotos, hillshade, the IGN relief, on a globe that turns into Web Mercator.
+- 🗺️ **Basemaps and relief, worldwide.** OpenFreeMap's vector basemaps by default (OpenStreetMap data, no key), any
+  MapLibre style drawn in workers with its labels above your data, raster tiles, a worldwide relief, on a globe that
+  turns into Web Mercator. The Géoplateforme's data for France in one option or call: PLAN.IGN, orthophotos,
+  hillshade, the IGN relief, any WMTS, WMS or WFS layer ([Géoplateforme (IGN) data](https://graffkevin.github.io/isard/guide/geoplateforme)).
 - ⛰️ **Everything on the relief.** Lines, circles, labels and buildings stand on the ground; fills of any size are
   exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
 - 🪐 **The Moon, Mars, any body.** `body: 'moon'`, `'mars'` or an ellipsoid of your own: the globe at its radius
@@ -46,13 +48,13 @@ General-purpose map libraries spend their time on things these maps do not need.
 ## Quick start
 
 ```sh
-bun add @ign-junn/isard     # or npm install @ign-junn/isard
+bun add isard     # or npm install isard
 ```
 
 ```ts
-import { GeoMap } from '@ign-junn/isard';
+import { GeoMap } from 'isard';
 
-const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 14, basemap: 'plan-grey-vector' });
+const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 14 });
 const network = map.addNetwork({ nodes, edges, max: 1800 }); // lon/lat pairs, node index pairs
 map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))); // one value per node
 ```
@@ -78,7 +80,7 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
     <td><a href="https://graffkevin.github.io/isard/examples/network"><img src="docs/public/screenshots/network.jpg" alt="" /></a><br /><b>Travel times on hover</b><br />a network recolored at every move</td>
   </tr>
   <tr>
-    <td><a href="https://graffkevin.github.io/isard/examples/vector"><img src="docs/public/screenshots/vector.jpg" alt="" /></a><br /><b>Vector basemaps</b><br />the PLAN.IGN styles, a restyled subset</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/vector"><img src="docs/public/screenshots/vector.jpg" alt="" /></a><br /><b>Vector basemaps</b><br />OpenFreeMap's styles, a restyled subset</td>
     <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
   </tr>
   <tr>
@@ -93,7 +95,7 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 |---|---|---|
 | [Networks](https://graffkevin.github.io/isard/layers/networks) | `addNetwork` | millions of edges colored by a value per node, worked out per pixel along the edges |
 | [Lines, circles, fills](https://graffkevin.github.io/isard/layers/features) | `addLines`, `addCircles`, `addFills` | GeoJSON styled per feature: zoom stops, functions, values through a ramp, filters |
-| [Labels](https://graffkevin.github.io/isard/layers/labels) | `addSymbols` | Géoplateforme fonts, halos, along lines, collisions shared by all layers |
+| [Labels](https://graffkevin.github.io/isard/layers/labels) | `addSymbols` | SDF fonts (Noto Sans by default, any glyphs), halos, along lines, collisions shared by all layers |
 | [Buildings](https://graffkevin.github.io/isard/layers/buildings) | `addExtrusions` | tiles or one set, colored by values or by a network's times |
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
 | [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS, equirectangular tiles reprojected, or tiles drawn by your code |
@@ -128,7 +130,7 @@ drives both.
 crates/geo/        camera, projections, geodesy and geoid, tile selection, label placement, polygons   tested natively
 crates/tiles3d/    3D Tiles tree, traversal and decoding                                                tested natively
 crates/engine/     the WebAssembly core: the engine, the ground, the layers, picking
-packages/isard/    the npm package @ign-junn/isard: GeoMap, layer handles, overlays, workers
+packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
 apps/              the demo and the benchmark (Isard, iTowns, 3DTilesRendererJS)
 examples/          one page per example
 docs/              the documentation site (VitePress)
@@ -145,4 +147,5 @@ More in [Develop and release](https://graffkevin.github.io/isard/guide/develop).
 
 ## Licence
 
-MIT, © Institut national de l'information géographique et forestière (IGN).
+MIT, © 2026 Kevin Graff. Basemap data: © OpenStreetMap contributors (OpenFreeMap, OpenMapTiles); IGN data: Licence
+Ouverte (Géoplateforme).

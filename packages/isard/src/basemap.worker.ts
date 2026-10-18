@@ -1,7 +1,8 @@
 /**
  * Worker of the vector basemaps: fetches and decodes vector tiles (kept for the tiles that share them), draws their
  * fills, lines and circles with a MapLibre style into images (Canvas 2D, off the main thread) for the raster pool,
- * and lists the label candidates of the style's symbol layers for the page to shape and place.
+ * with the style's raster layers under them, and lists the label candidates of the style's symbol layers for the page
+ * to shape and place. Extrusions are drawn flat, as fills.
  *
  * A raster tile of level z covers 256 CSS pixels at map zoom z - 1 (MapLibre's 512 px convention): it is drawn from
  * the vector tile of level z - 1 (or the deepest one the source has), with the style at that zoom.
@@ -16,12 +17,16 @@ import {
   filter,
   isExpression,
   isFeatureDependent,
+  type Json,
   type LabelCandidate,
+  labelFont,
+  type RasterSource,
   type StyleLayer,
   text,
+  zoomStops,
 } from './vectorstyle.ts';
 
-export type { LabelCandidate };
+export type { LabelCandidate, RasterSource };
 
 /** Fetch priority of a request (`fetch`'s `priority`, a hint to the browser) */
 export type Priority = 'high' | 'low' | 'auto';
@@ -39,6 +44,8 @@ export type BasemapRequest =
       tiles: string;
       maxzoom: number;
       layers: StyleLayer[];
+      /** The style's raster sources, by name, for its raster layers */
+      rasters?: Record<string, RasterSource>;
       /** The style's sprite, for the fill patterns (loaded once by the page) */
       sprite?: Sprite;
     }
@@ -57,6 +64,7 @@ interface Renderer {
   tiles: string;
   maxzoom: number;
   layers: StyleLayer[];
+  rasters: Record<string, RasterSource>;
   sprite: Sprite | undefined;
   /** Fill patterns by icon name, cut from the sprite once */
   patterns: Map<string, OffscreenCanvas | undefined>;
@@ -74,6 +82,35 @@ const CACHE = 96;
 /** Requests in progress, and those of them aborted (both forgotten once answered) */
 const active = new Set<number>();
 const aborted = new Set<number>();
+
+/** Images of the raster sources by URL, the most recent last */
+const images = new Map<string, Promise<ImageBitmap | undefined>>();
+const IMAGES = 64;
+
+/** An image of a raster source (shared by every renderer); undefined where the source has none */
+function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | undefined> {
+  const hit = images.get(url);
+  if (hit) {
+    images.delete(url);
+    images.set(url, hit);
+    return hit;
+  }
+  const pending = (async () => {
+    const init: PriorityInit = { priority };
+    const response = await fetch(url, init);
+    if (response.status === 404 || response.status === 204) return undefined;
+    if (!response.ok) throw new Error(`${url}: ${response.status}`);
+    return createImageBitmap(await response.blob());
+  })();
+  pending.catch(() => images.delete(url));
+  images.set(url, pending);
+  while (images.size > IMAGES) {
+    const oldest = images.keys().next().value;
+    if (oldest === undefined) break;
+    images.delete(oldest);
+  }
+  return pending;
+}
 
 /** `RequestInit` with the fetch priority, which the TypeScript DOM library may not know yet */
 type PriorityInit = RequestInit & { priority?: Priority };
@@ -180,6 +217,26 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
       drawn = true;
       continue;
     }
+    if (layer.type === 'raster') {
+      const source = layer.source === undefined ? undefined : r.rasters[layer.source];
+      if (!source) continue;
+      // The canvas covers the Web Mercator tile (z, x, y): a source tile of 512 px covers it from a level coarser
+      const rz = Math.max(0, Math.min(z - (source.tileSize >= 512 ? 1 : 0), source.maxzoom));
+      const n = 2 ** (z - rz);
+      const url = source.tiles
+        .replace('{z}', String(rz))
+        .replace('{x}', String(Math.floor(x / n)))
+        .replace('{y}', String(Math.floor(y / n)));
+      const picture = await image(url, priority).catch(() => undefined);
+      if (aborted.has(id)) return undefined;
+      if (!picture) continue;
+      const [w, h] = [picture.width / n, picture.height / n];
+      g.globalAlpha = Number(value(layer, 'paint', 'raster-opacity', zctx, 1));
+      g.drawImage(picture, (x % n) * w, (y % n) * h, w, h, 0, 0, size, size);
+      g.globalAlpha = 1;
+      drawn = true;
+      continue;
+    }
     const data = layers?.get(layer['source-layer'] ?? '');
     if (!data) continue;
     // Tile units to canvas pixels
@@ -209,7 +266,16 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
     for (const f of data.features) {
       const ctx = context(f, zoom);
       if (!filter(layer.filter, ctx)) continue;
-      if (layer.type === 'fill' && f.type === 3) {
+      if (layer.type === 'fill-extrusion' && f.type === 3) {
+        // Flat, seen from above: its color
+        path(f, true);
+        g.fillStyle = paint(
+          get('paint', 'fill-extrusion-color', ctx, '#000'),
+          Number(get('paint', 'fill-extrusion-opacity', ctx, 1)),
+        );
+        g.fill('evenodd');
+        drawn = true;
+      } else if (layer.type === 'fill' && f.type === 3) {
         const opacity = Number(get('paint', 'fill-opacity', ctx, 1));
         const pattern = get('paint', 'fill-pattern', ctx, undefined);
         path(f, true);
@@ -239,8 +305,10 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
       } else if (layer.type === 'line' && f.type !== 1) {
         const width = Number(get('paint', 'line-width', ctx, 1));
         if (width <= 0) continue;
+        // A gap: two lines on either side of it, drawn as one wide line (the casing of a road, its inside drawn over)
+        const gap = Number(get('paint', 'line-gap-width', ctx, 0));
         g.strokeStyle = paint(get('paint', 'line-color', ctx, '#000'), Number(get('paint', 'line-opacity', ctx, 1)));
-        g.lineWidth = width * px;
+        g.lineWidth = (gap > 0 ? gap + 2 * width : width) * px;
         g.lineCap = String(get('layout', 'line-cap', ctx, 'butt')) as CanvasLineCap;
         g.lineJoin = String(get('layout', 'line-join', ctx, 'miter')) as CanvasLineJoin;
         const dash = get('paint', 'line-dasharray', ctx, undefined);
@@ -273,6 +341,19 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
   return createImageBitmap(g.getImageData(0, 0, size, size), { premultiplyAlpha: 'none' });
 }
 
+/** A text written over its icon (a road shield's number: no halo, centered on it, no offset): icons are not drawn, and
+ * without its icon the text would float unreadable; such a layer is left out */
+function onIcon(layer: StyleLayer): boolean {
+  const { layout = {}, paint = {} } = layer;
+  return (
+    layout['icon-image'] !== undefined &&
+    paint['text-halo-width'] === undefined &&
+    paint['text-halo-color'] === undefined &&
+    layout['text-offset'] === undefined &&
+    (layout['text-anchor'] ?? 'center') === 'center'
+  );
+}
+
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */
 function lonLat(z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] {
   const n = 2 ** z;
@@ -293,8 +374,20 @@ async function labels(
   const layers = await tile(url, priority);
   if (!layers || aborted.has(id)) return [];
   const out: LabelCandidate[] = [];
+  // The text size of a layer when it depends on the zoom only: legacy stops as they are, an expression as stops
+  const sizes = new Map<StyleLayer, Json>();
+  const sizeOf = (layer: StyleLayer): Json => {
+    let s = sizes.get(layer);
+    if (s === undefined) {
+      const v = layer.layout?.['text-size'] ?? 16;
+      s = isExpression(v) ? zoomStops(v) : v;
+      sizes.set(layer, s);
+    }
+    return s;
+  };
   r.layers.forEach((layer, index) => {
     if (layer.type !== 'symbol' || !shown(layer, z) || layer.layout?.['text-field'] === undefined) return;
+    if (onIcon(layer)) return;
     const data = layers.get(layer['source-layer'] ?? '');
     if (!data) return;
     const placement = layer.layout?.['symbol-placement'] === 'line' ? 'line' : 'point';
@@ -306,10 +399,8 @@ async function labels(
       const transform = value(layer, 'layout', 'text-transform', ctx, 'none');
       if (transform === 'uppercase') t = t.toUpperCase();
       else if (transform === 'lowercase') t = t.toLowerCase();
-      const fonts = value(layer, 'layout', 'text-font', ctx, ['Source Sans Pro Regular']);
-      let font = Array.isArray(fonts) && typeof fonts[0] === 'string' ? fonts[0] : 'Source Sans Pro Regular';
-      // A family without its weight: the regular one
-      if (!/Regular|Bold|Italic|Semibold|Light/.test(font)) font = `${font} Regular`;
+      const fonts = value(layer, 'layout', 'text-font', ctx, ['Noto Sans Regular']);
+      const font = labelFont(Array.isArray(fonts) && typeof fonts[0] === 'string' ? fonts[0] : 'Noto Sans Regular');
       const offset = value(layer, 'layout', 'text-offset', ctx, [0, 0]);
       const base = {
         layer: index,
@@ -318,7 +409,7 @@ async function labels(
         // Zoom stops are kept for the engine; a value of the feature evaluated here
         size: isFeatureDependent(layer.layout?.['text-size'])
           ? Number(value(layer, 'layout', 'text-size', ctx, 16))
-          : (layer.layout?.['text-size'] ?? 16),
+          : sizeOf(layer),
         color: String(value(layer, 'paint', 'text-color', ctx, '#000')),
         haloColor: String(value(layer, 'paint', 'text-halo-color', ctx, 'rgba(0,0,0,0)')),
         haloWidth: Number(value(layer, 'paint', 'text-halo-width', ctx, 0)),
@@ -383,6 +474,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       tiles: data.tiles,
       maxzoom: data.maxzoom,
       layers: data.layers,
+      rasters: data.rasters ?? {},
       sprite: data.sprite,
       patterns: new Map(),
     });

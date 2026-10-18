@@ -1,10 +1,10 @@
 /**
- * Travel times on hover: the streets of BD TOPO as a network layer, the walking time from the cursor to every node
+ * Travel times on hover: the streets of the IGN's BD TOPO (Géoplateforme WFS) as a network layer, over PLAN.IGN, the walking time from the cursor to every node
  * worked out in the page (Dijkstra), handed to the map in one call. The map calls `hover` in the frame it draws: the
  * new times are drawn by that very frame.
  */
-import { GeoMap } from '@ign-junn/isard';
-import { element, wfs } from '../shared/wfs.ts';
+import { GeoMap, geoplateformeWfs } from 'isard';
+import { element } from '../shared/page.ts';
 
 const BOX: [number, number, number, number] = [2.405, 48.835, 2.445, 48.857];
 /** Walking speed, metres per second */
@@ -13,12 +13,12 @@ const WALK = 1.25;
 const map = await GeoMap.create(element('map'), {
   center: [2.425, 48.846],
   zoom: 15,
-  basemap: 'plan-grey-vector',
+  basemap: 'ign-plan-grey-vector',
   projection: 'mercator',
 });
 
 // The graph: a node per distinct end of a street, an edge per street, along its line
-const roads = await wfs<{ nature: string }>('BDTOPO_V3:troncon_de_route', BOX);
+const roads = await geoplateformeWfs<{ nature: string }>('BDTOPO_V3:troncon_de_route', BOX);
 const index = new Map<string, number>();
 const nodes: number[] = [];
 const node = ([lon, lat]: number[]) => {

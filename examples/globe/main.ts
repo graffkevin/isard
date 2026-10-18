@@ -1,16 +1,15 @@
 /**
- * The globe: the orthophotos on a sphere among the stars, turning slowly until the map is touched; a click flies to
+ * The globe: the IGN orthophotos (Géoplateforme; worldwide imagery at low zoom) on a sphere among the stars, turning slowly until the map is touched; a click flies to
  * the point (van Wijk and Nuij's path, as MapLibre's flyTo), the sphere blending into Web Mercator on the way.
  */
-import { GeoMap } from '@ign-junn/isard';
-import { element } from '../shared/wfs.ts';
+import { GeoMap } from 'isard';
+import { element } from '../shared/page.ts';
 
 const map = await GeoMap.create(element('map'), {
   center: [2.5, 30],
   zoom: 1.4,
   projection: 'globe',
-  basemap: 'ortho',
-  hillshade: 0,
+  basemap: 'ign-ortho',
 });
 
 // Turns a few degrees a second until the first gesture

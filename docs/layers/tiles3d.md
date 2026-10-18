@@ -15,7 +15,8 @@ The 3D Tiles code is a third of the engine: maps load the engine without it, and
 the full one (the layer shows once it is there, `stats()` is undefined until then). `tiles3d: true` in the map's
 options loads it from the start, for a map that shows 3D Tiles at once.
 
-With the relief on, its altitudes get the geoid height so that the meshes (ellipsoidal heights) sit on the ground.
+Meshes have ellipsoidal heights: over France, the IGN's relief (`terrain: 'ign'`) gets the RAF20 geoid height so
+that they sit on the ground (`geoid: true` does it for another model).
 The decoders come from gstatic.com and jsDelivr by default: `decoders` to self-host them.
 
 ::: warning Content Security Policy

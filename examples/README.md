@@ -1,8 +1,9 @@
 # Examples
 
-Each folder is a page: `index.html` and its `main.ts`, importing `@ign-junn/isard` as an application does. The data
-comes from the Géoplateforme (WFS of BD TOPO and ADMIN EXPRESS, vector tiles, WMS of the relief), the Moon's and
-Mars's from NASA's Trek, no key needed.
+Each folder is a page: `index.html` and its `main.ts`, importing `isard` as an application does. The default
+basemap is OpenFreeMap's (OpenStreetMap data); the French examples take the IGN's data from the Géoplateforme (WFS of
+BD TOPO and ADMIN EXPRESS, PLAN.IGN, orthophotos, WMS of the relief), the Moon's and Mars's come from NASA's Trek, no key
+needed.
 
 | Example | Shows |
 |---|---|
@@ -13,7 +14,7 @@ Mars's from NASA's Trek, no key needed.
 | [`buildings`](buildings/main.ts) | buildings raised to their height, colored by it, picked |
 | [`relief`](relief/main.ts) | the relief, a sky, and a fragment shader of the page drawn over the ground |
 | [`tiles3d`](tiles3d/main.ts) | a photomesh streamed as 3D Tiles |
-| [`vector`](vector/main.ts) | the PLAN.IGN vector styles, a restyled subset on its own layer |
+| [`vector`](vector/main.ts) | OpenFreeMap's vector styles, a restyled subset on its own layer |
 | [`moon`](moon/main.ts) | a map of the Moon: NASA's LRO mosaic reprojected from longitudes and latitudes over LOLA's relief, the Apollo sites, Tycho and Copernicus in 3D |
 | [`mars`](mars/main.ts) | a map of Mars in its dusty halo: the Viking colour mosaic over MOLA's relief, Olympus Mons and Valles Marineris in 3D, the rovers |
 

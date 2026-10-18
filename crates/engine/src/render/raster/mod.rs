@@ -11,9 +11,10 @@
 //! whole stack, each pixel shaded once, whatever the number of tiles and layers. A tile fading in is mixed with its
 //! stand-in in the same shader.
 //!
-//! An elevation source (raw altitudes, `image/x-bil;bits=32` or an `ArcGIS` raw grid, in an R32F pool) gives the relief: the vertex shader
-//! lifts the grid of every tile by the heights read in it, three levels coarser than the imagery (a 16 × 16 grid
-//! needs far fewer samples than 256 px), and a skirt under the tile edges hides the cracks between levels.
+//! An elevation source (raw altitudes, `image/x-bil;bits=32`, an `ArcGIS` raw grid or the floats of the page's loader,
+//! in an R32F pool) gives the relief: the vertex shader lifts the grid of every tile by the heights read in it, three
+//! levels coarser than the imagery (a 16 × 16 grid needs far fewer samples than 256 px), and a skirt under the tile
+//! edges hides the cracks between levels.
 //!
 //! - `cache`: which tile is in which slot, least recently used order, failures, what to draw and load (pure)
 //! - `data`: the altitudes made ready for the pool, the URLs of the tiles (pure)
@@ -92,8 +93,9 @@ pub struct RasterOptions {
     pub geoid: bool,
     /// Side of the textures of the tiles, pixels (256; more for tiles drawn by the page, sharper)
     pub size: i32,
-    /// Draws the tiles instead of fetching `url`: `(z, x, y, signal) => Promise<ImageBitmap | null>` (null: no tile
-    /// here; a rejection: an error worth a retry)
+    /// Draws the tiles instead of fetching `url`: `(z, x, y, signal) => Promise<ImageBitmap | null>`, or
+    /// `Promise<Float32Array | null>` of 256 × 256 altitudes for the relief (null: no tile here; a rejection: an error
+    /// worth a retry)
     pub loader: Option<js_sys::Function>,
 }
 
@@ -358,7 +360,11 @@ impl RasterSource {
             let mut pixels = Err(Fetch::Transient);
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
                 let reload = retried || attempt > 0;
-                let fetched = if let Some(loader) = &loader {
+                let fetched = if let (Some(loader), true) = (&loader, elevation) {
+                    fetch::draw_heights(loader, tile, geoid, no_data, &signal)
+                        .await
+                        .map(Pixels::Heights)
+                } else if let Some(loader) = &loader {
                     fetch::draw_tile(loader, tile, &signal).await.map(Pixels::Image)
                 } else if elevation {
                     fetch::fetch_heights(&url, tile, geoid, no_data, &signal, reload, priority)

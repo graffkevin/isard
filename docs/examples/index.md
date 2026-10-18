@@ -1,8 +1,9 @@
 # Examples
 
 Each example is a page of [`examples/`](https://github.com/graffkevin/isard/tree/main/examples) in the repository: an
-`index.html` and its `main.ts`, importing `@ign-junn/isard` as an application does. The data comes from the
-Géoplateforme (the Moon's and Mars's from NASA), no key needed.
+`index.html` and its `main.ts`, importing `isard` as an application does. The basemap is
+OpenFreeMap's (OpenStreetMap data); the French examples take the IGN's data from the Géoplateforme, the Moon's and
+Mars's come from NASA, no key needed.
 
 | | |
 |---|---|
@@ -13,6 +14,6 @@ Géoplateforme (the Moon's and Mars's from NASA), no key needed.
 | [Buildings](./buildings) | raised to their height, colored by it |
 | [Relief and a ground shader](./relief) | your GLSL over the mountains |
 | [3D Tiles](./tiles3d) | the Lille photomesh |
-| [Vector basemaps](./vector) | the PLAN.IGN styles, a restyled subset |
+| [Vector basemaps](./vector) | OpenFreeMap's styles, a restyled subset |
 | [The Moon](./moon) | another body: the LRO mosaic reprojected over LOLA's relief, the Apollo sites, its craters in 3D |
 | [Mars](./mars) | a body with an atmosphere: its dusty halo, the Viking mosaic over MOLA's relief, Olympus Mons in 3D |

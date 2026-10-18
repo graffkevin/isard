@@ -1,15 +1,15 @@
 /**
- * Vector basemaps: the PLAN.IGN styles drawn from the Géoplateforme's vector tiles, and a subset of a style on its own
- * raster layer, restyled: the rivers and water areas in a strong blue, over the basemap (they could go over a flood
- * layer of the application).
+ * Vector basemaps: OpenFreeMap's styles drawn from its vector tiles (OpenStreetMap data, the OpenMapTiles schema), and
+ * a subset of a style on its own raster layer, restyled: the rivers and water areas in a strong blue, over the basemap
+ * (they could go over a flood layer of the application).
  */
-import { type Basemap, GeoMap } from '@ign-junn/isard';
-import { element } from '../shared/wfs.ts';
+import { type Basemap, GeoMap } from 'isard';
+import { element } from '../shared/page.ts';
 
 const map = await GeoMap.create(element('map'), {
   center: [1.909, 47.902],
   zoom: 13,
-  basemap: 'plan-grey-vector',
+  basemap: 'osm-positron',
   projection: 'mercator',
 });
 
@@ -21,13 +21,13 @@ const rivers = tiles.raster({
     {
       id: 'water',
       type: 'fill',
-      'source-layer': 'hydro_surf',
+      'source-layer': 'water',
       paint: { 'fill-color': '#2f7fc4', 'fill-opacity': 0.55 },
     },
     {
       id: 'rivers',
       type: 'line',
-      'source-layer': 'hydro_reseau',
+      'source-layer': 'waterway',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': '#2f7fc4',
@@ -42,13 +42,11 @@ const rivers = tiles.raster({
   ],
 });
 
-for (const [id, basemap] of [
-  ['grey', 'plan-grey-vector'],
-  ['standard', 'plan-vector'],
-] as [string, Basemap][]) {
+const styles = ['positron', 'liberty', 'bright'];
+for (const id of styles) {
   element(id).onclick = () => {
-    map.setBasemap(basemap, 0.3);
-    for (const other of ['grey', 'standard']) element(other).classList.toggle('on', other === id);
+    map.setBasemap(`osm-${id}` as Basemap);
+    for (const other of styles) element(other).classList.toggle('on', other === id);
   };
 }
 element<HTMLInputElement>('rivers').onchange = (e) => rivers.setStyle((e.target as HTMLInputElement).checked ? 1 : 0);

@@ -1,11 +1,39 @@
 # Changelog
 
-Every notable change of `@ign-junn/isard`. The format follows [Keep a Changelog](https://keepachangelog.com), the
+Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
 ## [Unreleased]
 
+### Changed
+
+- The package is renamed from `@ign-junn/isard` to `isard` (`npm install isard`, `import { GeoMap } from 'isard'`);
+  `@ign-junn/isard` is deprecated. The project is independent of the IGN; the Géoplateforme's data stays supported, as
+  one source among others.
+- The default basemap is OpenFreeMap's Positron (`'osm-positron'`: OpenStreetMap data, worldwide, free, no key), with
+  `'osm-liberty'` and `'osm-bright'`. The Géoplateforme's basemaps are named `'ign-plan'`, `'ign-plan-grey'`,
+  `'ign-ortho'`, `'ign-plan-vector'` and `'ign-plan-grey-vector'`; their former names (`LegacyBasemap`) are deprecated,
+  still accepted with a warning. `vectorTiles()` takes Positron by default (`OPENFREEMAP_STYLES`).
+- No IGN hillshade by default (`hillshade` defaults to 0).
+- `terrain: true` on the Earth is the worldwide Terrain Tiles of AWS's open data registry (Terrarium PNGs decoded in
+  the page, the sea floor at sea level); the IGN's model is `terrain: 'ign'` (or `{ model: 'ign' }`), and only it is
+  raised by the RAF20 geoid by default (`geoid` defaults to false for the other models). The Earth's relief range is
+  its dry land, -450 to 8900 m (the prisms of draped fills reach above Everest); the Moon's relief starts at level 3.
+- Labels use OpenFreeMap's fonts by default (`GLYPHS_URL`, `DEFAULT_FONT`: Noto Sans Regular, Bold, Italic); a vector
+  basemap's labels take the glyphs of its style.
+- The attribution control credits the sources in use, following them: OpenFreeMap, OpenMapTiles and OpenStreetMap,
+  the IGN only for the Géoplateforme's data, the Terrain Tiles (`OPENFREEMAP_ATTRIBUTION`, `IGN_ATTRIBUTION`,
+  `TERRAIN_TILES_ATTRIBUTION`; `DEFAULT_ATTRIBUTION` deprecated).
+- Licence: © 2026 Kevin Graff.
+
 ### Added
+
+- The Géoplateforme's data in one call: `geoplateformeWmts`, `geoplateformeWms` (raster options of any of its layers,
+  crediting the IGN) and `geoplateformeWfs` (its features as GeoJSON); a guide page, "Géoplateforme (IGN) data".
+- `RasterOptions.attribution`: a raster's credits, shown while it is on the map; `VectorTilesOptions.attribution`.
+- Relief tiles of PNG encodings: `terrain.encoding`, `'terrarium'` or `'mapbox'` (Terrain-RGB), decoded in the page.
+- Vector basemaps: the raster layers of a style (its shaded relief), extrusions drawn flat, `line-gap-width`, text
+  sizes of zoom expressions; a text written over its icon (a road shield's number) is left out, icons not being drawn.
 
 - 3D Tiles: implicit tiling (quadtree and octree, binary or JSON subtrees), several contents per tile, sparse and
   zero-filled accessors, `texCoord` sets, content recognized by its bytes; horizon culling on the globe.
@@ -32,7 +60,7 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   (LOLA, 237 m; MOLA, 463 m), asked for raw floats in the body's Mercator. `terrain.url` takes an ArcGIS image service
   (`…/ImageServer`) on any body, and `{bbox}` is in the body's Mercator metres. `BodyOptions.relief` (its lowest and
   highest ground) bounds what the relief may raise into view, the prisms of draped fills, the no-data and the horizon;
-  the relief starts at a coarser level on a body of a larger relief for its size (2 on the Moon, 3 on Mars). The
+  the relief starts at a coarser level on a body of a larger relief for its size (3 on the Moon and Mars). The
   `moon` and `mars` examples have relief and pitched views (Tycho, Copernicus, Olympus Mons, Valles Marineris).
 
 ### Fixed

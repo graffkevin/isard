@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Isard
   text: Maps that recolor at every mouse move
-  tagline: A WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps. Rust core in WebAssembly, a small TypeScript API.
+  tagline: A WebGL2 map engine for large, interactive data layers, labels and 3D Tiles. Rust core in WebAssembly, a small TypeScript API.
   image:
     src: /logo.svg
     alt: Isard
@@ -24,8 +24,8 @@ features:
     title: Millions of features, one upload
     details: A network of millions of street pieces recolors from a single texture upload of 4 bytes per node, drawn in the frame of the mouse move. Only the squares in view are drawn.
   - icon: 🗺️
-    title: Géoplateforme basemaps
-    details: PLAN.IGN raster or vector (its MapLibre styles drawn in workers, labels above your data), orthophotos, hillshade, the IGN relief, on a globe that turns into Web Mercator.
+    title: Basemaps and relief, worldwide
+    details: OpenFreeMap's vector basemaps by default (OpenStreetMap data, no key), any MapLibre style drawn in workers with its labels above your data, a worldwide relief, on a globe that turns into Web Mercator. The Géoplateforme's PLAN.IGN, orthophotos and relief for France.
   - icon: ⛰️
     title: Everything lies on the relief
     details: Lines, circles, labels and buildings stand on the ground; fills of any size are exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
@@ -34,7 +34,7 @@ features:
     details: Buildings raised to their height, colored by a value or by a network's travel times. Photomeshes and city models in 3D Tiles, compressed or not.
   - icon: 🏷️
     title: Labels and overlays
-    details: Text in the Géoplateforme's fonts with halos and shared collisions, markers, popups, navigation controls.
+    details: Text from signed distance fields with halos and shared collisions, markers, popups, navigation controls.
   - icon: 🦀
     title: Small and exact
     details: f64 on the CPU, f32 relative to the camera on the GPU, centimetres at any zoom. Frames on demand only. Strict TypeScript types end to end.
@@ -45,9 +45,9 @@ features:
 ## Five lines
 
 ```ts
-import { GeoMap } from '@ign-junn/isard';
+import { GeoMap } from 'isard';
 
-const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 14, basemap: 'plan-grey-vector' });
+const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 14 });
 const network = map.addNetwork({ nodes, edges, max: 1800 }); // lon/lat pairs, node index pairs
 map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))); // one value per node
 ```

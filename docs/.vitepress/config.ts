@@ -20,8 +20,7 @@ const examples = [
 
 export default defineConfig({
   title: 'Isard',
-  description:
-    'WebGL2 map engine for large, interactive data layers on Géoplateforme basemaps: Rust core in WebAssembly, small TypeScript API',
+  description: 'A WebGL2 map engine for large, interactive data layers: Rust core in WebAssembly, small TypeScript API',
   // Served by GitHub Pages under the repository's name
   base: '/isard/',
   cleanUrls: true,
@@ -54,6 +53,7 @@ export default defineConfig({
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'Concepts', link: '/guide/concepts' },
             { text: 'Basemaps and relief', link: '/guide/basemaps' },
+            { text: 'Géoplateforme (IGN) data', link: '/guide/geoplateforme' },
             { text: 'Events and picking', link: '/guide/events' },
             { text: 'Markers, popups, controls', link: '/guide/overlays' },
             { text: 'Performance', link: '/guide/performance' },
@@ -90,13 +90,13 @@ export default defineConfig({
     },
     socialLinks: [
       { icon: 'github', link: 'https://github.com/graffkevin/isard' },
-      { icon: 'npm', link: 'https://www.npmjs.com/package/@ign-junn/isard' },
+      { icon: 'npm', link: 'https://www.npmjs.com/package/isard' },
     ],
     search: { provider: 'local' },
     outline: { level: [2, 3] },
     footer: {
       message: 'MIT licence',
-      copyright: "© Institut national de l'information géographique et forestière (IGN)",
+      copyright: '© 2026 Kevin Graff',
     },
   },
 });

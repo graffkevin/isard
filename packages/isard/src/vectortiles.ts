@@ -1,6 +1,6 @@
 /**
- * Vector basemaps from a MapLibre style (the Géoplateforme's PLAN.IGN styles by default): the fills, lines and circles
- * drawn tile by tile in workers into the raster pool, so that they lie on the relief like any basemap and composite
+ * Vector basemaps from a MapLibre style (OpenFreeMap's Positron by default): the fills, lines, circles and raster
+ * layers drawn tile by tile in workers into the raster pool, so that they lie on the relief like any basemap and composite
  * with the hillshade in one pass; and the labels of the style's symbol layers in a symbol layer of their own, kept
  * above the application's layers (as MapLibre's `beforeId: firstSymbol` does), shaped and placed by the engine.
  *
@@ -8,28 +8,47 @@
  * rivers from the basemap's data over a flood layer, for instance, restyled with `extraLayers`.
  */
 import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } from './basemap.worker.ts';
+import { OPENFREEMAP_ATTRIBUTION } from './basemaps.ts';
 import type { Feature, Size } from './features.ts';
+import { IGN_ATTRIBUTION } from './geoplateforme.ts';
 import type { RasterLayer } from './layers.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
 import type { SymbolLayer } from './symbols.ts';
-import type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
+import {
+  type Json,
+  type LabelCandidate,
+  labelFont,
+  type RasterSource,
+  type Style,
+  type StyleLayer,
+} from './vectorstyle.ts';
 import type { Camera } from './wasm/isard.js';
 
-/** PLAN.IGN vector styles of the Géoplateforme */
+/** OpenFreeMap's styles: OpenStreetMap data in the OpenMapTiles schema, worldwide, free and without a key */
+export const OPENFREEMAP_STYLES = {
+  positron: 'https://tiles.openfreemap.org/styles/positron',
+  liberty: 'https://tiles.openfreemap.org/styles/liberty',
+  bright: 'https://tiles.openfreemap.org/styles/bright',
+} as const;
+
+/** PLAN.IGN vector styles of the Géoplateforme (France) */
 export const PLAN_STYLES = {
   standard: 'https://data.geopf.fr/annexes/ressources/vectorTiles/styles/PLAN.IGN/standard.json',
   grey: 'https://data.geopf.fr/annexes/ressources/vectorTiles/styles/PLAN.IGN/gris.json',
 } as const;
 
-/** Vector basemaps by name (see `Basemap`) */
+/** Vector basemaps by name (see `BasemapName`) */
 export const VECTOR_BASEMAPS = {
-  'plan-vector': PLAN_STYLES.standard,
-  'plan-grey-vector': PLAN_STYLES.grey,
+  'osm-positron': OPENFREEMAP_STYLES.positron,
+  'osm-liberty': OPENFREEMAP_STYLES.liberty,
+  'osm-bright': OPENFREEMAP_STYLES.bright,
+  'ign-plan-vector': PLAN_STYLES.standard,
+  'ign-plan-grey-vector': PLAN_STYLES.grey,
 } as const;
 
 export interface VectorTilesOptions {
-  /** A style URL or object (default the PLAN.IGN grey style) */
+  /** A style URL or object (default OpenFreeMap's Positron) */
   style?: string | Style;
   /** Workers drawing the tiles (default cores - 1, 1 to 4). The vector tiles of a map share its workers (and their
    * decoded tiles); another count gives these tiles workers of their own */
@@ -37,11 +56,26 @@ export interface VectorTilesOptions {
   /** Where to load the worker from, when a bundler does not resolve the default URL (default the map's
    * `basemapWorkerUrl`); another URL than the map's gives these tiles workers of their own */
   workerUrl?: string | URL;
+  /** Credits of the tiles, shown while its raster layers are on the map (default: OpenFreeMap's for its styles, the
+   * IGN's for PLAN.IGN's) */
+  attribution?: string;
 }
 
-/** Text size of a style (number or legacy stops) as a size for the symbol layer */
+/** The credits of a known style: OpenFreeMap's, PLAN.IGN's */
+export function styleAttribution(style: string | Style): string | undefined {
+  if (typeof style !== 'string') return undefined;
+  if ((Object.values(OPENFREEMAP_STYLES) as string[]).includes(style)) return OPENFREEMAP_ATTRIBUTION;
+  if ((Object.values(PLAN_STYLES) as string[]).includes(style)) return IGN_ATTRIBUTION;
+  return undefined;
+}
+
+/** Text size of a style (a number, legacy stops, or the stops of a zoom expression made by the worker) as a size for
+ * the symbol layer */
 function size(value: Json): Size {
   if (typeof value === 'number') return value;
+  if (Array.isArray(value) && value.length > 0 && value.every(Array.isArray)) {
+    return value.map((s) => [Number((s as Json[])[0]), Number((s as Json[])[1])] as [number, number]);
+  }
   if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.stops)) {
     return (value.stops as Json[]).map((s) => {
       const [z, v] = s as [number, number];
@@ -235,8 +269,10 @@ export class VectorTiles {
   /** Renderers sent to the workers, dropped on destroy */
   private readonly renderers: string[] = [];
   private readonly cleanup: (() => void)[] = [];
+  /** Credits of its raster layers */
+  private readonly attribution: string | undefined;
   /** The style once loaded, with its source resolved */
-  readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number }>;
+  readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number; rasters: Record<string, RasterSource> }>;
 
   /**
    * Its workers are the map's (shared by every `VectorTiles` of the map, a vector tile decoded once for all of them),
@@ -250,7 +286,9 @@ export class VectorTiles {
     this.pool = pool;
     this.ownPool = own;
     this.namespace = pool.namespace();
-    this.ready = this.load(options.style ?? PLAN_STYLES.grey);
+    const style = options.style ?? OPENFREEMAP_STYLES.positron;
+    this.attribution = options.attribution ?? styleAttribution(style);
+    this.ready = this.load(style);
     // Reported once here; `ready`, the raster tiles and the labels fail with it
     this.ready.catch((error: unknown) => {
       if (!this.destroyed) console.warn('isard: vector tiles', error);
@@ -269,9 +307,30 @@ export class VectorTiles {
     }
     const template = tiles?.[0];
     if (!template) throw new Error(`source ${name} has no tiles`);
-    // Only the layers of that source (and the background)
-    style.layers = style.layers.filter((l) => l.type === 'background' || l.source === name);
-    return { style, tiles: template, maxzoom: maxzoom ?? 14 };
+    // Its raster sources of tiles, drawn into the same images (the shaded relief of a style at low zoom)
+    const rasters: Record<string, RasterSource> = {};
+    for (const [key, s] of Object.entries(style.sources)) {
+      const url = s.type === 'raster' ? s.tiles?.[0] : undefined;
+      if (url) rasters[key] = { tiles: url, maxzoom: s.maxzoom ?? 22, tileSize: s.tileSize ?? 512 };
+    }
+    // Only the layers of those sources (and the background); other types (hillshade, heatmap…) are left out
+    style.layers = style.layers.filter(
+      (l) =>
+        l.type === 'background' ||
+        (l.source === name && l.type !== 'raster') ||
+        (l.type === 'raster' && l.source !== undefined && rasters[l.source] !== undefined),
+    );
+    return { style, tiles: template, maxzoom: maxzoom ?? 14, rasters };
+  }
+
+  /** The fonts of the style's labels, for its glyphs (the first of each `text-font`, as the workers take it) */
+  private static fonts(style: Style): string[] {
+    const fonts = new Set<string>();
+    for (const layer of style.layers) {
+      const font = layer.layout?.['text-font'];
+      if (layer.type === 'symbol' && Array.isArray(font) && typeof font[0] === 'string') fonts.add(labelFont(font[0]));
+    }
+    return [...fonts];
   }
 
   /** The style's sprite (its JSON and its image), loaded once, for the renderers that draw fill patterns */
@@ -297,14 +356,14 @@ export class VectorTiles {
 
   /** Sends a renderer of these layers to every worker; returns its key */
   private async renderer(select: (layer: StyleLayer) => boolean, extra: StyleLayer[]) {
-    const { style, tiles, maxzoom } = await this.ready;
+    const { style, tiles, maxzoom, rasters } = await this.ready;
     const key = rendererKey(this.namespace, this.keys++);
     const layers = [...style.layers.filter(select), ...extra];
     const patterns = layers.some((l) => l.paint?.['fill-pattern'] !== undefined);
     // The image is downloaded once, copied to each worker
     const sprite = patterns && style.sprite ? await this.loadSprite(style.sprite) : undefined;
     if (this.destroyed) throw new DOMException('isard: vector tiles destroyed', 'AbortError');
-    this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, ...(sprite ? { sprite } : {}) });
+    this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, rasters, ...(sprite ? { sprite } : {}) });
     this.renderers.push(key);
     return { key, maxzoom };
   }
@@ -351,6 +410,7 @@ export class VectorTiles {
       minZoom: options.minZoom ?? 0,
       maxZoom: options.maxZoom ?? 20,
       loader,
+      ...(this.attribution ? { attribution: this.attribution } : {}),
       ...(before ? { before } : {}),
     });
   }
@@ -378,7 +438,11 @@ export class VectorTiles {
       placement: 'line',
     });
     this.map.keepOnTop(symbol);
-    const renderer = this.renderer((l) => l.type === 'symbol' && layers(l), []);
+    const renderer = this.ready.then(({ style }) => {
+      // The style's fonts from its own glyphs
+      if (style.glyphs) this.map.glyphs.register(style.glyphs, VectorTiles.fonts(style));
+      return this.renderer((l) => l.type === 'symbol' && layers(l), []);
+    });
     renderer.catch(() => undefined);
     /** The labels of the tiles, the most recently used last */
     const tiles = new Map<string, Promise<LabelCandidate[]>>();

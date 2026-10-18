@@ -1,7 +1,7 @@
 /**
  * Glyphs for the symbol layers: signed distance fields in MapLibre's glyph format (ranges of 256 code points per
- * protobuf file, 24 px glyphs with a 3 px buffer), loaded from the Géoplateforme's fonts on first use, packed into an
- * atlas the engine samples; and the shaping of a label: its lines (explicit and wrapped), their glyphs placed around
+ * protobuf file, 24 px glyphs with a 3 px buffer), loaded on first use (from OpenFreeMap's fonts by default, a vector
+ * basemap's labels from the glyphs of its style), packed into an atlas the engine samples; and the shaping of a label: its lines (explicit and wrapped), their glyphs placed around
  * the anchor.
  *
  * The atlas has pages of one size: the first one grows up to the page size limit, then pages are added, so it never
@@ -11,8 +11,11 @@
 import type { Anchor } from './overlay.ts';
 import type { Engine } from './wasm/isard.js';
 
-/** Fonts of the Géoplateforme's vector styles (Source Sans Pro Regular, Bold, Italic, Semibold) */
-export const GLYPHS_URL = 'https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/{fontstack}/{range}.pbf';
+/** OpenFreeMap's fonts, those of its styles (Noto Sans Regular, Bold, Italic) */
+export const GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+
+/** The font of labels that name none */
+export const DEFAULT_FONT = 'Noto Sans Regular';
 
 /** Size the glyphs are drawn at in the files, and their buffer */
 const EM = 24;
@@ -147,6 +150,8 @@ export class Glyphs {
   private shelves: Shelf[] = [];
   private readonly fonts = new Map<string, Map<number, Glyph>>();
   private readonly ranges = new Map<string, Promise<void>>();
+  /** Glyph URLs of fonts other than the map's (those of a vector basemap's style) */
+  private readonly sources = new Map<string, string>();
   private engine: Engine | undefined;
   /** Rows of each page changed since the last upload: first, end */
   private readonly dirty = new Map<number, [number, number]>();
@@ -179,6 +184,11 @@ export class Glyphs {
     return this.pages.length;
   }
 
+  /** Loads these fonts from another glyph URL (a style's `glyphs`); a font keeps the first URL given for it */
+  register(url: string, fonts: Iterable<string>): void {
+    for (const font of fonts) if (!this.sources.has(font)) this.sources.set(font, url);
+  }
+
   /** Loads the glyphs of these code points in a font */
   async load(font: string, codes: Iterable<number>): Promise<Map<number, Glyph>> {
     const glyphs = this.fonts.get(font) ?? new Map<number, Glyph>();
@@ -193,7 +203,7 @@ export class Glyphs {
     const key = `${font}/${start}`;
     let pending = this.ranges.get(key);
     if (!pending) {
-      const url = this.url
+      const url = (this.sources.get(font) ?? this.url)
         .replace('{fontstack}', encodeURIComponent(font))
         .replace('{range}', `${start}-${start + 255}`);
       pending = fetch(url)

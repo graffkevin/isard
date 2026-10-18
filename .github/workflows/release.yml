@@ -1,6 +1,6 @@
 # Publishes the package on npm when a v<version> tag is pushed (`bun run release`), with provenance: npm's trusted
-# publishing authenticates this workflow (configure it once on npmjs.com: organization ign-junn, package
-# @ign-junn/isard, repository and workflow release.yml), no token is stored anywhere
+# publishing authenticates this workflow (configure it once on npmjs.com, in the settings of the package isard: publisher
+# GitHub Actions, repository graffkevin/isard, workflow release.yml), no token is stored anywhere
 name: Release
 
 on:

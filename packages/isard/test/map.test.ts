@@ -31,7 +31,9 @@ afterAll(restore);
 
 const { GeoMap, defaultEasing } = await import('../src/map.ts');
 const { TileLoader } = await import('../src/loader.ts');
-const { TERRAIN_URL } = await import('../src/basemaps.ts');
+const { geoplateformeWms, geoplateformeWmts } = await import('../src/geoplateforme.ts');
+const { IGN_ATTRIBUTION, OPENFREEMAP_ATTRIBUTION, TERRAIN_TILES, TERRAIN_TILES_ATTRIBUTION, TERRAIN_URL } =
+  await import('../src/basemaps.ts');
 
 type Map = Awaited<ReturnType<typeof GeoMap.create>>;
 
@@ -110,14 +112,14 @@ describe('options', () => {
     // The Earth, WGS 84, first: the layers' shaders may take its size
     expect(engine.calls[0]).toEqual([
       'setBody',
-      [6378137, 1 / 298.257223563, Float32Array.of(0.42, 0.66, 1, 1), -200, 5000],
+      [6378137, 1 / 298.257223563, Float32Array.of(0.42, 0.66, 1, 1), -450, 8900],
     ]);
     expect(engine.last('setZoomRange')).toEqual([0, 22]);
     expect(engine.last('setMaxPitch')).toEqual([70]);
     expect(engine.last('setGlobe')).toEqual([true]);
     expect(engine.last('setSky')).toEqual([true]);
     expect(engine.last('setAtmosphere')).toEqual([undefined]);
-    expect(engine.last('setTerrain')).toEqual([undefined, 1, undefined, undefined]);
+    expect(engine.last('setTerrain')).toEqual([undefined, 1, undefined, undefined, undefined]);
     expect(engine.last('setImmediateLoading')).toEqual([true]);
     const background = engine.last('setBackground') as number[];
     expect(background.map((v) => Math.round(v * 255))).toEqual([0xf2, 0xf2, 0xf0]);
@@ -146,15 +148,32 @@ describe('options', () => {
     expect(engine.last('setSky')).toEqual([false]);
     expect(engine.last('setImmediateLoading')).toEqual([false]);
     expect(engine.last('setBackground')).toEqual([1, 0, 0]);
-    expect(engine.last('setTerrain')).toEqual([TERRAIN_URL, 2, 15, true]);
+    expect(engine.last('setTerrain')?.slice(0, 4)).toEqual([TERRAIN_TILES.url, 2, 14, false]);
     expect(map.getCamera()).toMatchObject({ center: [5, 45], zoom: 8 });
   });
 
   test('terrain: true takes every default; setTerrain(false) removes it', async () => {
     const { engine, map } = await create({ terrain: true });
-    expect(engine.last('setTerrain')).toEqual([TERRAIN_URL, 1, 15, true]);
+    // The worldwide Terrain Tiles, decoded by a loader of the page, the altitudes as served
+    const [url, exaggeration, maxZoom, geoid, loader] = engine.last('setTerrain') ?? [];
+    expect([url, exaggeration, maxZoom, geoid]).toEqual([TERRAIN_TILES.url, 1, 14, false]);
+    expect(loader).toBeInstanceOf(Function);
+    // The same loader for the same tiles: the engine keeps them when the exaggeration changes
+    map.setTerrain({ exaggeration: 2 });
+    expect(engine.last('setTerrain')?.[4]).toBe(loader);
     map.setTerrain(false);
-    expect(engine.last('setTerrain')).toEqual([undefined, 1, undefined, undefined]);
+    expect(engine.last('setTerrain')).toEqual([undefined, 1, undefined, undefined, undefined]);
+  });
+
+  test("the IGN's terrain model by name, raised by the geoid; another encoding decoded by a loader", async () => {
+    const { engine, map } = await create({ terrain: 'ign' });
+    expect(engine.last('setTerrain')).toEqual([TERRAIN_URL, 1, 15, true, undefined]);
+    map.setTerrain({ model: 'ign', exaggeration: 1.5, geoid: false });
+    expect(engine.last('setTerrain')).toEqual([TERRAIN_URL, 1.5, 15, false, undefined]);
+    map.setTerrain({ url: 'https://dem.example/{z}/{x}/{y}.png', encoding: 'mapbox' });
+    const [url, , maxZoom, geoid, loader] = engine.last('setTerrain') ?? [];
+    expect([url, maxZoom, geoid]).toEqual(['https://dem.example/{z}/{x}/{y}.png', 15, false]);
+    expect(loader).toBeInstanceOf(Function);
   });
 
   test('atmosphere: colors as RGB 0-1, then the three blends', async () => {
@@ -176,7 +195,70 @@ describe('options', () => {
     expect(engine.last('setBackground')).toEqual([0, 0, 0]);
   });
 
-  test('the Moon: its sphere, no atmosphere, none of the Géoplateforme defaults', async () => {
+  test('credits follow the basemap, hillshade and relief; former basemap names still work', async () => {
+    const container = new FakeElement('div');
+    const map = await GeoMap.create(container as unknown as HTMLElement, {
+      basemap: 'ign-plan',
+      workers: false,
+      attributionControl: { customAttribution: 'Mine' },
+    });
+    maps.push(map);
+    const engine = map.engine as unknown as FakeEngine;
+    const credits = (element: FakeElement): string | undefined =>
+      element.className === 'isard-attrib-inner' ? element.innerHTML : element.children.map(credits).find(Boolean);
+    expect(credits(container)).toBe(`${IGN_ATTRIBUTION} | Mine`);
+    map.setBasemap('none');
+    expect(credits(container)).toBe('Mine');
+    map.setTerrain(true);
+    expect(credits(container)).toBe(`${TERRAIN_TILES_ATTRIBUTION} | Mine`);
+    // The IGN hillshade and terrain model: the IGN credits once
+    map.setTerrain('ign');
+    map.setBasemap('none', 0.4);
+    expect(credits(container)).toBe(`${IGN_ATTRIBUTION} | Mine`);
+    // 'ortho' is now 'ign-ortho', with a warning
+    const warn = mock(() => undefined);
+    const original = console.warn;
+    console.warn = warn;
+    map.setBasemap('ortho');
+    console.warn = original;
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(engine.last('addRaster')?.[0])).toContain('ORTHOIMAGERY.ORTHOPHOTOS');
+    expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([10, 59, 89]);
+  });
+
+  test("a raster's credits while it is on the map; the Géoplateforme's rasters credit the IGN", async () => {
+    const container = new FakeElement('div');
+    const map = await GeoMap.create(container as unknown as HTMLElement, { basemap: 'none', workers: false });
+    maps.push(map);
+    const credits = (element: FakeElement): string | undefined =>
+      element.className === 'isard-attrib-inner' ? element.innerHTML : element.children.map(credits).find(Boolean);
+    const cadastre = map.addRaster(geoplateformeWms('CADASTRALPARCELS.PARCELLAIRE_EXPRESS'));
+    expect(credits(container)).toBe(IGN_ATTRIBUTION);
+    const engine = map.engine as unknown as FakeEngine;
+    expect(String(engine.last('addRaster')?.[0])).toContain('BBOX={bbox}&WIDTH=256&HEIGHT=256');
+    // Under the basemap's credits, which come first
+    map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png', attribution: 'Example' });
+    map.setBasemap('ign-plan');
+    expect(credits(container)).toBe(`${IGN_ATTRIBUTION} | Example`);
+    map.setBasemap('none');
+    cadastre.remove();
+    expect(credits(container)).toBe('Example');
+    // The same WMTS URL as the IGN's basemaps
+    expect(geoplateformeWmts('ORTHOIMAGERY.ORTHOPHOTOS', { format: 'image/jpeg' }).url).toBe(
+      'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM' +
+        '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&FORMAT=image/jpeg',
+    );
+  });
+
+  test("OpenFreeMap's and PLAN.IGN's styles credit their sources", async () => {
+    const { styleAttribution, OPENFREEMAP_STYLES, PLAN_STYLES } = await import('../src/vectortiles.ts');
+    expect(styleAttribution(OPENFREEMAP_STYLES.positron)).toBe(OPENFREEMAP_ATTRIBUTION);
+    expect(OPENFREEMAP_ATTRIBUTION).toContain('OpenStreetMap');
+    expect(styleAttribution(PLAN_STYLES.grey)).toBe(IGN_ATTRIBUTION);
+    expect(styleAttribution('https://tiles.example/style.json')).toBeUndefined();
+  });
+
+  test("the Moon: its sphere, no atmosphere, none of the Earth's defaults", async () => {
     // The map's own defaults, not those of `create`
     const container = new FakeElement('div');
     const map = await GeoMap.create(container as unknown as HTMLElement, {
@@ -211,7 +293,7 @@ describe('options', () => {
     expect((url as string).match(/[{}]/g)).toEqual(['{', '}']);
     // A url of the page's own: its finest level 15 by default
     map.setTerrain({ url: 'https://moon.example/{z}/{x}/{y}.bil', exaggeration: 3 });
-    expect(engine.last('setTerrain')).toEqual(['https://moon.example/{z}/{x}/{y}.bil', 3, 15, false]);
+    expect(engine.last('setTerrain')).toEqual(['https://moon.example/{z}/{x}/{y}.bil', 3, 15, false, undefined]);
   });
 
   test('an ArcGIS image service gives raw altitudes in the Mercator of the body', async () => {
@@ -223,7 +305,8 @@ describe('options', () => {
         '&size=256,256&bboxSR=3857&imageSR=3857&bbox={bbox}',
       1,
       15,
-      true,
+      false,
+      undefined,
     ]);
     map.setTerrain({ url: 'https://dem.example/D/ImageServer?token=1' });
     expect(engine.last('setTerrain')?.[0]).toBe('https://dem.example/D/ImageServer?token=1');
@@ -249,7 +332,7 @@ describe('options', () => {
     expect(wrong.last('setBody')).toEqual([1000, 0, undefined, -10, 10]);
   });
 
-  test('Mars: the sphere of its equatorial radius, a thin dusty halo, none of the Géoplateforme defaults', async () => {
+  test("Mars: the sphere of its equatorial radius, a thin dusty halo, none of the Earth's defaults", async () => {
     const container = new FakeElement('div');
     const map = await GeoMap.create(container as unknown as HTMLElement, { body: 'mars', workers: false });
     maps.push(map);

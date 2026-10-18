@@ -3,7 +3,19 @@
  * nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are drawn in the
  * same frame.
  */
-import { BASEMAPS, BODY_TERRAINS, HILLSHADE, IMAGE_SERVER, imageServerTerrain, SEA, TERRAIN_URL } from './basemaps.ts';
+import {
+  BASEMAPS,
+  BODY_TERRAINS,
+  basemapName,
+  HILLSHADE,
+  IGN_ATTRIBUTION,
+  IMAGE_SERVER,
+  imageServerTerrain,
+  SEA,
+  TERRAIN_TILES,
+  TERRAIN_TILES_ATTRIBUTION,
+  TERRAIN_URL,
+} from './basemaps.ts';
 import { parseCssColor } from './color.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import { DEFAULT_DECODERS } from './decoders.ts';
@@ -28,6 +40,7 @@ import { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
 import { injectStyle } from './style.ts';
 import { SymbolLayer, type SymbolOptions, symbolStyle } from './symbols.ts';
+import { encodedTerrainLoader } from './terrain.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
@@ -44,6 +57,8 @@ import type {
   Point,
   Projection,
   RasterOptions,
+  TerrainEncoding,
+  TerrainModel,
   TerrainOptions,
   Tiles3dOptions,
 } from './types.ts';
@@ -139,10 +154,10 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
 }
 
 /** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap), its
- * `relief` the range of its ground (the Earth's: France's, that of the IGN terrain model). Mars: the sphere of its
+ * `relief` the range of its ground (the Earth's dry land, from the Dead Sea to Everest). Mars: the sphere of its
  * equatorial radius (its data take planetocentric latitudes), a faint butterscotch halo of dust */
 const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>> = {
-  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca', relief: [-200, 5000] },
+  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca', relief: [-450, 8900] },
   moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f', relief: [-9200, 10800] },
   mars: {
     radius: 3396190,
@@ -170,24 +185,59 @@ function haloSettings(atmosphere: boolean | string): Float32Array | undefined {
   return color && Float32Array.from(color);
 }
 
-/** Relief settings from the option: undefined when off. The IGN terrain model by default on the Earth, NASA's on the
- * Moon and Mars; an ArcGIS image service asked for in the body's Mercator */
+/** The loaders of the relief by encoding, URL and floor: the same loader for the same tiles (the engine keeps its
+ * tiles when only the exaggeration changes) */
+const terrainLoaders = new Map<string, ReturnType<typeof encodedTerrainLoader>>();
+
+function terrainLoader(url: string, encoding: Exclude<TerrainEncoding, 'float32'>, floor?: number) {
+  const key = `${encoding} ${floor ?? ''} ${url}`;
+  let loader = terrainLoaders.get(key);
+  if (!loader) {
+    loader = encodedTerrainLoader(url, encoding, floor);
+    terrainLoaders.set(key, loader);
+  }
+  return loader;
+}
+
+/** Relief settings from the option: undefined when off. On the Earth the Terrain Tiles by default (worldwide,
+ * Terrarium PNGs decoded in the page) or the IGN terrain model (France, raised by the geoid); NASA's on the Moon and
+ * Mars; an ArcGIS image service asked for in the body's Mercator */
 function terrainSettings(
-  terrain: boolean | TerrainOptions | undefined,
+  terrain: boolean | TerrainModel | TerrainOptions | undefined,
   body: CelestialBody | undefined,
   radius: number,
 ): Settings['terrain'] {
   if (!terrain) return undefined;
-  const options = terrain === true ? {} : terrain;
+  let options: TerrainOptions = {};
+  if (typeof terrain === 'string') options = { model: terrain };
+  else if (terrain !== true) options = terrain;
   const earth = (body ?? 'earth') === 'earth';
+  const exaggeration = options.exaggeration ?? 1;
+  if (options.url === undefined && earth) {
+    if (options.model === 'ign') {
+      const geoid = options.geoid ?? true;
+      return { url: TERRAIN_URL, exaggeration, maxZoom: options.maxZoom ?? 15, geoid, attribution: IGN_ATTRIBUTION };
+    }
+    return {
+      url: TERRAIN_TILES.url,
+      exaggeration,
+      maxZoom: options.maxZoom ?? TERRAIN_TILES.maxZoom,
+      geoid: options.geoid ?? false,
+      // The sea floor of the model at sea level: the oceans stay flat under the basemap's water
+      loader: terrainLoader(TERRAIN_TILES.url, 'terrarium', 0),
+      attribution: TERRAIN_TILES_ATTRIBUTION,
+    };
+  }
   const preset = body === 'moon' || body === 'mars' ? BODY_TERRAINS[body] : undefined;
-  const url = options.url ?? (earth ? TERRAIN_URL : preset?.url);
+  const url = options.url ?? preset?.url;
   if (url === undefined) throw new Error('isard: the relief of this body needs a url');
+  const encoding = options.encoding ?? 'float32';
   return {
     url: IMAGE_SERVER.test(url) ? imageServerTerrain(url, earth, radius) : url,
-    exaggeration: options.exaggeration ?? 1,
+    exaggeration,
     maxZoom: options.maxZoom ?? (options.url === undefined && preset ? preset.maxZoom : 15),
-    geoid: options.geoid ?? earth,
+    geoid: options.geoid ?? false,
+    ...(encoding === 'float32' ? {} : { loader: terrainLoader(url, encoding) }),
   };
 }
 
@@ -244,7 +294,18 @@ interface Settings {
   globe: boolean;
   sky: boolean;
   atmosphere: Float32Array | undefined;
-  terrain: { url: string; exaggeration: number; maxZoom: number; geoid: boolean } | undefined;
+  terrain:
+    | {
+        url: string;
+        exaggeration: number;
+        maxZoom: number;
+        geoid: boolean;
+        /** Decodes the tiles of `url` for the engine (an encoding other than raw floats) */
+        loader?: (z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>;
+        /** Credits of the model */
+        attribution?: string;
+      }
+    | undefined;
   loading: LoadingMode;
   background: [r: number, g: number, b: number];
   globeColor: [r: number, g: number, b: number];
@@ -300,12 +361,16 @@ export class GeoMap {
   /** What loading the engine with 3D Tiles and its workers needs */
   private readonly tiles3dOptions: Pick<GeoMapOptions, 'wasmUrl' | 'workers' | 'workerUrl' | 'decoders'>;
   private gone = false;
-  /** The map is of the Earth: the Géoplateforme basemaps, relief and credits by default */
+  /** The map is of the Earth: a basemap by default */
   private readonly earth: boolean;
   /** The body, as the option named it */
   private readonly body: CelestialBody | undefined;
   private basemap: RasterLayer | undefined;
   private hillshade: RasterLayer | undefined;
+  /** Called when the credits of the layers or relief change (the attribution controls) */
+  private readonly attributionListeners = new Set<() => void>();
+  /** Credits of the raster layers that have some (basemaps, hillshade, the Géoplateforme's rasters…) */
+  private readonly rasterCredits = new Map<object, string>();
   private animation: ((now: number) => boolean) | undefined;
   private hoverPoint: Point | undefined;
   /** Frame polling the engine for the answer of the hover picking, 0 if none */
@@ -381,7 +446,7 @@ export class GeoMap {
       terrain: terrainSettings(options.terrain, options.body, body.radius),
       loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? (this.earth ? '#f2f2f0' : '#000000')),
-      globeColor: this.earth ? SEA['plan-grey'] : rgb(body.color),
+      globeColor: this.earth ? SEA['osm-positron'] : rgb(body.color),
     };
     this.#engine = this.createEngine();
     // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
@@ -396,10 +461,7 @@ export class GeoMap {
       ? { center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0 }
       : { center: [0, 0], zoom: 2, pitch: 0, bearing: 0 };
     this.setCamera({ ...start, ...options });
-    this.setBasemap(
-      options.basemap ?? (this.earth ? 'plan-grey' : 'none'),
-      options.hillshade ?? (this.earth ? 0.4 : 0),
-    );
+    this.setBasemap(options.basemap ?? (this.earth ? 'osm-positron' : 'none'), options.hillshade ?? 0);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.watchRatio();
@@ -415,7 +477,7 @@ export class GeoMap {
     if (keyboard) this.canvas.tabIndex = 0;
     const attribution = options.attributionControl ?? true;
     if (attribution !== false) {
-      this.addControl(new AttributionControl(attribution === true ? {} : attribution, this.earth), 'bottom-right');
+      this.addControl(new AttributionControl(attribution === true ? {} : attribution), 'bottom-right');
     }
   }
 
@@ -444,7 +506,7 @@ export class GeoMap {
     engine.setGlobe(globe);
     engine.setSky(sky);
     engine.setAtmosphere(atmosphere);
-    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1, terrain?.maxZoom, terrain?.geoid);
+    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1, terrain?.maxZoom, terrain?.geoid, terrain?.loader);
     engine.setImmediateLoading(loading === 'immediate');
     engine.setBackground(...background);
     engine.setGlobeColor(...globeColor);
@@ -504,6 +566,12 @@ export class GeoMap {
 
   /** @internal Forgets a removed layer */
   detach(layer: object): void {
+    this.unlist(layer);
+    if (this.rasterCredits.delete(layer)) this.attributionChanged();
+  }
+
+  /** Takes a layer out of the drawing order (to put it back elsewhere, or for good) */
+  private unlist(layer: object): void {
     const index = this.layers.indexOf(layer as Layer);
     if (index >= 0) this.layers.splice(index, 1);
   }
@@ -528,7 +596,7 @@ export class GeoMap {
   /** @internal Moves a layer under `before`, or on top of all */
   moveLayer(layer: object, before: object | undefined): void {
     const handle = layer as Layer;
-    this.detach(handle);
+    this.unlist(handle);
     const index = before ? this.layers.indexOf(before as Layer) : -1;
     const at = index < 0 ? this.layers.length : index;
     this.layers.splice(at, 0, handle);
@@ -553,7 +621,7 @@ export class GeoMap {
   /** Moves a layer under all the others */
   private toBottom(layer: Layer): void {
     this.engine.moveLayer(layer.id, 0);
-    this.detach(layer);
+    this.unlist(layer);
     this.layers.unshift(layer);
   }
 
@@ -718,13 +786,32 @@ export class GeoMap {
     this.requestRender();
   }
 
-  /** Relief under the basemap: true for the body's terrain model (the IGN's on the Earth, NASA's on the Moon and
-   * Mars), its options, or false; on another body, its options with a `url` */
-  setTerrain(terrain: boolean | TerrainOptions): void {
+  /** Relief under the basemap: true for the body's terrain model (on the Earth the worldwide Terrain Tiles, NASA's
+   * on the Moon and Mars), one of the Earth's models by name (`'ign'`), its options, or false; on another body, its
+   * options with a `url` */
+  setTerrain(terrain: boolean | TerrainModel | TerrainOptions): void {
     this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius);
     const t = this.settings.terrain;
-    this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid);
+    this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid, t?.loader);
+    this.attributionChanged();
     this.requestRender();
+  }
+
+  /** @internal The credits of the raster layers (the basemap first) and of the relief in use, each once */
+  attributions(): string[] {
+    const layers = this.layers.map((layer) => this.rasterCredits.get(layer));
+    const credits = [...layers, this.settings.terrain?.attribution];
+    return [...new Set(credits.filter((c): c is string => c !== undefined))];
+  }
+
+  /** @internal Calls `listener` when the credits change; returns what stops it */
+  onAttributionChange(listener: () => void): () => void {
+    this.attributionListeners.add(listener);
+    return () => this.attributionListeners.delete(listener);
+  }
+
+  private attributionChanged(): void {
+    for (const listener of this.attributionListeners) listener();
   }
 
   /** Color behind the map, a CSS color (its alpha ignored) */
@@ -852,9 +939,10 @@ export class GeoMap {
 
   // ── Layers ──
 
-  /** Replaces the Géoplateforme basemap and hillshade, under the other layers (hillshade by default: 0.4 on the
-   * Earth, 0 elsewhere) */
-  setBasemap(basemap: Basemap, hillshade = this.earth ? 0.4 : 0): void {
+  /** Replaces the basemap and the IGN hillshade, under the other layers (hillshade by default: 0, none). The former
+   * names of the Géoplateforme basemaps (`LegacyBasemap`) are taken under their new ones */
+  setBasemap(basemap: Basemap, hillshade = 0): void {
+    const name = basemapName(basemap);
     this.basemap?.remove();
     this.hillshade?.remove();
     if (this.vector) {
@@ -863,7 +951,7 @@ export class GeoMap {
       this.vector.tiles.destroy();
       this.vector = undefined;
     }
-    const vector = VECTOR_BASEMAPS[basemap as keyof typeof VECTOR_BASEMAPS];
+    const vector = VECTOR_BASEMAPS[name as keyof typeof VECTOR_BASEMAPS];
     if (vector) {
       const tiles = new VectorTiles(this, {
         style: vector,
@@ -872,28 +960,35 @@ export class GeoMap {
       this.basemap = tiles.raster();
       this.vector = { tiles, labels: tiles.labels() as SymbolLayer<unknown> };
     } else {
-      this.basemap = basemap === 'none' ? undefined : this.addRaster(BASEMAPS[basemap as keyof typeof BASEMAPS]);
+      this.basemap = name === 'none' ? undefined : this.addRaster(BASEMAPS[name as keyof typeof BASEMAPS]);
     }
     // Off the Earth, the body's own color
-    if (this.earth) this.settings.globeColor = SEA[basemap];
+    if (this.earth) this.settings.globeColor = SEA[name];
     this.engine.setGlobeColor(...this.settings.globeColor);
     this.hillshade = hillshade > 0 ? this.addRaster({ ...HILLSHADE, opacity: hillshade }) : undefined;
     if (this.hillshade) this.toBottom(this.hillshade);
     if (this.basemap) this.toBottom(this.basemap);
+    this.attributionChanged();
   }
 
   /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from an equirectangular `grid`), over the layers
    * already added */
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
     const { url, grid = 'mercator', minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1, size, before } = options;
+    let layer: RasterLayer;
     if (grid === 'equirectangular' && !options.loader) {
       // The source's level n has the pixel size of Mercator level n + 1 at the equator
       const loader = equirectangularLoader(url, maxZoom, size ?? 256);
-      const layer = new RasterLayer(this, { url, minZoom, maxZoom: maxZoom + 1, opacity, saturation, size, loader });
-      return this.place(layer, before);
+      layer = new RasterLayer(this, { url, minZoom, maxZoom: maxZoom + 1, opacity, saturation, size, loader });
+    } else {
+      layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader: options.loader });
     }
-    const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader: options.loader });
-    return this.place(layer, before);
+    this.place(layer, before);
+    if (options.attribution) {
+      this.rasterCredits.set(layer, options.attribution);
+      this.attributionChanged();
+    }
+    return layer;
   }
 
   /** Line network colored by a value per node; `layer.setValues` recolors it in one texture upload */
@@ -948,8 +1043,9 @@ export class GeoMap {
   }
 
   /**
-   * Vector tiles with a MapLibre style (PLAN.IGN grey by default): `tiles.raster(…)` draws its fills and lines (or a
-   * subset) as a raster layer, `tiles.labels(…)` its labels. `setBasemap('plan-grey-vector')` does both for the basemap.
+   * Vector tiles with a MapLibre style (OpenFreeMap's Positron by default): `tiles.raster(…)` draws its fills and lines
+   * (or a subset) as a raster layer, `tiles.labels(…)` its labels. `setBasemap('osm-positron')` does both for the
+   * basemap.
    */
   vectorTiles(options: VectorTilesOptions = {}): VectorTiles {
     const tiles = new VectorTiles(this, {

@@ -1,14 +1,13 @@
-/** 3D Tiles: the Lille photomesh (Métropole Européenne de Lille, 2020, 5 cm, open data) over the orthophoto */
-import { GeoMap } from '@ign-junn/isard';
-import { element } from '../shared/wfs.ts';
+/** 3D Tiles: the Lille photomesh (Métropole Européenne de Lille, 2020, 5 cm, open data) over the IGN orthophoto */
+import { GeoMap } from 'isard';
+import { element } from '../shared/page.ts';
 
 const map = await GeoMap.create(element('map'), {
   center: [3.0635, 50.6366],
   zoom: 17,
   pitch: 55,
   bearing: 30,
-  basemap: 'ortho',
-  hillshade: 0,
+  basemap: 'ign-ortho',
   projection: 'mercator',
   // 3D Tiles at once: the engine that draws them from the start, not after the one without them
   tiles3d: true,

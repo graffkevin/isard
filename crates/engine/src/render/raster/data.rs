@@ -9,7 +9,7 @@ use geo::geoid;
 use geo::tiles::TileId;
 
 /// Altitudes this far below the lowest ground of the body are the server's no-data (-99999 on the Géoplateforme,
-/// -32768 in 16-bit rasters): under -1000 m on the Earth
+/// -32768 in 16-bit rasters): under -1250 m on the Earth
 const NO_DATA_MARGIN: f64 = 800.0;
 
 /// Depth in [0, 1] from an RGBA8 pixel of `shaders::DEPTH_FRAGMENT`
@@ -38,13 +38,13 @@ pub fn bbox(tile: TileId, body: &Body) -> String {
     format!("{},{},{},{}", x(min.x), y(max.y), x(max.x), y(min.y))
 }
 
-/// Levels of the relief: coarser, it would not show; finer, the Géoplateforme grid (1 m) gains nothing at a 16 × 16 mesh
+/// Levels of the relief: coarser, it would not show; finer, even a 1 m grid (RGE ALTI) gains nothing at a 16 × 16 mesh
 const TERRAIN_MIN_Z: u8 = 6;
 const TERRAIN_MAX_Z: u8 = 15;
 
 /// First and last levels of the relief of a body, `max_z` asked (the finest by default): from level 6 on the Earth,
-/// as many levels coarser as the body's relief is larger for its size (it shows from further away: level 2 on the
-/// Moon, 3 on Mars)
+/// as many levels coarser as the body's relief is larger for its size (it shows from further away: level 3 on the
+/// Moon and Mars)
 #[must_use]
 pub fn terrain_levels(body: &Body, max_z: Option<u8>) -> (u8, u8) {
     let coarser = body.relief_scale().log2().round().clamp(0.0, f64::from(TERRAIN_MIN_Z));
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn no_data_takes_the_lowest_altitude() {
         let below = no_data(&Body::EARTH);
-        assert_eq!(below, -1000.0);
+        assert_eq!(below, -1250.0);
         let mut h = vec![12.0, -99_999.0, 5.0, f32::NAN, 30.0];
         fill_no_data(&mut h, below);
         assert_eq!(h, vec![12.0, 5.0, 5.0, 5.0, 30.0]);
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(terrain_levels(&Body::EARTH, None), (6, 15));
         assert_eq!(terrain_levels(&Body::EARTH, Some(3)), (6, 6));
         assert_eq!(terrain_levels(&Body::EARTH, Some(20)), (6, 15));
-        assert_eq!(terrain_levels(&Body::MOON, Some(8)), (2, 8));
+        assert_eq!(terrain_levels(&Body::MOON, Some(8)), (3, 8));
         assert_eq!(terrain_levels(&Body::MARS, Some(8)), (3, 8));
         // A body flatter than the Earth starts at level 6 all the same
         let flat = Body {

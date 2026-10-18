@@ -1,6 +1,6 @@
 /**
- * Demo of the engine: Géoplateforme basemaps on the globe or in Web Mercator, the Lille photomesh in 3D Tiles, and the
- * IGN relief, and the loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles
+ * Demo of the engine: OpenFreeMap and Géoplateforme basemaps on the globe or in Web Mercator, the Lille photomesh in
+ * 3D Tiles, the worldwide relief, and the loading counters of every layer. URL parameters: ?projection=mercator, ?workers=0 (3D Tiles
  * decoded on the main thread, to compare), ?terrain=1 (relief on from the start).
  */
 import {
@@ -12,7 +12,7 @@ import {
   Popup,
   type Projection,
   type Tiles3dLayer,
-} from '@ign-junn/isard';
+} from 'isard';
 
 declare global {
   interface Window {
@@ -21,8 +21,10 @@ declare global {
   }
 }
 
-const IGN: LonLat = [2.424573, 48.845726];
+const PARIS: LonLat = [2.3376, 48.8606];
 const WORLD = { center: [2.5, 46.6] as LonLat, zoom: 2.2, pitch: 0, bearing: 0 };
+/** The worldwide relief, raised by the French geoid: the photomesh's ellipsoidal heights sit on it in France */
+const RELIEF = { geoid: true };
 /** Photomesh of the Métropole Européenne de Lille (2020, 5 cm, open data): a heavy textured 3D Tiles dataset */
 const LILLE_MESH = 'https://webimaging.lillemetropole.fr/externe/maillage/2020_mel_5cm/tileset.json';
 
@@ -39,23 +41,23 @@ const map = await GeoMap.create(element('map'), {
   ...WORLD,
   projection,
   maxZoom: 19.5,
-  terrain: params.get('terrain') === '1',
+  terrain: params.get('terrain') === '1' && RELIEF,
   ...(params.get('workers') === '0' ? { workers: false } : {}),
 });
 window.map = map;
 map.addControl(new NavigationControl({ visualizePitch: true }));
 
-// A draggable marker at the IGN headquarters; a click opens its popup, which follows it when dragged
+// A draggable marker at the Louvre; a click opens its popup, which follows it when dragged
 const popup = new Popup({ offset: [0, -34] });
-const ign = new Marker({ draggable: true }).setLonLat(IGN).setPopup(popup).addTo(map);
+const pin = new Marker({ draggable: true }).setLonLat(PARIS).setPopup(popup).addTo(map);
 const where = () => {
-  const [lon, lat] = ign.getLonLat();
+  const [lon, lat] = pin.getLonLat();
   popup.setHTML(
-    `<strong>IGN</strong><br>${lon.toFixed(5)}, ${lat.toFixed(5)}<br><small>Drag the pin to move it</small>`,
+    `<strong>Pin</strong><br>${lon.toFixed(5)}, ${lat.toFixed(5)}<br><small>Drag the pin to move it</small>`,
   );
 };
 where();
-ign.on('drag', where);
+pin.on('drag', where);
 
 /** A row of toggle buttons */
 function buttons<T extends string>(parent: string, options: readonly T[], initial: T, pick: (option: T) => void): void {
@@ -74,10 +76,17 @@ function buttons<T extends string>(parent: string, options: readonly T[], initia
 }
 
 const projections: readonly Projection[] = ['globe', 'mercator'];
-const basemaps: readonly Basemap[] = ['plan-grey', 'plan', 'plan-grey-vector', 'ortho', 'none'];
+const basemaps: readonly Basemap[] = [
+  'osm-positron',
+  'osm-liberty',
+  'ign-plan',
+  'ign-plan-grey-vector',
+  'ign-ortho',
+  'none',
+];
 buttons('projections', projections, projection, (p) => map.setProjection(p));
-buttons('basemaps', basemaps, 'plan-grey', (b) => map.setBasemap(b, b === 'ortho' ? 0 : 0.4));
-element('fly').onclick = () => map.easeTo({ center: IGN, zoom: 15, pitch: 50, bearing: -17 }, 2500);
+buttons('basemaps', basemaps, 'osm-positron', (b) => map.setBasemap(b));
+element('fly').onclick = () => map.easeTo({ center: PARIS, zoom: 15, pitch: 50, bearing: -17 }, 2500);
 element('world').onclick = () => map.easeTo(WORLD, 2500);
 
 let mesh: Tiles3dLayer | undefined;
@@ -86,19 +95,19 @@ element('lille').onclick = () => {
   map.easeTo({ center: [3.0632, 50.6369], zoom: 16.5, pitch: 60, bearing: 20 }, 3000);
 };
 
-// Relief: the IGN terrain model under the basemap
+// Relief: the worldwide Terrain Tiles under the basemap
 const relief = element('relief');
 let terrain = params.get('terrain') === '1';
 relief.classList.toggle('on', terrain);
 relief.onclick = () => {
   terrain = !terrain;
   relief.classList.toggle('on', terrain);
-  map.setTerrain(terrain);
+  map.setTerrain(terrain && RELIEF);
 };
 element('montblanc').onclick = () => {
   if (!terrain) relief.click();
-  map.setBasemap('ortho', 0);
-  for (const button of element('basemaps').children) button.classList.toggle('on', button.textContent === 'ortho');
+  map.setBasemap('ign-ortho');
+  for (const button of element('basemaps').children) button.classList.toggle('on', button.textContent === 'ign-ortho');
   map.easeTo({ center: [6.87, 45.9], zoom: 12.5, pitch: 72, bearing: 160 }, 3000);
 };
 

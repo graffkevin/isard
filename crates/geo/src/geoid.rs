@@ -1,5 +1,5 @@
 //! Height of the geoid above the WGS 84 ellipsoid over mainland France, from IGN's RAF20 grid (RGF93 v2b to
-//! NGF-IGN69). The terrain model gives altitudes (NGF-IGN69) and 3D Tiles ellipsoidal heights: adding the geoid
+//! NGF-IGN69). The IGN's terrain model gives altitudes (NGF-IGN69) and 3D Tiles ellipsoidal heights: adding the geoid
 //! height to the altitudes puts both on the same surface (about 45 m apart in France).
 //!
 //! `raf20.bin`: every fourth node of `fr_ign_RAF20.tif` (PROJ data, converted by IGN from `RAF20.tac`, Licence

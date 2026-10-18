@@ -299,7 +299,8 @@ impl Engine {
     /// the Mercator metres of another body) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
     /// heights (1: true relief); `max_z`: finest level loaded (up to 15, from 6 on the Earth, coarser on bodies of a
     /// larger relief for their size: `terrain_levels`); `geoid`: altitudes raised by the RAF20 geoid height (heights
-    /// above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France)
+    /// above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France); `loader`: gives the
+    /// altitudes of each tile instead of fetching `url` (an encoding decoded by the page: Terrarium, Terrain-RGB)
     #[wasm_bindgen(js_name = setTerrain)]
     pub fn set_terrain(
         &mut self,
@@ -307,6 +308,10 @@ impl Engine {
         exaggeration: f64,
         max_z: Option<u8>,
         geoid: Option<bool>,
+        #[wasm_bindgen(
+            unchecked_param_type = "((z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>) | undefined"
+        )]
+        loader: Option<js_sys::Function>,
     ) -> Result<(), JsValue> {
         let exaggeration = exaggeration.max(0.0) as f32;
         let body = self.body();
@@ -317,7 +322,8 @@ impl Engine {
                 if source.options.url == url
                     && source.options.max_z == max_z
                     && source.options.geoid == geoid
-                    && source.options.body == body =>
+                    && source.options.body == body
+                    && source.options.loader == loader =>
             {
                 *current = exaggeration;
             }
@@ -334,7 +340,7 @@ impl Engine {
                         body,
                         geoid,
                         size: 256,
-                        loader: None,
+                        loader,
                     },
                 )?;
                 if let Some((old, _)) = self.terrain.replace((source, exaggeration)) {

@@ -1,16 +1,17 @@
 /**
- * @ign-junn/isard: WebGL2 map engine for large, interactive data layers and 3D Tiles on Géoplateforme basemaps.
+ * isard: a WebGL2 map engine for large, interactive data layers, labels and 3D Tiles.
  *
  * ```ts
- * import { GeoMap } from '@ign-junn/isard';
+ * import { GeoMap } from 'isard';
  * const map = await GeoMap.create(container, { center: [2.4246, 48.8457], zoom: 13 });
  * const network = map.addNetwork({ nodes, edges, max: 1800, contour: 300 });
  * map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat)));
  * map.addTiles3d({ url: 'https://…/tileset.json' });
  * map.addControl(new NavigationControl());
- * new Marker().setLonLat([2.4246, 48.8457]).setPopup(new Popup({ offset: [0, -34] }).setText('IGN')).addTo(map);
+ * new Marker().setLonLat([2.4246, 48.8457]).setPopup(new Popup({ offset: [0, -34] }).setText('Here')).addTo(map);
  * ```
  */
+export { OPENFREEMAP_ATTRIBUTION, TERRAIN_TILES_ATTRIBUTION } from './basemaps.ts';
 export {
   AttributionControl,
   type AttributionOptions,
@@ -44,8 +45,9 @@ export type {
   Styled,
 } from './features.ts';
 export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
+export { geoplateformeWfs, geoplateformeWms, geoplateformeWmts, IGN_ATTRIBUTION } from './geoplateforme.ts';
 export type { TextPart } from './glyphs.ts';
-export { GLYPHS_URL } from './glyphs.ts';
+export { DEFAULT_FONT, GLYPHS_URL } from './glyphs.ts';
 export type { GroundOptions, GroundTexture } from './layers.ts';
 export { GroundLayer, Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
 export { GeoMap } from './map.ts';
@@ -65,11 +67,13 @@ export type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
+  BasemapName,
   BodyOptions,
   CelestialBody,
   FeatureHit,
   FlyToOptions,
   GeoMapOptions,
+  LegacyBasemap,
   LoadingMode,
   LonLat,
   MapEvents,
@@ -81,11 +85,13 @@ export type {
   Projection,
   RasterGrid,
   RasterOptions,
+  TerrainEncoding,
+  TerrainModel,
   TerrainOptions,
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
-export type { Json, LabelCandidate, Style, StyleLayer } from './vectorstyle.ts';
+export type { Json, LabelCandidate, RasterSource, Style, StyleLayer } from './vectorstyle.ts';
 export type { VectorTilesOptions } from './vectortiles.ts';
-export { PLAN_STYLES, VectorTiles } from './vectortiles.ts';
+export { OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
 export type { Camera, NetworkStats, PickHit, PickResult, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';

@@ -1,5 +1,5 @@
-//! The downloads of a raster source: images decoded by the browser, altitudes as raw floats, tiles drawn by the
-//! page's loader; and the timer of the retries
+//! The downloads of a raster source: images decoded by the browser, altitudes as raw floats, tiles and altitudes drawn
+//! by the page's loader; and the timer of the retries
 
 use super::TILE;
 use super::data::{apply_mask, fill_no_data, to_ellipsoid};
@@ -74,6 +74,43 @@ pub async fn draw_tile(
         return Err(Fetch::Missing);
     }
     value.dyn_into().map_err(|_| Fetch::Transient)
+}
+
+/// Altitudes of a tile drawn by the page's loader (decoded from an encoding the engine does not read, such as the
+/// RGB of Terrarium PNGs): 256 × 256 floats, rows from the north, `null` for no tile here. No-data and the geoid as for
+/// a fetched grid
+pub async fn draw_heights(
+    loader: &js_sys::Function,
+    tile: TileId,
+    geoid: bool,
+    no_data: f32,
+    signal: &web_sys::AbortSignal,
+) -> Result<Vec<f32>, Fetch> {
+    let promise = loader
+        .call4(
+            &JsValue::NULL,
+            &tile.z.into(),
+            &tile.x.into(),
+            &tile.y.into(),
+            signal.as_ref(),
+        )
+        .map_err(|_| Fetch::Transient)?;
+    let value = JsFuture::from(js_sys::Promise::resolve(&promise))
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    if value.is_null() || value.is_undefined() {
+        return Err(Fetch::Missing);
+    }
+    let grid: js_sys::Float32Array = value.dyn_into().map_err(|_| Fetch::Transient)?;
+    if grid.length() != (TILE * TILE) as u32 {
+        return Err(Fetch::Transient);
+    }
+    let mut heights = grid.to_vec();
+    fill_no_data(&mut heights, no_data);
+    if geoid {
+        to_ellipsoid(tile, &mut heights);
+    }
+    Ok(heights)
 }
 
 /// Altitudes of a tile: a full grid of 256 × 256 little-endian f32, maybe followed by the validity mask of an `ArcGIS`

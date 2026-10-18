@@ -1,6 +1,6 @@
 /**
  * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
- * pass (wasm-opt), then the `@ign-junn/isard` package (packages/isard/dist: module, workers, type declarations), the
+ * pass (wasm-opt), then the `isard` package (packages/isard/dist: module, workers, type declarations), the
  * demo and the examples (bundled together from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

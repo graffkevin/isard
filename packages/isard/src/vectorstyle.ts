@@ -25,10 +25,21 @@ export interface StyleLayer {
 
 export interface Style {
   version: number;
-  sources: Record<string, { type: string; tiles?: string[]; url?: string; maxzoom?: number; minzoom?: number }>;
+  sources: Record<
+    string,
+    { type: string; tiles?: string[]; url?: string; maxzoom?: number; minzoom?: number; tileSize?: number }
+  >;
   layers: StyleLayer[];
   glyphs?: string;
   sprite?: string;
+}
+
+/** A raster source of a style: its tile URL, its deepest level and the CSS pixels of its tiles (MapLibre's
+ * `tileSize`: 512 by default) */
+export interface RasterSource {
+  tiles: string;
+  maxzoom: number;
+  tileSize: number;
 }
 
 /** A label to shape and place, in style terms evaluated at the tile's zoom */
@@ -529,4 +540,40 @@ export function text(field: Json | undefined, ctx: Context): string {
     return v.filter((x) => typeof x === 'string').join('');
   }
   return v === undefined || v === null ? '' : String(v);
+}
+
+/** The font of a label from the first of its `text-font`: a family without its weight takes the regular one */
+export function labelFont(font: string): string {
+  return /Regular|Bold|Italic|Semibold|Light|Medium|Black/.test(font) ? font : `${font} Regular`;
+}
+
+/**
+ * A value of the zoom only (an expression: `interpolate`, `step` of `["zoom"]`) as stops `[[zoom, value], …]` for the
+ * engine, which interpolates them linearly: evaluated at its own stops and at the whole zooms between (an exponential
+ * curve followed closely), a step kept sharp just before its threshold
+ */
+export function zoomStops(e: Json): [number, number][] {
+  const zooms = new Set<number>();
+  const walk = (x: Json) => {
+    if (!Array.isArray(x)) return;
+    const zoomInput = (input: Json | undefined) => Array.isArray(input) && input[0] === 'zoom';
+    if ((x[0] === 'interpolate' || x[0] === 'interpolate-hcl' || x[0] === 'interpolate-lab') && zoomInput(x[2])) {
+      for (let i = 3; i < x.length; i += 2) zooms.add(Number(x[i]));
+    } else if (x[0] === 'step' && zoomInput(x[1])) {
+      for (let i = 3; i < x.length; i += 2) {
+        const t = Number(x[i]);
+        zooms.add(t);
+        zooms.add(t - 0.01);
+      }
+    }
+    for (const y of x) walk(y);
+  };
+  walk(e);
+  const finite = [...zooms].filter(Number.isFinite);
+  if (finite.length === 0) finite.push(0);
+  const [lo, hi] = [Math.min(...finite), Math.max(...finite)];
+  for (let z = Math.ceil(lo); z <= Math.floor(hi); z += 1) finite.push(z);
+  return [...new Set(finite)]
+    .sort((a, b) => a - b)
+    .map((zoom) => [zoom, Number(evaluate(e, { zoom, properties: {}, type: 'Unknown' }))]);
 }

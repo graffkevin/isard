@@ -8,9 +8,43 @@ import type { Camera, Engine } from './wasm/isard.js';
 export type LonLat = [lon: number, lat: number];
 export type Point = [x: number, y: number];
 
-/** Géoplateforme basemaps: rasters (`plan`, `plan-grey`, `ortho`), or vector tiles with their labels above the
- * other layers (`plan-vector`, `plan-grey-vector`, the PLAN.IGN styles) */
-export type Basemap = 'plan' | 'plan-grey' | 'plan-vector' | 'plan-grey-vector' | 'ortho' | 'none';
+/**
+ * The named basemaps. OpenFreeMap's vector styles, OpenStreetMap data worldwide, their labels above the other layers:
+ * `osm-positron` (light grey, quiet: data over it reads first), `osm-liberty` and `osm-bright` (in colour). The
+ * Géoplateforme's (IGN, France): rasters (`ign-plan`, `ign-plan-grey`, `ign-ortho`, the aerial photographs) or vector
+ * tiles with their labels (`ign-plan-vector`, `ign-plan-grey-vector`, the PLAN.IGN styles).
+ */
+export type BasemapName =
+  | 'osm-positron'
+  | 'osm-liberty'
+  | 'osm-bright'
+  | 'ign-plan'
+  | 'ign-plan-grey'
+  | 'ign-ortho'
+  | 'ign-plan-vector'
+  | 'ign-plan-grey-vector'
+  | 'none';
+
+/**
+ * @deprecated The former names of the Géoplateforme basemaps, still accepted (with a warning): the same names with the
+ * `ign-` prefix (`'plan-grey'` is `'ign-plan-grey'`)
+ */
+export type LegacyBasemap = 'plan' | 'plan-grey' | 'plan-vector' | 'plan-grey-vector' | 'ortho';
+
+/** A basemap by name (see `BasemapName`; the former names of `LegacyBasemap` are deprecated) */
+export type Basemap = BasemapName | LegacyBasemap;
+
+/**
+ * The Earth's named terrain models. `'terrain-tiles'`: worldwide, the Terrain Tiles of AWS's open data registry
+ * (SRTM, EU-DEM, GMTED… merged by Mapzen, 30 m in most places), the sea floor flattened at sea level. `'ign'`: France,
+ * the IGN's RGE ALTI from the Géoplateforme (1 to 5 m), raised by the RAF20 geoid to heights above the ellipsoid.
+ */
+export type TerrainModel = 'terrain-tiles' | 'ign';
+
+/** How tiles encode their altitudes: `'float32'`, raw little-endian floats (`image/x-bil;bits=32`, an ArcGIS raw
+ * grid); `'terrarium'`, the colors of a PNG, `R × 256 + G + B / 256 - 32768`; `'mapbox'`, those of Terrain-RGB,
+ * `(R × 65536 + G × 256 + B) / 10 - 10000` */
+export type TerrainEncoding = 'float32' | 'terrarium' | 'mapbox';
 
 /**
  * How tiles load and show. 'immediate' (default): everything visible loads, tiles show as soon as they arrive.
@@ -43,9 +77,8 @@ export interface BodyOptions {
  * The body the map is drawn on: 'earth' (WGS 84, the default), 'moon' (a sphere of 1 737 400 m, no atmosphere),
  * 'mars' (a sphere of 3 396 190 m, its equatorial radius, a thin dusty halo; planetocentric latitudes) or another
  * one. Zoom levels keep their meaning on screen (the Web Mercator tile pyramid), their metres follow the body:
- * altitudes, relief, buildings, 3D Tiles. Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no
- * hillshade, no geoid, no IGN credits, and space for its background; the Moon and Mars have NASA's relief for
- * `terrain: true`.
+ * altitudes, relief, buildings, 3D Tiles. Off the Earth, the map has none of the Earth's defaults: no basemap, no
+ * credits, and space for its background; the Moon and Mars have NASA's relief for `terrain: true`.
  */
 export type CelestialBody = 'earth' | 'moon' | 'mars' | BodyOptions;
 
@@ -56,18 +89,18 @@ export interface GeoMapOptions extends Partial<Camera> {
   projection?: Projection;
   /** Default 'immediate' */
   loading?: LoadingMode;
-  /** Géoplateforme basemap (default 'plan-grey'; 'none' off the Earth) */
+  /** The basemap (default 'osm-positron'; 'none' off the Earth) */
   basemap?: Basemap;
-  /** Opacity of the IGN hillshade over the basemap, 0 for none (default 0.4; 0 off the Earth) */
+  /** Opacity of the IGN hillshade over the basemap (France, Géoplateforme), 0 for none (default 0) */
   hillshade?: number;
   /** Color behind the map (sky of tilted flat views), a CSS color (default `#f2f2f0`; black off the Earth) */
   background?: string;
   /** Space behind the globe: stars and atmosphere halo, fading out as the globe turns flat (default true) */
   sky?: boolean;
-  /** Relief under the basemap: true for the body's terrain model (the IGN's on the Earth: Géoplateforme, RGE ALTI;
-   * NASA's on the Moon and Mars: LOLA, MOLA), or its options (default false; on another body, its `url` is required).
-   * Network layers are draped on it */
-  terrain?: boolean | TerrainOptions;
+  /** Relief under the basemap: true for the body's terrain model (on the Earth the worldwide Terrain Tiles; NASA's on
+   * the Moon and Mars: LOLA, MOLA), one of the Earth's models by name (`'ign'`: France, RGE ALTI), or its options
+   * (default false; on another body, its `url` is required). Network layers are draped on it */
+  terrain?: boolean | TerrainModel | TerrainOptions;
   minZoom?: number;
   maxZoom?: number;
   /** Highest pitch, degrees, up to 85 (default 70) */
@@ -96,8 +129,8 @@ export interface GeoMapOptions extends Partial<Camera> {
   tiles3d?: boolean;
   /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
   basemapWorkerUrl?: string | URL;
-  /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default the
-   * Géoplateforme's fonts) */
+  /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default
+   * OpenFreeMap's fonts, Noto Sans). A vector basemap's labels take the glyphs of its style */
   glyphs?: string;
   /** Workers decoding 3D Tiles off the main thread: a count, or false to decode on the main thread (default: cores - 1,
    * 1 to 4) */
@@ -108,25 +141,30 @@ export interface GeoMapOptions extends Partial<Camera> {
    * builds on gstatic.com and jsDelivr; self-host them for offline or locked-down networks). They run through
    * `new Function`: a Content Security Policy needs `'unsafe-eval'` (see `DecoderUrls`) */
   decoders?: Partial<DecoderUrls>;
-  /** Credits at the bottom right: false for none, or its options (default true: the Géoplateforme credits, compact
-   * on maps narrower than 640 px) */
+  /** Credits at the bottom right: false for none, or its options (default true: the credits of the basemap,
+   * hillshade and relief in use, compact on maps narrower than 640 px) */
   attributionControl?: boolean | AttributionOptions;
 }
 
 export interface TerrainOptions {
-  /** Raw altitudes, 256 × 256 `image/x-bil;bits=32`: a WMS GetMap URL with {bbox} (EPSG:3857 on the Earth, the
-   * body's Mercator metres elsewhere: the sphere of its radius), a tile URL with {z}, {x} and {y}, or an ArcGIS image
-   * service (a URL ending in `/ImageServer`), asked for raw altitudes in the body's Mercator (default: the Géoplateforme
-   * WMS, ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES; on the Moon and Mars, NASA's Trek LOLA and MOLA models). Altitudes
-   * over mainland France (NGF-IGN69) are raised by the RAF20 geoid height to meet the ellipsoidal heights of 3D Tiles */
+  /** One of the Earth's named models (default `'terrain-tiles'` on the Earth); unused with a `url` */
+  model?: TerrainModel;
+  /** Altitudes of 256 × 256 tiles in `encoding`: a WMS GetMap URL with {bbox} (EPSG:3857 on the Earth, the body's
+   * Mercator metres elsewhere: the sphere of its radius), a tile URL with {z}, {x} and {y}, or an ArcGIS image service
+   * (a URL ending in `/ImageServer`), asked for raw altitudes in the body's Mercator (default: the `model`'s; on the
+   * Moon and Mars, NASA's Trek LOLA and MOLA models) */
   url?: string;
+  /** How the tiles of `url` encode their altitudes (default `'float32'`); `'terrarium'` and `'mapbox'` take a URL with
+   * {z}, {x} and {y} */
+  encoding?: TerrainEncoding;
   /** Vertical exaggeration, 1 for the true relief (default 1) */
   exaggeration?: number;
-  /** Finest level of the relief, up to 15 (default 15; 8 for the Moon's and Mars's models). It starts at level 6 on
-   * the Earth, coarser on bodies of a larger relief for their size (2 on the Moon, 3 on Mars) */
+  /** Finest level of the relief, up to 15 (default 15; 14 for the Terrain Tiles, 8 for the Moon's and Mars's models). It
+   * starts at level 6 on the Earth, coarser on bodies of a larger relief for their size (3 on the Moon and Mars) */
   maxZoom?: number;
-  /** Altitudes raised by the RAF20 geoid height, to heights above the ellipsoid (those of 3D Tiles); false keeps the
-   * altitudes as served (NGF-IGN69 over France) (default true on the Earth, false elsewhere) */
+  /** Altitudes over mainland France raised by the height of the RAF20 geoid (the French one, 0 away from France), to
+   * heights above the ellipsoid (those of 3D Tiles); false keeps the altitudes as served (NGF-IGN69 for the IGN's)
+   * (default true for the `'ign'` model, false otherwise) */
   geoid?: boolean;
 }
 
@@ -184,6 +222,8 @@ export interface RasterOptions {
   /** Draws each tile instead of fetching `url`: an image of `size` × `size`, null for nothing there; a rejection is
    * retried like a network error */
   loader?: (z: number, x: number, y: number, signal: AbortSignal) => Promise<ImageBitmap | null>;
+  /** Credits of the tiles, HTML: shown by the attribution control while the layer is on the map */
+  attribution?: string;
 }
 
 export interface NetworkStyle {

@@ -6,11 +6,11 @@ the globe's horizon. The wheel zooms the map over them.
 ## Markers
 
 ```ts
-import { Marker, Popup } from '@ign-junn/isard';
+import { Marker, Popup } from 'isard';
 
 const marker = new Marker({ draggable: true, anchor: 'bottom' })
   .setLonLat([2.4246, 48.8457])
-  .setPopup(new Popup().setHTML('<b>IGN</b>'))
+  .setPopup(new Popup().setHTML('<b>Here</b>'))
   .addTo(map);
 marker.on('drag', ({ lonLat }) => console.log(lonLat));
 ```
@@ -30,14 +30,14 @@ new Popup({ closeButton: true, closeOnClick: true, maxWidth: '280px', anchor: 'b
 ## Controls
 
 ```ts
-import { NavigationControl } from '@ign-junn/isard';
+import { NavigationControl } from 'isard';
 
 map.addControl(new NavigationControl({ visualizePitch: true }), 'bottom-right');
 ```
 
 A control is any object with `onAdd(map)` returning an element and `onRemove(map)`. Controls stack from their corner
-inward; the attribution is added by the map (`attributionControl: false` to remove it, or `{ compact,
-customAttribution }`).
+inward; the attribution is added by the map, with the credits of the basemap, hillshade and relief in use
+(`attributionControl: false` to remove it, or `{ compact, customAttribution }`).
 
 ```ts
 class TiltButton {

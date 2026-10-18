@@ -11,9 +11,9 @@ declarations.
 | `body` | `'earth'` | `'moon'`, `'mars'`, or `{ radius, flattening, atmosphere, color, relief }` ([other bodies](./guide/basemaps#the-moon-mars-and-other-bodies)) |
 | `center`, `zoom`, `pitch`, `bearing` | Saint-Mandé, 13, 0, 0 | the camera, MapLibre's conventions |
 | `projection` | `'globe'` | or `'mercator'` |
-| `basemap` | `'plan-grey'` | `'plan'`, `'plan-grey-vector'`, `'plan-vector'`, `'ortho'`, `'none'` |
-| `hillshade` | 0.4 | opacity of the IGN hillshade, 0 for none |
-| `terrain` | off | `true` (the IGN's model; NASA's on the Moon and Mars) or `{ url, exaggeration, maxZoom, geoid }` ([relief](./guide/basemaps#relief)) |
+| `basemap` | `'osm-positron'` | `'osm-liberty'`, `'osm-bright'`, `'ign-plan-grey'`, `'ign-plan'`, `'ign-plan-grey-vector'`, `'ign-plan-vector'`, `'ign-ortho'`, `'none'` ([basemaps](./guide/basemaps)) |
+| `hillshade` | 0 | opacity of the IGN hillshade (France), 0 for none |
+| `terrain` | off | `true` (the worldwide Terrain Tiles; NASA's on the Moon and Mars), `'ign'` (France) or `{ model, url, encoding, exaggeration, maxZoom, geoid }` ([relief](./guide/basemaps#relief)) |
 | `atmosphere` | none | sky and ground fog: `{ skyColor, horizonColor, fogColor, skyHorizonBlend, horizonFogBlend, fogGroundBlend }` |
 | `sky` | true | stars and halo around the globe |
 | `background` | `#f2f2f0` | behind the map |
@@ -22,11 +22,11 @@ declarations.
 | `interactive` | true | mouse, touch and keyboard controls |
 | `keyboard` | true | arrows, `+`, `-`, `0` once the map has the focus ([keys](./guide/events#keyboard)) |
 | `ariaLabel` | `'Map'` | accessible name of the map |
-| `attributionControl` | true | `false`, or `{ compact, customAttribution }` |
+| `attributionControl` | true | the credits of the data shown; `false`, or `{ compact, customAttribution }` |
 | `coreWasmUrl`, `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start |
 | `tiles3d` | false | load the engine with 3D Tiles from the start (else with the first 3D Tiles layer) |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread |
-| `decoders`, `glyphs` | official builds, Géoplateforme fonts | to self-host them |
+| `decoders`, `glyphs` | official builds, OpenFreeMap's fonts | to self-host them |
 
 ## Camera
 
@@ -45,7 +45,7 @@ declarations.
 | Method | |
 |---|---|
 | `setBasemap(basemap, hillshade)` | under the other layers |
-| `setTerrain(terrain)` | `true`, `false` or its options |
+| `setTerrain(terrain)` | `true`, `'ign'`, `false` or its options |
 | `setAtmosphere(options)` | undefined to remove it |
 | `vectorTiles({ style, workers })` (the map's workers, shared) | `.raster({ layers, extraLayers, size, opacity, before })`, `.labels({ layers })` |
 
@@ -60,7 +60,7 @@ declarations.
 | `addExtrusions(options)` | `ExtrusionLayer` | `setData`, `setTile`, `removeTile`, `setValues`, `linkNetwork`, `setAnchors` |
 | `addNetwork(options)` | `NetworkLayer` | `setValues`, `setCosts`, `setEdgeWidths`, `setStyle`, `stats` |
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
-| `addRaster(options)` | `RasterLayer` | `setStyle(opacity, saturation)` |
+| `addRaster(options)` | `RasterLayer` | `setStyle(opacity, saturation)`; `attribution` credits it while shown; `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
 | `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
 
 Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`. Every `add…` takes `before`.
