@@ -89,6 +89,8 @@ export {
   type PopupEvents,
   type PopupOptions,
 } from './overlay.ts';
+export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from './pointclouds.ts';
+export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './pointclouds.ts';
 export type { Overlap, SymbolOptions, SymbolStyle } from './symbols.ts';
 export { SymbolLayer } from './symbols.ts';
 export { parseTopoJson, type TopoGeometry, type Topology } from './topojson.ts';
@@ -132,5 +134,15 @@ export type {
 } from './vectorstyle.ts';
 export type { VectorTilesOptions } from './vectortiles.ts';
 export { OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
-export type { Camera, NetworkStats, PickHit, PickResult, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';
+export type {
+  Camera,
+  NetworkStats,
+  PickHit,
+  PickResult,
+  PointCloudInfo,
+  PointCloudPoint,
+  PointCloudStats,
+  RasterLayerStats,
+  Tiles3dStats,
+} from './wasm/isard.js';
 export { parseWmtsGrid, wmtsGrid } from './wmts.ts';

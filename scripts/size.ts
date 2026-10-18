@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** Budgets: gzipped KB (1024 bytes, gzip level 9), set on 2026-10-17 */
+/** Budgets: gzipped KB (1024 bytes, gzip level 9), set on 2026-10-17, the point clouds on 2026-10-19 */
 const BUDGETS = {
   /** The engine maps load first, without 3D Tiles */
   // 225 until the icons of the symbol layers (their atlas, their quads beside the glyphs, the placement of a text and
@@ -19,8 +19,14 @@ const BUDGETS = {
   'isard_core_bg.wasm': 230,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
-  // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB
-  'isard_bg.wasm': 356,
+  // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB; 356 until
+  // the point clouds, about 40 KB: the 3D Tiles points (pnts, glTF points, their program, about 12 KB) and the COPC
+  // layer (its head, hierarchy pages, octree traversal within a point budget, the grids positioning its points, its
+  // requests to the workers held to a rate, Eye-Dome Lighting, picking, about 28 KB); its LAZ decoder is the point
+  // cloud module below, not in the engines (the core engine does not change)
+  'isard_bg.wasm': 404,
+  /** The point cloud module (the LAZ decoder of COPC), loaded by the decoding workers with the first point cloud */
+  'isard_points_bg.wasm': 46,
   /** The package's modules (dist/*.js but the workers), all together */
   // 61 until the equirectangular grid (the Moon), about 2 KB; 64 until the OpenFreeMap basemaps, the Terrarium decoding
   // of the worldwide relief, the credits by source, the glyphs of a style and the Géoplateforme helpers, about 5.5 KB;
@@ -33,11 +39,14 @@ const BUDGETS = {
   // and TopoJSON, about 8.5 KB, each a module of its own, in a bundle only when imported; 97 until the icons of the
   // symbol layers (the sprites, the icon atlas, the layout of an icon and its fit to the text, the icons of the
   // labels), about 7 KB here (3.3 KB minified in a bundle)
-  modules: 104,
+  // 104 until the point clouds (their handle, the CRS of a WKT, the palette of the classes), about 1.7 KB
+  modules: 111,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   // 38 until the icon atlas, about 0.2 KB
-  bindings: 39,
-  'decoder.worker.js': 13,
+  // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB
+  bindings: 44,
+  // 13 until the COPC chunks (their range requests, the point cloud module's bindings), about 1.4 KB
+  'decoder.worker.js': 15,
   // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes; 9.2 until
   // the PNG relief decoded and the equirectangular rasters reprojected in the workers, about 1.3 KB; 11 until the icons
   // of the labels (their properties, icons alone along lines, the layers past the source's deepest level), 0.7 KB
@@ -64,8 +73,9 @@ export function checkSizes(): boolean {
   const groups: Record<keyof typeof BUDGETS, string[]> = {
     'isard_core_bg.wasm': ['isard_core_bg.wasm'],
     'isard_bg.wasm': ['isard_bg.wasm'],
+    'isard_points_bg.wasm': ['isard_points_bg.wasm'],
     modules,
-    bindings: ['wasm/isard_core.js', 'wasm/isard.js'],
+    bindings: ['wasm/isard_core.js', 'wasm/isard.js', 'wasm/isard_points.js'],
     'decoder.worker.js': ['decoder.worker.js'],
     'basemap.worker.js': ['basemap.worker.js'],
   };

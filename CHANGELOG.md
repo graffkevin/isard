@@ -3,6 +3,39 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [0.5.0] - 2026-10-19
+
+### Added
+
+- Entry points by theme: `isard/formats` (KML, GPX, TopoJSON), `isard/projections` (CRSs, reprojection, WMTS grids)
+  and `isard/geoplateforme` (the IGN's WMTS, WMS, WFS, the Lambert-93 grid); `isard` still exports all of them.
+- Point clouds, `map.addPointCloud({ url })` → `PointCloudLayer` (`setStyle`, `stats`, `info`, `remove`): COPC files
+  (LAZ 1.4 point formats 6 to 8 with their octree, read by HTTP range requests: the IGN's LiDAR HD), and 3D Tiles
+  point clouds (`format: '3dtiles'`, the default for a `.json` URL). The octree traversed by screen-space error within
+  a point budget (`pointBudget`, 3 million), the nearest, coarsest and most central nodes first, their downloads
+  aborted once out of the selection, a GPU memory budget; colored by RGB, class (the ASPRS and LiDAR HD palette,
+  `classifications` to recolor or hide classes), altitude (a ramp) or intensity; points of a fixed size or sized by
+  the spacing of their level, round or square; Eye-Dome Lighting (`edl`); depth shared with the relief, the buildings
+  and the 3D Tiles; `pickFeature` gives a point with its class, intensity, altitude, returns and color, read back from
+  the GPU.
+- COPC positions reprojected as they are decoded, in the workers: the CRS from the file's WKT (built-in CRSs, or
+  `registerCrs`) or `crs` (any proj4 CRS), computed exactly on a grid of each node and interpolated within a
+  millimetre; NGF-IGN69 altitudes (Lambert-93, the CC zones; `geoid`) raised by the RAF20 geoid height onto the
+  ellipsoid of the relief; `verticalScale` (the WKT's vertical unit by default).
+- The point cloud module, `isard_points_bg.wasm` (43 KB gzipped, the LAZ decoder of the `laz` crate): loaded by the
+  decoding workers with the first COPC chunk, the engines do not hold it (`pointsWasmUrl` when a bundler moves it).
+- Requests held to a rate (`requestsPerSecond`, 8 a second for the Géoplateforme), answers `429` asked again after a
+  pause.
+- 3D Tiles: `.pnts` tiles (positions plain or quantized, RGB, RGBA, RGB565, constant colors, normals plain or
+  oct-encoded, `3DTILES_draco_point_compression`) and glTF points (mode 0, meshopt, quantization, Draco), lit by their
+  normals; `pointSize` in the style of a 3D Tiles layer.
+- The point clouds example: Notre-Dame de Paris in the IGN's LiDAR HD; the Géoplateforme guide on LiDAR HD.
+
+### Changed
+
+- The engine with 3D Tiles is 385 KB gzipped (was 345 KB): the point clouds (their program, the COPC layer, the pnts
+  and glTF points); the engine without 3D Tiles does not change.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

@@ -48,7 +48,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/isard/src/index.ts"],
+      "includes": ["packages/isard/src/index.ts", "packages/isard/src/formats.ts", "packages/isard/src/projections.ts"],
       "linter": {
         "rules": {
           "performance": {

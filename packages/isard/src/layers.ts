@@ -254,7 +254,7 @@ export class Tiles3dLayer extends Layer {
     this.style = { ...this.style, ...style };
     // Kept for its creation while the engine with 3D Tiles loads
     if (this.id < 0) return;
-    this.map.engine.setTiles3dStyle(this.id, this.style.maxScreenSpaceError, this.style.opacity);
+    this.map.engine.setTiles3dStyle(this.id, this.style.maxScreenSpaceError, this.style.opacity, this.style.pointSize);
     this.map.requestRender();
   }
 
@@ -272,7 +272,7 @@ export class Tiles3dLayer extends Layer {
   /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError);
-    engine.setTiles3dStyle(id, this.style.maxScreenSpaceError, this.style.opacity);
+    engine.setTiles3dStyle(id, this.style.maxScreenSpaceError, this.style.opacity, this.style.pointSize);
     return id;
   }
 }

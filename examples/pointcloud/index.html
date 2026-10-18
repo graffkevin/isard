@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Point clouds · Isard</title>
+    <link rel="stylesheet" href="../shared/page.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="panel">
+      <h1>Point clouds</h1>
+      <p>Notre-Dame de Paris and the Île de la Cité in the IGN's LiDAR HD (Licence Ouverte), read from its COPC file by range requests, over the IGN relief. Hover a point.</p><p><button type="button" id="classification" class="on">classes</button> <button type="button" id="elevation">altitude</button> <button type="button" id="intensity">intensity</button> <label><input id="edl" type="checkbox" checked /> EDL</label></p><p><output id="stats">…</output></p><p id="info">&nbsp;</p>
+    </div>
+    <script type="module" src="../dist/pointcloud/main.js"></script>
+  </body>
+</html>

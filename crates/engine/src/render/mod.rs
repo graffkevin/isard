@@ -14,6 +14,8 @@ pub(crate) mod lines;
 pub(crate) mod models;
 pub(crate) mod network;
 pub(crate) mod overlay;
+#[cfg(feature = "tiles3d")]
+pub(crate) mod points;
 pub(crate) mod raster;
 pub(crate) mod sky;
 pub(crate) mod symbols;

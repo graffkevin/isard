@@ -24,7 +24,7 @@ are taken as one datum: they differ by less than a metre in Europe. CRSs on the 
 Lambert II étendu) need a datum shift of up to a hundred metres: plug them with proj4 (below).
 
 ```ts
-import { getCrs, lambertConformalConic, transverseMercator } from 'isard';
+import { getCrs, lambertConformalConic, transverseMercator } from 'isard/projections';
 
 getCrs('EPSG:2154').forward([2.3461, 48.8462]); // [652011.88, 6860882.57]: the Panthéon in Lambert-93
 getCrs('EPSG:32631').inverse([452025.15, 5410564.93]); // [2.3461, 48.8462]
@@ -40,7 +40,7 @@ A CRS is any object with `forward([lon, lat])` and `inverse([x, y])`: a converte
 
 ```ts
 import proj4 from 'proj4';
-import { registerCrs } from 'isard';
+import { registerCrs } from 'isard/projections';
 
 proj4.defs('EPSG:27572', '+proj=lcc +lat_1=46.8 +lat_0=46.8 +lon_0=0 +k_0=0.99987742 +x_0=600000 +y_0=2200000 ' +
   '+a=6378249.2 +b=6356515 +towgs84=-168,-60,320,0,0,0,0 +pm=paris +units=m +no_defs');
@@ -78,7 +78,7 @@ and a source tile edge falling on a tile edge fetches nothing more.
 ### From WMTS capabilities
 
 ```ts
-import { wmtsGrid } from 'isard';
+import { wmtsGrid } from 'isard/projections';
 
 const grid = await wmtsGrid('https://…/wmts?SERVICE=WMTS&REQUEST=GetCapabilities', 'LAYER', 'MATRIXSET');
 map.addRaster({ url: 'https://…/wmts?…&LAYER=LAYER&TILEMATRIXSET=MATRIXSET&TILEMATRIX={z}&TILECOL={x}&TILEROW={y}', grid });

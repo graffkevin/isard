@@ -1,4 +1,5 @@
-//! 3D Tiles layer: loads a tileset (b3dm / glb meshes, external tilesets) and draws its textured meshes.
+//! 3D Tiles layer: loads a tileset (b3dm / glb meshes, pnts and glTF points, external tilesets) and draws its
+//! textured meshes and its points (`render::points`).
 //!
 //! The tree and its traversal live in `tiles3d::tileset`, the decoding in `tiles3d::decode`; this module fetches, uploads and draws.
 //! Tiles are fetched and decoded asynchronously (images by the browser, off the main thread), uploaded a few per
@@ -14,12 +15,13 @@
 
 pub(crate) mod fetch;
 pub(crate) mod gpu;
-mod state;
+pub(crate) mod state;
 
 use crate::engine::Engine;
 use crate::js;
 use crate::layer::{Frame, Layer, Loading as Profile};
 use crate::render::gl;
+use crate::render::points::{ColorBy, Draw, Look, PointProgram};
 use fetch::{close, decode_images, fetch_bytes, get_array, js_get, load_in_worker};
 use geo::camera::View;
 use glow::HasContext;
@@ -126,6 +128,10 @@ pub struct Tiles3dLayer {
     uniforms: [Option<glow::UniformLocation>; 4],
     pub max_error: f64,
     pub opacity: f32,
+    /// Size of the points (CSS pixels)
+    pub point_size: f64,
+    /// The program of the points, made with the first tile holding some
+    points: Option<PointProgram>,
     /// GPU memory budget for the meshes (bytes)
     pub budget: usize,
     pub stats: Tiles3dStats,
@@ -161,6 +167,8 @@ impl Tiles3dLayer {
             uniforms,
             max_error,
             opacity: 1.0,
+            point_size: 2.0,
+            points: None,
             budget: 512 << 20,
             stats: Tiles3dStats::default(),
             stale: Vec::new(),
@@ -274,6 +282,12 @@ impl Tiles3dLayer {
             };
             match uploaded {
                 Ok(gpu) => {
+                    if !gpu.points.is_empty() && self.points.is_none() {
+                        match PointProgram::new(gl) {
+                            Ok(program) => self.points = Some(program),
+                            Err(e) => web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles points: {e}"))),
+                        }
+                    }
                     self.states.replace(tile, State::Ready(gpu));
                 }
                 Err(e) => {
@@ -405,7 +419,7 @@ impl Tiles3dLayer {
         gl: &glow::Context,
         raw: &web_sys::WebGl2RenderingContext,
         view: &View,
-        frame: u64,
+        (frame, pixel_ratio): (u64, f64),
         loading: Profile,
     ) -> bool {
         self.receive(gl, raw, frame, loading.upload_budget_ms);
@@ -454,6 +468,7 @@ impl Tiles3dLayer {
         self.states.touch(&selection.backfill, frame);
         self.evict(gl, frame);
         self.render(gl, view, &selection.draw, &selection.backfill);
+        self.render_points(gl, view, pixel_ratio, &selection.draw, &selection.backfill);
         let prefetching = selection
             .prefetch
             .iter()
@@ -531,9 +546,59 @@ impl Tiles3dLayer {
     }
 }
 
+impl Tiles3dLayer {
+    /// Draws the points of the tiles drawn (and of their stand-ins): their colors, lit by their normals, at
+    /// `point_size`
+    fn render_points(&self, gl: &glow::Context, view: &View, pixel_ratio: f64, tiles: &[usize], backfill: &[usize]) {
+        let Some(program) = &self.points else {
+            return;
+        };
+        let draws: Vec<Draw> = tiles
+            .iter()
+            .chain(backfill)
+            .filter_map(|&i| match self.states.get(i) {
+                Some(State::Ready(mesh)) => Some(mesh),
+                _ => None,
+            })
+            .flat_map(|mesh| {
+                let g = geo::geodesy::from_ecef(mesh.anchor);
+                let up = geo::geodesy::enu(g.x, g.y)[2];
+                let matrix = view.view_proj * view.ecef_matrix(mesh.anchor);
+                mesh.points.iter().map(move |points| Draw {
+                    points,
+                    matrix,
+                    up,
+                    base: g.z,
+                    spacing: 0.0,
+                })
+            })
+            .collect();
+        if draws.is_empty() {
+            return;
+        }
+        let look = Look {
+            color_by: ColorBy::Rgb,
+            size: self.point_size,
+            max_size: self.point_size,
+            adaptive: false,
+            round: true,
+            range: [0.0, 1.0],
+            classes: false,
+            lit: true,
+        };
+        program.draw(gl, pixel_ratio, &look, &draws, None);
+    }
+}
+
 impl Layer for Tiles3dLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
-        self.draw_tiles(frame.gl, frame.raw, frame.view, frame.number, frame.loading)
+        self.draw_tiles(
+            frame.gl,
+            frame.raw,
+            frame.view,
+            (frame.number, frame.pixel_ratio),
+            frame.loading,
+        )
     }
 
     fn delete(&mut self, gl: &glow::Context) {
@@ -546,6 +611,9 @@ impl Layer for Tiles3dLayer {
         }
         for (_, arrival) in self.queue.drain(..) {
             discard(arrival);
+        }
+        if let Some(points) = &self.points {
+            points.delete(gl);
         }
         // SAFETY: the program is owned by this layer, not used afterwards
         unsafe { gl.delete_program(self.program) };
@@ -634,12 +702,16 @@ impl Engine {
         Ok(self.add_layer(Box::new(layer)))
     }
 
-    /// Screen-space error threshold and opacity of a 3D Tiles layer
+    /// Screen-space error threshold, opacity and size of the points (CSS pixels, 2 if not given) of a 3D Tiles layer
     #[wasm_bindgen(js_name = setTiles3dStyle)]
-    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32) {
+    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32, point_size: Option<f64>) {
         if let Some((layer, _)) = self.layer_mut::<Tiles3dLayer>(id) {
             layer.max_error = max_error;
             layer.opacity = opacity;
+            layer.point_size = point_size
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .unwrap_or(2.0)
+                .min(64.0);
         }
     }
 

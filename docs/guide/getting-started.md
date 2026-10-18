@@ -9,8 +9,9 @@ npm install isard
 ```
 
 The package is ES modules with their types (your bundler keeps what you use), the engine in two builds
-(`isard_core_bg.wasm`, 225 KB gzipped, and `isard_bg.wasm`, 345 KB with 3D Tiles) and two workers:
-`decoder.worker.js` decodes 3D Tiles, `basemap.worker.js` draws vector basemaps. It needs WebGL2, and runs in every
+(`isard_core_bg.wasm`, 225 KB gzipped, and `isard_bg.wasm`, 385 KB with 3D Tiles and point clouds), the point cloud
+module (`isard_points_bg.wasm`, 43 KB, the LAZ decoder, loaded with the first COPC point cloud) and two workers:
+`decoder.worker.js` decodes 3D Tiles and point clouds, `basemap.worker.js` draws vector basemaps. It needs WebGL2, and runs in every
 current browser.
 
 ## A first map
@@ -56,8 +57,15 @@ import basemapWorkerUrl from 'isard/basemap.worker.js?url';
 import decoderWorkerUrl from 'isard/decoder.worker.js?url';
 import wasmUrl from 'isard/isard_bg.wasm?url';
 import coreWasmUrl from 'isard/isard_core_bg.wasm?url';
+import pointsWasmUrl from 'isard/isard_points_bg.wasm?url';
 
-const map = await GeoMap.create(container, { coreWasmUrl, wasmUrl, workerUrl: decoderWorkerUrl, basemapWorkerUrl });
+const map = await GeoMap.create(container, {
+  coreWasmUrl,
+  wasmUrl,
+  pointsWasmUrl,
+  workerUrl: decoderWorkerUrl,
+  basemapWorkerUrl,
+});
 ```
 
 Given `wasmUrl` without `coreWasmUrl`, the map loads the full engine from the start.

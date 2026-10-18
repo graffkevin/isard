@@ -23,8 +23,8 @@ declarations.
 | `keyboard` | true | arrows, `+`, `-`, `0` once the map has the focus ([keys](./guide/events#keyboard)) |
 | `ariaLabel` | `'Map'` | accessible name of the map |
 | `attributionControl` | true | the credits of the data shown; `false`, or `{ compact, customAttribution }` |
-| `coreWasmUrl`, `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start |
-| `tiles3d` | false | `true`: the engine with 3D Tiles from the start (else loaded with the first 3D Tiles layer or model, a short stall); `'preload'`: downloaded and compiled once the map is idle ([3D Tiles](./layers/tiles3d#the-engine-with-3d-tiles)) |
+| `coreWasmUrl`, `wasmUrl`, `pointsWasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start; `pointsWasmUrl`: the point cloud module of the workers |
+| `tiles3d` | false | `true`: the engine with 3D Tiles from the start (else loaded with the first 3D Tiles layer, model or point cloud, a short stall); `'preload'`: downloaded and compiled once the map is idle ([3D Tiles](./layers/tiles3d#the-engine-with-3d-tiles)) |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread (the PNG relief and the reprojected rasters too) |
 | `basemapTileSize` | 512 | texture size of the vector basemap's tiles; 256: a quarter of the work and memory, lines a little softer |
 | `decoders`, `glyphs` | official builds, OpenFreeMap's fonts | to self-host them |
@@ -66,6 +66,7 @@ styles the basemaps use, for `vectorTiles({ style })`.
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
 | `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, `'equirectangular'`, or a `TileGrid` in another CRS: tile matrices or a WMS's `{bbox}`, reprojected by the map's workers, see [projections](./guide/projections)), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
 | `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
+| `addPointCloud({ url, format, colorBy, pointSize, pointBudget, edl, classifications, crs })` | `PointCloudLayer` | `setStyle`, `stats`, `info`; a COPC file (range requests) or 3D Tiles points, points picked with their attributes ([point clouds](./layers/pointclouds)) |
 | `addModels({ url \| data, instances, altitudeReference })` | `ModelLayer` | `setInstances`; instances `{ lonLat, altitude, heading, pitch, roll, scale }`, picked by index ([models](./layers/models)) |
 | `addCustomLayer({ renderingMode, onAdd, render, onRemove }, { before })` | `CustomLayer` | your WebGL drawing in every frame, `frame.matrixAt(lonLat, altitude)` its matrices ([custom layers](./layers/custom)) |
 
@@ -91,6 +92,14 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 | `getContainer()`, `getCanvas()`, `destroy()` | |
 
 ## Data and helpers
+
+Grouped by theme in entry points of their own (each also exported by `isard` itself, as before):
+
+| Import | |
+|---|---|
+| `isard/formats` | `parseKml`, `parseGpx`, `parseTopoJson` |
+| `isard/projections` | `getCrs`, `registerCrs`, `lambertConformalConic`, `transverseMercator`, `reproject`, `wmtsGrid`, `parseWmtsGrid`, the `Crs` and `TileGrid` types |
+| `isard/geoplateforme` | `geoplateformeWmts`, `geoplateformeWms`, `geoplateformeWfs`, `lambert93Grid`, `IGN_ATTRIBUTION` |
 
 | | |
 |---|---|

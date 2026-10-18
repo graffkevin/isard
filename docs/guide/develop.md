@@ -9,7 +9,9 @@ Rust, `biome.json` (format and lint) and `tsconfig.base.json` for TypeScript.
 ```
 crates/geo/        camera and projections, geodesy (WGS 84, Moon, Mars), RAF20 geoid, tile selection, label placement,
                    polygons
-crates/tiles3d/    3D Tiles tree, traversal and decoding (meshopt, quantization, b3dm, glb)
+crates/tiles3d/    3D Tiles tree, traversal and decoding (meshopt, quantization, b3dm, pnts, glb)
+crates/pointcloud/ point clouds: COPC (LAS header, octree hierarchy, LAZ chunks), the octree traversal; the LAZ
+                   decoder is built apart, the point cloud module of the workers
 crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking; built twice, with and
                    without the 3D Tiles (its `tiles3d` feature)
 packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
@@ -19,8 +21,8 @@ docs/              this site (VitePress)
 scripts/           build (and its size budget), dev server, release
 ```
 
-`crates/geo` and `crates/tiles3d` have no WebGL and no I/O; `crates/engine` keeps its WebGL and browser calls apart
-from its logic (raster cache, 3D Tiles state, styles, placement): all three are tested natively. The package's pure
+`crates/geo`, `crates/tiles3d` and `crates/pointcloud` have no WebGL and no I/O; `crates/engine` keeps its WebGL and
+browser calls apart from its logic (raster cache, 3D Tiles state, styles, placement): all four are tested natively. The package's pure
 modules (MVT, style expressions, colors, glyphs) are tested by `bun test`.
 
 ## Commands
@@ -43,14 +45,14 @@ bun run docs:check   # the API reference: every type a public signature uses is 
 The checks run on every push and pull request; the site is deployed once they pass on `main`.
 
 `bun run build` ends with the sizes of what the package ships, gzipped: the two engines (`isard_core_bg.wasm`
-without 3D Tiles, `isard_bg.wasm` with them), the package's modules, the engines' bindings and the workers. Each has a
+without 3D Tiles, `isard_bg.wasm` with them), the point cloud module (`isard_points_bg.wasm`), the package's modules, the engines' bindings and the workers. Each has a
 budget about 5 % above its size when it was set, in `scripts/size.ts`: over one, the build fails, and so do the
 checks. A growth is then raised there deliberately, in the commit that makes the code bigger (`bun scripts/size.ts`
 checks the last build again).
 
 ## Release
 
-Raising the version is the release: set it in `packages/isard/package.json` and in the three `crates/*/Cargo.toml`,
+Raising the version is the release: set it in `packages/isard/package.json` and in the four `crates/*/Cargo.toml`,
 describe it in `CHANGELOG.md`, check it, then push it to `main`.
 
 ```sh

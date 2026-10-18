@@ -47,6 +47,7 @@ import {
 } from './layers.ts';
 import type { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
+import { PointCloudLayer, type PointCloudOptions } from './pointclouds.ts';
 import {
   atmosphereSettings,
   bodySettings,
@@ -174,7 +175,10 @@ export class GeoMap {
   /** The engine with 3D Tiles is loading, for the 3D Tiles layers added on the core engine */
   private upgrading: Promise<void> | undefined;
   /** What loading the engine with 3D Tiles and its workers needs */
-  private readonly tiles3dOptions: Pick<GeoMapOptions, 'wasmUrl' | 'workers' | 'workerUrl' | 'decoders'>;
+  private readonly tiles3dOptions: Pick<
+    GeoMapOptions,
+    'wasmUrl' | 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl'
+  >;
   private gone = false;
   /** The map is of the Earth: a basemap by default */
   private readonly earth: boolean;
@@ -984,8 +988,18 @@ export class GeoMap {
 
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */
   addTiles3d(options: Tiles3dOptions): Tiles3dLayer {
-    const { url, maxScreenSpaceError = 16, opacity = 1 } = options;
-    return this.add(new Tiles3dLayer(this, url, { maxScreenSpaceError, opacity }));
+    const { url, maxScreenSpaceError = 16, opacity = 1, pointSize } = options;
+    return this.add(
+      new Tiles3dLayer(this, url, { maxScreenSpaceError, opacity, ...(pointSize !== undefined ? { pointSize } : {}) }),
+    );
+  }
+
+  /**
+   * A point cloud (see `PointCloudOptions`): a COPC file read by range requests (IGN's LiDAR HD…), or 3D Tiles
+   * points; with depth, on the engine with 3D Tiles; under `before` if given
+   */
+  addPointCloud(options: PointCloudOptions & { before?: Layer }): PointCloudLayer {
+    return this.place(new PointCloudLayer(this, options), options.before);
   }
 
   /** A glTF model drawn at positions (see `ModelOptions`), with depth; on the engine with 3D Tiles, as they are */

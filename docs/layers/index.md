@@ -10,6 +10,7 @@
 | [Rasters](./rasters) | `addRaster` | XYZ / WMTS tiles, or tiles drawn by your code |
 | [3D Tiles](./tiles3d) | `addTiles3d` | photomeshes, city models |
 | [glTF models](./models) | `addModels` | a glTF model at many positions: wind turbines, vehicles, street furniture |
+| [Point clouds](./pointclouds) | `addPointCloud` | LiDAR in COPC (IGN's LiDAR HD), 3D Tiles points |
 | [Custom layers](./custom) | `addCustomLayer` | your WebGL code or a three.js scene, in the map's frame and depth |
 
 Every `add…` returns a handle: `layer.setStyle(…)`, `layer.setVisible(b)`, `layer.moveBefore(other)`,

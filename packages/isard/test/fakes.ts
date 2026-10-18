@@ -93,7 +93,18 @@ export class FakeEngine {
 
 /** The engine without 3D Tiles (`isard_core.js`): the same, without its 3D Tiles methods */
 export class CoreFakeEngine extends FakeEngine {
-  static readonly TILES3D = ['addTiles3d', 'setTiles3dStyle', 'tiles3dStats', 'addModels', 'setModelInstances'];
+  static readonly TILES3D = [
+    'addTiles3d',
+    'setTiles3dStyle',
+    'tiles3dStats',
+    'addModels',
+    'setModelInstances',
+    'addPointCloud',
+    'setPointCloudStyle',
+    'pointCloudStats',
+    'pointCloudInfo',
+    'pointCloudPoint',
+  ];
   constructor(canvas: unknown, onRequest: () => void) {
     super(canvas, onRequest);
     for (const name of CoreFakeEngine.TILES3D) this.hidden.add(name);
@@ -119,6 +130,19 @@ const bindings = (Engine: typeof FakeEngine) => () => ({
 // The full engine, and the one without 3D Tiles (loaded by default): the same fake without the 3D Tiles methods
 mock.module('../src/wasm/isard.js', bindings(FakeEngine));
 mock.module('../src/wasm/isard_core.js', bindings(CoreFakeEngine));
+
+/** The point cloud module of the workers, configurable per test */
+export const pointsWasm = {
+  init: mock(async (_input?: unknown) => ({})),
+  decodeCopc: mock(
+    (_chunk: Uint8Array, _laz: Uint8Array, _layout: Float64Array, _grid: Float64Array, count: number) =>
+      new Uint8Array(count * 20),
+  ),
+};
+mock.module('../src/wasm/isard_points.js', () => ({
+  default: (input?: unknown) => pointsWasm.init(input),
+  decodeCopc: (...args: Parameters<typeof pointsWasm.decodeCopc>) => pointsWasm.decodeCopc(...args),
+}));
 
 // ── DOM ──
 

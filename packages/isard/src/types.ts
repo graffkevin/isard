@@ -124,6 +124,9 @@ export interface GeoMapOptions extends Partial<Camera> {
    * resolve the default URL. Maps load it first, and the engine with 3D Tiles (`wasmUrl`) for their first 3D Tiles
    * layer only */
   coreWasmUrl?: string | URL;
+  /** Where the decoding workers load the point cloud module from (`isard_points_bg.wasm`, the LAZ decoder of COPC),
+   * when a bundler does not resolve the default URL. Loaded with the first point cloud only */
+  pointsWasmUrl?: string | URL;
   /** Load the engine with 3D Tiles from the start (default false: it is loaded when the first 3D Tiles layer or glTF
    * model is added, the map then moving its camera and layers onto it, a stall of about a frame or two). For a map that shows 3D Tiles
    * at once: one engine downloaded instead of two. `'preload'`: the map starts on the engine without 3D Tiles and
@@ -284,10 +287,12 @@ export interface Tiles3dStyle {
   /** Screen-space error (CSS pixels) above which a tile is refined: 16 by default, lower is finer and heavier */
   maxScreenSpaceError: number;
   opacity: number;
+  /** Size of the points of point cloud tiles (`.pnts`, glTF points), CSS pixels: 2 by default */
+  pointSize?: number;
 }
 
 export interface Tiles3dOptions extends Partial<Tiles3dStyle> {
-  /** URL of a `tileset.json` (3D Tiles 1.0 b3dm or 1.1 glb meshes, external tilesets) */
+  /** URL of a `tileset.json` (3D Tiles 1.0 b3dm and pnts, 1.1 glb meshes and points, external tilesets) */
   url: string;
 }
 

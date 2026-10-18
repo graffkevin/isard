@@ -43,6 +43,10 @@ full-screen passes at most.
 ## Other CRSs and formats
 
 ```ts
+import { parseGpx, parseKml, parseTopoJson } from 'isard/formats';
+import { geoplateformeWfs } from 'isard/geoplateforme';
+import { reproject } from 'isard/projections';
+
 map.addFills({ data: await geoplateformeWfs('BDTOPO_V3:batiment', box, { srsName: 'EPSG:2154' }) });
 map.addLines({ data: reproject(data, 'EPSG:32631') });
 map.addLines({ data: parseGpx(await (await fetch('walk.gpx')).text()) });

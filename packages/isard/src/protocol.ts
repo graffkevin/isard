@@ -3,7 +3,14 @@ import type { DecoderUrls } from './decoders.ts';
 import type { DecodedTile, TextureFormats } from './wasm/isard.js';
 
 export type WorkerRequest =
-  | { type: 'init'; module: WebAssembly.Module; decoders: DecoderUrls; formats: TextureFormats }
+  | {
+      type: 'init';
+      module: WebAssembly.Module;
+      decoders: DecoderUrls;
+      formats: TextureFormats;
+      /** URL of the point cloud module (`isard_points_bg.wasm`), loaded with the first COPC chunk */
+      points: string;
+    }
   | {
       type: 'load';
       id: number;
@@ -13,8 +20,21 @@ export type WorkerRequest =
       reload: boolean;
       priority?: 'high' | 'low';
     }
+  | {
+      type: 'points';
+      id: number;
+      url: string;
+      offset: number;
+      size: number;
+      laz: Uint8Array;
+      layout: Float64Array;
+      grid: Float64Array;
+      count: number;
+      priority?: 'high' | 'low';
+    }
   | { type: 'abort'; id: number };
 
 export type WorkerReply =
   | { type: 'tile'; id: number; tile: DecodedTile }
+  | { type: 'points'; id: number; vertices: Uint8Array<ArrayBuffer> }
   | { type: 'error'; id: number; error: string; aborted: boolean };

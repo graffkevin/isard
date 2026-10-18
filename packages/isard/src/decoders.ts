@@ -16,7 +16,8 @@ import type { CompressedTexture, DracoGeometry, DracoRequest, TextureFormats } f
  * to your server and give their folders in `GeoMapOptions.decoders`.
  */
 export interface DecoderUrls {
-  /** Folder of `draco_wasm_wrapper_gltf.js` and `draco_decoder_gltf.wasm` */
+  /** Folder of `draco_wasm_wrapper_gltf.js` and `draco_decoder_gltf.wasm` (and, for Draco point clouds, of the full
+   * decoder `draco_wasm_wrapper.js` and `draco_decoder.wasm`) */
   draco: string;
   /** Folder of `basis_transcoder.js` and `basis_transcoder.wasm` */
   basis: string;
@@ -42,6 +43,7 @@ interface DracoAttribute {
 }
 interface DracoDecoder {
   DecodeArrayToMesh(data: Int8Array, size: number, mesh: DracoMesh): DracoStatus;
+  DecodeArrayToPointCloud(data: Int8Array, size: number, cloud: DracoMesh): DracoStatus;
   GetAttributeByUniqueId(mesh: DracoMesh, id: number): DracoAttribute;
   GetAttributeDataArrayForAllPoints(
     mesh: DracoMesh,
@@ -55,6 +57,7 @@ interface DracoDecoder {
 interface DracoModule {
   Decoder: new () => DracoDecoder;
   Mesh: new () => DracoMesh;
+  PointCloud: new () => DracoMesh;
   DT_FLOAT32: number;
   HEAPF32: Float32Array;
   HEAPU32: Uint32Array;
@@ -108,23 +111,39 @@ async function instantiate<T>(base: string, script: string, wasm: string, name: 
 }
 
 let draco: Promise<DracoModule> | undefined;
+/** The full Draco decoder: the glTF build decodes meshes only, not the point clouds */
+let dracoPoints: Promise<DracoModule> | undefined;
 let basis: Promise<BasisModule> | undefined;
 
-/** Decodes the Draco primitives of a tile */
+/** Decodes the Draco primitives of a tile (their points alone for point clouds) */
 export async function decodeDraco(urls: DecoderUrls, requests: DracoRequest[]): Promise<DracoGeometry[]> {
-  draco ??= instantiate<DracoModule>(
-    urls.draco,
-    'draco_wasm_wrapper_gltf.js',
-    'draco_decoder_gltf.wasm',
-    'DracoDecoderModule',
-  );
-  const module = await draco;
+  const meshes = requests.some((r) => !r.points);
+  if (meshes) {
+    draco ??= instantiate<DracoModule>(
+      urls.draco,
+      'draco_wasm_wrapper_gltf.js',
+      'draco_decoder_gltf.wasm',
+      'DracoDecoderModule',
+    );
+  }
+  if (requests.some((r) => r.points)) {
+    dracoPoints ??= instantiate<DracoModule>(
+      urls.draco,
+      'draco_wasm_wrapper.js',
+      'draco_decoder.wasm',
+      'DracoDecoderModule',
+    );
+  }
+  const [forMeshes, forPoints] = await Promise.all([meshes ? draco : undefined, dracoPoints]);
   return requests.map((request) => {
+    const module = (request.points ? forPoints : forMeshes) as DracoModule;
     const decoder = new module.Decoder();
-    const mesh = new module.Mesh();
+    const mesh = request.points ? new module.PointCloud() : new module.Mesh();
     try {
       const data = new Int8Array(request.data.buffer, request.data.byteOffset, request.data.byteLength);
-      const status = decoder.DecodeArrayToMesh(data, data.byteLength, mesh);
+      const status = request.points
+        ? decoder.DecodeArrayToPointCloud(data, data.byteLength, mesh)
+        : decoder.DecodeArrayToMesh(data, data.byteLength, mesh);
       if (!status.ok()) throw new Error(`Draco: ${status.error_msg()}`);
       const floats = (id: number): Float32Array => {
         const attribute = decoder.GetAttributeByUniqueId(mesh, id);
@@ -137,6 +156,16 @@ export async function decodeDraco(urls: DecoderUrls, requests: DracoRequest[]): 
           module._free(pointer);
         }
       };
+      if (request.points) {
+        const geometry: DracoGeometry = {
+          mesh: request.mesh,
+          primitive: request.primitive,
+          positions: floats(request.position),
+        };
+        if (request.color !== undefined) geometry.colors = floats(request.color);
+        if (request.normal !== undefined) geometry.normals = floats(request.normal);
+        return geometry;
+      }
       const count = mesh.num_faces() * 3;
       const pointer = module._malloc(count * 4);
       let indices: Uint32Array;

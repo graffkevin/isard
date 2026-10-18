@@ -4,7 +4,9 @@
  * grid, to compare); the arrondissements of Paris from its WFS in EPSG:2154 (the collection names its CRS, the layers
  * reproject it); a GPX file: a boat trip down the Seine and its bridges.
  */
-import { GeoMap, geoplateformeWfs, geoplateformeWmts, IGN_ATTRIBUTION, parseGpx, type RasterLayer } from 'isard';
+import { GeoMap, type RasterLayer } from 'isard';
+import { parseGpx } from 'isard/formats';
+import { geoplateformeWfs, geoplateformeWmts, IGN_ATTRIBUTION } from 'isard/geoplateforme';
 import { element } from '../shared/page.ts';
 
 const map = await GeoMap.create(element('map'), {

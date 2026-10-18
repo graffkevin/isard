@@ -88,3 +88,45 @@ pub async fn fetch_bytes(
     let buffer = JsFuture::from(response.array_buffer()?).await?;
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
+
+/// Fetches `length` bytes of a file from `start` (an HTTP range request, as point clouds are read). A server that
+/// ignores the range (200 for more than asked) is an error, its body not read: a whole point cloud is gigabytes
+pub async fn fetch_range(url: &str, start: u64, length: u64, priority: &str) -> Result<Vec<u8>, String> {
+    let error = |e: JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let controller = web_sys::AbortController::new().map_err(error)?;
+    let init = web_sys::RequestInit::new();
+    init.set_signal(Some(&controller.signal()));
+    crate::js::fetch_priority(&init, priority);
+    let headers = web_sys::Headers::new().map_err(error)?;
+    let end = start.saturating_add(length.max(1) - 1);
+    headers.set("Range", &format!("bytes={start}-{end}")).map_err(error)?;
+    init.set_headers(&headers);
+    let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
+        .await
+        .map_err(error)?
+        .dyn_into()
+        .map_err(error)?;
+    if !response.ok() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    if response.status() != 206 {
+        let size = response.headers().get("content-length").ok().flatten();
+        if size.and_then(|s| s.parse::<u64>().ok()).is_none_or(|s| s > length) {
+            controller.abort();
+            return Err("the server ignores range requests (HTTP 206 expected)".into());
+        }
+    }
+    let buffer = JsFuture::from(response.array_buffer().map_err(error)?)
+        .await
+        .map_err(error)?;
+    let bytes = js_sys::Uint8Array::new(&buffer);
+    // A whole small file (200) or the range: its part from `start`
+    let offset = if response.status() == 206 {
+        0
+    } else {
+        start.min(u64::from(bytes.length())) as u32
+    };
+    let end = (u64::from(offset) + length).min(u64::from(bytes.length())) as u32;
+    Ok(bytes.subarray(offset, end).to_vec())
+}

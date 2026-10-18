@@ -13,7 +13,7 @@ pub(super) fn split(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
         _ if bytes.trim_ascii_start().starts_with(b"{") => {
             Err("a JSON document (external tileset?), not a mesh".into())
         }
-        _ => Err("unsupported tile content (b3dm and glb only)".into()),
+        _ => Err("unsupported tile content (b3dm, pnts and glb only)".into()),
     }
 }
 

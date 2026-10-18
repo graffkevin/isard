@@ -4,6 +4,7 @@
 use super::fetch::{get_array, js_get};
 use super::state::Resident;
 use crate::render::gl::{self, Objects, bytes};
+use crate::render::points::{GpuPoints, tile_vertices};
 use glow::HasContext;
 use tiles3d::decode::Mesh;
 use wasm_bindgen::{JsCast, JsValue};
@@ -21,6 +22,8 @@ pub struct GpuPrimitive {
 pub struct GpuMesh {
     pub anchor: glam::DVec3,
     pub primitives: Vec<GpuPrimitive>,
+    /// Its points (`.pnts`, glTF points)
+    pub points: Vec<GpuPoints>,
     /// Its textures, each once however many primitives share it
     textures: Vec<glow::Texture>,
     bytes: usize,
@@ -80,6 +83,7 @@ pub fn upload(
     let mut gpu = GpuMesh {
         anchor: mesh.anchor,
         primitives: Vec::new(),
+        points: Vec::new(),
         textures: Vec::new(),
         bytes: 0,
         used: frame,
@@ -109,6 +113,18 @@ pub fn upload(
         if let Err(e) = upload_primitive(gl, p, texture, &mut gpu) {
             delete_mesh(gl, &gpu);
             return Err(e);
+        }
+    }
+    for p in &mesh.points {
+        match GpuPoints::upload(gl, &tile_vertices(p)) {
+            Ok(points) => {
+                gpu.bytes += points.bytes;
+                gpu.points.push(points);
+            }
+            Err(e) => {
+                delete_mesh(gl, &gpu);
+                return Err(format!("{e:?}"));
+            }
         }
     }
     Ok(gpu)
@@ -169,6 +185,7 @@ pub fn upload_decoded(
     let mut gpu = GpuMesh {
         anchor,
         primitives: Vec::new(),
+        points: Vec::new(),
         textures: Vec::new(),
         bytes: 0,
         used: frame,
@@ -179,6 +196,22 @@ pub fn upload_decoded(
         if let Err(e) = upload_decoded_primitive(gl, raw, &p, &mut gpu, &mut shared) {
             delete_mesh(gl, &gpu);
             return Err(e);
+        }
+    }
+    for vertices in get_array(tile, "points").iter() {
+        let uploaded = vertices
+            .dyn_into::<js_sys::Uint8Array>()
+            .map_err(|_| JsValue::from_str("decoded tile: points of no Uint8Array"))
+            .and_then(|v| GpuPoints::upload_js(gl, raw, &v));
+        match uploaded {
+            Ok(points) => {
+                gpu.bytes += points.bytes;
+                gpu.points.push(points);
+            }
+            Err(e) => {
+                delete_mesh(gl, &gpu);
+                return Err(e);
+            }
         }
     }
     Ok(gpu)
@@ -404,6 +437,9 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
 pub fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
     for p in &mesh.primitives {
         delete_primitive(gl, p);
+    }
+    for p in &mesh.points {
+        p.delete(gl);
     }
     for &t in &mesh.textures {
         // SAFETY: textures owned by the mesh, not used afterwards

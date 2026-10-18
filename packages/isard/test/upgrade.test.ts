@@ -87,7 +87,9 @@ const point: Feature = { type: 'Feature', geometry: { type: 'Point', coordinates
 /** The layers created in an engine, in order */
 const created = (engine: FakeEngine) =>
   engine.calls
-    .filter(([name]) => /^add(Lines|Circles|Fills|Tiles3d|Extrusions|Network|Raster|Models|CustomLayer)$/.test(name))
+    .filter(([name]) =>
+      /^add(Lines|Circles|Fills|Tiles3d|Extrusions|Network|Raster|Models|CustomLayer|PointCloud)$/.test(name),
+    )
     .map(([n]) => n);
 
 describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => {
@@ -419,6 +421,71 @@ describe('models, on the engine with 3D Tiles', () => {
     canvasOf(map).dispatch('webglcontextlost');
     canvasOf(map).dispatch('webglcontextrestored');
     expect(created(engineOf(map))).toEqual(['addModels']);
+  });
+});
+
+describe('point clouds, on the engine with 3D Tiles', () => {
+  test('the first point cloud moves the map onto it; its style set meanwhile is kept', async () => {
+    hold();
+    const map = await create();
+    const below = map.addLines({ data: point });
+    const cloud = map.addPointCloud({ url: 'https://example.org/lidar.copc.laz', pointSize: 3 });
+    expect(cloud.format).toBe('copc');
+    expect(cloud.id).toBe(-1);
+    expect(cloud.stats()).toBeUndefined();
+    cloud.setStyle({ colorBy: 'elevation', edl: true, classifications: { 2: { visible: false } } });
+    release();
+    await settle();
+    const full = engineOf(map);
+    expect(full).not.toBeInstanceOf(CoreFakeEngine);
+    expect(created(full)).toEqual(['addLines', 'addPointCloud']);
+    expect(below.id).toBeGreaterThanOrEqual(0);
+    const [url, resolve] = full.last('addPointCloud') ?? [];
+    expect(url).toBe('https://example.org/lidar.copc.laz');
+    // The engine asks the page for the CRS of the file's WKT
+    const crs = (resolve as (wkt?: string) => { geoid: boolean; verticalScale: number })(
+      'PROJCS["RGF93 v1 / Lambert-93",GEOGCS["RGF93 v1"],UNIT["metre",1],AUTHORITY["EPSG","2154"]]',
+    );
+    expect(crs).toMatchObject({ geoid: true, verticalScale: 1 });
+    expect(() => (resolve as (wkt?: string) => unknown)(undefined)).toThrow('names no CRS');
+    const [id, numbers, palette, ramp] = full.last('setPointCloudStyle') ?? [];
+    expect(id).toBe(cloud.id);
+    // Elevation, 3 px, adaptive, round, EDL of strength 1, no rate limit
+    const n = [...(numbers as Float64Array)];
+    expect([n[0], n[1], n[3], n[4], n[5], n[13]]).toEqual([2, 3, 1, 1, 1, 0]);
+    expect((palette as Uint8Array)[2 * 4 + 3]).toBe(0);
+    expect((ramp as Uint8Array).length).toBe(1024);
+    expect(reported).toEqual([]);
+  });
+
+  test('the Géoplateforme is asked 8 times a second at most; a tileset.json is 3D Tiles', async () => {
+    const map = await create({ tiles3d: true });
+    const lidar = map.addPointCloud({ url: 'https://data.geopf.fr/telechargement/download/x.copc.laz' });
+    expect(engineOf(map).last('setPointCloudStyle')?.[1]).toSatisfy((n) => (n as Float64Array)[13] === 8);
+    const tiles = map.addPointCloud({ url: 'points/tileset.json', pointSize: 4 });
+    expect(tiles.format).toBe('3dtiles');
+    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 4]);
+    tiles.setStyle({ pointSize: 5 });
+    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 5]);
+    expect(tiles.info()).toBeUndefined();
+    expect(lidar.id).toBeGreaterThanOrEqual(0);
+  });
+
+  test('a picked point becomes a feature: its position and attributes; a context loss creates the layer again', async () => {
+    const map = await create({ tiles3d: true });
+    const cloud = map.addPointCloud({ url: 'a.copc.laz' });
+    const engine = engineOf(map) as unknown as Record<string, unknown>;
+    engine.pointCloudPoint = (_id: number, index: number) =>
+      index === 3 ? { lonLat: [2.35, 48.85], height: 80, altitude: 36, classification: 6, intensity: 9 } : undefined;
+    expect(cloud.featureAt(3)).toMatchObject({
+      geometry: { type: 'Point', coordinates: [2.35, 48.85, 80] },
+      properties: { classification: 6 },
+    });
+    expect(cloud.featureAt(4)).toBeUndefined();
+    canvasOf(map).dispatch('webglcontextlost');
+    canvasOf(map).dispatch('webglcontextrestored');
+    expect(created(engineOf(map))).toEqual(['addPointCloud']);
+    expect(engineOf(map).last('setPointCloudStyle')?.[0]).toBe(cloud.id);
   });
 });
 

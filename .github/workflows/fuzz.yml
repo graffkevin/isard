@@ -1,5 +1,5 @@
-# Continuous fuzzing of the parsers that read downloaded bytes (3D Tiles glb / b3dm, meshopt streams, tilesets and
-# subtrees) and of the polygon triangulation: each target 5 minutes a night (cargo-fuzz, nightly: fuzz/), the corpus
+# Continuous fuzzing of the parsers that read downloaded bytes (3D Tiles glb / b3dm / pnts, meshopt streams, tilesets
+# and subtrees, the heads and hierarchy pages of COPC point clouds) and of the polygon triangulation: each target 5 minutes a night (cargo-fuzz, nightly: fuzz/), the corpus
 # kept between runs in the cache, crashes uploaded as artifacts.
 name: Fuzz
 
@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [decode, meshopt, tileset, subtree, shapes]
+        target: [decode, meshopt, tileset, subtree, shapes, pnts, copc]
     defaults:
       run:
         working-directory: fuzz

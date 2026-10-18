@@ -5,7 +5,7 @@ const mesh = map.addTiles3d({ url: 'https://…/tileset.json', maxScreenSpaceErr
 mesh.stats(); // { drawn, loaded, inFlight, prefetching, gpuMb, tiles }
 ```
 
-3D Tiles 1.0 (b3dm) and 1.1 (glb), external tilesets, implicit tiling (quadtree and octree, binary or JSON subtrees,
+3D Tiles 1.0 (b3dm, and pnts point clouds) and 1.1 (glb, triangles and points), external tilesets, implicit tiling (quadtree and octree, binary or JSON subtrees,
 box or region volumes), several contents per tile, compressed or not: meshopt and mesh quantization decoded in Rust,
 Draco geometry and KTX2 (Basis Universal) textures decoded in workers by the official modules, loaded on first use;
 KTX2 textures stay compressed on the GPU (ASTC, BC7, ETC2 or S3TC). Traversal by screen-space error, children
@@ -14,10 +14,10 @@ replacing their parent only once all are ready, downloads aborted when they leav
 ## The engine with 3D Tiles
 
 The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer (or
-[model](./models), which shares its decoders) loads the full one (the layer shows once it is there, `stats()` is
+[model](./models), which shares its decoders, or [point cloud](./pointclouds)) loads the full one (the layer shows once it is there, `stats()` is
 undefined until then). The map then moves onto it: a
 new engine on the same canvas, the camera, settings and every layer created again in it, in order, with the same
-handles. That costs a download (some 345 KB gzipped, compiled off the main thread) and, once it is there, a stall
+handles. That costs a download (some 385 KB gzipped, compiled off the main thread) and, once it is there, a stall
 of a frame or two while the map is rebuilt (shaders, the layers' buffers, the raster tiles fetched again): the
 view may hold or flash once. The rebuild runs in a task of its own, after the one that instantiated the engine.
 
@@ -44,7 +44,8 @@ Self-hosting them is the way to depend on no third party at run time:
 await GeoMap.create(container, { decoders: { draco: '/decoders/draco/', basis: '/decoders/basis/' } });
 ```
 
-Copy `draco_wasm_wrapper_gltf.js` and `draco_decoder_gltf.wasm` (from the `draco3d` package or gstatic), and
+Copy `draco_wasm_wrapper_gltf.js` and `draco_decoder_gltf.wasm` (from the `draco3d` package or gstatic; for Draco
+point clouds, the full decoder `draco_wasm_wrapper.js` and `draco_decoder.wasm` too), and
 `basis_transcoder.js` and `basis_transcoder.wasm` (from `three/examples/jsm/libs/basis/`), into those folders. A
 tileset without Draco nor KTX2 loads neither.
 :::

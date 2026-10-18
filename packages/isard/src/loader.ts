@@ -1,13 +1,13 @@
 /**
- * Pool of decoding workers for 3D Tiles content. The engine calls `load` and `abort` (`TileLoaderLike`); the main
- * thread then only uploads the decoded arrays to the GPU.
+ * Pool of decoding workers for 3D Tiles content and point clouds. The engine calls `load`, `loadPoints` and `abort`
+ * (`TileLoaderLike`); the main thread then only uploads the decoded arrays to the GPU.
  */
 import type { DecoderUrls } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
 import type { DecodedTile, TextureFormats, TileLoaderLike } from './wasm/isard.js';
 
 interface Pending {
-  resolve: (tile: DecodedTile) => void;
+  resolve: (result: DecodedTile | Uint8Array<ArrayBuffer>) => void;
   reject: (error: Error) => void;
   worker: Worker;
 }
@@ -26,6 +26,8 @@ export class TileLoader implements TileLoaderLike {
     private readonly size: number,
     private readonly decoders: DecoderUrls,
     private readonly formats: TextureFormats,
+    /** URL of the point cloud module, for the workers */
+    private readonly points: string = '',
   ) {}
 
   /** Called by the engine: fetch and decode off the main thread, on the least busy worker */
@@ -41,8 +43,30 @@ export class TileLoader implements TileLoaderLike {
     const worker = this.leastBusy();
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, worker });
+      this.pending.set(id, { resolve: resolve as Pending['resolve'], reject, worker });
       this.send(worker, { type: 'load', id, url, transform, yUp, reload, ...(priority ? { priority } : {}) });
+    });
+  }
+
+  /** Called by the engine: the points of a COPC node, fetched (a range request) and decoded off the main thread */
+  loadPoints(
+    id: number,
+    url: string,
+    offset: number,
+    size: number,
+    laz: Uint8Array,
+    layout: Float64Array,
+    grid: Float64Array,
+    count: number,
+    priority?: 'high' | 'low',
+  ): Promise<Uint8Array<ArrayBuffer>> {
+    if (this.failed) return Promise.reject(this.failed);
+    const worker = this.leastBusy();
+    this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve: resolve as Pending['resolve'], reject, worker });
+      const message = { type: 'points', id, url, offset, size, laz, layout, grid, count } as const;
+      this.send(worker, { ...message, ...(priority ? { priority } : {}) });
     });
   }
 
@@ -72,7 +96,8 @@ export class TileLoader implements TileLoaderLike {
         };
         worker.onmessageerror = () =>
           this.fail(worker, `the decoding worker ${this.workerUrl} sent an unreadable message`);
-        this.send(worker, { type: 'init', module: this.module, decoders: this.decoders, formats: this.formats });
+        const { module, decoders, formats, points } = this;
+        this.send(worker, { type: 'init', module, decoders, formats, points });
         this.workers.push(worker);
         this.busy.set(worker, 0);
       }
@@ -94,6 +119,7 @@ export class TileLoader implements TileLoaderLike {
     if (!pending) return;
     this.pending.delete(reply.id);
     if (reply.type === 'tile') pending.resolve(reply.tile);
+    else if (reply.type === 'points') pending.resolve(reply.vertices);
     else if (reply.aborted) pending.reject(new DOMException(`tile ${reply.id} aborted`, 'AbortError'));
     else pending.reject(new Error(reply.error));
   }

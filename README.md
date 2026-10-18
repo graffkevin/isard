@@ -42,9 +42,11 @@ General-purpose map libraries spend their time on things these maps do not need.
   digs Valles Marineris and the lunar craters from NASA's LOLA and MOLA models.
 - 🏙️ **Buildings and 3D Tiles.** Buildings colored by a value or by a network's travel times, photomeshes and city
   models in 3D Tiles (Draco, meshopt, KTX2).
+- ☁️ **Point clouds.** LiDAR in COPC read by range requests (the IGN's LiDAR HD, reprojected from Lambert-93 onto the
+  relief), 3D Tiles points; colored by RGB, class, altitude or intensity, Eye-Dome Lighting, a point budget, picked.
 - 🧊 **Your own 3D.** glTF models at positions, instanced and picked; custom layers for your WebGL code or a three.js
   scene, in the map's frame and depth, with camera-relative matrices exact at any zoom.
-- 🦀 **Small and exact.** 225 KB of WebAssembly gzipped (345 KB once a 3D Tiles layer or a model is added), f64 on the CPU and f32 relative to the camera on the GPU
+- 🦀 **Small and exact.** 225 KB of WebAssembly gzipped (385 KB once a 3D Tiles layer, a model or a point cloud is added), f64 on the CPU and f32 relative to the camera on the GPU
   (centimetres at any zoom), frames on demand only, strict TypeScript types end to end.
 
 ## Quick start
@@ -101,8 +103,9 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 | [Buildings](https://graffkevin.github.io/isard/layers/buildings) | `addExtrusions` | tiles or one set, colored by values or by a network's times |
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
 | [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS; in Web Mercator, or reprojected from another grid (longitudes and latitudes, Lambert-93, UTM, any CRS through proj4); or tiles drawn by your code |
-| [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, glb, external tilesets, compressed or not |
+| [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, pnts, glb, external tilesets, compressed or not |
 | [glTF models](https://graffkevin.github.io/isard/layers/models) | `addModels` | a glTF model at many positions, instanced, on the relief, picked |
+| [Point clouds](https://graffkevin.github.io/isard/layers/pointclouds) | `addPointCloud` | COPC (LiDAR HD) by range requests, pnts and glTF points; by class, altitude, intensity, EDL |
 | [Custom layers](https://graffkevin.github.io/isard/layers/custom) | `addCustomLayer` | your WebGL code or a three.js scene in the map's frame, sharing its depth |
 
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in
@@ -133,6 +136,7 @@ drives both.
 ```
 crates/geo/        camera, projections, geodesy and geoid, tile selection, label placement, polygons   tested natively
 crates/tiles3d/    3D Tiles tree, traversal and decoding                                                tested natively
+crates/pointcloud/ COPC point clouds: header, octree hierarchy, traversal, LAZ chunks                    tested natively
 crates/engine/     the WebAssembly core: the engine, the ground, the layers, picking
 packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
 apps/              the demo and the benchmark (Isard, iTowns, 3DTilesRendererJS)

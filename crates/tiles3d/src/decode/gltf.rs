@@ -1,8 +1,9 @@
 //! The glTF of a tile: its scene's node hierarchy walked down to world positions, its triangle primitives with
-//! their texture coordinates and image, its buffer views (sliced from the binary chunk or decompressed by meshopt).
+//! their texture coordinates and image, its point primitives with their colors and normals, its buffer views (sliced
+//! from the binary chunk or decompressed by meshopt).
 
 use super::container::{parse_glb, slice};
-use super::{DracoGeometry, Mesh, Primitive};
+use super::{DracoGeometry, Mesh, Points, Primitive, center, relative};
 use crate::meshopt;
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
@@ -74,7 +75,7 @@ pub(super) fn decode_glb(
         DMat4::IDENTITY
     };
     let to_world = *transform * DMat4::from_translation(rtc) * axis;
-    let mut out = Vec::new();
+    let mut out = Out::default();
     let scene = index(&json["scene"]).unwrap_or(0);
     let nodes = json["nodes"].as_array().map_or(&[][..], Vec::as_slice);
     let roots: Vec<usize> = if let Some(roots) = json["scenes"][scene]["nodes"].as_array() {
@@ -96,23 +97,29 @@ pub(super) fn decode_glb(
         gltf.node(node, &to_world, &mut out, 0)?;
     }
     // Anchor: center of the positions' bounds
-    let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
-    for (_, world) in &out {
-        for p in world {
-            min = min.min(*p);
-            max = max.max(*p);
-        }
-    }
-    let anchor = if min.is_finite() && max.is_finite() {
-        (min + max) / 2.0
-    } else {
-        transform.transform_point3(rtc)
-    };
+    let corners: Vec<DVec3> = out
+        .triangles
+        .iter()
+        .map(|(_, world)| world)
+        .chain(out.points.iter().map(|(_, world)| world))
+        .filter_map(|world| bounds(world))
+        .flatten()
+        .collect();
+    let anchor = center(&corners).unwrap_or_else(|| transform.transform_point3(rtc));
     let primitives = out
+        .triangles
         .into_iter()
         .map(|(mut primitive, world)| {
-            primitive.positions = world.iter().flat_map(|p| (*p - anchor).as_vec3().to_array()).collect();
+            primitive.positions = relative(&world, anchor);
             primitive
+        })
+        .collect();
+    let points = out
+        .points
+        .into_iter()
+        .map(|(mut points, world)| {
+            points.positions = relative(&world, anchor);
+            points
         })
         .collect();
     Ok(Mesh {
@@ -124,7 +131,25 @@ pub(super) fn decode_glb(
             .into_iter()
             .map(|(_, bytes, mime)| (bytes, mime))
             .collect(),
+        points,
     })
+}
+
+/// The corners of the bounds of positions, None if not finite
+fn bounds(positions: &[DVec3]) -> Option<[DVec3; 2]> {
+    let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+    for p in positions {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    (min.is_finite() && max.is_finite()).then_some([min, max])
+}
+
+/// The primitives of the scene with their world positions: triangles, points
+#[derive(Default)]
+struct Out {
+    triangles: Vec<(Primitive, Vec<DVec3>)>,
+    points: Vec<(Points, Vec<DVec3>)>,
 }
 
 /// Positions and uv as stored (before the node transforms), triangle indices: shared by the nodes using a mesh
@@ -206,13 +231,7 @@ impl<'a> Gltf<'a> {
             .ok_or_else(|| "glTF tile too large".into())
     }
 
-    fn node(
-        &self,
-        index: usize,
-        parent: &DMat4,
-        out: &mut Vec<(Primitive, Vec<DVec3>)>,
-        depth: u32,
-    ) -> Result<(), String> {
+    fn node(&self, index: usize, parent: &DMat4, out: &mut Out, depth: u32) -> Result<(), String> {
         if depth > MAX_DEPTH {
             return Err("glTF node hierarchy too deep".into());
         }
@@ -237,8 +256,12 @@ impl<'a> Gltf<'a> {
                 .flatten()
                 .enumerate()
             {
-                if let Some(p) = self.primitive((mesh, index), primitive, &world)? {
-                    out.push(p);
+                if primitive["mode"].as_u64() == Some(0) {
+                    if let Some(p) = self.points((mesh, index), primitive, &world)? {
+                        out.points.push(p);
+                    }
+                } else if let Some(p) = self.primitive((mesh, index), primitive, &world)? {
+                    out.triangles.push(p);
                 }
             }
         }
@@ -366,6 +389,91 @@ impl<'a> Gltf<'a> {
                 indices,
                 image,
                 color,
+            },
+            world_positions,
+        )))
+    }
+
+    /// A point primitive (mode 0): its positions, colors (`COLOR_0` times the material's base color, else that color)
+    /// and normals, from the accessors or the Draco decoder
+    fn points(
+        &self,
+        (mesh, index): (usize, usize),
+        primitive: &Value,
+        world: &DMat4,
+    ) -> Result<Option<(Points, Vec<DVec3>)>, String> {
+        let attributes = &primitive["attributes"];
+        let [positions, colors, normals]: [Rc<[f32]>; 3] =
+            if primitive["extensions"]["KHR_draco_mesh_compression"].is_object() {
+                let g = self
+                    .draco
+                    .iter()
+                    .find(|g| g.mesh == mesh && g.primitive == index)
+                    .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
+                self.spend((g.positions.len() / 3).saturating_mul(5))?;
+                [
+                    g.positions.as_slice().into(),
+                    g.colors.as_slice().into(),
+                    g.normals.as_slice().into(),
+                ]
+            } else {
+                let Some(position) = self::index(&attributes["POSITION"]) else {
+                    return Ok(None);
+                };
+                let positions = self.floats(position)?;
+                self.spend((positions.len() / 3).saturating_mul(5))?;
+                let optional = |name: &str| match self::index(&attributes[name]) {
+                    Some(a) => self.floats(a),
+                    None => Ok(Rc::from(Vec::new())),
+                };
+                [positions, optional("COLOR_0")?, optional("NORMAL")?]
+            };
+        let count = positions.len() / 3;
+        let colored = colors.len() == count * 3 || colors.len() == count * 4;
+        if !positions.len().is_multiple_of(3)
+            || !(colors.is_empty() || colored)
+            || !(normals.is_empty() || normals.len() == count * 3)
+        {
+            return Err("inconsistent glTF points".into());
+        }
+        let factor = numbers(
+            &material(self.json, primitive)["pbrMetallicRoughness"]["baseColorFactor"],
+            [1.0; 4],
+        )
+        .unwrap_or([1.0; 4])
+        .map(|c| c.clamp(0.0, 1.0));
+        let base = if colors.is_empty() {
+            vec![[255; 4]; count]
+        } else {
+            super::pnts::float_colors(&colors, count)
+        };
+        let colors = base
+            .into_iter()
+            .map(|c| std::array::from_fn(|i| (f64::from(c[i]) * factor[i]).round() as u8))
+            .collect();
+        let world_positions = positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&p| world.transform_point3(DVec3::from(p.map(f64::from))))
+            .collect();
+        let normals = normals
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&n| {
+                world
+                    .transform_vector3(DVec3::from(n.map(f64::from)))
+                    .normalize_or_zero()
+                    .as_vec3()
+                    .to_array()
+            })
+            .collect();
+        Ok(Some((
+            Points {
+                positions: Vec::new(),
+                colors,
+                normals,
             },
             world_positions,
         )))
@@ -616,6 +724,118 @@ mod tests {
         assert_eq!(mesh.images.len(), 1);
         assert_eq!((a.image, b.image, c.image), (Some(0), Some(0), Some(0)));
         assert_eq!(mesh.image(b).unwrap(), (&[0xFF, 0xD8, 0xFF, 0xE0][..], "image/jpeg"));
+    }
+
+    /// A helix of 2000 colored points with normals (mode 0), as written and compressed by gltfpack (meshopt,
+    /// quantized positions and normals)
+    #[test]
+    fn point_primitives_keep_their_colors_and_normals() {
+        let plain = super::super::decode(
+            include_bytes!("../../tests/data/helix_points.glb"),
+            &DMat4::IDENTITY,
+            false,
+            &[],
+        )
+        .unwrap();
+        assert!(plain.primitives.is_empty());
+        let p = &plain.points[0];
+        assert_eq!((p.positions.len(), p.colors.len(), p.normals.len()), (6000, 2000, 2000));
+        let at = |mesh: &Mesh, i: usize| {
+            let q = &mesh.points[0].positions[i * 3..i * 3 + 3];
+            mesh.anchor + DVec3::new(f64::from(q[0]), f64::from(q[1]), f64::from(q[2]))
+        };
+        // The node's translation applied: the first point at (110, 0, 0)
+        assert!((at(&plain, 0) - DVec3::new(110.0, 0.0, 0.0)).length() < 1e-4);
+        assert_eq!(p.colors[0], [254, 0, 200, 255]);
+        assert!((DVec3::from(p.normals[0].map(f64::from)) - DVec3::X).length() < 1e-6);
+        let packed = super::super::decode(
+            include_bytes!("../../tests/data/helix_points_meshopt.glb"),
+            &DMat4::IDENTITY,
+            false,
+            &[],
+        )
+        .unwrap();
+        let q = &packed.points[0];
+        assert_eq!(q.colors.len(), 2000);
+        // gltfpack reorders the points: each has its counterpart within 2 mm (14-bit positions over 30 m), with its
+        // color and its normal (8 bits)
+        for i in (0..2000).step_by(37) {
+            let target = at(&packed, i);
+            let j = (0..2000)
+                .min_by(|&a, &b| {
+                    (at(&plain, a) - target)
+                        .length()
+                        .total_cmp(&(at(&plain, b) - target).length())
+                })
+                .unwrap();
+            assert!((at(&plain, j) - target).length() < 2e-3, "{i}");
+            assert_eq!(q.colors[i], p.colors[j]);
+            let (a, b) = (
+                DVec3::from(p.normals[j].map(f64::from)),
+                DVec3::from(q.normals[i].map(f64::from)),
+            );
+            assert!(a.dot(b) > 0.999, "{i}");
+        }
+    }
+
+    #[test]
+    fn point_colors_take_the_base_color() {
+        let bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let mut json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 24}],
+            "bufferViews": [{"buffer": 0, "byteLength": 24}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 2, "type": "VEC3"}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.5, 0.0, 1.0]}}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "mode": 0, "material": 0}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        let mesh = triangle(&json, &bin).unwrap();
+        assert_eq!(mesh.points[0].colors, [[255, 128, 0, 255]; 2]);
+        assert_eq!(mesh.points[0].normals.len(), 0);
+        // Colors of the wrong count: an error
+        json["accessors"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3"}));
+        json["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = json!(1);
+        assert!(triangle(&json, &bin).is_err());
+        // Lines and strips are left out
+        json["meshes"][0]["primitives"][0]["mode"] = json!(1);
+        let mesh = triangle(&json, &bin).unwrap();
+        assert!(mesh.points.is_empty() && mesh.primitives.is_empty());
+    }
+
+    #[test]
+    fn draco_points_come_from_the_decoder() {
+        let bin = [0u8; 8];
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "extensionsUsed": ["KHR_draco_mesh_compression"],
+            "buffers": [{"byteLength": 8}],
+            "bufferViews": [{"buffer": 0, "byteLength": 8}],
+            "accessors": [
+                {"componentType": 5126, "count": 2, "type": "VEC3"},
+                {"componentType": 5121, "normalized": true, "count": 2, "type": "VEC3"}
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "COLOR_0": 1}, "mode": 0, "extensions": {
+                "KHR_draco_mesh_compression": {"bufferView": 0, "attributes": {"POSITION": 3, "COLOR_0": 5}}
+            }}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        let bytes = super::super::tests::glb(&json, &bin);
+        let requests = super::super::draco_requests(&bytes).unwrap();
+        let r = &requests[0];
+        assert!(r.points);
+        assert_eq!((r.position, r.color, r.normal, r.uv), (3, Some(5), None, None));
+        let geometry = DracoGeometry {
+            positions: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+            colors: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            ..DracoGeometry::default()
+        };
+        let mesh = super::super::decode(&bytes, &DMat4::IDENTITY, false, &[geometry]).unwrap();
+        assert_eq!(mesh.points[0].colors, [[255, 0, 0, 255], [0, 255, 0, 255]]);
+        assert!((mesh.anchor - DVec3::X).length() < 1e-9);
     }
 
     #[test]

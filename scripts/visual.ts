@@ -65,11 +65,18 @@ const VIEWS: Record<string, [example: string, view: string]> = {
   'mars-valles-marineris': ['mars', 'valles-marineris'],
 };
 
+/**
+ * Examples opened with a query: the point cloud with a small point budget (its fixtures, LAZ chunks of the Île de la
+ * Cité, stay a few MB)
+ */
+const QUERIES: Record<string, string> = { pointcloud: '?budget=250000' };
+
 /** Smaller viewports where the data is heavy (the fixtures stay small): terrain and hillshade under a pitched camera */
 const VIEWPORTS: Record<string, [number, number]> = {
   relief: [320, 200],
   tiles3d: [320, 200],
   models: [480, 300],
+  pointcloud: [480, 300],
   'moon-tycho': [240, 150],
   'mars-olympus-mons': [240, 150],
   'mars-valles-marineris': [320, 200],
@@ -102,6 +109,8 @@ if (examples.length === 0) {
 
 interface Fixture {
   url: string;
+  /** The range asked for (point clouds), part of the fixture's key */
+  range?: string;
   status: number;
   type: string;
 }
@@ -165,8 +174,12 @@ session.on('Fetch.requestPaused', (event: Protocol.Fetch.RequestPausedEvent) => 
 });
 await session.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
 
+/** Attempts at a URL the server turns away for too many requests (HTTP 429, the Géoplateforme past 10 a second) */
+const BUSY_ATTEMPTS = 6;
+
 async function answer(requestId: string, request: Protocol.Network.Request): Promise<void> {
-  const h = key(request.url);
+  const range = request.headers.Range ?? request.headers.range;
+  const h = key(range ? `${request.url}#${range}` : request.url);
   used.add(h);
   const cors = [
     { name: 'Access-Control-Allow-Origin', value: '*' },
@@ -178,11 +191,20 @@ async function answer(requestId: string, request: Protocol.Network.Request): Pro
   }
   if (record && !manifest[h]) {
     try {
-      const response = await fetch(request.url, { headers: { 'User-Agent': 'isard-visual-tests' } });
+      const headers: Record<string, string> = {
+        'User-Agent': 'isard-visual-tests',
+        ...(range ? { Range: range } : {}),
+      };
+      let response = await fetch(request.url, { headers });
+      for (let attempt = 1; response.status === 429 && attempt < BUSY_ATTEMPTS; attempt += 1) {
+        await sleep(1000 * attempt);
+        response = await fetch(request.url, { headers });
+      }
       const body = Buffer.from(await response.arrayBuffer());
       writeFileSync(bodyPath(h), Bun.gzipSync(body, { level: 9 }));
       manifest[h] = {
         url: request.url,
+        ...(range ? { range } : {}),
         status: response.status,
         type: response.headers.get('content-type') ?? 'application/octet-stream',
       };
@@ -245,7 +267,7 @@ for (const name of examples) {
   served.bytes = 0;
   const start = Date.now();
   const [example, view] = VIEWS[name] ?? [name, ''];
-  const query = STILL.has(example) ? '?still' : '';
+  const query = STILL.has(example) ? '?still' : (QUERIES[example] ?? '');
   await page.goto(`${origin}/examples/${example}/${query}${view ? `#${view}` : ''}`, { waitUntil: 'load' });
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second

@@ -1,0 +1,34 @@
+[package]
+name = "isard-pointcloud"
+version = "0.5.0"
+publish = false
+edition = "2024"
+license = "MIT"
+authors = ["Kevin Graff"]
+repository = "https://github.com/graffkevin/isard"
+description = "Point clouds of isard: COPC (LAS 1.4 header, octree hierarchy, LAZ chunks), the octree traversal, the points ready for the GPU"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+geo = { package = "isard-geo", path = "../geo" }
+glam = "0.34"
+# LAZ decompression (COPC chunks: LAS 1.4 layered compression), only in the point cloud module of the decoding workers
+laz = { version = "0.13", default-features = false, optional = true }
+wasm-bindgen = { version = "=0.2.129", optional = true }
+
+[features]
+# The LAZ decoder
+laz = ["dep:laz"]
+# The point cloud module (isard_points_bg.wasm): the LAZ decoder exported to the decoding workers. scripts/build.ts
+# builds it apart from the engines, which hold the rest of this crate (the hierarchy, the traversal) but not the LAZ
+# decoder: it is downloaded with the first point cloud only
+module = ["laz", "dep:wasm-bindgen"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# LAZ chunks compressed in the tests (point formats 7 and 8, malformed chunks)
+laz = { version = "0.13", default-features = false }

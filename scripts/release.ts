@@ -27,7 +27,7 @@ const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'ut
 if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`)) {
   fail(`CHANGELOG.md does not describe ${version}: add its "## [${version}] - <date>" section first`);
 }
-for (const crate of ['engine', 'geo', 'tiles3d']) {
+for (const crate of ['engine', 'geo', 'pointcloud', 'tiles3d']) {
   const manifest = readFileSync(join(root, 'crates', crate, 'Cargo.toml'), 'utf8');
   const crateVersion = /^version = "([^"]+)"/m.exec(manifest)?.[1];
   if (crateVersion !== version) fail(`crates/${crate} is at ${crateVersion}, the package at ${version}: align them`);

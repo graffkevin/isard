@@ -1,6 +1,6 @@
 /**
- * Builds everything: the Rust engine to WebAssembly (cargo), its JavaScript bindings (wasm-bindgen), a size and speed
- * pass (wasm-opt), then the `isard` package (packages/isard/dist: module, workers, type declarations), the
+ * Builds everything: the Rust engine to WebAssembly (cargo) and the point cloud module (the LAZ decoder of the
+ * workers), their JavaScript bindings (wasm-bindgen), a size and speed pass (wasm-opt), then the `isard` package (packages/isard/dist: module, workers, type declarations), the
  * demo and the examples (bundled together from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,6 +18,7 @@ const pkg = 'packages/isard';
 const bindings = `${pkg}/src/wasm`;
 const wasm = `${bindings}/isard_bg.wasm`;
 const coreWasm = `${bindings}/isard_core_bg.wasm`;
+const pointsWasm = `${bindings}/isard_points_bg.wasm`;
 
 // The bindings generator must be the version of the wasm-bindgen crate (Cargo.lock), or the module does not load
 const locked = /name = "wasm-bindgen"\nversion = "([^"]+)"/.exec(readFileSync(join(root, 'Cargo.lock'), 'utf8'))?.[1];
@@ -36,6 +37,10 @@ await $`cargo build -p isard --target wasm32-unknown-unknown --release --no-defa
 await $`wasm-bindgen --target web --out-dir ${bindings} --out-name isard_core ${target}`;
 await $`cargo build -p isard --target wasm32-unknown-unknown --release`;
 await $`wasm-bindgen --target web --out-dir ${bindings} ${target}`;
+// The point cloud module: the LAZ decoder of COPC chunks, loaded by the decoding workers with the first point cloud
+// (the engines do not hold it)
+await $`cargo build -p isard-pointcloud --target wasm32-unknown-unknown --release --features module`;
+await $`wasm-bindgen --target web --out-dir ${bindings} --out-name isard_points target/wasm32-unknown-unknown/release/isard_pointcloud.wasm`;
 // Size and speed pass (binaryen, a dev dependency, run by Bun): about a third smaller, without the debug sections
 const features = [
   '--enable-bulk-memory',
@@ -45,7 +50,9 @@ const features = [
 ];
 const strip = ['--strip-debug', '--strip-producers'];
 const wasmOpt = join(root, 'node_modules/.bin/wasm-opt');
-await Promise.all([wasm, coreWasm].map((file) => $`bun --bun ${wasmOpt} -O3 ${features} ${strip} ${file} -o ${file}`));
+await Promise.all(
+  [wasm, coreWasm, pointsWasm].map((file) => $`bun --bun ${wasmOpt} -O3 ${features} ${strip} ${file} -o ${file}`),
+);
 
 /** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle). The output
  * folder is emptied first: files of an older build (renamed since) would ship. `split`: the entry points share the
@@ -88,6 +95,7 @@ async function bundle(entries: string[], outdir: string, options: { split?: bool
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
   copyFileSync(join(root, coreWasm), join(root, outdir, 'isard_core_bg.wasm'));
+  copyFileSync(join(root, pointsWasm), join(root, outdir, 'isard_points_bg.wasm'));
 }
 
 /** The package: its modules as they are (an application's bundler keeps what it uses), the engine's bindings, the
@@ -97,7 +105,7 @@ async function buildPackage(): Promise<void> {
   rmSync(dist, { recursive: true, force: true });
   await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
   mkdirSync(join(dist, 'wasm'), { recursive: true });
-  for (const name of ['isard', 'isard_core']) {
+  for (const name of ['isard', 'isard_core', 'isard_points']) {
     copyFileSync(join(root, bindings, `${name}.js`), join(dist, `wasm/${name}.js`));
     // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
     const declarations = readFileSync(join(root, bindings, `${name}.d.ts`), 'utf8');

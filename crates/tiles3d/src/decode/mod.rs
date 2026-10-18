@@ -1,5 +1,6 @@
-//! Decoding of 3D Tiles content: Batched 3D Model (`.b3dm`, 3D Tiles 1.0) and binary glTF (`.glb`, 3D Tiles 1.1),
-//! into triangle meshes ready for the GPU. Pure Rust, no I/O: images stay encoded, the browser decodes them.
+//! Decoding of 3D Tiles content: Batched 3D Model (`.b3dm`, 3D Tiles 1.0), Point Cloud (`.pnts`) and binary glTF
+//! (`.glb`, 3D Tiles 1.1, its triangles and points), into meshes and points ready for the GPU. Pure Rust, no I/O:
+//! images stay encoded, the browser decodes them.
 //!
 //! Positions go through the glTF node transforms, the y-up to z-up rotation, `RTC_CENTER` and the tile transform, to
 //! ECEF; they are stored in f32 relative to an anchor (the tile's center), exact to the millimetre over tens of
@@ -9,17 +10,19 @@
 //! allocated, so a malformed tile is an error, never a panic.
 //!
 //! `container` opens the b3dm and glb containers, `gltf` walks the scene and builds the primitives, `accessor` reads
-//! their values.
+//! their values, `pnts` reads the point clouds of 3D Tiles 1.0.
 
 #![forbid(unsafe_code)]
 
 mod accessor;
 mod container;
 mod gltf;
+mod pnts;
 
 use container::{parse_glb, split};
 use glam::{DMat4, DVec3};
 use gltf::{Gltf, decode_glb, index, uv_set};
+pub use pnts::oct_decode;
 use std::rc::Rc;
 
 /// One textured triangle mesh. A mesh used by several nodes of the scene (instances) gives a primitive per node: its
@@ -36,12 +39,23 @@ pub struct Primitive {
     pub color: [f32; 4],
 }
 
+/// Points (a `.pnts`, or a glTF primitive of mode 0)
+pub struct Points {
+    /// x, y, z relative to the anchor (ECEF axes, metres)
+    pub positions: Vec<f32>,
+    /// RGBA per point (white without colors)
+    pub colors: Vec<[u8; 4]>,
+    /// Unit normal per point (ECEF axes), empty without normals
+    pub normals: Vec<[f32; 3]>,
+}
+
 pub struct Mesh {
     /// ECEF origin of the positions
     pub anchor: DVec3,
     pub primitives: Vec<Primitive>,
     /// Encoded images (JPEG, PNG, WebP, KTX2) and their media types, each once however many primitives use it
     pub images: Vec<(Rc<[u8]>, String)>,
+    pub points: Vec<Points>,
 }
 
 impl Mesh {
@@ -53,7 +67,8 @@ impl Mesh {
     }
 }
 
-/// A Draco-compressed primitive (`KHR_draco_mesh_compression`), for an external Draco decoder
+/// A Draco-compressed primitive (`KHR_draco_mesh_compression`) or point cloud (`3DTILES_draco_point_compression`,
+/// mesh and primitive 0), for an external Draco decoder
 pub struct DracoRequest {
     pub mesh: usize,
     pub primitive: usize,
@@ -62,27 +77,68 @@ pub struct DracoRequest {
     /// Draco attribute ids
     pub position: u32,
     pub uv: Option<u32>,
+    pub color: Option<u32>,
+    pub normal: Option<u32>,
+    /// Points (no triangles)
+    pub points: bool,
 }
 
-/// What a Draco decoder returns for a request: positions and uv as stored (before the node transforms), triangles
+/// What a Draco decoder returns for a request: positions, uv, colors and normals as stored (before the node
+/// transforms), triangles (none for points)
+#[derive(Default)]
 pub struct DracoGeometry {
     pub mesh: usize,
     pub primitive: usize,
     pub positions: Vec<f32>,
     pub uvs: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Three or four per point
+    pub colors: Vec<f32>,
+    pub normals: Vec<f32>,
 }
 
 /// Decodes a `.b3dm` or `.glb` tile. `transform`: the tile's world transform; `y_up`: glTF y-up to 3D Tiles z-up
 /// (always for `.b3dm` of 3D Tiles 1.0, unless the tileset says `gltfUpAxis: Z`).
 /// Draco primitives are decoded beforehand by the caller (`draco_requests`) and passed in `draco`.
 pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometry]) -> Result<Mesh, String> {
+    if bytes.get(..4) == Some(b"pnts") {
+        let (world, mut points) = pnts::decode(bytes, transform, draco)?;
+        let anchor = center(&world).unwrap_or_else(|| transform.transform_point3(DVec3::ZERO));
+        points.positions = relative(&world, anchor);
+        return Ok(Mesh {
+            anchor,
+            primitives: Vec::new(),
+            images: Vec::new(),
+            points: vec![points],
+        });
+    }
     let (glb, rtc) = split(bytes)?;
     decode_glb(glb, transform, y_up, rtc, draco)
 }
 
+/// The center of the bounds of positions, None if there is none (or one is not finite)
+fn center(positions: &[DVec3]) -> Option<DVec3> {
+    let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+    for p in positions {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    (min.is_finite() && max.is_finite()).then(|| (min + max) / 2.0)
+}
+
+/// Positions relative to an anchor, in f32
+fn relative(positions: &[DVec3], anchor: DVec3) -> Vec<f32> {
+    positions
+        .iter()
+        .flat_map(|p| (*p - anchor).as_vec3().to_array())
+        .collect()
+}
+
 /// The Draco-compressed primitives of a tile, to decode before `decode`
 pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
+    if bytes.get(..4) == Some(b"pnts") {
+        return Ok(pnts::draco_request(bytes)?.into_iter().collect());
+    }
     let (glb, _) = split(bytes)?;
     let (json, bin) = parse_glb(glb)?;
     let gltf = Gltf::new(&json, bin, &[]);
@@ -95,12 +151,20 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
             }
             let view = index(&ext["bufferView"]).ok_or("Draco extension without bufferView")?;
             let attribute = |name: &str| ext["attributes"][name].as_u64().and_then(|v| u32::try_from(v).ok());
+            let points = primitive["mode"].as_u64() == Some(0);
             out.push(DracoRequest {
                 mesh: m,
                 primitive: p,
                 data: gltf.view(view)?.to_vec(),
                 position: attribute("POSITION").ok_or("Draco without POSITION")?,
-                uv: attribute(&format!("TEXCOORD_{}", uv_set(&json, primitive))),
+                uv: if points {
+                    None
+                } else {
+                    attribute(&format!("TEXCOORD_{}", uv_set(&json, primitive)))
+                },
+                color: attribute("COLOR_0").filter(|_| points),
+                normal: attribute("NORMAL").filter(|_| points),
+                points,
             });
         }
     }
@@ -219,6 +283,7 @@ mod tests {
             positions: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            ..DracoGeometry::default()
         };
         let mesh = decode(bytes, &DMat4::IDENTITY, true, &[geometry]).unwrap();
         assert_eq!(*mesh.primitives[0].indices, [0, 1, 2]);
@@ -388,6 +453,7 @@ mod tests {
                     positions: vec![0.0; 9],
                     uvs: vec![0.0; 4],
                     indices: vec![0, 1, 5],
+                    ..DracoGeometry::default()
                 })
                 .collect();
             let _ = decode(bytes, &DMat4::IDENTITY, true, &draco);
@@ -398,8 +464,9 @@ mod tests {
     /// wildly: every outcome is a mesh or an error
     #[test]
     fn malformed_tiles_never_panic() {
-        let fixtures: [&[u8]; 6] = [
+        let fixtures: [&[u8]; 7] = [
             LILLE,
+            include_bytes!("../../tests/data/helix_points_meshopt.glb"),
             include_bytes!("../../tests/data/lille_noq.glb"),
             include_bytes!("../../tests/data/lille_q.glb"),
             include_bytes!("../../tests/data/lille_vpf.glb"),

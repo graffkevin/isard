@@ -109,11 +109,19 @@ async function compile(url: string | URL): Promise<WebAssembly.Module> {
   }
 }
 
-/** The decoding workers of 3D Tiles, running the full engine's module, unless turned off (`workers: false` or 0, or
- * no workers in this environment) */
+/** Where the workers load the point cloud module from (`isard_points_bg.wasm`, the LAZ decoder): the option, or next
+ * to the module; absolute, the workers being elsewhere */
+export function pointsUrl(options: Pick<GeoMapOptions, 'pointsWasmUrl'>): string {
+  const url = options.pointsWasmUrl ?? new URL('./isard_points_bg.wasm', import.meta.url);
+  const base = typeof document === 'undefined' ? undefined : document.baseURI;
+  return base ? new URL(url, base).href : String(url);
+}
+
+/** The decoding workers of 3D Tiles and point clouds, running the full engine's module, unless turned off (`workers:
+ * false` or 0, or no workers in this environment) */
 export function startTileLoader(
   module: WebAssembly.Module,
-  options: Pick<GeoMapOptions, 'workers' | 'workerUrl' | 'decoders'>,
+  options: Pick<GeoMapOptions, 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl'>,
   engine: Engine,
 ): TileLoader | undefined {
   const { workers: count, workerUrl, decoders } = options;
@@ -125,6 +133,7 @@ export function startTileLoader(
     workers,
     { ...DEFAULT_DECODERS, ...decoders },
     engine.textureFormats(),
+    pointsUrl(options),
   );
 }
 

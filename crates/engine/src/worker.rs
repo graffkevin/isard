@@ -28,6 +28,8 @@ export interface EncodedTile {
   /** ECEF origin of the vertices (metres) */
   anchor: Float64Array<ArrayBuffer>;
   primitives: EncodedPrimitive[];
+  /** Its points (`.pnts`, glTF points), 20 bytes a vertex: x, y, z (f32) around the anchor, RGB, a normal */
+  points: Uint8Array<ArrayBuffer>[];
 }
 
 /** A texture transcoded for the GPU (KTX2 / Basis Universal): a WebGL internal format and its mip levels */
@@ -50,7 +52,10 @@ export interface DecodedPrimitive {
   color?: Float32Array<ArrayBuffer>;
 }
 
-/** A Draco-compressed primitive of a tile (`KHR_draco_mesh_compression`), to decode with the Draco module */
+/**
+ * A Draco-compressed primitive of a tile (`KHR_draco_mesh_compression`), or its points
+ * (`3DTILES_draco_point_compression`), to decode with the Draco module
+ */
 export interface DracoRequest {
   mesh: number;
   primitive: number;
@@ -58,15 +63,21 @@ export interface DracoRequest {
   /** Draco attribute ids */
   position: number;
   uv?: number;
+  color?: number;
+  normal?: number;
+  /** A point cloud: no triangles */
+  points?: boolean;
 }
 
-/** The Draco module's output for a request: positions and uv as stored, triangles */
+/** The Draco module's output for a request: positions, uv, colors and normals as stored, triangles (not for points) */
 export interface DracoGeometry {
   mesh: number;
   primitive: number;
   positions: Float32Array;
   uvs?: Float32Array;
-  indices: Uint32Array;
+  indices?: Uint32Array;
+  colors?: Float32Array;
+  normals?: Float32Array;
 }
 
 /** Compressed texture formats supported by the GPU */
@@ -81,6 +92,8 @@ export interface TextureFormats {
 export interface DecodedTile {
   anchor: Float64Array<ArrayBuffer>;
   primitives: DecodedPrimitive[];
+  /** Its points' vertices (`EncodedTile.points`) */
+  points?: Uint8Array<ArrayBuffer>[];
 }
 
 /** What the engine expects from a pool of decoding workers (`Engine.setTileLoader`) */
@@ -98,6 +111,22 @@ export interface TileLoaderLike {
     priority?: 'high' | 'low',
   ): Promise<DecodedTile>;
   abort(id: number): void;
+  /**
+   * The points of a COPC node: its LAZ chunk (`size` bytes at `offset` of the file at `url`, a range request), the
+   * data of the file's LAZ VLR, its layout (format, record length, scale, offset), the grid positioning its points
+   * and its point count; resolves with its vertices (20 bytes each, see `EncodedTile.points`)
+   */
+  loadPoints?(
+    id: number,
+    url: string,
+    offset: number,
+    size: number,
+    laz: Uint8Array,
+    layout: Float64Array,
+    grid: Float64Array,
+    count: number,
+    priority?: 'high' | 'low',
+  ): Promise<Uint8Array<ArrayBuffer>>;
 }
 "#;
 
@@ -111,8 +140,13 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Array, JsValue> {
         Reflect::set(&request, &"primitive".into(), &(r.primitive as u32).into())?;
         Reflect::set(&request, &"data".into(), &Uint8Array::from(&r.data[..]))?;
         Reflect::set(&request, &"position".into(), &r.position.into())?;
-        if let Some(uv) = r.uv {
-            Reflect::set(&request, &"uv".into(), &uv.into())?;
+        for (key, value) in [("uv", r.uv), ("color", r.color), ("normal", r.normal)] {
+            if let Some(id) = value {
+                Reflect::set(&request, &key.into(), &id.into())?;
+            }
+        }
+        if r.points {
+            Reflect::set(&request, &"points".into(), &true.into())?;
         }
         out.push(&request);
     }
@@ -140,21 +174,29 @@ fn draco_geometries(value: &JsValue) -> Result<Vec<decode::DracoGeometry>, JsVal
                     .map(|a| a.to_vec())
                     .unwrap_or_default()
             };
-            let indices: Uint32Array = Reflect::get(&g, &"indices".into())?.dyn_into()?;
+            // Points have no triangles
+            let indices = Reflect::get(&g, &"indices".into())?;
+            let indices = if indices.is_undefined() {
+                Vec::new()
+            } else {
+                indices.dyn_into::<Uint32Array>()?.to_vec()
+            };
             Ok(decode::DracoGeometry {
                 mesh: number(&g, "mesh").ok_or("Draco geometry without mesh")?,
                 primitive: number(&g, "primitive").ok_or("Draco geometry without primitive")?,
                 positions: floats("positions"),
                 uvs: floats("uvs"),
-                indices: indices.to_vec(),
+                indices,
+                colors: floats("colors"),
+                normals: floats("normals"),
             })
         })
         .collect()
 }
 
-/// Decodes a `.b3dm` / `.glb` tile: `{ anchor: Float64Array(3), primitives: [{ vertices: Float32Array (x, y, z, u,
-/// v per vertex, relative to the anchor), indices: Uint32Array, image?: Uint8Array, mime?: string, color?:
-/// Float32Array (the material's base color, when not white) }] }`.
+/// Decodes a `.b3dm` / `.pnts` / `.glb` tile: `{ anchor: Float64Array(3), primitives: [{ vertices: Float32Array (x,
+/// y, z, u, v per vertex, relative to the anchor), indices: Uint32Array, image?: Uint8Array, mime?: string, color?:
+/// Float32Array (the material's base color, when not white) }], points: [Uint8Array] (the points' vertices) }`.
 /// `transform`: the tile's world transform (16 numbers, column-major).
 /// `draco`: the decoded geometries of its Draco primitives (`dracoRequests`), if any.
 #[wasm_bindgen(js_name = decodeTile, unchecked_return_type = "EncodedTile")]
@@ -198,5 +240,10 @@ pub fn decode_tile(
         primitives.push(&primitive);
     }
     set(&out, "primitives", &primitives)?;
+    let points = Array::new();
+    for p in &mesh.points {
+        points.push(&Uint8Array::from(&crate::render::points::tile_vertices(p)[..]));
+    }
+    set(&out, "points", &points)?;
     Ok(out)
 }

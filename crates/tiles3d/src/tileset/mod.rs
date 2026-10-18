@@ -34,18 +34,18 @@ use volume::Volume;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
     None,
-    /// `.b3dm` or `.glb` (or an unknown extension: the decoder tells by the first bytes)
+    /// `.b3dm`, `.pnts` or `.glb` (or an unknown extension: the decoder tells by the first bytes)
     Mesh(String),
     /// External tileset or implicit-tiling subtree, grafted under the tile once loaded (`Tree::add`)
     Tileset(String),
-    /// A format this engine does not draw (points, instances, composites)
+    /// A format this engine does not draw (instances, composites)
     Unsupported,
 }
 
 /// What downloaded content is, by its first bytes (its URI may not tell)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// `b3dm` or `glTF` binary
+    /// `b3dm`, `pnts` or `glTF` binary
     Mesh,
     /// JSON: an external tileset (or a JSON subtree)
     Json,
@@ -58,7 +58,7 @@ pub enum Kind {
 #[must_use]
 pub fn sniff(bytes: &[u8]) -> Kind {
     match bytes.get(..4) {
-        Some(b"b3dm" | b"glTF") => Kind::Mesh,
+        Some(b"b3dm" | b"pnts" | b"glTF") => Kind::Mesh,
         Some(b"subt") => Kind::Subtree,
         _ if bytes.trim_ascii_start().starts_with(b"{") => Kind::Json,
         _ => Kind::Other,
@@ -122,7 +122,7 @@ fn classify(url: &str, uri: &str) -> Content {
     let extension = file.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
     match extension.as_str() {
         "json" => Content::Tileset(absolute),
-        "pnts" | "i3dm" | "cmpt" | "gltf" | "vctr" | "geom" | "geojson" => Content::Unsupported,
+        "i3dm" | "cmpt" | "gltf" | "vctr" | "geom" | "geojson" => Content::Unsupported,
         _ => Content::Mesh(absolute),
     }
 }
@@ -399,7 +399,8 @@ mod tests {
         assert_eq!(sniff(b"glTF...."), Kind::Mesh);
         assert_eq!(sniff(b"subt...."), Kind::Subtree);
         assert_eq!(sniff(b" \n{\"asset\":{}}"), Kind::Json);
-        assert_eq!(sniff(b"pnts"), Kind::Other);
+        assert_eq!(sniff(b"pnts"), Kind::Mesh);
+        assert_eq!(sniff(b"i3dm"), Kind::Other);
         assert_eq!(sniff(b""), Kind::Other);
     }
 

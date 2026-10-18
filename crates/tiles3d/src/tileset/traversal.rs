@@ -493,7 +493,7 @@ mod tests {
             50.63,
             3000.0,
             64.0,
-            r#","contents":[{"uri":"a.glb"},{"uri":"b.b3dm"},{"uri":"c.pnts"}]"#,
+            r#","contents":[{"uri":"a.glb"},{"uri":"b.b3dm"},{"uri":"c.i3dm"}]"#,
         );
         let tree = tileset(&root);
         assert_eq!(tree.nodes.len(), 3);
@@ -507,7 +507,7 @@ mod tests {
             Content::Mesh("https://example.org/t/b.b3dm".into())
         );
         assert_eq!(tree.nodes[2].content, Content::Unsupported);
-        // Both meshes requested; drawn only once both are ready (the points stay empty)
+        // Both meshes requested; drawn only once both are ready (the instances stay empty)
         let pending = |i: usize| if i == 2 { Readiness::Empty } else { Readiness::Pending };
         let s = select(&tree, 0, &view(16.0), 16.0, &pending);
         assert_eq!(s.request, [0, 1]);

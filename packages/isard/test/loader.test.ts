@@ -53,7 +53,7 @@ const formats = { astc: true, bptc: false, etc: false, s3tc: true };
 const transform = Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
 const tile = { anchor: [1, 2, 3], primitives: [] } as unknown as DecodedTile;
 
-const loader = (size = 2) => new TileLoader(module, 'decoder.js', size, decoders, formats);
+const loader = (size = 2) => new TileLoader(module, 'decoder.js', size, decoders, formats, 'points.wasm');
 /** Keeps a request whose outcome the test ignores from failing it as unhandled */
 const quiet = (p: Promise<unknown>) => void p.catch(() => {});
 const worker = (i: number) => FakeWorker.all[i] as FakeWorker;
@@ -71,7 +71,7 @@ describe('workers', () => {
     for (const w of FakeWorker.all) {
       expect(w.url).toBe('decoder.js');
       expect(w.options).toEqual({ type: 'module' });
-      expect(w.messages[0]).toEqual({ type: 'init', module, decoders, formats });
+      expect(w.messages[0]).toEqual({ type: 'init', module, decoders, formats, points: 'points.wasm' });
     }
     quiet(l.load(2, 'b.glb', transform, true, false));
     expect(FakeWorker.all.length).toBe(3);
@@ -192,6 +192,32 @@ describe('failures', () => {
     const again = await l.load(2, 'b.glb', transform, true, false).catch((e: unknown) => e);
     expect(again).toBe(first);
     expect(FakeWorker.all.length).toBe(1);
+  });
+});
+
+describe('point clouds', () => {
+  test('a COPC chunk goes to a worker with what decodes it, and resolves with its vertices', async () => {
+    const l = loader(1);
+    const laz = new Uint8Array([1]);
+    const layout = new Float64Array(8);
+    const grid = new Float64Array(30);
+    const done = l.loadPoints(5, 'c.copc.laz', 100, 20, laz, layout, grid, 7, 'low');
+    expect(worker(0).messages[1]).toEqual({
+      type: 'points',
+      id: 5,
+      url: 'c.copc.laz',
+      offset: 100,
+      size: 20,
+      laz,
+      layout,
+      grid,
+      count: 7,
+      priority: 'low',
+    });
+    const vertices = new Uint8Array(140);
+    worker(0).reply({ type: 'points', id: 5, vertices });
+    expect(await done).toBe(vertices);
+    l.destroy();
   });
 });
 

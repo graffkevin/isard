@@ -14,7 +14,7 @@
     "build:bench": "bun scripts/build.ts --bench",
     "dev": "bun scripts/build.ts --bench && bun scripts/serve.ts",
     "typecheck": "tsc -p packages/isard && tsc -p packages/isard/tsconfig.worker.json && tsc -p packages/isard/tsconfig.test.json && tsc -p apps/demo && tsc -p apps/bench && tsc -p examples && tsc -p scripts",
-    "lint": "biome check . && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo clippy --target wasm32-unknown-unknown -- -D warnings && cargo clippy -p isard --target wasm32-unknown-unknown --no-default-features -- -D warnings",
+    "lint": "biome check . && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo clippy --target wasm32-unknown-unknown -- -D warnings && cargo clippy -p isard --target wasm32-unknown-unknown --no-default-features -- -D warnings && cargo clippy -p isard-pointcloud --target wasm32-unknown-unknown --features module -- -D warnings",
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test && cargo test -p isard --no-default-features && bun test packages/isard",
     "test:visual": "bun scripts/visual.ts",
