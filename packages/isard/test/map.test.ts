@@ -19,7 +19,10 @@ let fetchStatus = 200;
 const fetchMock = mock(async (_url: unknown) => new Response(EMPTY_WASM, { status: fetchStatus }));
 
 /** A stand-in for Worker: the tile loader only creates its workers with the first tile */
-class NoWorker {}
+class NoWorker {
+  postMessage() {}
+  terminate() {}
+}
 
 const restore = setGlobals({
   ...domGlobals(frames),
@@ -32,8 +35,14 @@ afterAll(restore);
 const { GeoMap, defaultEasing } = await import('../src/map.ts');
 const { TileLoader } = await import('../src/loader.ts');
 const { geoplateformeWms, geoplateformeWmts } = await import('../src/geoplateforme.ts');
-const { IGN_ATTRIBUTION, OPENFREEMAP_ATTRIBUTION, TERRAIN_TILES, TERRAIN_TILES_ATTRIBUTION, TERRAIN_URL } =
-  await import('../src/basemaps.ts');
+const {
+  BODY_TERRAINS,
+  IGN_ATTRIBUTION,
+  OPENFREEMAP_ATTRIBUTION,
+  TERRAIN_TILES,
+  TERRAIN_TILES_ATTRIBUTION,
+  TERRAIN_URL,
+} = await import('../src/basemaps.ts');
 
 type Map = Awaited<ReturnType<typeof GeoMap.create>>;
 
@@ -364,10 +373,46 @@ describe('options', () => {
     const { engine, map } = await create();
     map.addRaster({ url: 'https://trek.example/{z}/{y}/{x}.jpg', grid: 'equirectangular', maxZoom: 8 });
     const [url, minZoom, maxZoom, , , size, loader] = engine.last('addRaster') ?? [];
-    expect([url, minZoom, maxZoom, size]).toEqual(['https://trek.example/{z}/{y}/{x}.jpg', 0, 9, undefined]);
+    expect([url, minZoom, maxZoom, size]).toEqual(['https://trek.example/{z}/{y}/{x}.jpg', 1, 9, undefined]);
     expect(loader).toBeInstanceOf(Function);
     map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png' });
     expect(engine.last('addRaster')?.slice(2)).toEqual([19, 1, 1, undefined, undefined]);
+  });
+
+  test('an unknown basemap throws, before anything is created or removed', async () => {
+    await expect(create({ basemap: 'nope' as never })).rejects.toThrow("isard: unknown basemap 'nope'");
+    const { map, engine } = await create({ basemap: 'ign-plan' });
+    expect(() => map.setBasemap('plan-ortho' as never)).toThrow("isard: unknown basemap 'plan-ortho'");
+    expect(engine.args('removeLayer')).toEqual([]);
+  });
+
+  test('a PNG encoding of the relief takes a tile URL: an image service or a {bbox} throws', async () => {
+    const { map } = await create();
+    expect(() => map.setTerrain({ url: 'https://dem.example/ImageServer', encoding: 'terrarium' })).toThrow(
+      "isard: the 'terrarium' terrain encoding takes a tile URL with {z}, {x} and {y}",
+    );
+    expect(() => map.setTerrain({ url: 'https://dem.example/wms?BBOX={bbox}', encoding: 'mapbox' })).toThrow(
+      "the 'mapbox' terrain encoding",
+    );
+    expect(() => map.setTerrain({ url: 'https://dem.example/wms?BBOX={bbox}' })).not.toThrow();
+  });
+
+  test("NASA's relief of the Moon and Mars is credited; a relief of the application's is not", async () => {
+    const container = new FakeElement('div');
+    const map = await GeoMap.create(container as unknown as HTMLElement, {
+      body: 'moon',
+      terrain: true,
+      workers: false,
+    });
+    maps.push(map);
+    const credits = (element: FakeElement): string | undefined =>
+      element.className === 'isard-attrib-inner' ? element.innerHTML : element.children.map(credits).find(Boolean);
+    expect(credits(container)).toBe(BODY_TERRAINS.moon.attribution);
+    expect(credits(container)).toContain('LOLA terrain model, NASA/GSFC/MIT');
+    map.setTerrain({ url: 'https://dem.example/ImageServer' });
+    expect(credits(container) ?? '').toBe('');
+    const mars = await create({ body: 'mars', terrain: true, attributionControl: true });
+    expect(credits(mars.container)).toContain('MOLA terrain model, NASA/JPL/GSFC');
   });
 
   test('setMinZoom and setMaxZoom keep the other end', async () => {
@@ -747,6 +792,48 @@ describe('defaultEasing', () => {
       expect(v).toBeGreaterThanOrEqual(previous);
       previous = v;
     }
+  });
+});
+
+describe('layers', () => {
+  test("a raster's style: either value alone keeps the other; the positional form still works", async () => {
+    const { map, engine } = await create();
+    const raster = map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png', opacity: 0.8, saturation: 0.5 });
+    raster.setStyle({ opacity: 0.3 });
+    expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.3, 0.5]);
+    raster.setStyle({ saturation: 0 });
+    expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.3, 0]);
+    raster.setStyle(0.6);
+    expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.6, 1]);
+  });
+
+  test('a removed layer is removed once', async () => {
+    const { map, engine } = await create();
+    const line = map.addLines({ data: [] });
+    line.remove();
+    line.remove();
+    expect(engine.args('removeLayer').length).toBe(1);
+  });
+
+  test('vector tiles: a removed labels layer is forgotten; destroy removes the layers still there', async () => {
+    const { map, engine } = await create();
+    const internals = map as unknown as { onTop: Set<unknown>; vectorSets: Set<unknown> };
+    const tiles = map.vectorTiles({
+      style: { version: 8, sources: { v: { type: 'vector', tiles: ['https://t/{z}/{x}/{y}'] } }, layers: [] },
+    });
+    const raster = tiles.raster();
+    const labels = tiles.labels();
+    const other = tiles.raster();
+    expect(internals.onTop.has(labels)).toBe(true);
+    labels.remove();
+    expect(internals.onTop.size).toBe(0);
+    other.remove();
+    const removed = engine.args('removeLayer').length;
+    const id = raster.id;
+    tiles.destroy();
+    // Only the raster still on the map
+    expect(engine.args('removeLayer').slice(removed)).toEqual([[id]]);
+    expect(internals.vectorSets.size).toBe(0);
   });
 });
 

@@ -1,0 +1,17 @@
+{
+  "asset": { "version": "1.0" },
+  "geometricError": 500,
+  "root": {
+    "boundingVolume": { "sphere": [4045000, 212000, 4910000, 3000] },
+    "geometricError": 64,
+    "refine": "REPLACE",
+    "content": { "uri": "tileset.json" },
+    "children": [
+      {
+        "boundingVolume": { "sphere": [4045000, 212000, 4910000, 500] },
+        "geometricError": 8,
+        "content": { "uri": "b/tileset.json" }
+      }
+    ]
+  }
+}

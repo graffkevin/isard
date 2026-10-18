@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "isard"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "isard-geo"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "isard-tiles3d"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "glam",

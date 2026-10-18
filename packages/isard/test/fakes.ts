@@ -11,6 +11,8 @@ type Call = [name: string, args: unknown[]];
 /** A stand-in for the engine: records every call; methods not defined here return a new id (`add…`) or undefined */
 export class FakeEngine {
   static instances: FakeEngine[] = [];
+  /** Methods that throw in the next engine created */
+  static failNext = new Set<string>();
   calls: Call[] = [];
   cam: Camera = { center: [0, 0], zoom: 0, pitch: 0, bearing: 0 };
   /** What `render` returns: true while tiles load */
@@ -21,6 +23,10 @@ export class FakeEngine {
   polls: (PickResult | undefined)[] = [];
   boundsValue = Float64Array.of(1, 2, 3, 4);
   freed = false;
+  /** Methods this build does not have (the engine without 3D Tiles) */
+  hidden = new Set<string>();
+  /** Methods that throw, to test failures */
+  failing = new Set<string>();
   private nextId = 1;
 
   constructor(
@@ -28,6 +34,8 @@ export class FakeEngine {
     readonly onRequest: () => void,
   ) {
     FakeEngine.instances.push(this);
+    for (const name of FakeEngine.failNext) this.failing.add(name);
+    FakeEngine.failNext.clear();
     const own: Record<string, (...args: never[]) => unknown> = {
       camera: () => ({ ...this.cam, center: [...this.cam.center] }),
       setCamera: (lon: number, lat: number, zoom: number, pitch: number, bearing: number) => {
@@ -50,8 +58,10 @@ export class FakeEngine {
     return new Proxy(this, {
       get: (target, name, receiver) => {
         if (typeof name === 'symbol' || name in target) return Reflect.get(target, name, receiver);
+        if (target.hidden.has(name)) return undefined;
         return (...args: unknown[]) => {
           target.calls.push([name, args]);
+          if (target.failing.has(name)) throw new Error(`engine: ${name} failed`);
           const f = own[name];
           if (f) return (f as (...a: unknown[]) => unknown)(...args);
           return name.startsWith('add') ? target.nextId++ : undefined;
@@ -71,6 +81,15 @@ export class FakeEngine {
   }
 }
 
+/** The engine without 3D Tiles (`isard_core.js`): the same, without its 3D Tiles methods */
+export class CoreFakeEngine extends FakeEngine {
+  static readonly TILES3D = ['addTiles3d', 'setTiles3dStyle', 'tiles3dStats'];
+  constructor(canvas: unknown, onRequest: () => void) {
+    super(canvas, onRequest);
+    for (const name of CoreFakeEngine.TILES3D) this.hidden.add(name);
+  }
+}
+
 /** The module's free functions and init, configurable per test */
 export const wasm = {
   init: mock(async (_input?: unknown) => ({})),
@@ -81,15 +100,15 @@ export const wasm = {
   dracoRequests: mock((_bytes: Uint8Array): unknown[] => []),
 };
 
-const bindings = () => ({
+const bindings = (Engine: typeof FakeEngine) => () => ({
   default: (input?: unknown) => wasm.init(input),
-  Engine: FakeEngine,
+  Engine,
   decodeTile: (...args: Parameters<typeof wasm.decodeTile>) => wasm.decodeTile(...args),
   dracoRequests: (bytes: Uint8Array) => wasm.dracoRequests(bytes),
 });
-// The engine without 3D Tiles (loaded by default) and the full one: the same fake
-mock.module('../src/wasm/isard.js', bindings);
-mock.module('../src/wasm/isard_core.js', bindings);
+// The full engine, and the one without 3D Tiles (loaded by default): the same fake without the 3D Tiles methods
+mock.module('../src/wasm/isard.js', bindings(FakeEngine));
+mock.module('../src/wasm/isard_core.js', bindings(CoreFakeEngine));
 
 // ── DOM ──
 
@@ -183,6 +202,18 @@ export class FakeElement {
   getContext(): null {
     return null;
   }
+
+  /** Reads of the element's place on the page (a forced layout in a browser) */
+  rectReads = 0;
+  left = 0;
+  top = 0;
+
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number } {
+    this.rectReads += 1;
+    return { left: this.left, top: this.top, width: this.clientWidth, height: this.clientHeight };
+  }
+
+  setPointerCapture(): void {}
 
   get ownerDocument(): FakeDocument {
     return fakeDocument;

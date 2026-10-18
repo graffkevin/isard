@@ -9,6 +9,10 @@ use tiles3d::tileset::Readiness;
 pub const COOLDOWN_MS: f64 = 5_000.0;
 /// Downloads of siblings out of view at a time
 pub const PREFETCH_REQUESTS: usize = 4;
+/// Siblings out of view are prefetched only while the GPU memory is under this share of the budget (in tenths): they
+/// are never drawn, so past the budget they would be the first unloaded (down to 9 tenths), then fetched again, in a
+/// loop of downloads and uploads for nothing
+const PREFETCH_TENTHS: usize = 8;
 /// Attempts at the root tileset before the layer gives up, and the pause before the first retry (ms, doubled at each)
 pub const ROOT_ATTEMPTS: u32 = 4;
 pub const ROOT_RETRY_MS: f64 = 2_000.0;
@@ -45,7 +49,7 @@ pub struct States<M> {
     /// Tiles loading
     loading: HashSet<usize>,
     /// Tiles on the GPU, and their memory
-    ready: usize,
+    ready: HashSet<usize>,
     gpu_bytes: usize,
     /// Buffer of `take_stale`
     visible: HashSet<usize>,
@@ -56,7 +60,7 @@ impl<M> Default for States<M> {
         Self {
             tiles: Vec::new(),
             loading: HashSet::new(),
-            ready: 0,
+            ready: HashSet::new(),
             gpu_bytes: 0,
             visible: HashSet::new(),
         }
@@ -74,7 +78,7 @@ impl<M: Resident> States<M> {
 
     /// Tiles loading, tiles on the GPU, their memory (bytes)
     pub fn counts(&self) -> (usize, usize, usize) {
-        (self.loading.len(), self.ready, self.gpu_bytes)
+        (self.loading.len(), self.ready.len(), self.gpu_bytes)
     }
 
     /// New nodes in the tree (an external tileset grafted): unloaded, or empty when `empty` says they have no content
@@ -93,7 +97,7 @@ impl<M: Resident> States<M> {
                 self.loading.insert(tile);
             }
             State::Ready(mesh) => {
-                self.ready += 1;
+                self.ready.insert(tile);
                 self.gpu_bytes += mesh.bytes();
             }
             _ => {}
@@ -106,7 +110,9 @@ impl<M: Resident> States<M> {
                 }
             }
             State::Ready(mesh) => {
-                self.ready -= 1;
+                if !matches!(self.tiles[tile], State::Ready(_)) {
+                    self.ready.remove(&tile);
+                }
                 self.gpu_bytes -= mesh.bytes();
             }
             _ => {}
@@ -169,8 +175,16 @@ impl<M: Resident> States<M> {
     }
 
     /// The tiles to request this frame, in order, into `out`: those of `request` while fewer than `max_requests`
-    /// load, then, once every tile in view is asked, a few siblings out of view (`prefetch`)
-    pub fn plan_requests(&self, request: &[usize], prefetch: &[usize], max_requests: usize, out: &mut Vec<usize>) {
+    /// load, then, once every tile in view is asked, a few siblings out of view (`prefetch`) while the GPU memory is
+    /// well under `budget` (`PREFETCH_TENTHS`)
+    pub fn plan_requests(
+        &self,
+        request: &[usize],
+        prefetch: &[usize],
+        max_requests: usize,
+        budget: usize,
+        out: &mut Vec<usize>,
+    ) {
         out.clear();
         let mut in_flight = self.loading.len();
         for &i in request {
@@ -184,7 +198,8 @@ impl<M: Resident> States<M> {
         }
         // Siblings out of view: only with the visible tiles all requested, a few at a time (bandwidth stays for what
         // is on screen)
-        if request.iter().all(|i| !self.requestable(*i) || out.contains(i)) {
+        let room = self.gpu_bytes < budget / 10 * PREFETCH_TENTHS;
+        if room && request.iter().all(|i| !self.requestable(*i) || out.contains(i)) {
             let prefetching = prefetch.iter().filter(|&&i| self.is_loading(i)).count();
             let free = PREFETCH_REQUESTS
                 .saturating_sub(prefetching)
@@ -207,15 +222,19 @@ impl<M: Resident> States<M> {
         if self.gpu_bytes <= budget {
             return Vec::new();
         }
+        // Only the tiles on the GPU are looked at, not every node of the tree
         let mut candidates: Vec<(u64, usize, usize)> = self
-            .tiles
+            .ready
             .iter()
-            .enumerate()
-            .filter_map(|(i, s)| match s {
+            .filter_map(|&i| match &self.tiles[i] {
                 State::Ready(mesh) if mesh.used() < frame => Some((mesh.used(), i, mesh.bytes())),
                 _ => None,
             })
             .collect();
+        if candidates.is_empty() {
+            // Everything on the GPU is on screen: nothing to unload
+            return Vec::new();
+        }
         candidates.sort_unstable();
         let mut bytes = self.gpu_bytes;
         let mut out = Vec::new();
@@ -232,7 +251,7 @@ impl<M: Resident> States<M> {
     /// Takes every state out (the layer is deleted), leaving the tiles empty
     pub fn drain(&mut self) -> Vec<State<M>> {
         self.loading.clear();
-        self.ready = 0;
+        self.ready.clear();
         self.gpu_bytes = 0;
         std::mem::take(&mut self.tiles)
     }
@@ -321,14 +340,14 @@ mod tests {
         s.replace(0, loading(1));
         let mut out = Vec::new();
         // One loading, three more allowed: tiles 1 to 3; tile 4 waits, so no prefetch
-        s.plan_requests(&[1, 2, 3, 4], &[8, 9], 4, &mut out);
+        s.plan_requests(&[1, 2, 3, 4], &[8, 9], 4, usize::MAX, &mut out);
         assert_eq!(out, [1, 2, 3]);
         // Everything in view asked: siblings fill the room left
-        s.plan_requests(&[0, 1], &[7, 8, 9], 4, &mut out);
+        s.plan_requests(&[0, 1], &[7, 8, 9], 4, usize::MAX, &mut out);
         assert_eq!(out, [1, 7, 8]);
         // A ready tile is not asked again
         s.replace(1, State::Ready(Mesh { bytes: 1, used: 0 }));
-        s.plan_requests(&[1], &[], 4, &mut out);
+        s.plan_requests(&[1], &[], 4, usize::MAX, &mut out);
         assert_eq!(out, [] as [usize; 0]);
     }
 
@@ -352,5 +371,63 @@ mod tests {
         assert_eq!(root_retry_delay(2), Some(4_000.0));
         assert_eq!(root_retry_delay(3), Some(8_000.0));
         assert_eq!(root_retry_delay(ROOT_ATTEMPTS), None);
+    }
+
+    #[test]
+    fn no_prefetch_near_the_budget() {
+        let mut s = states(10);
+        s.replace(0, State::Ready(Mesh { bytes: 85, used: 0 }));
+        let mut out = Vec::new();
+        // 85 bytes of 100: past the share for prefetching; the tiles in view are still asked
+        s.plan_requests(&[1], &[7, 8], 4, 100, &mut out);
+        assert_eq!(out, [1]);
+        s.plan_requests(&[1], &[7, 8], 4, 1000, &mut out);
+        assert_eq!(out, [1, 7, 8]);
+    }
+
+    #[test]
+    fn counts_hold_through_loads_and_evictions() {
+        // Random loads, failures, replacements and evictions: the counts always those of the states
+        let mut s = states(64);
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for frame in 1..2000u64 {
+            let tile = (next() % 64) as usize;
+            match next() % 5 {
+                0 => drop(s.replace(tile, loading(frame as u32))),
+                1 | 2 => drop(s.replace(
+                    tile,
+                    State::Ready(Mesh {
+                        bytes: (next() % 50 + 1) as usize,
+                        used: frame,
+                    }),
+                )),
+                3 => drop(s.replace(tile, State::Failed(0.0))),
+                _ => s.touch(&[tile], frame),
+            }
+            for i in s.over_budget(500, frame) {
+                assert!(matches!(s.replace(i, State::Unloaded), Some(State::Ready(_))));
+            }
+            let (loading, ready, bytes) = s.counts();
+            let (mut l, mut r, mut b) = (0, 0, 0);
+            for i in 0..s.len() {
+                match s.get(i) {
+                    Some(State::Loading(_)) => l += 1,
+                    Some(State::Ready(m)) => {
+                        r += 1;
+                        b += m.bytes;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!((loading, ready, bytes), (l, r, b), "frame {frame}");
+            // Under the budget after the evictions, unless what is left was drawn this frame
+            assert!(bytes <= 500 || s.over_budget(500, frame).is_empty());
+        }
     }
 }

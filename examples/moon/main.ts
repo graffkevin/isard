@@ -20,12 +20,8 @@ const map = await GeoMap.create(element('map'), {
   body: 'moon',
   ...(views[location.hash.slice(1)] ?? globe),
   maxPitch: 75,
+  // LOLA's model, credited by the map
   terrain: true,
-  attributionControl: {
-    customAttribution:
-      '<a href="https://trek.nasa.gov/moon/">NASA Moon Trek</a>: LRO WAC mosaic, NASA/GSFC/Arizona State University; ' +
-      'LOLA terrain model, NASA/GSFC/MIT',
-  },
 });
 
 // The global mosaic, 100 m per pixel at the equator: levels 0 to 8 of an equirectangular grid
@@ -33,6 +29,8 @@ map.addRaster({
   url: 'https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{z}/{y}/{x}.jpg',
   grid: 'equirectangular',
   maxZoom: 8,
+  attribution:
+    '<a href="https://trek.nasa.gov/moon/">NASA Moon Trek</a>: LRO WAC mosaic, NASA/GSFC/Arizona State University',
 });
 
 // Where the lunar modules landed (longitude, latitude), and on which side of each its label goes

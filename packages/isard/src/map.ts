@@ -45,6 +45,7 @@ import type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
+  BasemapName,
   BodyOptions,
   CelestialBody,
   FeatureHit,
@@ -110,6 +111,29 @@ interface Bindings {
  * every map; `full` with them, loaded for the first 3D Tiles layer, its module shared with the decoding workers. The
  * core engine has the same API but the 3D Tiles methods: its class is typed as the full one. */
 const engines: { core?: Promise<Bindings>; full?: Promise<Bindings> } = {};
+/** The modules compiled (downloaded and compiled off the main thread, not instantiated): `tiles3d: 'preload'`
+ * compiles the full engine ahead, its first 3D Tiles layer then only instantiates it */
+const modules: { core?: Promise<WebAssembly.Module>; full?: Promise<WebAssembly.Module> } = {};
+
+/** @internal Forgets the engines loaded (tests) */
+export function forgetEngines(): void {
+  for (const kind of ['core', 'full'] as const) {
+    delete engines[kind];
+    delete modules[kind];
+  }
+}
+
+function compileEngine(kind: 'core' | 'full', url: string | URL): Promise<WebAssembly.Module> {
+  const compiled = modules[kind];
+  if (compiled) return compiled;
+  const compiling = compile(url).catch((error: unknown) => {
+    // A later call tries again (a network error, a wrong URL fixed)
+    delete modules[kind];
+    throw error;
+  });
+  modules[kind] = compiling;
+  return compiling;
+}
 
 function loadEngine(kind: 'core' | 'full', url: string | URL): Promise<Bindings> {
   const loaded = engines[kind];
@@ -117,13 +141,12 @@ function loadEngine(kind: 'core' | 'full', url: string | URL): Promise<Bindings>
   const loading = (async () => {
     // The bindings by dynamic import: an application bundles the ones it loads only
     const [module, bindings] = await Promise.all([
-      compile(url),
+      compileEngine(kind, url),
       kind === 'core' ? import('./wasm/isard_core.js') : import('./wasm/isard.js'),
     ]);
     await bindings.default({ module_or_path: module });
     return { module, Engine: bindings.Engine as unknown as EngineClass };
   })().catch((error: unknown) => {
-    // A later call tries again (a network error, a wrong URL fixed)
     delete engines[kind];
     throw error;
   });
@@ -232,12 +255,21 @@ function terrainSettings(
   const url = options.url ?? preset?.url;
   if (url === undefined) throw new Error('isard: the relief of this body needs a url');
   const encoding = options.encoding ?? 'float32';
+  // PNG encodings are fetched tile by tile: a {bbox} or an image service would be fetched as it is
+  if (
+    encoding !== 'float32' &&
+    (IMAGE_SERVER.test(url) || !/\{z\}/.test(url) || !/\{x\}/.test(url) || !/\{y\}/.test(url))
+  ) {
+    throw new Error(`isard: the '${encoding}' terrain encoding takes a tile URL with {z}, {x} and {y} (${url})`);
+  }
   return {
     url: IMAGE_SERVER.test(url) ? imageServerTerrain(url, earth, radius) : url,
     exaggeration,
     maxZoom: options.maxZoom ?? (options.url === undefined && preset ? preset.maxZoom : 15),
     geoid: options.geoid ?? false,
     ...(encoding === 'float32' ? {} : { loader: terrainLoader(url, encoding) }),
+    // NASA's credits for its models
+    ...(options.url === undefined && preset ? { attribution: preset.attribution } : {}),
   };
 }
 
@@ -313,6 +345,18 @@ interface Settings {
 
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
+/** Frames the hover picking waits for its answer at most (usually one) */
+const MAX_POLLS = 30;
+
+/** The name of a basemap, checked: an unknown one throws */
+function checkBasemap(basemap: Basemap): BasemapName {
+  const name = basemapName(basemap);
+  if (name !== 'none' && !(name in VECTOR_BASEMAPS) && !(name in BASEMAPS)) {
+    throw new Error(`isard: unknown basemap '${basemap}'`);
+  }
+  return name;
+}
+
 /** A map (see `GeoMap.create`); layers take it as their host */
 export class GeoMap {
   readonly canvas: HTMLCanvasElement;
@@ -375,6 +419,8 @@ export class GeoMap {
   private hoverPoint: Point | undefined;
   /** Frame polling the engine for the answer of the hover picking, 0 if none */
   private hoverPoll = 0;
+  /** Polls of the hover picking under way: given up after `MAX_POLLS` (an answer that never comes) */
+  private hoverPolls = 0;
   /** What 'hoverfeature' looks for: within `radius` CSS pixels, in `layers` only if given */
   hoverPicking: { radius?: number; layers?: readonly Layer[] } = {};
   private frameRequest = 0;
@@ -390,15 +436,21 @@ export class GeoMap {
   private basemapPool: BasemapWorkers | undefined;
   /** Stops watching the device pixel ratio */
   private unwatchRatio: (() => void) | undefined;
+  /** Stops listening to the canvas's context loss and restoration */
+  private readonly unwatchContext: () => void;
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
     // With 3D Tiles from the start when asked, or when only that engine's URL is given (as before the core engine)
     const full = options.tiles3d === true || (options.wasmUrl !== undefined && options.coreWasmUrl === undefined);
+    // Before anything is created
+    if (options.basemap !== undefined) checkBasemap(options.basemap);
     const bindings = full
       ? await loadEngine('full', options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url))
       : await loadEngine('core', options.coreWasmUrl ?? new URL('./isard_core_bg.wasm', import.meta.url));
-    return new GeoMap(container, options, bindings.Engine, full ? bindings.module : undefined);
+    const map = new GeoMap(container, options, bindings.Engine, full ? bindings.module : undefined);
+    if (options.tiles3d === 'preload' && !full) map.preloadTiles3d();
+    return map;
   }
 
   private constructor(
@@ -450,13 +502,19 @@ export class GeoMap {
     };
     this.#engine = this.createEngine();
     // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
-    this.canvas.addEventListener('webglcontextlost', (event) => {
+    const lost = (event: Event) => {
       event.preventDefault();
       this.lost = true;
       cancelAnimationFrame(this.frameRequest);
       this.frameRequest = 0;
-    });
-    this.canvas.addEventListener('webglcontextrestored', () => this.restore());
+    };
+    const restored = () => this.restore();
+    this.canvas.addEventListener('webglcontextlost', lost);
+    this.canvas.addEventListener('webglcontextrestored', restored);
+    this.unwatchContext = () => {
+      this.canvas.removeEventListener('webglcontextlost', lost);
+      this.canvas.removeEventListener('webglcontextrestored', restored);
+    };
     const start: Camera = this.earth
       ? { center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0 }
       : { center: [0, 0], zoom: 2, pitch: 0, bearing: 0 };
@@ -533,26 +591,51 @@ export class GeoMap {
    * settings and layers kept, as after a context loss); the layer is created then */
   private upgrade(): void {
     const url = this.tiles3dOptions.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url);
-    this.upgrading ??= loadEngine('full', url).then(
-      ({ module, Engine }) => {
-        this.upgrading = undefined;
-        if (this.gone) return;
-        this.engineClass = Engine;
-        this.tiles3dModule = module;
-        // A lost context: the engine is rebuilt on it once restored
-        if (!this.lost) this.restore();
-      },
-      (error: unknown) => {
-        // The 3D Tiles layers stay empty; the next one added tries again
-        this.upgrading = undefined;
-        report(error);
-        this.requestRender();
-      },
-    );
+    this.upgrading ??= loadEngine('full', url)
+      // The map is rebuilt in a task of its own, not in the one that instantiated the engine: two shorter tasks
+      .then((bindings) => new Promise<Bindings>((resolve) => setTimeout(() => resolve(bindings), 0)))
+      .then(
+        ({ module, Engine }) => {
+          this.upgrading = undefined;
+          if (this.gone) return;
+          this.engineClass = Engine;
+          this.tiles3dModule = module;
+          // A lost context: the engine is rebuilt on it once restored
+          if (!this.lost) this.restore();
+        },
+        (error: unknown) => {
+          // The 3D Tiles layers stay empty; the next one added tries again
+          this.upgrading = undefined;
+          if (this.gone) return;
+          report(error);
+          this.requestRender();
+        },
+      );
+  }
+
+  /** Downloads and compiles the engine with 3D Tiles once the map is idle (`tiles3d: 'preload'`), without running
+   * it: the first 3D Tiles layer then only instantiates it */
+  private preloadTiles3d(): void {
+    const url = this.tiles3dOptions.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url);
+    const start = () => {
+      if (!this.gone && !this.tiles3dModule) compileEngine('full', url).catch(() => undefined);
+    };
+    const later = () => {
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(start, { timeout: 2000 });
+      else setTimeout(start, 0);
+    };
+    if (this.settled) later();
+    else {
+      const off = this.on('idle', () => {
+        off();
+        later();
+      });
+    }
   }
 
   /** After a context loss: a new engine with the same camera, settings and layers (same handles, same order) */
   private restore(): void {
+    if (this.gone) return;
     this.cancelHoverPick();
     const camera = this.getCamera();
     this.#engine.free();
@@ -560,14 +643,41 @@ export class GeoMap {
     this.lost = false;
     this.setCamera(camera);
     this.#glyphs?.attach(this.#engine);
-    for (const layer of this.layers) layer.attach(this.#engine);
+    const engine = this.#engine;
+    // No layer refers to an id of the old engine while the others are created
+    for (const layer of this.layers) layer.forgetEngine();
+    for (const layer of this.layers) {
+      // Still waiting for the engine with 3D Tiles (loading, or failed): created with it
+      if (layer instanceof Tiles3dLayer && !this.tiles3dModule) continue;
+      // A layer that fails is reported and left out; the others are created
+      try {
+        layer.attach(engine);
+      } catch (error) {
+        report(error);
+      }
+    }
+    // Links between layers, once every layer has its new id (buildings colored by a network above them)
+    for (const layer of this.layers) {
+      if (layer.id < 0) continue;
+      try {
+        layer.relink(engine);
+      } catch (error) {
+        report(error);
+      }
+    }
     this.resize();
   }
 
   /** @internal Forgets a removed layer */
   detach(layer: object): void {
     this.unlist(layer);
+    this.onTop.delete(layer as Layer);
     if (this.rasterCredits.delete(layer)) this.attributionChanged();
+  }
+
+  /** @internal The layer is on the map */
+  hasLayer(layer: object): boolean {
+    return !this.gone && this.layers.includes(layer as Layer);
   }
 
   /** Takes a layer out of the drawing order (to put it back elsewhere, or for good) */
@@ -827,8 +937,9 @@ export class GeoMap {
   }
 
   /**
-   * Network edge under a screen point (CSS pixels), undefined if none. Reads one pixel of an offscreen picking pass:
-   * cheap whatever the number of features, call it on hover.
+   * The feature under a screen point (CSS pixels), undefined if none: its layer id and index. Reads one pixel of an
+   * offscreen picking pass, whatever the number of features, but waits for the GPU to finish the frame (a stall): for
+   * clicks and one-off queries. On hover, listen to 'hoverfeature' instead, which picks without waiting.
    */
   pick(point: Point, radius = 0, layers?: readonly Layer[]): PickHit | undefined {
     const only = layers && Uint32Array.from(layers.map((l) => l.id));
@@ -860,9 +971,14 @@ export class GeoMap {
   private requestHoverPick(point: Point): void {
     const { radius = 0, layers } = this.hoverPicking;
     const only = layers && Uint32Array.from(layers.map((l) => l.id));
+    // The engine cannot pick (no request in flight): the poll under way would wait for nothing
+    if (!this.engine.requestPick(point[0], point[1], radius, only)) {
+      this.cancelHoverPick();
+      return;
+    }
     // A new request replaces the one in flight (in the engine too): one poll loop at most
-    if (!this.engine.requestPick(point[0], point[1], radius, only) || this.hoverPoll) return;
-    this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
+    this.hoverPolls = 0;
+    if (!this.hoverPoll) this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
   }
 
   private readonly pollHoverPick = (): void => {
@@ -870,8 +986,9 @@ export class GeoMap {
     if (this.lost) return;
     const result: PickResult | undefined = this.engine.pollPick();
     if (!result) {
-      // The GPU is not done yet (usually a frame): asked again next frame, without drawing
-      this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
+      // The GPU is not done yet (usually a frame): asked again next frame, without drawing; given up at last
+      this.hoverPolls += 1;
+      if (this.hoverPolls < MAX_POLLS) this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
       return;
     }
     this.emit('hoverfeature', {
@@ -942,15 +1059,12 @@ export class GeoMap {
   /** Replaces the basemap and the IGN hillshade, under the other layers (hillshade by default: 0, none). The former
    * names of the Géoplateforme basemaps (`LegacyBasemap`) are taken under their new ones */
   setBasemap(basemap: Basemap, hillshade = 0): void {
-    const name = basemapName(basemap);
-    this.basemap?.remove();
-    this.hillshade?.remove();
-    if (this.vector) {
-      this.onTop.delete(this.vector.labels as Layer);
-      this.vector.labels.remove();
-      this.vector.tiles.destroy();
-      this.vector = undefined;
-    }
+    const name = checkBasemap(basemap);
+    if (this.basemap && this.hasLayer(this.basemap)) this.basemap.remove();
+    if (this.hillshade && this.hasLayer(this.hillshade)) this.hillshade.remove();
+    // Its raster and labels go with it
+    this.vector?.tiles.destroy();
+    this.vector = undefined;
     const vector = VECTOR_BASEMAPS[name as keyof typeof VECTOR_BASEMAPS];
     if (vector) {
       const tiles = new VectorTiles(this, {
@@ -978,8 +1092,9 @@ export class GeoMap {
     let layer: RasterLayer;
     if (grid === 'equirectangular' && !options.loader) {
       // The source's level n has the pixel size of Mercator level n + 1 at the equator
-      const loader = equirectangularLoader(url, maxZoom, size ?? 256);
-      layer = new RasterLayer(this, { url, minZoom, maxZoom: maxZoom + 1, opacity, saturation, size, loader });
+      const loader = equirectangularLoader(url, maxZoom, size ?? 256, minZoom);
+      const levels = { minZoom: minZoom + 1, maxZoom: maxZoom + 1 };
+      layer = new RasterLayer(this, { url, ...levels, opacity, saturation, size, loader });
     } else {
       layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader: options.loader });
     }
@@ -1057,6 +1172,11 @@ export class GeoMap {
     return tiles;
   }
 
+  /** @internal Forgets a destroyed `VectorTiles` */
+  dropVectorTiles(tiles: VectorTiles): void {
+    this.vectorSets.delete(tiles);
+  }
+
   /**
    * @internal The workers for a `VectorTiles`: the map's shared pool, or a pool of its own (`own`, to stop with it)
    * when it asks for another count or URL
@@ -1103,11 +1223,17 @@ export class GeoMap {
     this.requestRender();
   }
 
-  /** @internal */
+  /** @internal The pointer moved over the map (undefined: it left). Without 'hover' and 'hoverfeature' listeners,
+   * nothing is drawn: a still map stays idle under a moving mouse */
   hover(point: Point | undefined): void {
+    if (!point) {
+      this.hoverPoint = undefined;
+      this.cancelHoverPick();
+      return;
+    }
+    if (this.listeners.hover.size === 0 && this.listeners.hoverfeature.size === 0) return;
     this.hoverPoint = point;
-    if (point) this.requestRender();
-    else this.cancelHoverPick();
+    this.requestRender();
   }
 
   private frame(now: number): void {
@@ -1144,7 +1270,8 @@ export class GeoMap {
       const point = this.hoverPoint;
       hovered = point;
       this.hoverPoint = undefined;
-      this.emit('hover', { point, lonLat: this.unproject(point) });
+      // The position under the pointer for its listeners only (a 'hoverfeature' alone does not need it)
+      if (this.listeners.hover.size > 0) this.emit('hover', { point, lonLat: this.unproject(point) });
     }
     const t0 = performance.now();
     // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
@@ -1198,12 +1325,15 @@ export class GeoMap {
   }
 
   destroy(): void {
+    if (this.gone) return;
     this.gone = true;
+    // A context restored later rebuilds nothing
+    this.unwatchContext();
     const camera = this.getCamera();
     cancelAnimationFrame(this.frameRequest);
     this.cancelHoverPick();
     this.vector?.tiles.destroy();
-    for (const tiles of this.vectorSets) tiles.destroy();
+    for (const tiles of [...this.vectorSets]) tiles.destroy();
     this.vectorSets.clear();
     this.basemapPool?.terminate();
     this.basemapPool = undefined;
@@ -1216,6 +1346,8 @@ export class GeoMap {
     // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
     // that does nothing, and nothing is drawn again
     this.#engine = destroyed(camera);
+    // Glyph ranges still arriving upload to it, not to the freed engine
+    this.#glyphs?.attach(this.#engine);
     this.lost = true;
     for (const control of [...this.controls.keys()]) this.removeControl(control);
     this.positioned.clear();

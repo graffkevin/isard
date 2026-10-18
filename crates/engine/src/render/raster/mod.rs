@@ -28,7 +28,7 @@ mod pass;
 mod shaders;
 
 pub use cache::simulate_plans;
-pub use data::{terrain_levels, unpack_depth};
+pub use data::{terrain_geoid, terrain_levels, unpack_depth};
 pub use pass::RasterPass;
 pub use shaders::VERTEX;
 
@@ -76,6 +76,21 @@ pub const STACK: usize = 4;
 const INSTANCE: usize = 8 + STACK * 11 + 4;
 /// Elevation tiles are chosen this many times larger on screen than imagery tiles: three levels coarser
 const ELEVATION_SCALE: f64 = 8.0;
+
+/// Whether a tile is a descendant of a wanted tile close enough to stand in for it (`DESCENDANT_LEVELS`)
+fn stands_in_for(tile: TileId, wanted: &HashSet<TileId>) -> bool {
+    let mut t = tile.parent();
+    for _ in 0..DESCENDANT_LEVELS {
+        let Some(a) = t else {
+            return false;
+        };
+        if wanted.contains(&a) {
+            return true;
+        }
+        t = a.parent();
+    }
+    false
+}
 
 pub struct RasterOptions {
     /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857, `ArcGIS` `exportImage`: west,
@@ -240,15 +255,25 @@ impl RasterSource {
                 Err(Fetch::Transient) => self.cache.failed(tile, now),
             }
         }
+        // Tiles no longer needed (neither wanted nor kept by `abort_stale`, nor a descendant standing in for a wanted
+        // tile while zooming out) are dropped: a decoded image may hold 4 MB outside the heap
+        let (wanted, keep, queued) = (&self.wanted_set, &self.keep, &mut self.queued);
+        self.queue.retain(|(tile, pixels)| {
+            let needed = keep.contains(tile) || stands_in_for(*tile, wanted);
+            if !needed {
+                queued.remove(tile);
+                pixels.close();
+            }
+            needed
+        });
         // Tiles of the current view first, the others (stand-ins, tiles that left the view) after
-        let wanted = &self.wanted_set;
         self.queue
             .make_contiguous()
             .sort_by_key(|(tile, _)| !wanted.contains(tile));
         // Uploads within the frame's time budget (at least one), the rest waits for the next frames
-        let start = js_sys::Date::now();
+        let start = crate::js::now();
         let mut uploaded = 0;
-        while uploaded == 0 || js_sys::Date::now() - start < budget_ms {
+        while uploaded == 0 || crate::js::now() - start < budget_ms {
             let Some((tile, pixels)) = self.queue.pop_front() else {
                 break;
             };
@@ -365,7 +390,7 @@ impl RasterSource {
                         .await
                         .map(Pixels::Heights)
                 } else if let Some(loader) = &loader {
-                    fetch::draw_tile(loader, tile, &signal).await.map(Pixels::Image)
+                    fetch::draw_tile(loader, tile, size, &signal).await.map(Pixels::Image)
                 } else if elevation {
                     fetch::fetch_heights(&url, tile, geoid, no_data, &signal, reload, priority)
                         .await
@@ -437,8 +462,9 @@ impl RasterSource {
         self.wanted_set.clear();
         self.wanted_set.extend(self.wanted.iter().map(|s| s.tile));
         self.wanted_set.extend(self.preload.1.iter().copied());
-        self.receive(gl, frame, now, ctx.loading.upload_budget_ms);
+        // The tiles kept first (`keep`), which the arrivals not needed any more are checked against
         self.abort_stale(now);
+        self.receive(gl, frame, now, ctx.loading.upload_budget_ms);
         self.fading = false;
         let motion = Motion {
             flying: ctx.loading.skip_levels_in_flight && ctx.moving && ctx.preload.is_some(),
@@ -534,5 +560,24 @@ impl Drop for RasterSource {
                 pixels.close();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_descendants_stand_in_for_wanted_tiles() {
+        let wanted: HashSet<TileId> = [TileId::new(5, 10, 10)].into_iter().collect();
+        let child = TileId::new(6, 21, 20);
+        assert!(stands_in_for(child, &wanted));
+        assert!(stands_in_for(TileId::new(8, 84, 80), &wanted));
+        // Too deep, elsewhere, the tile itself or its parent: no
+        assert!(!stands_in_for(TileId::new(9, 168, 160), &wanted));
+        assert!(!stands_in_for(TileId::new(6, 0, 0), &wanted));
+        assert!(!stands_in_for(TileId::new(5, 10, 10), &wanted));
+        assert!(!stands_in_for(TileId::new(4, 5, 5), &wanted));
+        assert!(!stands_in_for(TileId::new(0, 0, 0), &wanted));
     }
 }

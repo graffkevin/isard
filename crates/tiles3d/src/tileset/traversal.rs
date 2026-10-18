@@ -6,6 +6,31 @@ use geo::camera::View;
 use glam::DVec4;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Hashes a node index with one multiplication (Fibonacci hashing): the traversal looks tiles up by index thousands of
+/// times a frame, where `SipHash`'s resistance to chosen keys buys nothing
+#[derive(Default)]
+struct IndexHasher(u64);
+
+impl Hasher for IndexHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(b)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0 ^ n as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+
+type IndexMap<V> = HashMap<usize, V, BuildHasherDefault<IndexHasher>>;
+type IndexSet = HashSet<usize, BuildHasherDefault<IndexHasher>>;
 
 /// Load state of a tile, as the traversal sees it
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,7 +91,7 @@ pub fn select(tree: &Tree, root: usize, view: &View, max_error: f64, ready: &dyn
     let mut requests = traversal.requests;
     // Largest screen-space error first (as Cesium does): coarse tiles and nearby tiles, the most visible gaps
     requests.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.total_cmp(&b.2)));
-    let mut seen = HashSet::new();
+    let mut seen = IndexSet::default();
     requests.retain(|r| seen.insert(r.0));
     let mut out = traversal.out;
     out.request = requests.into_iter().map(|r| r.0).collect();
@@ -84,10 +109,10 @@ struct Traversal<'a> {
     /// (tile, screen-space error, distance)
     requests: Vec<(usize, f64, f64)>,
     /// `measure` of the tiles met this frame
-    measures: RefCell<HashMap<usize, Option<(f64, f64)>>>,
+    measures: RefCell<IndexMap<Option<(f64, f64)>>>,
 }
 
-impl Traversal<'_> {
+impl<'a> Traversal<'a> {
     /// Screen-space error and distance to the camera of a tile (pixels); None if out of view or behind the horizon.
     /// Computed once per tile and frame
     fn measure(&self, i: usize) -> Option<(f64, f64)> {
@@ -110,9 +135,10 @@ impl Traversal<'_> {
         m
     }
 
-    /// A tile and its companions
-    fn members(&self, i: usize) -> impl Iterator<Item = usize> + use<'_> {
-        std::iter::once(i).chain(self.tree.nodes[i].companions.iter().copied())
+    /// A tile and its companions (borrowing the tree, not the traversal: no copy needed to push while iterating)
+    fn members(&self, i: usize) -> impl Iterator<Item = usize> + use<'a> {
+        let tree: &'a Tree = self.tree;
+        std::iter::once(i).chain(tree.nodes[i].companions.iter().copied())
     }
 
     /// Readiness of a tile with all its contents
@@ -122,7 +148,7 @@ impl Traversal<'_> {
 
     /// Requests the contents of a tile still to load
     fn request(&mut self, i: usize, error: f64, distance: f64) {
-        for m in self.members(i).collect::<Vec<_>>() {
+        for m in self.members(i) {
             if (self.ready)(m) == Readiness::Pending {
                 self.requests.push((m, error, distance));
             }
@@ -130,8 +156,9 @@ impl Traversal<'_> {
     }
 
     /// The contents of a tile that are ready
-    fn ready_members(&self, i: usize) -> impl Iterator<Item = usize> + use<'_> {
-        self.members(i).filter(|&m| (self.ready)(m) == Readiness::Ready)
+    fn ready_members(&self, i: usize) -> impl Iterator<Item = usize> + use<'a> {
+        let ready = self.ready;
+        self.members(i).filter(move |&m| ready(m) == Readiness::Ready)
     }
 
     fn visit(&mut self, i: usize) {
@@ -142,8 +169,8 @@ impl Traversal<'_> {
 
     fn visit_visible(&mut self, i: usize, error: f64, distance: f64) {
         // A visible tile: its downloads must survive the next frame
-        let members: Vec<usize> = self.members(i).collect();
-        self.out.visible.extend(&members);
+        let members = self.members(i);
+        self.out.visible.extend(members);
         let node = &self.tree.nodes[i];
         let state = self.state(i);
         // An empty tile with children (a grafted external tileset, a pure grouping node) cannot stand for its area:
@@ -169,7 +196,7 @@ impl Traversal<'_> {
             self.request(i, error, distance);
         }
         if state == Readiness::Ready && !self.children_ready(i, 3) {
-            let ready: Vec<usize> = self.ready_members(i).collect();
+            let ready = self.ready_members(i);
             self.out.backfill.extend(ready);
         }
         for &c in &node.children {
@@ -177,7 +204,7 @@ impl Traversal<'_> {
                 self.visit_visible(c, error, distance);
             } else if self.state(c) == Readiness::Pending {
                 // A sibling out of view: its download is kept, it loads when there is room
-                for m in self.members(c).collect::<Vec<_>>() {
+                for m in self.members(c) {
                     if (self.ready)(m) == Readiness::Pending {
                         self.out.visible.push(m);
                         self.out.prefetch.push(m);
@@ -190,7 +217,7 @@ impl Traversal<'_> {
     fn draw_or_request(&mut self, i: usize, state: Readiness, error: f64, distance: f64) {
         match state {
             Readiness::Ready => {
-                let ready: Vec<usize> = self.ready_members(i).collect();
+                let ready = self.ready_members(i);
                 self.out.draw.extend(ready);
             }
             // A content failed: the others still load

@@ -35,15 +35,15 @@ export interface Plan {
 const latitude = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
 
 /**
- * The strips filling Mercator tile `z`/`x`/`y` (`size` pixels a side) from equirectangular tiles of levels 0 to
- * `maxLevel`. The source level has the same pixel size along the parallels (one less than `z`: the source is twice as
- * wide at level 0), finer towards the poles, where the Mercator pixels shrink along the meridians.
+ * The strips filling Mercator tile `z`/`x`/`y` (`size` pixels a side) from equirectangular tiles of levels `minLevel`
+ * to `maxLevel`. The source level has the same pixel size along the parallels (one less than `z`: the source is twice
+ * as wide at level 0), finer towards the poles, where the Mercator pixels shrink along the meridians.
  */
-export function plan(z: number, x: number, y: number, size: number, maxLevel: number): Plan {
+export function plan(z: number, x: number, y: number, size: number, maxLevel: number, minLevel = 0): Plan {
   const n = 2 ** z;
   const center = latitude((y + 0.5) / n);
   const boost = Math.min(MAX_BOOST, Math.max(0, Math.round(-Math.log2(Math.cos((center * Math.PI) / 180)))));
-  const level = Math.max(0, Math.min(maxLevel, z - 1 + boost));
+  const level = Math.max(0, minLevel, Math.min(maxLevel, z - 1 + boost));
   // The source in pixels at that level: 360° across, 180° down
   const width = 2 * SOURCE * 2 ** level;
   const height = SOURCE * 2 ** level;
@@ -81,16 +81,35 @@ const tileUrl = (template: string, z: number, x: number, y: number) =>
 
 /**
  * A raster loader drawing Web Mercator tiles of `size` pixels from the equirectangular tiles of `url` ({z}, {x}, {y};
- * levels 0 to `maxLevel`). A missing source tile (404) leaves its part empty; a tile with no source at all is
+ * levels `minLevel` to `maxLevel`). A missing source tile (404) leaves its part empty; a tile with no source at all is
  * missing; other errors reject (retried by the engine).
  */
 export function equirectangularLoader(
   url: string,
   maxLevel: number,
   size: number,
+  minLevel = 0,
 ): (z: number, x: number, y: number, signal: AbortSignal) => Promise<ImageBitmap | null> {
   // Source tiles by key, oldest first: a request is shared by the tiles that need it, its signal is not theirs
   const cache = new Map<string, Promise<ImageBitmap | null>>();
+  /** Tiles being drawn from each source tile: an evicted one is closed once none is */
+  const users = new Map<Promise<ImageBitmap | null>, number>();
+  const evicted = new Set<Promise<ImageBitmap | null>>();
+  const close = (tile: Promise<ImageBitmap | null>) => {
+    evicted.delete(tile);
+    tile.then(
+      (image) => image?.close(),
+      () => undefined,
+    );
+  };
+  const release = (tile: Promise<ImageBitmap | null>) => {
+    const count = (users.get(tile) ?? 1) - 1;
+    if (count > 0) users.set(tile, count);
+    else {
+      users.delete(tile);
+      if (evicted.has(tile)) close(tile);
+    }
+  };
   const source = (z: number, x: number, y: number): Promise<ImageBitmap | null> => {
     const key = `${z}/${x}/${y}`;
     let tile = cache.get(key);
@@ -107,32 +126,37 @@ export function equirectangularLoader(
       tile.catch(() => cache.delete(key));
     }
     cache.set(key, tile);
-    for (const old of cache.keys()) {
+    users.set(tile, (users.get(tile) ?? 0) + 1);
+    for (const [old, image] of cache) {
       if (cache.size <= CACHE) break;
       cache.delete(old);
+      // Its image freed now, or once the tiles drawing from it are done
+      if (users.has(image)) evicted.add(image);
+      else close(image);
     }
     return tile;
   };
   return async (z, x, y, signal) => {
-    const { level, strips } = plan(z, x, y, size, maxLevel);
+    const { level, strips } = plan(z, x, y, size, maxLevel, minLevel);
     const keys = [...new Set(strips.map((s) => `${s.tx}/${s.ty}`))];
-    const images = new Map(
-      await Promise.all(
-        keys.map(async (key) => {
-          const [tx, ty] = key.split('/').map(Number) as [number, number];
-          return [key, await source(level, tx, ty)] as const;
-        }),
-      ),
-    );
-    signal.throwIfAborted();
-    if (![...images.values()].some(Boolean)) return null;
-    const canvas = new OffscreenCanvas(size, size);
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('isard: no 2D canvas to reproject the tiles');
-    for (const s of strips) {
-      const image = images.get(`${s.tx}/${s.ty}`);
-      if (image) context.drawImage(image, s.sx, s.sy, s.sw, 1, s.dx, s.dy, s.dw, 1);
+    const tiles = keys.map((key) => {
+      const [tx, ty] = key.split('/').map(Number) as [number, number];
+      return [key, source(level, tx, ty)] as const;
+    });
+    try {
+      const images = new Map(await Promise.all(tiles.map(async ([key, tile]) => [key, await tile] as const)));
+      signal.throwIfAborted();
+      if (![...images.values()].some(Boolean)) return null;
+      const canvas = new OffscreenCanvas(size, size);
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('isard: no 2D canvas to reproject the tiles');
+      for (const s of strips) {
+        const image = images.get(`${s.tx}/${s.ty}`);
+        if (image) context.drawImage(image, s.sx, s.sy, s.sw, 1, s.dx, s.dy, s.dw, 1);
+      }
+      return canvas.transferToImageBitmap();
+    } finally {
+      for (const [, tile] of tiles) release(tile);
     }
-    return canvas.transferToImageBitmap();
   };
 }

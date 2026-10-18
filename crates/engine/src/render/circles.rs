@@ -13,7 +13,7 @@ use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay::{self, ANCHOR, Anchor};
-use geo::pieces::{self, Grid};
+use geo::pieces::{self, Grid, Visible};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
@@ -112,6 +112,48 @@ struct Point {
     feature: u32,
 }
 
+/// Points sorted by square of their culling grid, offsets from the middle of their bounds
+struct Sorted {
+    min: DVec2,
+    max: DVec2,
+    grid: Grid,
+    start: Vec<u32>,
+    data: Vec<Point>,
+}
+
+/// Points (Mercator, interleaved) and their features sorted by square of a grid over them, in their order within a
+/// square; the points that are not numbers left out (one at infinity would stretch the grid to nothing)
+fn sort(points: &[f64], feature: &[u32]) -> Sorted {
+    let (merc, feature): (Vec<DVec2>, Vec<u32>) = overlay::points(points)
+        .into_iter()
+        .zip(feature.iter().copied())
+        .filter(|(p, _)| p.is_finite())
+        .unzip();
+    let (min, max) = overlay::bounds(&merc).unwrap_or((DVec2::ZERO, DVec2::ZERO));
+    let origin = (min + max) / 2.0;
+    let extent = (max - min).max_element();
+    let grid = Grid::over(min, max, (extent / SQUARES_ACROSS).max(MIN_SQUARE));
+    let squares: Vec<u32> = merc.iter().map(|&p| grid.square(p)).collect();
+    let (order, start) = pieces::sort_by_square(&squares, grid.len());
+    let data = order
+        .iter()
+        .map(|&k| {
+            let o = merc[k as usize] - origin;
+            Point {
+                offset: [o.x as f32, o.y as f32],
+                feature: feature[k as usize],
+            }
+        })
+        .collect();
+    Sorted {
+        min,
+        max,
+        grid,
+        start,
+        data,
+    }
+}
+
 pub struct CircleLayer {
     pub features: Features,
     /// Lying on the ground rather than facing the screen
@@ -130,6 +172,8 @@ pub struct CircleLayer {
     /// The culling grid and the first point of each of its squares (and the end)
     grid: Grid,
     start: Vec<u32>,
+    /// The squares in view and their points, kept from frame to frame
+    visible: Visible,
     drape: Drape,
     count: usize,
 }
@@ -179,6 +223,7 @@ impl CircleLayer {
             max: DVec2::ZERO,
             grid: Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0),
             start: vec![0, 0],
+            visible: Visible::default(),
             drape: Drape::new(),
             count: 0,
         };
@@ -188,32 +233,23 @@ impl CircleLayer {
 
     /// Replaces the points (Mercator, interleaved) and their features
     pub fn set_geometry(&mut self, gl: &glow::Context, points: &[f64], feature: &[u32]) {
-        let merc = overlay::points(points);
-        let n = merc.len().min(feature.len());
-        (self.min, self.max) = overlay::bounds(&merc[..n]).unwrap_or((DVec2::ZERO, DVec2::ZERO));
-        self.origin = (self.min + self.max) / 2.0;
-        // Sorted by square of the culling grid, in their order within a square
-        let extent = (self.max - self.min).max_element();
-        self.grid = Grid::over(self.min, self.max, (extent / SQUARES_ACROSS).max(MIN_SQUARE));
-        let squares: Vec<u32> = merc[..n].iter().map(|&p| self.grid.square(p)).collect();
-        let (order, start) = pieces::sort_by_square(&squares, self.grid.len());
-        let data: Vec<Point> = order
-            .iter()
-            .map(|&k| {
-                let o = merc[k as usize] - self.origin;
-                Point {
-                    offset: [o.x as f32, o.y as f32],
-                    feature: feature[k as usize],
-                }
-            })
-            .collect();
+        let Sorted {
+            min,
+            max,
+            grid,
+            start,
+            data,
+        } = sort(points, feature);
+        (self.min, self.max, self.grid) = (min, max, grid);
+        self.origin = (min + max) / 2.0;
         self.start = start;
+        self.visible.invalidate();
         // SAFETY: upload into the buffer owned by this layer
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&data), glow::STATIC_DRAW);
         }
-        self.count = n;
+        self.count = data.len();
         self.drape.delete(gl);
         self.drape = Drape::new();
     }
@@ -262,28 +298,32 @@ impl CircleLayer {
         }
     }
 
-    /// The ranges of points in the squares in view (none if the layer has nothing to draw at this zoom)
-    fn visible(&self, frame: &Frame) -> Vec<(u32, u32)> {
-        if self.count == 0 || !self.features.layer.shows(frame.camera.zoom) {
-            return Vec::new();
-        }
-        let view = frame.view;
-        let squares = pieces::squares_in_view(
-            &self.grid,
-            view,
-            overlay::heights(view, frame.relief),
-            overlay::shift(self.origin, view),
-            CULL_MARGIN / view.world_size,
-            true,
-        );
-        pieces::ranges(&squares, &self.start)
+    /// Whether the layer has anything to draw at this zoom
+    fn shows(&self, frame: &Frame) -> bool {
+        self.count > 0 && self.features.layer.shows(frame.camera.zoom)
+    }
+
+    /// How the layer looks for its squares in view: the circles reach `CULL_MARGIN` out of their points
+    fn look(&self, frame: &Frame) -> pieces::Look {
+        overlay::look(
+            self.origin,
+            frame.view,
+            frame.relief,
+            CULL_MARGIN / frame.view.world_size,
+        )
     }
 }
 
 impl Layer for CircleLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
-        let ranges = self.visible(frame);
+        if !self.shows(frame) {
+            return false;
+        }
+        let look = self.look(frame);
+        let mut visible = std::mem::take(&mut self.visible);
+        let ranges = visible.update(&self.grid, &self.start, frame.view, look);
         if ranges.is_empty() {
+            self.visible = visible;
             return false;
         }
         self.update_drape(frame);
@@ -297,7 +337,8 @@ impl Layer for CircleLayer {
                 gl.depth_mask(false);
             }
         }
-        self.render(frame, &ranges, None);
+        self.render(frame, ranges, None);
+        self.visible = visible;
         // SAFETY: state changes on the live context
         unsafe {
             gl.enable(glow::CULL_FACE);
@@ -312,7 +353,10 @@ impl Layer for CircleLayer {
     }
 
     fn draw_pick(&self, frame: &Frame, layer: u8) {
-        let ranges = self.visible(frame);
+        if !self.shows(frame) {
+            return;
+        }
+        let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, frame.view, self.look(frame));
         if ranges.is_empty() {
             return;
         }
@@ -355,5 +399,38 @@ impl Engine {
         if let Some((layer, _)) = self.layer_mut::<CircleLayer>(id) {
             layer.on_ground = on_ground;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn points_not_numbers_are_left_out() {
+        let points = [
+            0.5,
+            0.5,
+            f64::INFINITY,
+            0.5,
+            0.25,
+            f64::NAN,
+            0.5001,
+            0.5002,
+            -f64::INFINITY,
+            1e308,
+        ];
+        let sorted = sort(&points, &[0, 1, 2, 3, 4]);
+        assert_eq!(sorted.data.len(), 2);
+        assert!(sorted.grid.len() <= 33 * 33, "{}", sorted.grid.len());
+        assert_eq!(*sorted.start.last().unwrap(), 2);
+        let mut features: Vec<u32> = sorted.data.iter().map(|p| p.feature).collect();
+        features.sort_unstable();
+        assert_eq!(features, [0, 3]);
+        assert!(sorted.max.x - sorted.min.x < 1e-3);
+        // Fewer features than points: the points without one are left out; none at all
+        assert_eq!(sort(&points, &[0]).data.len(), 1);
+        let none = sort(&[], &[]);
+        assert!(none.data.is_empty() && none.grid.len() == 1 && none.start == [0, 0]);
     }
 }

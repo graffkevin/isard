@@ -23,7 +23,7 @@ use crate::render::gl::{self, Objects, Projection, bytes as as_bytes};
 use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
 use crate::render::raster::RasterSource;
 use geo::camera::{Camera, View};
-use geo::pieces::{self, Grid, Lines};
+use geo::pieces::{self, Grid, Lines, Visible};
 use glam::DVec2;
 use glow::HasContext;
 use shaders::{FRAGMENT, PICK_FRAGMENT, VALUE, VERTEX};
@@ -77,9 +77,21 @@ impl Pass {
             ),
             &format!("#version 300 es\nprecision highp float;\n{defines}{VALUE}{fragment}"),
         )?;
+        let uniforms = gl::uniforms(gl, program, UNIFORMS);
+        gl::sampler_units(
+            gl,
+            program,
+            &[
+                (uniforms[1].as_ref(), VALUES_UNIT),
+                (uniforms[8].as_ref(), EDGES_UNIT),
+                (uniforms[9].as_ref(), COSTS_UNIT),
+                (uniforms[11].as_ref(), SCALES_UNIT),
+                (uniforms[12].as_ref(), RAMP_UNIT),
+            ],
+        );
         Ok(Self {
             program,
-            uniforms: gl::uniforms(gl, program, UNIFORMS),
+            uniforms,
             anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape: DrapeUniforms::new(gl, program),
@@ -160,6 +172,8 @@ pub struct NetworkLayer {
     /// Squares of the network and the pieces of each
     grid: Grid,
     start: Vec<u32>,
+    /// The squares in view and their pieces, kept from frame to frame
+    visible: Visible,
     drape: Drape,
     nodes: usize,
     edge_count: usize,
@@ -241,6 +255,7 @@ impl NetworkLayer {
             origin,
             grid: built.grid,
             start: built.start,
+            visible: Visible::default(),
             drape: Drape::new(),
             nodes,
             edge_count,
@@ -323,40 +338,35 @@ impl NetworkLayer {
         (self.piece_count, self.drawn.get())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render(
+    /// Sets up a pass for this layer: its program, the view, the style but the width, the textures, the pieces
+    fn bind(
         &self,
         gl: &glow::Context,
         pass: &Pass,
         camera: &Camera,
         view: &View,
         pixel_ratio: f64,
-        width: Width,
         relief: Option<(&RasterSource, f32)>,
-        ranges: &[(u32, u32)],
     ) {
-        if ranges.is_empty() {
-            return;
-        }
         let [
-            width_u,
-            values,
+            _,
+            _,
             max,
             contour,
-            opacity,
+            _,
             _,
             segments,
             with_costs,
-            edges,
-            costs,
-            halo,
-            scales,
-            ramp,
+            _,
+            _,
+            _,
+            _,
+            _,
             unreached,
             fade,
         ] = &pass.uniforms;
         let style = &self.style;
-        // SAFETY: draw with objects owned by this layer
+        // SAFETY: state setup with objects owned by this layer (the sampler units set once, by `Pass::new`)
         unsafe {
             gl.use_program(Some(pass.program));
             let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
@@ -367,29 +377,47 @@ impl NetworkLayer {
             self.drape.bind(gl, &pass.drape, relief);
             let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
             gl.uniform_1_i32(segments.as_ref(), parts);
-            gl.uniform_1_f32(width_u.as_ref(), (width.pixels * pixel_ratio) as f32);
             gl.uniform_1_f32(max.as_ref(), style.max);
             gl.uniform_1_f32(contour.as_ref(), style.contour);
-            let alpha = if width.halo { style.halo_opacity } else { style.opacity };
-            gl.uniform_1_f32(opacity.as_ref(), alpha);
-            gl.uniform_1_f32(halo.as_ref(), if width.halo { 1.0 } else { 0.0 });
             gl.uniform_1_i32(with_costs.as_ref(), i32::from(self.with_costs));
             gl.uniform_4_f32_slice(unreached.as_ref(), &style.unreached);
             gl.uniform_1_f32(fade.as_ref(), style.fade);
-            for (unit, location, texture) in [
-                (VALUES_UNIT, values, self.values),
-                (EDGES_UNIT, edges, self.edges),
-                (COSTS_UNIT, costs, self.costs),
-                (SCALES_UNIT, scales, self.scales),
-                (RAMP_UNIT, ramp, self.ramp),
+            for (unit, texture) in [
+                (VALUES_UNIT, self.values),
+                (EDGES_UNIT, self.edges),
+                (COSTS_UNIT, self.costs),
+                (SCALES_UNIT, self.scales),
+                (RAMP_UNIT, self.ramp),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                gl.uniform_1_i32(location.as_ref(), unit as i32);
             }
             gl.active_texture(glow::TEXTURE0);
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.pieces));
+        }
+    }
+
+    /// Draws the pieces of `ranges` at a width, the pass set up by `bind` (the halo then the lines share it: only
+    /// their width and opacity change)
+    fn draw_ranges(
+        &self,
+        gl: &glow::Context,
+        pass: &Pass,
+        pixel_ratio: f64,
+        width: Width,
+        relief: Option<(&RasterSource, f32)>,
+        ranges: &[(u32, u32)],
+    ) {
+        let [width_u, _, _, _, opacity, _, _, _, _, _, halo, ..] = &pass.uniforms;
+        let style = &self.style;
+        let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+        // SAFETY: draws with the objects bound by `bind`
+        unsafe {
+            gl.uniform_1_f32(width_u.as_ref(), (width.pixels * pixel_ratio) as f32);
+            let alpha = if width.halo { style.halo_opacity } else { style.opacity };
+            gl.uniform_1_f32(opacity.as_ref(), alpha);
+            gl.uniform_1_f32(halo.as_ref(), if width.halo { 1.0 } else { 0.0 });
             // No base instance in WebGL2: the instanced attributes are pointed at the first piece of each range
             for &(first, end) in ranges {
                 let offset = first as i32 * STRIDE;
@@ -398,7 +426,6 @@ impl NetworkLayer {
                 gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, STRIDE, offset + 24);
                 gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 2 * (parts + 1), (end - first) as i32);
             }
-            gl.bind_vertex_array(None);
         }
     }
 }
@@ -424,7 +451,9 @@ impl Layer for NetworkLayer {
             );
             self.drape.update(gl, lo, hi, source);
         }
-        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, view, relief);
+        let look = overlay::look(self.origin, view, relief, 0.0);
+        let mut visible = std::mem::take(&mut self.visible);
+        let ranges = visible.update(&self.grid, &self.start, view, look);
         self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
         // Line quads are built on screen, either way round
         // SAFETY: state changes on the live context, set back below
@@ -437,19 +466,25 @@ impl Layer for NetworkLayer {
             }
         }
         let style = self.style;
-        let halo_width = stops(&style.halo, camera.zoom);
-        if halo_width > 0.0 && style.halo_opacity > 0.0 {
-            let halo = Width {
-                pixels: halo_width,
-                halo: true,
+        if !ranges.is_empty() {
+            self.bind(gl, &self.shaded, camera, view, pixel_ratio, relief);
+            let halo_width = stops(&style.halo, camera.zoom);
+            if halo_width > 0.0 && style.halo_opacity > 0.0 {
+                let halo = Width {
+                    pixels: halo_width,
+                    halo: true,
+                };
+                self.draw_ranges(gl, &self.shaded, pixel_ratio, halo, relief, ranges);
+            }
+            let lines = Width {
+                pixels: stops(&style.width, camera.zoom),
+                halo: false,
             };
-            self.render(gl, &self.shaded, camera, view, pixel_ratio, halo, relief, &ranges);
+            self.draw_ranges(gl, &self.shaded, pixel_ratio, lines, relief, ranges);
+            // SAFETY: unbinding on the live context
+            unsafe { gl.bind_vertex_array(None) };
         }
-        let lines = Width {
-            pixels: stops(&style.width, camera.zoom),
-            halo: false,
-        };
-        self.render(gl, &self.shaded, camera, view, pixel_ratio, lines, relief, &ranges);
+        self.visible = visible;
         // SAFETY: state changes on the live context
         unsafe {
             gl.enable(glow::CULL_FACE);
@@ -478,12 +513,19 @@ impl Layer for NetworkLayer {
             gl.use_program(Some(self.pick.program));
             gl.uniform_1_f32(self.pick.uniforms[LAYER_UNIFORM].as_ref(), f32::from(layer));
         }
-        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, view, relief);
+        let look = overlay::look(self.origin, view, relief, 0.0);
+        let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, view, look);
+        if ranges.is_empty() {
+            return;
+        }
         let width = Width {
             pixels: stops(&self.style.width, camera.zoom) + PICK_SLOP,
             halo: false,
         };
-        self.render(gl, &self.pick, camera, view, pixel_ratio, width, relief, &ranges);
+        self.bind(gl, &self.pick, camera, view, pixel_ratio, relief);
+        self.draw_ranges(gl, &self.pick, pixel_ratio, width, relief, &ranges);
+        // SAFETY: unbinding on the live context
+        unsafe { gl.bind_vertex_array(None) };
     }
 
     fn delete(&mut self, gl: &glow::Context) {

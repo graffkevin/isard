@@ -11,9 +11,19 @@ Isard is built for maps where everything changes at every mouse move. What makes
   t(B) + cost from B): an edge reached from both ends shows where the two fronts meet.
 - **One draw call for the ground.** The raster layers of a stack (basemap, hillshade…) share texture arrays and are
   composited in one fragment shader, each pixel shaded once.
-- **Frames on demand.** Nothing runs while idle; the hover listener runs in the frame it draws.
+- **Frames on demand.** Nothing runs while idle, a mouse moving over the map included: a frame is drawn for the
+  pointer only when something listens to `hover` or `hoverfeature`, and the hover listener runs in the frame it
+  draws. `pick` and `pickFeature` wait for the GPU: on hover, `hoverfeature` picks without waiting.
 - **Work off the main thread.** Images decoded by the browser, 3D Tiles decoded in workers (Draco, meshopt, KTX2),
-  vector tiles drawn in workers on CPU canvases (no read-back on the main thread at the upload).
+  vector tiles drawn in workers on CPU canvases (an opaque tile moved out of its canvas without a copy, no read-back
+  on the main thread at the upload), each worker keeping its share of the decoded tiles. Still on the main thread:
+  the Terrarium and Terrain-RGB relief (each PNG decoded by the browser, its colors turned into altitudes in the
+  page: 256 × 256 pixels a tile) and the reprojection of equirectangular rasters (a Canvas 2D drawing per tile).
+- **Less WebAssembly for most maps.** The engine comes in two builds: without 3D Tiles (`isard_core_bg.wasm`, 220 KB
+  gzipped), loaded by every map, and with them (`isard_bg.wasm`, 330 KB), loaded for the first 3D Tiles layer. That
+  move costs a download and a stall of a frame or two, the map being rebuilt on the new engine; `tiles3d: true`
+  avoids it for a map that shows 3D Tiles at once, `tiles3d: 'preload'` downloads and compiles the full engine once
+  the map is idle (see [3D Tiles](../layers/tiles3d#the-engine-with-3d-tiles)).
 - **No holes, no backlog.** Missing tiles covered by their nearest ancestor or descendants, coarse tiles first, stale
   requests aborted, transient errors retried, arrivals uploaded within a budget per frame, foveated loading and skipped
   levels during flights.

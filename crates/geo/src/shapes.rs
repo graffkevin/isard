@@ -576,6 +576,9 @@ mod tests {
             (vec![10, 4], vec![0, 1]),
             (vec![9, 20], vec![0, 1]),
             (vec![0, 3], vec![0, 5]),
+            // Polygons claiming every ring there could be, or running backwards
+            (vec![0, 3, u32::MAX], vec![0, u32::MAX, 0]),
+            (vec![0, 3], vec![u32::MAX, 0, u32::MAX]),
         ] {
             let polygons = Polygons {
                 points: &points,

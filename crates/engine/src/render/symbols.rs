@@ -145,6 +145,74 @@ pub struct SymbolStyle {
     pub visible: bool,
 }
 
+/// Labels as `SymbolLayer::set_labels` takes them, ready to upload
+struct Built {
+    labels: Vec<Label>,
+    /// Per label: offset, fill, halo, halo width (`gl::table_rows` rows of RGBA32F texels)
+    table: Vec<f32>,
+    quads: Vec<Quad>,
+    min: DVec2,
+    max: DVec2,
+    origin: DVec2,
+}
+
+/// The labels of `SymbolLayer::set_labels`, from arrays of any lengths (as many labels as all three describe) and
+/// quads of any label numbers (those of no label left out)
+fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built {
+    let n = (anchors.len() / 2)
+        .min(boxes.len() / 4)
+        .min(styles.len() / LABEL_FLOATS);
+    let mut merc = overlay::points(anchors);
+    merc.truncate(n);
+    let (min, max) = overlay::bounds(&merc).unwrap_or((DVec2::ZERO, DVec2::ZERO));
+    let origin = (min + max) / 2.0;
+    let labels = merc
+        .iter()
+        .enumerate()
+        .map(|(i, &m)| Label {
+            merc: m,
+            rect: [boxes[i * 4], boxes[i * 4 + 1], boxes[i * 4 + 2], boxes[i * 4 + 3]],
+            always: styles[i * LABEL_FLOATS + 9] > 0.5,
+            direction: DVec2::new(
+                f64::from(styles[i * LABEL_FLOATS + 10]),
+                f64::from(styles[i * LABEL_FLOATS + 11]),
+            ),
+            size: stops_of(&styles[i * LABEL_FLOATS + 12..i * LABEL_FLOATS + 20]).unwrap_or([[0.0; 4], [1.0; 4]]),
+        })
+        .collect();
+    // Per label: offset, fill, halo, halo width
+    let rows = gl::table_rows(n * 4);
+    let mut table = vec![0f32; rows * WIDTH * 4];
+    for (i, m) in merc.iter().enumerate() {
+        let o = (*m - origin).as_vec2();
+        let s = &styles[i * LABEL_FLOATS..(i + 1) * LABEL_FLOATS];
+        let t = i * 16;
+        table[t..t + 2].copy_from_slice(&[o.x, o.y]);
+        table[t + 4..t + 12].copy_from_slice(&s[..8]);
+        table[t + 12] = s[8];
+    }
+    let data: Vec<Quad> = quads
+        .as_chunks::<QUAD_FLOATS>()
+        .0
+        .iter()
+        .filter(|q| (q[0] as usize) < n)
+        .map(|q| Quad {
+            label: q[0] as u32,
+            rect: [q[1], q[2], q[3], q[4]],
+            uv: [q[5], q[6], q[7], q[8]],
+            scale: q[9],
+        })
+        .collect();
+    Built {
+        labels,
+        table,
+        quads: data,
+        min,
+        max,
+        origin,
+    }
+}
+
 pub struct SymbolLayer {
     pub style: SymbolStyle,
     program: glow::Program,
@@ -160,6 +228,8 @@ pub struct SymbolLayer {
     labels: Vec<Label>,
     /// Per label, this frame: shown (1 or 0), angle on screen (radians, clockwise), scale, unused
     visible: Vec<f32>,
+    /// The states of the placement before, to tell whether they changed (a buffer kept between placements)
+    previous: Vec<f32>,
     /// What the last placement depended on (`PlaceKey`), and the boxes it took in the collision grid: an unchanged
     /// placement takes them again without working anything out
     placed: Option<(PlaceKey, Vec<collision::Rect>)>,
@@ -202,6 +272,16 @@ impl SymbolLayer {
             gl.bind_vertex_array(None);
         }
         objects.keep();
+        let uniforms = gl::uniforms(gl, program, UNIFORMS);
+        gl::sampler_units(
+            gl,
+            program,
+            &[
+                (uniforms[2].as_ref(), LABELS_UNIT),
+                (uniforms[3].as_ref(), VISIBLE_UNIT),
+                (uniforms[4].as_ref(), ATLAS_UNIT),
+            ],
+        );
         Ok(Self {
             style: SymbolStyle {
                 size: [[0.0; 4], [1.0; 4]],
@@ -211,7 +291,7 @@ impl SymbolLayer {
                 visible: true,
             },
             program,
-            uniforms: gl::uniforms(gl, program, UNIFORMS),
+            uniforms,
             anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
@@ -222,6 +302,7 @@ impl SymbolLayer {
             visible_texture,
             labels: Vec::new(),
             visible: Vec::new(),
+            previous: Vec::new(),
             placed: None,
             uploaded: false,
             origin: DVec2::ZERO,
@@ -241,66 +322,35 @@ impl SymbolLayer {
         styles: &[f32],
         quads: &[f32],
     ) -> Result<(), String> {
-        let n = (anchors.len() / 2)
-            .min(boxes.len() / 4)
-            .min(styles.len() / LABEL_FLOATS);
-        let mut merc = overlay::points(anchors);
-        merc.truncate(n);
-        (self.min, self.max) = overlay::bounds(&merc).unwrap_or((DVec2::ZERO, DVec2::ZERO));
-        self.origin = (self.min + self.max) / 2.0;
-        self.labels = merc
-            .iter()
-            .enumerate()
-            .map(|(i, &m)| Label {
-                merc: m,
-                rect: [boxes[i * 4], boxes[i * 4 + 1], boxes[i * 4 + 2], boxes[i * 4 + 3]],
-                always: styles[i * LABEL_FLOATS + 9] > 0.5,
-                direction: DVec2::new(
-                    f64::from(styles[i * LABEL_FLOATS + 10]),
-                    f64::from(styles[i * LABEL_FLOATS + 11]),
-                ),
-                size: stops_of(&styles[i * LABEL_FLOATS + 12..i * LABEL_FLOATS + 20]).unwrap_or([[0.0; 4], [1.0; 4]]),
-            })
-            .collect();
-        self.visible = vec![0.0; n * 4];
-        self.placed = None;
-        self.uploaded = false;
-        // Per label: offset, fill, halo, halo width
+        let Built {
+            labels,
+            table,
+            quads: data,
+            min,
+            max,
+            origin,
+        } = build(anchors, boxes, styles, quads);
+        let n = labels.len();
         let rows = gl::table_rows(n * 4);
-        let mut table = vec![0f32; rows * WIDTH * 4];
-        for (i, m) in merc.iter().enumerate() {
-            let o = (*m - self.origin).as_vec2();
-            let s = &styles[i * LABEL_FLOATS..(i + 1) * LABEL_FLOATS];
-            let t = i * 16;
-            table[t..t + 2].copy_from_slice(&[o.x, o.y]);
-            table[t + 4..t + 12].copy_from_slice(&s[..8]);
-            table[t + 12] = s[8];
-        }
-        let data: Vec<Quad> = quads
-            .as_chunks::<QUAD_FLOATS>()
-            .0
-            .iter()
-            .filter(|q| (q[0] as usize) < n)
-            .map(|q| Quad {
-                label: q[0] as u32,
-                rect: [q[1], q[2], q[3], q[4]],
-                uv: [q[5], q[6], q[7], q[8]],
-                scale: q[9],
-            })
-            .collect();
-        // SAFETY: deletion of textures owned by this layer, replaced right below
-        unsafe {
-            gl.delete_texture(self.labels_texture);
-            gl.delete_texture(self.visible_texture);
-        }
-        self.labels_texture = gl::table_texture(gl, glow::RGBA32F, n * 4)?;
+        // The new textures first: if one cannot be made, the layer keeps the old ones (and nothing to draw)
+        let mut objects = Objects::new(gl);
+        let labels_texture = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, n * 4)?);
         gl::upload_table(gl, bytes(&table), rows * WIDTH, glow::RGBA, glow::FLOAT, 16);
-        self.visible_texture = gl::table_texture(gl, glow::RGBA32F, n)?;
-        // SAFETY: upload into the buffer owned by this layer
+        let visible_texture = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, n)?);
+        objects.keep();
+        // SAFETY: upload into the buffer owned by this layer; the old textures, replaced, are not used afterwards
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quads));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&data), glow::STATIC_DRAW);
+            gl.delete_texture(self.labels_texture);
+            gl.delete_texture(self.visible_texture);
         }
+        (self.labels_texture, self.visible_texture) = (labels_texture, visible_texture);
+        (self.min, self.max, self.origin) = (min, max, origin);
+        self.labels = labels;
+        self.visible = vec![0.0; n * 4];
+        self.placed = None;
+        self.uploaded = false;
         self.quad_count = data.len() as i32;
         self.drape.delete(gl);
         self.drape = Drape::new();
@@ -403,8 +453,10 @@ impl Layer for SymbolLayer {
             }
             return;
         }
-        let previous = std::mem::take(&mut self.visible);
-        let mut visible = vec![0f32; previous.len()];
+        // The states of the last placement kept aside, its buffer reused for the new ones
+        std::mem::swap(&mut self.visible, &mut self.previous);
+        self.visible.clear();
+        self.visible.resize(self.previous.len(), 0.0);
         let mut boxes = self.placed.take().map(|(_, b)| b).unwrap_or_default();
         boxes.clear();
         let (camera, view) = (frame.camera, frame.view);
@@ -419,15 +471,18 @@ impl Layer for SymbolLayer {
             }
             let p = ground + glam::DVec3::Z * altitude * view.vertical;
             let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
-            (clip.w > 0.0).then(|| {
-                let at = DVec2::new(
-                    f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
-                    f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
-                );
-                (at, clip.w)
-            })
+            (clip.w > 0.0)
+                .then(|| {
+                    let at = DVec2::new(
+                        f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
+                        f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
+                    );
+                    (at, clip.w)
+                })
+                // An anchor that is not a number is nowhere
+                .filter(|(at, _)| at.is_finite())
         };
-        for (label, state) in self.labels.iter().zip(visible.as_chunks_mut::<4>().0) {
+        for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
             let altitude = frame
                 .relief
                 .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
@@ -461,8 +516,7 @@ impl Layer for SymbolLayer {
                 *state = [1.0, angle as f32, scale as f32, 0.0];
             }
         }
-        self.uploaded &= visible == previous;
-        self.visible = visible;
+        self.uploaded &= self.visible == self.previous;
         self.placed = Some((key, boxes));
     }
 
@@ -493,7 +547,7 @@ impl Layer for SymbolLayer {
             gl::upload_table(gl, bytes(&self.visible), self.labels.len(), glow::RGBA, glow::FLOAT, 16);
             self.uploaded = true;
         }
-        let [ratio, atlas_size_u, labels, visible, atlas_u, opacity] = &self.uniforms;
+        let [ratio, atlas_size_u, _, _, _, opacity] = &self.uniforms;
         // SAFETY: draw with objects owned by this layer and the engine's glyph atlas
         unsafe {
             gl.use_program(Some(self.program));
@@ -505,14 +559,14 @@ impl Layer for SymbolLayer {
             gl.uniform_1_f32(opacity.as_ref(), stops(&self.style.opacity, camera.zoom) as f32);
             self.projection.set(gl, view);
             self.drape.bind(gl, &self.drape_uniforms, relief);
-            for (unit, location, target, texture) in [
-                (LABELS_UNIT, labels, glow::TEXTURE_2D, self.labels_texture),
-                (VISIBLE_UNIT, visible, glow::TEXTURE_2D, self.visible_texture),
-                (ATLAS_UNIT, atlas_u, glow::TEXTURE_2D_ARRAY, atlas),
+            // The sampler units are set once, by `SymbolLayer::new`
+            for (unit, target, texture) in [
+                (LABELS_UNIT, glow::TEXTURE_2D, self.labels_texture),
+                (VISIBLE_UNIT, glow::TEXTURE_2D, self.visible_texture),
+                (ATLAS_UNIT, glow::TEXTURE_2D_ARRAY, atlas),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(target, Some(texture));
-                gl.uniform_1_i32(location.as_ref(), unit as i32);
             }
             gl.active_texture(glow::TEXTURE0);
             gl.disable(glow::CULL_FACE);
@@ -723,5 +777,30 @@ mod tests {
         assert!((upright(o, DVec2::new(1.0, 1.0)) - PI / 4.0).abs() < 1e-12);
         assert!((upright(o, DVec2::new(-1.0, -1.0)) - PI / 4.0).abs() < 1e-12);
         assert!(upright(o, DVec2::new(0.0, -1.0)).abs() <= FRAC_PI_2);
+    }
+
+    #[test]
+    fn malformed_labels_do_not_panic() {
+        let style = [1.0f32; LABEL_FLOATS];
+        // Two anchors (one not a number), one box, two styles: one label
+        let built = build(
+            &[0.5, 0.5, f64::NAN, 0.2],
+            &[0.0, 0.0, 10.0, 5.0, 1.0],
+            &[style, style].concat(),
+            &[],
+        );
+        assert_eq!(built.labels.len(), 1);
+        assert_eq!(built.table.len(), gl::table_rows(4) * WIDTH * 4);
+        assert!(built.origin.is_finite());
+        // Quads of no label (past it, negative, not a number: 0 as usize, the first) and a partial one
+        let mut quads = vec![0f32; QUAD_FLOATS * 4 + 3];
+        quads[QUAD_FLOATS] = 1.0;
+        quads[QUAD_FLOATS * 2] = -5.0;
+        quads[QUAD_FLOATS * 3] = f32::NAN;
+        let built = build(&[0.5, 0.5], &[0.0; 4], &style, &quads);
+        assert_eq!(built.quads.len(), 3);
+        assert!(built.quads.iter().all(|q| q.label == 0));
+        let none = build(&[], &[], &[], &quads);
+        assert!(none.labels.is_empty() && none.quads.is_empty());
     }
 }

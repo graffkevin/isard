@@ -11,7 +11,7 @@ import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } f
 import { OPENFREEMAP_ATTRIBUTION } from './basemaps.ts';
 import type { Feature, Size } from './features.ts';
 import { IGN_ATTRIBUTION } from './geoplateforme.ts';
-import type { RasterLayer } from './layers.ts';
+import type { Layer, RasterLayer } from './layers.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
 import type { SymbolLayer } from './symbols.ts';
@@ -203,8 +203,10 @@ export class BasemapWorkers {
   /** Sends a message to every worker (a renderer, or its removal) */
   broadcast(message: Extract<BasemapRequest, { type: 'init' } | { type: 'drop' }>): void {
     if (this.terminated) return;
+    // A renderer tells the workers how many they are: they share the decoded tiles' budget
+    const sent = message.type === 'init' ? { ...message, workers: this.workers.length } : message;
     // A sprite image is copied to each worker (structured clone)
-    for (const w of this.workers) w.postMessage(message);
+    for (const w of this.workers) w.postMessage(sent);
   }
 
   /** Asks a worker for a tile's image or labels, on behalf of `owner` */
@@ -271,6 +273,8 @@ export class VectorTiles {
   private readonly cleanup: (() => void)[] = [];
   /** Credits of its raster layers */
   private readonly attribution: string | undefined;
+  /** Its raster and label layers, removed with it */
+  private readonly layers: Layer[] = [];
   /** The style once loaded, with its source resolved */
   readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number; rasters: Record<string, RasterSource> }>;
 
@@ -313,14 +317,15 @@ export class VectorTiles {
       const url = s.type === 'raster' ? s.tiles?.[0] : undefined;
       if (url) rasters[key] = { tiles: url, maxzoom: s.maxzoom ?? 22, tileSize: s.tileSize ?? 512 };
     }
-    // Only the layers of those sources (and the background); other types (hillshade, heatmap…) are left out
-    style.layers = style.layers.filter(
+    // Only the layers of those sources (and the background); other types (hillshade, heatmap…) are left out. The
+    // application's style object stays as it is
+    const layers = style.layers.filter(
       (l) =>
         l.type === 'background' ||
         (l.source === name && l.type !== 'raster') ||
         (l.type === 'raster' && l.source !== undefined && rasters[l.source] !== undefined),
     );
-    return { style, tiles: template, maxzoom: maxzoom ?? 14, rasters };
+    return { style: { ...style, layers }, tiles: template, maxzoom: maxzoom ?? 14, rasters };
   }
 
   /** The fonts of the style's labels, for its glyphs (the first of each `text-font`, as the workers take it) */
@@ -403,7 +408,7 @@ export class VectorTiles {
       );
       return 'image' in response ? response.image : null;
     };
-    return this.map.addRaster({
+    const layer = this.map.addRaster({
       url: '',
       size: texture,
       opacity,
@@ -413,6 +418,8 @@ export class VectorTiles {
       ...(this.attribution ? { attribution: this.attribution } : {}),
       ...(before ? { before } : {}),
     });
+    this.layers.push(layer);
+    return layer;
   }
 
   /**
@@ -438,6 +445,7 @@ export class VectorTiles {
       placement: 'line',
     });
     this.map.keepOnTop(symbol);
+    this.layers.push(symbol);
     const renderer = this.ready.then(({ style }) => {
       // The style's fonts from its own glyphs
       if (style.glyphs) this.map.glyphs.register(style.glyphs, VectorTiles.fonts(style));
@@ -555,11 +563,17 @@ export class VectorTiles {
     return symbol;
   }
 
+  /** Stops its workers' work and removes its raster and label layers from the map (those still there) */
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     for (const off of this.cleanup) off();
     this.cleanup.length = 0;
+    for (const layer of this.layers) if (this.map.hasLayer(layer)) layer.remove();
+    this.layers.length = 0;
+    this.map.dropVectorTiles(this);
+    // The page's copy of the sprite (the workers have theirs)
+    this.sprite?.then((sprite) => sprite?.image.close()).catch(() => undefined);
     if (this.ownPool) {
       this.pool.terminate();
     } else {

@@ -8,7 +8,9 @@ use crate::js;
 use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
-use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_levels};
+use crate::render::raster::{
+    DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_geoid, terrain_levels,
+};
 use crate::render::sky::{self, Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
@@ -71,6 +73,10 @@ pub struct Engine {
     pub(crate) gl: glow::Context,
     pub(crate) raw: web_sys::WebGl2RenderingContext,
     /// Pool of decoding workers for 3D Tiles (`load`, `abort`), set by the JavaScript side
+    #[cfg_attr(
+        not(feature = "tiles3d"),
+        allow(dead_code, reason = "read by the 3D Tiles layers only")
+    )]
     pub(crate) loader: Option<JsValue>,
     camera: Camera,
     pixel_ratio: f64,
@@ -185,18 +191,19 @@ impl Engine {
 
     /// Viewport in CSS pixels and device pixel ratio
     pub fn resize(&mut self, width: f64, height: f64, pixel_ratio: f64) {
-        self.camera.width = width.max(1.0);
-        self.camera.height = height.max(1.0);
-        self.pixel_ratio = pixel_ratio;
+        // A size that is not a number keeps the last one
+        if width.is_finite() && height.is_finite() {
+            self.camera.width = width.max(1.0);
+            self.camera.height = height.max(1.0);
+        }
+        if pixel_ratio.is_finite() && pixel_ratio > 0.0 {
+            self.pixel_ratio = pixel_ratio;
+        }
     }
 
     #[wasm_bindgen(js_name = setCamera)]
     pub fn set_camera(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
-        self.camera.center = camera::mercator(lon, lat);
-        self.camera.zoom = zoom;
-        self.camera.pitch = pitch;
-        self.camera.bearing = bearing;
-        self.camera.clamp();
+        self.camera.set_view(lon, lat, zoom, pitch, bearing);
         self.handled = false;
     }
 
@@ -214,9 +221,7 @@ impl Engine {
 
     #[wasm_bindgen(js_name = setZoomRange)]
     pub fn set_zoom_range(&mut self, min: f64, max: f64) {
-        self.camera.min_zoom = min;
-        self.camera.max_zoom = max;
-        self.camera.clamp();
+        self.camera.set_zoom_range(min, max);
     }
 
     #[wasm_bindgen(js_name = setBackground)]
@@ -240,8 +245,8 @@ impl Engine {
     /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), the halo of its
     /// atmosphere around the globe (RGB 0-1 and its strength, 4 numbers; `undefined` for an airless body), and the
     /// lowest and highest altitudes of its ground (metres: what its relief may raise into view). WGS 84, the Earth's
-    /// blue halo and the relief of France by default; set before the layers and the relief, whose shaders may take its
-    /// size (`ISARD_EARTH` of the ground layers)
+    /// blue halo and the range of its relief worldwide (-450 m to 8900 m) by default; set before the layers and the
+    /// relief, whose shaders may take its size (`ISARD_EARTH` of the ground layers)
     #[wasm_bindgen(js_name = setBody)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>, lowest: f64, highest: f64) {
@@ -290,8 +295,7 @@ impl Engine {
     /// Highest pitch the camera accepts, degrees (up to 85)
     #[wasm_bindgen(js_name = setMaxPitch)]
     pub fn set_max_pitch(&mut self, max: f64) {
-        self.camera.max_pitch = max;
-        self.camera.clamp();
+        self.camera.set_max_pitch(max);
     }
 
     /// Relief under the raster layers, from raw altitudes (`image/x-bil;bits=32`, 256 × 256, or the same followed by
@@ -299,7 +303,8 @@ impl Engine {
     /// the Mercator metres of another body) or `{z}/{x}/{y}`; `undefined` turns it off. `exaggeration` scales the
     /// heights (1: true relief); `max_z`: finest level loaded (up to 15, from 6 on the Earth, coarser on bodies of a
     /// larger relief for their size: `terrain_levels`); `geoid`: altitudes raised by the RAF20 geoid height (heights
-    /// above the ellipsoid, those of 3D Tiles), else left as served (NGF-IGN69 over France); `loader`: gives the
+    /// above the ellipsoid, those of 3D Tiles; over France, on the Earth only), else left as served (the default);
+    /// `loader`: gives the
     /// altitudes of each tile instead of fetching `url` (an encoding decoded by the page: Terrarium, Terrain-RGB)
     #[wasm_bindgen(js_name = setTerrain)]
     pub fn set_terrain(
@@ -316,7 +321,7 @@ impl Engine {
         let exaggeration = exaggeration.max(0.0) as f32;
         let body = self.body();
         let (min_z, max_z) = terrain_levels(&body, max_z);
-        let geoid = geoid.unwrap_or(true);
+        let geoid = terrain_geoid(geoid, &body);
         match (url, &mut self.terrain) {
             (Some(url), Some((source, current)))
                 if source.options.url == url
@@ -395,11 +400,7 @@ impl Engine {
     /// Loads in advance the tiles of a camera flight's destination; `clearPreload` when the flight ends
     pub fn preload(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
         let mut camera = self.camera.clone();
-        camera.center = camera::mercator(lon, lat);
-        camera.zoom = zoom;
-        camera.pitch = pitch;
-        camera.bearing = bearing;
-        camera.clamp();
+        camera.set_view(lon, lat, zoom, pitch, bearing);
         self.preload_generation += 1;
         self.preload = Some((self.preload_generation, camera));
     }
@@ -412,6 +413,9 @@ impl Engine {
     /// Drags the ground from one screen point to another (CSS pixels); in relief, the ground point grabbed stays
     /// under the cursor
     pub fn pan(&mut self, x0: f64, y0: f64, x1: f64, y1: f64) {
+        if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
+            return;
+        }
         let (from, to) = (DVec2::new(x0, y0), DVec2::new(x1, y1));
         let altitude = self.grabbed(from);
         self.camera.pan_at(from, to, altitude);
@@ -421,6 +425,9 @@ impl Engine {
 
     #[wasm_bindgen(js_name = zoomAt)]
     pub fn zoom_at(&mut self, delta: f64, x: f64, y: f64) {
+        if ![delta, x, y].iter().all(|v| v.is_finite()) {
+            return;
+        }
         let at = DVec2::new(x, y);
         // The relief kept on the CPU first: a wheel notch never waits for the GPU (a read back stalls it)
         let altitude = match self.grab {
@@ -437,6 +444,9 @@ impl Engine {
 
     /// Turns and tilts around the screen center, in degrees
     pub fn rotate(&mut self, bearing: f64, pitch: f64) {
+        if !bearing.is_finite() || !pitch.is_finite() {
+            return;
+        }
         self.camera.bearing += bearing;
         self.camera.pitch += pitch;
         self.camera.clamp();

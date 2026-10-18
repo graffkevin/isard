@@ -111,6 +111,7 @@ impl Gltf<'_> {
         let read = reader(&layout)?;
         let (count, components, size, element) = (layout.count, layout.components, layout.size, layout.element());
         let total = count.checked_mul(components).ok_or("accessor too large")?;
+        self.spend(total)?;
         let mut out = if let Some(view_index) = self::index(&accessor["bufferView"]) {
             let bytes = self.view(view_index)?;
             let start = offset(&accessor["byteOffset"])?;

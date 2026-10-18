@@ -14,6 +14,8 @@ use glam::{DVec2, DVec3};
 const SQUARES_ACROSS: f64 = 256.0;
 /// Smallest square, Mercator units (about 500 m at the equator, 330 m at 48°)
 const MIN_SQUARE: f64 = 500.0 / 40_075_016.686;
+/// Most squares along a side of any grid: the squares grow past it (16 M squares at most)
+const MAX_SIDE: u32 = 4096;
 
 /// The grid of a network, Mercator
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,16 +27,25 @@ pub struct Grid {
 }
 
 impl Grid {
-    /// A grid of squares of side `size` from `min`, enough of them to cover `max`
+    /// A grid of squares of side `size` from `min`, enough of them to cover `max`, at most `MAX_SIDE` along a side
+    /// (larger squares then); bounds that are not numbers give one square at the origin
     #[must_use]
     pub fn over(min: DVec2, max: DVec2, size: f64) -> Self {
+        let (min, max) = if min.is_finite() && max.is_finite() {
+            (min, max)
+        } else {
+            (DVec2::ZERO, DVec2::ZERO)
+        };
         let extent = (max - min).max(DVec2::ZERO);
         let size = if size.is_finite() && size > 0.0 { size } else { 1.0 };
+        // A little under the limit: the rounding of the division never adds a square past it
+        let size = size.max(extent.max_element() / f64::from(MAX_SIDE - 2));
+        let squares = |e: f64| ((e / size) as u32).saturating_add(1).min(MAX_SIDE);
         Self {
             min,
             size,
-            cols: ((extent.x / size) as u32).saturating_add(1),
-            rows: ((extent.y / size) as u32).saturating_add(1),
+            cols: squares(extent.x),
+            rows: squares(extent.y),
         }
     }
 
@@ -112,26 +123,21 @@ fn line_of<'a>(
 #[must_use]
 pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec2) -> Pieces {
     let edge_count = edges.len() / 2;
+    // Points that are not numbers are left out (and the pieces that reach them)
     let (mut min, mut max) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
     let mut ends = [DVec2::ZERO; 2];
     for e in 0..edge_count {
         for &p in line_of(e, nodes, edges, lines, &mut ends) {
-            min = min.min(p);
-            max = max.max(p);
+            if p.is_finite() {
+                min = min.min(p);
+                max = max.max(p);
+            }
         }
     }
-    if edge_count == 0 {
-        min = DVec2::ZERO;
-        max = DVec2::ZERO;
-    }
     let extent = max - min;
-    let size = (extent.x.max(extent.y) / SQUARES_ACROSS).max(MIN_SQUARE);
-    let grid = Grid {
-        min,
-        size,
-        cols: (extent.x / size) as u32 + 1,
-        rows: (extent.y / size) as u32 + 1,
-    };
+    let grid = Grid::over(min, max, (extent.x.max(extent.y) / SQUARES_ACROSS).max(MIN_SQUARE));
+    let size = grid.size;
+    let finite = |w: &[DVec2]| w[0].is_finite() && w[1].is_finite();
     // Two passes over the edges: the pieces of each square counted, then written straight at their place (no
     // unsorted copy: millions of pieces for a region)
     let f32s = |p: DVec2| [p.x as f32, p.y as f32];
@@ -139,9 +145,13 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
         let mut ends = [DVec2::ZERO; 2];
         for e in 0..edge_count {
             let points = line_of(e, nodes, edges, lines, &mut ends);
-            let total: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+            let total: f64 = points
+                .windows(2)
+                .filter(|w| finite(w))
+                .map(|w| w[0].distance(w[1]))
+                .sum();
             let mut along = 0.0;
-            for w in points.windows(2) {
+            for w in points.windows(2).filter(|w| finite(w)) {
                 let length = w[0].distance(w[1]);
                 let parts = (length / size).ceil().max(1.0) as usize;
                 for k in 0..parts {
@@ -164,7 +174,7 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
             }
         }
     };
-    let squares = (grid.cols * grid.rows) as usize;
+    let squares = grid.len();
     let mut start = vec![0u32; squares + 1];
     each(&mut |s, _| start[s as usize + 1] += 1);
     for s in 0..squares {
@@ -201,6 +211,13 @@ pub fn visible(grid: &Grid, start: &[u32], view: &View, heights: (f64, f64), shi
 #[must_use]
 pub fn squares_in_view(grid: &Grid, view: &View, heights: (f64, f64), shift: f64, margin: f64, far: bool) -> Vec<u32> {
     let mut squares = Vec::new();
+    squares_in_view_into(grid, view, (heights, shift, margin, far), &mut squares);
+    squares
+}
+
+/// `squares_in_view` into `out` (cleared first), with (heights, shift, margin, far)
+fn squares_in_view_into(grid: &Grid, view: &View, (heights, shift, margin, far): Look, out: &mut Vec<u32>) {
+    out.clear();
     let reach = 0.5 + margin.max(0.0) / grid.size;
     let planes = if far { ALL_PLANES } else { NO_FAR_PLANE };
     visit(
@@ -208,17 +225,97 @@ pub fn squares_in_view(grid: &Grid, view: &View, heights: (f64, f64), shift: f64
         view,
         (heights, shift, reach, planes),
         (0, 0, grid.cols, grid.rows),
-        &mut squares,
+        out,
     );
-    squares.sort_unstable();
-    squares
+    out.sort_unstable();
+}
+
+/// How a layer looks for its squares in view (as `squares_in_view` takes them): heights, shift, margin, far
+pub type Look = ((f64, f64), f64, f64, bool);
+
+/// The squares in view of a layer and the ranges of items they hold, kept from frame to frame: their buffers reused,
+/// and nothing worked out again for the view they were worked out for (the picking pass after a frame, a frame
+/// redrawn for another layer). `invalidate` when the grid or the items change
+#[derive(Default)]
+pub struct Visible {
+    /// What they were worked out for: the view (matrix, center, scale, globe) and the look
+    key: Option<[u64; 26]>,
+    squares: Vec<u32>,
+    ranges: Vec<(u32, u32)>,
+}
+
+impl Visible {
+    fn key(view: &View, ((low, high), shift, margin, far): Look) -> [u64; 26] {
+        let mut key = [0u64; 26];
+        for (k, v) in view.view_proj.to_cols_array().into_iter().enumerate() {
+            key[k] = v.to_bits();
+        }
+        let rest = [
+            view.center.x,
+            view.center.y,
+            view.world_size,
+            view.globe.factor,
+            view.vertical,
+            low,
+            high,
+            shift,
+            margin,
+            f64::from(u8::from(far)),
+        ];
+        for (k, v) in rest.into_iter().enumerate() {
+            key[16 + k] = v.to_bits();
+        }
+        key
+    }
+
+    /// The ranges of items (`start`: the first of each square, and the end) in the squares of `grid` in view, worked
+    /// out again only for another view or look
+    pub fn update(&mut self, grid: &Grid, start: &[u32], view: &View, look: Look) -> &[(u32, u32)] {
+        let key = Self::key(view, look);
+        if self.key != Some(key) {
+            squares_in_view_into(grid, view, look, &mut self.squares);
+            ranges_into(&self.squares, start, &mut self.ranges);
+            self.key = Some(key);
+        }
+        &self.ranges
+    }
+
+    /// The ranges of the last `update` if it was for this view and look (without changing anything: the picking pass)
+    #[must_use]
+    pub fn cached(&self, view: &View, look: Look) -> Option<&[(u32, u32)]> {
+        (self.key == Some(Self::key(view, look))).then_some(self.ranges.as_slice())
+    }
+
+    /// The ranges of the last `update`
+    #[must_use]
+    pub fn ranges(&self) -> &[(u32, u32)] {
+        &self.ranges
+    }
+
+    /// The squares in view of the last `update`, in increasing order
+    #[must_use]
+    pub fn squares(&self) -> &[u32] {
+        &self.squares
+    }
+
+    /// Forgets what was worked out: the grid or the items changed
+    pub fn invalidate(&mut self) {
+        self.key = None;
+    }
 }
 
 /// Ranges of items (`first..end`) of some squares (in increasing order), merged when consecutive; `start`: first item
 /// of each square (and the end). Empty squares and squares out of `start` are skipped
 #[must_use]
 pub fn ranges(squares: &[u32], start: &[u32]) -> Vec<(u32, u32)> {
-    let mut out: Vec<(u32, u32)> = Vec::new();
+    let mut out = Vec::new();
+    ranges_into(squares, start, &mut out);
+    out
+}
+
+/// `ranges` into `out` (cleared first)
+pub fn ranges_into(squares: &[u32], start: &[u32], out: &mut Vec<(u32, u32)>) {
+    out.clear();
     for &s in squares {
         let (Some(&first), Some(&end)) = (start.get(s as usize), start.get(s as usize + 1)) else {
             continue;
@@ -231,7 +328,6 @@ pub fn ranges(squares: &[u32], start: &[u32]) -> Vec<(u32, u32)> {
             _ => out.push((first, end)),
         }
     }
-    out
 }
 
 /// Stable counting sort of items by square: the order to put them in (item indices) and the first position of each
@@ -426,5 +522,71 @@ mod tests {
         far.width = 1200.0;
         far.height = 800.0;
         assert_eq!(p.visible(&far.view(), (0.0, 0.0), 0.0), Vec::new());
+    }
+
+    #[test]
+    fn grids_stay_small_whatever_their_bounds() {
+        // Bounds that are not numbers: one square
+        for (min, max) in [
+            (DVec2::ZERO, DVec2::new(f64::INFINITY, 1.0)),
+            (DVec2::new(f64::NAN, 0.0), DVec2::ONE),
+            (DVec2::NEG_INFINITY, DVec2::INFINITY),
+        ] {
+            let grid = Grid::over(min, max, 1e-6);
+            assert_eq!(grid.len(), 1, "{min} {max}");
+            assert_eq!(grid.square(DVec2::new(f64::NAN, 0.5)), 0);
+        }
+        // Tiny squares over a wide extent: larger squares, at most MAX_SIDE a side, still covering the extent
+        let grid = Grid::over(DVec2::ZERO, DVec2::new(1e6, 1.0), 1e-9);
+        assert!(grid.cols <= MAX_SIDE && grid.rows <= MAX_SIDE);
+        assert!(f64::from(grid.cols) * grid.size >= 1e6);
+        assert_eq!(grid.square(DVec2::new(1e6, 1.0)) % grid.cols, grid.cols - 1);
+    }
+
+    #[test]
+    fn points_not_numbers_are_left_out_of_the_pieces() {
+        let nodes = [
+            DVec2::new(0.5, 0.5),
+            DVec2::new(0.5001, 0.5),
+            DVec2::new(f64::INFINITY, 0.5),
+        ];
+        let points = [DVec2::new(0.5, 0.5), DVec2::new(f64::NAN, 1.0), DVec2::new(0.5001, 0.5)];
+        let lines = Lines {
+            start: &[0, 3],
+            points: &points,
+        };
+        // Edge 0 along a line with a point not a number, edge 1 to a node at infinity: no piece reaches them
+        let p = build(&nodes, &[0, 1, 0, 2], Some(&lines), nodes[0]);
+        assert!(p.grid.len() < 100_000, "{}", p.grid.len());
+        assert!(
+            p.pieces
+                .iter()
+                .all(|q| q.from.iter().chain(&q.to).all(|v| v.is_finite()))
+        );
+        let only_infinite = build(&nodes, &[2, 2], None, DVec2::ZERO);
+        assert!(only_infinite.pieces.is_empty() && only_infinite.grid.len() == 1);
+    }
+
+    #[test]
+    fn visible_squares_are_kept_for_the_same_view() {
+        let (nodes, edges) = town(50);
+        let p = build(&nodes, &edges, None, DVec2::ZERO);
+        let mut c = Camera::new(2.36, 48.84, 16.0);
+        c.width = 800.0;
+        c.height = 600.0;
+        let view = c.view();
+        let look = ((0.0, 0.0), 0.0, 0.0, true);
+        let mut visible = Visible::default();
+        assert!(visible.cached(&view, look).is_none());
+        let ranges = visible.update(&p.grid, &p.start, &view, look).to_vec();
+        assert_eq!(ranges, p.visible(&view, (0.0, 0.0), 0.0));
+        assert_eq!(visible.cached(&view, look), Some(ranges.as_slice()));
+        assert!(visible.squares().is_sorted() && !visible.squares().is_empty());
+        // Another view or another look: worked out again
+        c.bearing = 30.0;
+        assert!(visible.cached(&c.view(), look).is_none());
+        assert!(visible.cached(&view, ((0.0, 1.0), 0.0, 0.0, true)).is_none());
+        visible.invalidate();
+        assert!(visible.cached(&view, look).is_none());
     }
 }

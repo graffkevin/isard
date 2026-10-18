@@ -124,9 +124,11 @@ export interface GeoMapOptions extends Partial<Camera> {
    * layer only */
   coreWasmUrl?: string | URL;
   /** Load the engine with 3D Tiles from the start (default false: it is loaded when the first 3D Tiles layer is added,
-   * the map then moving its camera and layers onto it). For a map that shows 3D Tiles at once: one engine downloaded
-   * instead of two */
-  tiles3d?: boolean;
+   * the map then moving its camera and layers onto it, a stall of about a frame or two). For a map that shows 3D Tiles
+   * at once: one engine downloaded instead of two. `'preload'`: the map starts on the engine without 3D Tiles and
+   * downloads and compiles the other once idle, without running it: its first 3D Tiles layer does not wait for the
+   * download (for a map that will show 3D Tiles later, on demand) */
+  tiles3d?: boolean | 'preload';
   /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
   basemapWorkerUrl?: string | URL;
   /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default
@@ -205,6 +207,13 @@ export interface FlyToOptions extends AnimationOptions {
  * north (NASA's Trek WMTS, WorldCRS84Quad), reprojected in the page into Web Mercator tiles.
  */
 export type RasterGrid = 'mercator' | 'equirectangular';
+
+/** What `RasterLayer.setStyle` changes */
+export interface RasterStyle {
+  opacity: number;
+  /** 0 = greyscale, 1 = original colors */
+  saturation: number;
+}
 
 export interface RasterOptions {
   /** Tile URL with {z}, {x} and {y} (256 px tiles); unused with a `loader` */

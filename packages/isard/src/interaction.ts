@@ -95,6 +95,9 @@ export class Interaction {
   /** Recent pan moves, for the release speed: [time, dx, dy] */
   private trail: [number, number, number][] = [];
   private moved = false;
+  /** The canvas's place on the page, read once: reading it on every pointer move would force a layout each time.
+   * Read again after a resize, a scroll, and when a pointer comes in or goes down */
+  private rect: DOMRect | undefined;
 
   constructor(
     private readonly map: GeoMap,
@@ -109,7 +112,20 @@ export class Interaction {
       canvas.addEventListener(type, handler, options);
       this.cleanup.push(() => canvas.removeEventListener(type, handler));
     };
-    listen('pointerdown', (e) => this.down(e));
+    const moved = () => {
+      this.rect = undefined;
+    };
+    listen('pointerenter', moved);
+    // Scrolls of the page or of any element holding the map
+    if (typeof addEventListener === 'function') {
+      addEventListener('scroll', moved, { capture: true, passive: true });
+      this.cleanup.push(() => removeEventListener('scroll', moved, { capture: true }));
+    }
+    this.cleanup.push(map.on('resize', moved));
+    listen('pointerdown', (e) => {
+      this.rect = undefined;
+      this.down(e);
+    });
     listen('pointermove', (e) => this.move(e));
     listen('pointerup', (e) => this.up(e));
     listen('pointercancel', (e) => this.up(e));
@@ -143,8 +159,8 @@ export class Interaction {
   }
 
   private local(e: MouseEvent): Point {
-    const r = this.map.canvas.getBoundingClientRect();
-    return [e.clientX - r.left, e.clientY - r.top];
+    this.rect ??= this.map.canvas.getBoundingClientRect();
+    return [e.clientX - this.rect.left, e.clientY - this.rect.top];
   }
 
   private down(e: PointerEvent): void {

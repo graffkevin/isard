@@ -202,7 +202,7 @@ fn upload_decoded_primitive(
     let made = if let Ok(bitmap) = js_get(p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
         texture(gl, &bitmap).map(Some).map_err(JsValue::from)
     } else if js_get(p, "texture").is_object() {
-        compressed_texture(gl, raw, &js_get(p, "texture")).map(Some)
+        compressed_texture(gl, raw, &js_get(p, "texture"))
     } else {
         Ok(None)
     };
@@ -222,29 +222,67 @@ fn upload_decoded_primitive(
     }
 }
 
-/// Texture transcoded by a worker (KTX2): its mip levels uploaded as they are, compressed or RGBA8; deleted again if
-/// a level fails
+/// Bytes of a mip level of `width` × `height` in `format` (RGBA8 or the block formats the workers transcode to), None
+/// for another format or a side that is not positive
+fn level_bytes(format: u32, width: i32, height: i32) -> Option<usize> {
+    let (w, h) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let block = match format {
+        glow::RGBA8 => return w.checked_mul(h)?.checked_mul(4),
+        // BC1 (S3TC RGB / RGBA), ETC2 RGB, ETC1
+        0x83f0 | 0x83f1 | 0x9274 | 0x8d64 => 8,
+        // BC2, BC3, BC7, ETC2 RGBA, ASTC 4×4
+        0x83f2 | 0x83f3 | 0x8e8c | 0x9278 | 0x93b0 => 16,
+        _ => return None,
+    };
+    w.div_ceil(4).checked_mul(h.div_ceil(4))?.checked_mul(block)
+}
+
+/// Whether mip levels (width, height, bytes) make a texture in `format`: each level half the one before (at least 1),
+/// with exactly the bytes its size needs. A wrong one would leave the texture incomplete (drawn black) without an
+/// error
+fn levels_fit(format: u32, levels: &[(i32, i32, usize)]) -> bool {
+    let Some(&(w0, h0, _)) = levels.first() else {
+        return false;
+    };
+    levels.len() <= 32
+        && levels.iter().enumerate().all(|(k, &(w, h, length))| {
+            w == (w0 >> k).max(1) && h == (h0 >> k).max(1) && level_bytes(format, w, h) == Some(length)
+        })
+}
+
+/// Texture transcoded by a worker (KTX2): its mip levels uploaded as they are, compressed or RGBA8; None (drawn
+/// untextured) if they do not make a texture (`levels_fit`); deleted again if a level fails
 fn compressed_texture(
     gl: &glow::Context,
     raw: &web_sys::WebGl2RenderingContext,
     texture: &JsValue,
-) -> Result<(glow::Texture, usize), JsValue> {
+) -> Result<Option<(glow::Texture, usize)>, JsValue> {
     let format = js_get(texture, "format")
         .as_f64()
         .ok_or("compressed texture without format")? as u32;
-    let levels = get_array(texture, "levels");
+    let mut levels = Vec::new();
+    let mut sizes = Vec::new();
+    for info in get_array(texture, "levels").iter() {
+        let width = js_get(&info, "width").as_f64().unwrap_or(0.0) as i32;
+        let height = js_get(&info, "height").as_f64().unwrap_or(0.0) as i32;
+        let data: js_sys::Uint8Array = js_get(&info, "data").dyn_into()?;
+        sizes.push((width, height, data.byte_length() as usize));
+        levels.push(data);
+    }
+    if !levels_fit(format, &sizes) {
+        return Ok(None);
+    }
     let mut objects = Objects::new(gl);
     let handle = objects.texture()?;
-    let mut bytes = 0;
+    let bytes = sizes.iter().map(|&(_, _, length)| length).sum();
     // SAFETY: setup of a texture just created on the live context; glow binds, the raw context uploads into the bound
     // texture
     unsafe {
         gl.bind_texture(glow::TEXTURE_2D, Some(handle));
-        for (level, info) in levels.iter().enumerate() {
-            let width = js_get(&info, "width").as_f64().unwrap_or(0.0) as i32;
-            let height = js_get(&info, "height").as_f64().unwrap_or(0.0) as i32;
-            let data: js_sys::Uint8Array = js_get(&info, "data").dyn_into()?;
-            bytes += data.byte_length() as usize;
+        for (level, (data, &(width, height, _))) in levels.iter().zip(&sizes).enumerate() {
             if format == glow::RGBA8 {
                 raw.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
                     glow::TEXTURE_2D,
@@ -255,7 +293,7 @@ fn compressed_texture(
                     0,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
-                    Some(&data),
+                    Some(data),
                 )?;
             } else {
                 raw.compressed_tex_image_2d_with_array_buffer_view(
@@ -265,11 +303,11 @@ fn compressed_texture(
                     width,
                     height,
                     0,
-                    &data,
+                    data,
                 );
             }
         }
-        let count = levels.length() as i32;
+        let count = levels.len() as i32;
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, (count - 1).max(0));
         let min = if count > 1 {
             glow::LINEAR_MIPMAP_LINEAR
@@ -282,7 +320,7 @@ fn compressed_texture(
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
     }
     objects.keep();
-    Ok((handle, bytes))
+    Ok(Some((handle, bytes)))
 }
 
 /// Mipmapped texture from a decoded image (closed after the upload); returns it with its GPU size
@@ -331,5 +369,29 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
 pub fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
     for p in &mesh.primitives {
         delete_primitive(gl, p);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mip_levels_must_have_the_size_of_their_format() {
+        // BC7 (16 bytes per 4 × 4 block): 8 × 8, 4 × 4, 2 × 2, 1 × 1
+        let good = [(8, 8, 64), (4, 4, 16), (2, 2, 16), (1, 1, 16)];
+        assert!(levels_fit(0x8e8c, &good));
+        // BC1 (8 bytes a block) does not fit the same bytes; RGBA8 has its own
+        assert!(!levels_fit(0x83f0, &good));
+        assert!(levels_fit(glow::RGBA8, &[(3, 2, 24), (1, 1, 4)]));
+        assert_eq!(level_bytes(0x93b0, 5, 5), Some(64));
+        assert_eq!(level_bytes(0x9274, 1, 1), Some(8));
+        // Short data, a level of the wrong size, no level, an unknown format, sides not positive
+        assert!(!levels_fit(0x8e8c, &[(8, 8, 63)]));
+        assert!(!levels_fit(0x8e8c, &[(8, 8, 64), (8, 8, 64)]));
+        assert!(!levels_fit(0x8e8c, &[]));
+        assert!(!levels_fit(0x1234, &[(4, 4, 16)]));
+        assert!(!levels_fit(glow::RGBA8, &[(0, 4, 0)]));
+        assert_eq!(level_bytes(glow::RGBA8, -1, 4), None);
     }
 }

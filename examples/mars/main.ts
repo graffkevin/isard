@@ -21,12 +21,8 @@ const map = await GeoMap.create(element('map'), {
   body: 'mars',
   ...(views[location.hash.slice(1)] ?? globe),
   maxPitch: 75,
+  // MOLA's model, credited by the map
   terrain: true,
-  attributionControl: {
-    customAttribution:
-      '<a href="https://trek.nasa.gov/mars/">NASA Mars Trek</a>: Viking MDIM 2.1 colour mosaic, NASA/JPL-Caltech/USGS; ' +
-      'MOLA terrain model, NASA/JPL/GSFC',
-  },
 });
 
 // The global mosaic, 232 m per pixel: levels 0 to 7 of an equirectangular grid
@@ -34,6 +30,8 @@ map.addRaster({
   url: 'https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/{z}/{y}/{x}.jpg',
   grid: 'equirectangular',
   maxZoom: 7,
+  attribution:
+    '<a href="https://trek.nasa.gov/mars/">NASA Mars Trek</a>: Viking MDIM 2.1 colour mosaic, NASA/JPL-Caltech/USGS',
 });
 
 // Planetocentric latitudes, longitudes east from -180 to 180 (those of the mosaic), and on which side the label goes

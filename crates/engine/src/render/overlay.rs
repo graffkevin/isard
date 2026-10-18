@@ -10,7 +10,7 @@
 use crate::render::gl;
 use crate::render::raster::RasterSource;
 use geo::camera::View;
-use geo::pieces::{self, Grid};
+use geo::pieces::{Grid, Look, Visible};
 use glam::{DVec2, DVec3, DVec4};
 use glow::HasContext;
 
@@ -105,19 +105,16 @@ pub fn points(coordinates: &[f64]) -> Vec<DVec2> {
         .collect()
 }
 
-/// Bounds of points, None for none
+/// Bounds of the points that are numbers, None for none
 #[must_use]
 pub fn bounds(points: &[DVec2]) -> Option<(DVec2, DVec2)> {
-    if points.is_empty() {
-        return None;
-    }
-    Some(
-        points
-            .iter()
-            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
-                (a.min(p), b.max(p))
-            }),
-    )
+    let (min, max) = points
+        .iter()
+        .filter(|p| p.is_finite())
+        .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
+            (a.min(p), b.max(p))
+        });
+    min.is_finite().then_some((min, max))
 }
 
 /// Whole worlds to add to x so that a layer at `origin` is drawn on the copy of the world nearest to the center
@@ -137,16 +134,30 @@ pub fn heights(view: &View, relief: Option<(&RasterSource, f32)>) -> (f64, f64) 
     })
 }
 
-/// Ranges of pieces in the squares in view of a layer of pieces at `origin`
+/// How a layer at `origin` looks for its squares in view (`geo::pieces::Look`): the heights it may stand at, the copy
+/// of the world it is drawn on, `margin` (Mercator) around what its squares hold, squares past the far plane left out
 #[must_use]
-pub fn visible_pieces(
+pub fn look(origin: DVec2, view: &View, relief: Option<(&RasterSource, f32)>, margin: f64) -> Look {
+    (heights(view, relief), shift(origin, view), margin, true)
+}
+
+/// The ranges of items in view for the picking pass: those of the last frame if it had the same view, else worked out
+/// anew (`visible` is the layer's, updated by its frames only)
+#[must_use]
+pub fn pick_ranges<'a>(
+    visible: &'a Visible,
     grid: &Grid,
     start: &[u32],
-    origin: DVec2,
     view: &View,
-    relief: Option<(&RasterSource, f32)>,
-) -> Vec<(u32, u32)> {
-    pieces::visible(grid, start, view, heights(view, relief), shift(origin, view))
+    look: Look,
+) -> std::borrow::Cow<'a, [(u32, u32)]> {
+    visible.cached(view, look).map_or_else(
+        || {
+            let mut fresh = Visible::default();
+            std::borrow::Cow::Owned(fresh.update(grid, start, view, look).to_vec())
+        },
+        std::borrow::Cow::Borrowed,
+    )
 }
 
 /// Whether a Mercator box (standing between `heights`, pixels of the local frame) may show in the view: sample
@@ -368,6 +379,10 @@ mod tests {
         assert_eq!(p, [DVec2::new(0.1, 0.2), DVec2::new(0.3, 0.05)]);
         assert_eq!(bounds(&p), Some((DVec2::new(0.1, 0.05), DVec2::new(0.3, 0.2))));
         assert_eq!(bounds(&[]), None);
+        // Points not numbers are left out
+        let q = [DVec2::new(f64::INFINITY, 0.0), DVec2::new(0.2, 0.4), DVec2::NAN];
+        assert_eq!(bounds(&q), Some((DVec2::new(0.2, 0.4), DVec2::new(0.2, 0.4))));
+        assert_eq!(bounds(&q[2..]), None);
     }
 
     #[test]

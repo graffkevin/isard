@@ -41,6 +41,13 @@ impl Body {
         relief: (-8300.0, 21_300.0),
     };
 
+    /// Whether this is the Earth's ellipsoid (WGS 84), whatever the range of its relief: what Earth-only data (the
+    /// RAF20 geoid) applies to
+    #[must_use]
+    pub fn is_earth(&self) -> bool {
+        self.radius == Self::EARTH.radius && self.flattening == Self::EARTH.flattening
+    }
+
     /// Square of the first eccentricity
     fn e2(&self) -> f64 {
         self.flattening * (2.0 - self.flattening)
@@ -171,6 +178,12 @@ mod tests {
     fn the_earth_is_wgs84() {
         assert_eq!(Body::default(), Body::EARTH);
         assert_eq!(Body::EARTH.radius, 6_378_137.0);
+        assert!(Body::EARTH.is_earth() && !Body::MOON.is_earth() && !Body::MARS.is_earth());
+        let regional = Body {
+            relief: (-10.0, 1000.0),
+            ..Body::EARTH
+        };
+        assert!(regional.is_earth());
         assert_eq!(Body::EARTH.to_ecef(3.06, 50.63, 20.0), to_ecef(3.06, 50.63, 20.0));
         // The pole: the semi-minor axis
         let pole = Body::EARTH.to_ecef(0.0, 90.0, 0.0);

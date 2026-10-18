@@ -73,15 +73,32 @@ impl FeaturePass {
 /// height of the pixels (RGBA rows, from the bottom)
 fn nearest(pixels: &[u8], block: (i32, i32, i32, i32), cursor: (i32, i32), radius: i32) -> Option<[u8; 4]> {
     let (x0, y0, w, _) = block;
-    let mut best: Option<(i32, [u8; 4])> = None;
+    let w = i64::from(w.max(1));
+    // Squared distances in i64: a radius of 50 000 pixels squared is past i32
+    let radius = i64::from(radius);
+    let mut best: Option<(i64, [u8; 4])> = None;
     for (k, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
-        let (i, j) = (k as i32 % w + x0, k as i32 / w + y0);
-        let d = (i - cursor.0).pow(2) + (j - cursor.1).pow(2);
+        let (i, j) = (k as i64 % w + i64::from(x0), k as i64 / w + i64::from(y0));
+        let d = (i - i64::from(cursor.0)).pow(2) + (j - i64::from(cursor.1)).pow(2);
         if pixel[3] != 0 && d <= radius * radius && best.is_none_or(|(b, _)| d < b) {
             best = Some((d, *pixel));
         }
     }
     best.map(|(_, pixel)| pixel)
+}
+
+/// The block of pixels around the cursor (device pixels, y up) inside a canvas of `size`, and the radius in device
+/// pixels: `radius` (device pixels) no larger than the canvas's diagonal, 0 if not a number
+fn block_around(cursor: (i32, i32), radius: f64, size: (i32, i32)) -> ((i32, i32, i32, i32), i32) {
+    let diagonal = f64::from(size.0).hypot(f64::from(size.1)).ceil();
+    let r = radius.max(0.0).min(diagonal).round() as i32;
+    let (px, py) = cursor;
+    let (x0, y0) = (px.saturating_sub(r).max(0), py.saturating_sub(r).max(0));
+    let (x1, y1) = (
+        px.saturating_add(r).min(size.0 - 1),
+        py.saturating_add(r).min(size.1 - 1),
+    );
+    ((x0, y0, x1 - x0 + 1, y1 - y0 + 1), r)
 }
 
 /// A picking request waiting for the GPU (`requestPick`)
@@ -255,6 +272,9 @@ impl Engine {
 
     /// A screen point (CSS pixels) in device pixels, y up; None outside the canvas
     fn device_point(&self, x: f64, y: f64, size: (i32, i32)) -> Option<(i32, i32)> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
         let (px, py) = (
             (x * self.pixel_ratio) as i32,
             size.1 - 1 - (y * self.pixel_ratio) as i32,
@@ -366,15 +386,13 @@ impl Engine {
         let size = self.canvas_size();
         let (px, py) = self.device_point(x, y, size)?;
         // The block of pixels around the cursor, inside the canvas
-        let r = (radius.max(0.0) * self.pixel_ratio).round() as i32;
-        let (x0, y0) = ((px - r).max(0), (py - r).max(0));
-        let (x1, y1) = ((px + r).min(size.0 - 1), (py + r).min(size.1 - 1));
+        let (block, radius) = block_around((px, py), radius * self.pixel_ratio, size);
         Some(FeaturePass {
             pickable,
             slots,
             cursor: (px, py),
-            block: (x0, y0, x1 - x0 + 1, y1 - y0 + 1),
-            radius: r,
+            block,
+            radius,
         })
     }
 
@@ -629,5 +647,28 @@ mod tests {
         // An ordinal past the layers drawn: no hit
         pixels[5 * 4 + 3] = 5;
         assert_eq!(pass.hit(&pixels), None);
+    }
+
+    #[test]
+    fn the_radius_stays_within_the_canvas() {
+        let size = (300, 200);
+        assert_eq!(block_around((10, 20), 2.0, size), ((8, 18, 5, 5), 2));
+        // Clipped at the edges of the canvas
+        assert_eq!(block_around((0, 199), 3.0, size), ((0, 196, 4, 4), 3));
+        // Infinite, huge, negative or not a number: at most the diagonal, the block the canvas at most
+        for radius in [f64::INFINITY, 1e12, 50_000.0] {
+            let ((x0, y0, w, h), r) = block_around((150, 100), radius, size);
+            assert_eq!((x0, y0, w, h, r), (0, 0, 300, 200, 361), "{radius}");
+        }
+        assert_eq!(block_around((10, 20), f64::NAN, size), ((10, 20, 1, 1), 0));
+        assert_eq!(block_around((10, 20), -4.0, size), ((10, 20, 1, 1), 0));
+        // A radius whose square is past i32 still finds the pixel
+        let mut pixels = vec![0u8; 4];
+        pixels[3] = 1;
+        assert_eq!(
+            nearest(&pixels, (0, 0, 1, 1), (40_000, 40_000), 60_000),
+            Some([0, 0, 0, 1])
+        );
+        assert_eq!(nearest(&pixels, (0, 0, 1, 1), (40_000, 40_000), 50_000), None);
     }
 }

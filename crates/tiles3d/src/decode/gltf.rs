@@ -137,6 +137,10 @@ const MAX_DEPTH: u32 = 32;
 /// Node visits allowed per node of the file: a hierarchy is a tree (each node once), some slack for files sharing
 /// nodes, none for a graph whose shared children would multiply the visits
 const VISITS_PER_NODE: usize = 4;
+/// Values (f32 components, indices) a tile may decode in all: accessors are read again for each primitive and node
+/// that uses them, and one without buffer view costs no byte of the file, so a tiny file could otherwise ask for
+/// gigabytes. 16 M values: 64 MB, far above a real tile
+const MAX_VALUES: usize = 1 << 24;
 
 pub(super) struct Gltf<'a> {
     pub(super) json: &'a Value,
@@ -147,6 +151,8 @@ pub(super) struct Gltf<'a> {
     views: RefCell<HashMap<usize, Rc<[u8]>>>,
     /// Node visits left
     visits: Cell<usize>,
+    /// Values left to decode (`MAX_VALUES`)
+    values: Cell<usize>,
 }
 
 impl<'a> Gltf<'a> {
@@ -158,7 +164,15 @@ impl<'a> Gltf<'a> {
             draco,
             views: RefCell::default(),
             visits: Cell::new(nodes.saturating_mul(VISITS_PER_NODE)),
+            values: Cell::new(MAX_VALUES),
         }
+    }
+
+    /// Takes `count` values from the tile's budget, before they are allocated: an error past `MAX_VALUES`
+    pub(super) fn spend(&self, count: usize) -> Result<(), String> {
+        let left = self.values.get().checked_sub(count).ok_or("glTF tile too large")?;
+        self.values.set(left);
+        Ok(())
     }
 
     fn node(
@@ -217,6 +231,7 @@ impl<'a> Gltf<'a> {
                 .find(|g| g.mesh == mesh && g.primitive == index)
                 .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
             let count = g.positions.len() / 3;
+            self.spend(count.saturating_mul(5).saturating_add(g.indices.len()))?;
             let uvs = if g.uvs.is_empty() {
                 vec![0.0; count * 2]
             } else {
@@ -230,13 +245,17 @@ impl<'a> Gltf<'a> {
         let positions = self.floats(position)?;
         let count = positions.len() / 3;
         let uv = &primitive["attributes"][format!("TEXCOORD_{}", uv_set(self.json, primitive))];
-        let uvs = match self::index(uv) {
-            Some(uv) => self.floats(uv)?,
-            None => vec![0.0; count * 2],
+        let uvs = if let Some(uv) = self::index(uv) {
+            self.floats(uv)?
+        } else {
+            self.spend(count.saturating_mul(2))?;
+            vec![0.0; count * 2]
         };
-        let indices: Vec<u32> = match self::index(&primitive["indices"]) {
-            Some(i) => self.accessor(i, |l| index_reader(l.component_type))?,
-            None => (0..u32::try_from(count).map_err(|_| "too many vertices")?).collect(),
+        let indices: Vec<u32> = if let Some(i) = self::index(&primitive["indices"]) {
+            self.accessor(i, |l| index_reader(l.component_type))?
+        } else {
+            self.spend(count)?;
+            (0..u32::try_from(count).map_err(|_| "too many vertices")?).collect()
         };
         Ok(Some((positions, uvs, indices)))
     }
@@ -475,5 +494,32 @@ mod tests {
             no_view["accessors"][0].as_object_mut().unwrap().remove("bufferView");
             assert!(triangle(&no_view, &bin).is_err() || count == 4, "{count}");
         }
+    }
+
+    #[test]
+    fn values_read_again_count_against_one_budget() {
+        // One accessor without buffer view, under the per-accessor cap, used by many primitives of many nodes: a
+        // few hundred bytes asking for gigabytes, an error before
+        let primitives: Vec<Value> = (0..64).map(|_| json!({"attributes": {"POSITION": 0}})).collect();
+        let nodes: Vec<Value> = (0..64).map(|_| json!({"mesh": 0})).collect();
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "accessors": [{"componentType": 5126, "count": 1_000_000, "type": "VEC3"}],
+            "meshes": [{"primitives": primitives}],
+            "nodes": nodes
+        });
+        let bytes = super::super::tests::glb(&json, &[]);
+        assert!(bytes.len() < 4096);
+        assert_eq!(
+            super::super::decode(&bytes, &DMat4::IDENTITY, false, &[])
+                .err()
+                .as_deref(),
+            Some("glTF tile too large")
+        );
+        // The same accessor once fits
+        let mut once = json;
+        once["meshes"][0]["primitives"] = json!([{"attributes": {"POSITION": 0}}]);
+        once["nodes"] = json!([{"mesh": 0}]);
+        assert!(triangle(&once, &[]).is_ok());
     }
 }

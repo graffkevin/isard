@@ -20,6 +20,10 @@ pub struct Loading {
     pub upload_budget_ms: f64,
     /// Requests in flight per raster layer, and per 3D Tiles layer
     pub raster_requests: usize,
+    #[cfg_attr(
+        not(feature = "tiles3d"),
+        allow(dead_code, reason = "read by the 3D Tiles layers only")
+    )]
     pub mesh_requests: usize,
 }
 
@@ -48,12 +52,24 @@ impl Loading {
 pub struct Frame<'a> {
     pub gl: &'a glow::Context,
     /// The same context, for uploads straight from JavaScript typed arrays
+    #[cfg_attr(
+        not(feature = "tiles3d"),
+        allow(dead_code, reason = "read by the 3D Tiles layers only")
+    )]
     pub raw: &'a web_sys::WebGl2RenderingContext,
     pub camera: &'a Camera,
     pub view: &'a View,
     pub pixel_ratio: f64,
     /// Frame number
+    #[cfg_attr(
+        not(feature = "tiles3d"),
+        allow(dead_code, reason = "read by the 3D Tiles layers only")
+    )]
     pub number: u64,
+    #[cfg_attr(
+        not(feature = "tiles3d"),
+        allow(dead_code, reason = "read by the 3D Tiles layers only")
+    )]
     pub loading: Loading,
     /// The relief, if any: its elevation source and vertical exaggeration
     pub relief: Option<(&'a RasterSource, f32)>,

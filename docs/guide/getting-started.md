@@ -33,14 +33,16 @@ The basemap is OpenFreeMap's Positron by default (OpenStreetMap data, worldwide,
 
 `GeoMap.create` loads the engine once per page (it is compiled once), creates a canvas filling the container and
 returns the map. The engine it loads has no 3D Tiles, a third smaller: the first 3D Tiles layer loads the full one
-(shared with the decoding workers), and the map moves its camera and layers onto it. A map that shows 3D Tiles at
-once asks for it from the start, to download one engine instead of two:
+(shared with the decoding workers), and the map moves its camera and layers onto it: the view may hold or flash
+for a frame or two while the map is rebuilt on it. A map that shows 3D Tiles at once asks for it from the start, to
+download one engine instead of two and skip that move (`'preload'` downloads it once the map is idle, see
+[3D Tiles](../layers/tiles3d#the-engine-with-3d-tiles)):
 
 ```ts
 const map = await GeoMap.create(container, { tiles3d: true });
 ```
 
- Nothing more is needed: the map follows the container's size, and drag,
+Nothing more is needed: the map follows the container's size, and drag,
 wheel, double click, right drag (turn and tilt) and two-finger gestures move the camera.
 
 ## With a bundler

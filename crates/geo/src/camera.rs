@@ -280,7 +280,54 @@ impl Camera {
         TILE_SIZE * self.zoom.exp2()
     }
 
+    /// Center, zoom, pitch and bearing from the page: a value that is not a number leaves the camera's own (the
+    /// center needs both coordinates), so a bad value never poisons the camera
+    pub fn set_view(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
+        if lon.is_finite() && lat.is_finite() {
+            self.center = mercator(lon, lat);
+        }
+        for (field, value) in [
+            (&mut self.zoom, zoom),
+            (&mut self.pitch, pitch),
+            (&mut self.bearing, bearing),
+        ] {
+            if value.is_finite() {
+                *field = value;
+            }
+        }
+        self.clamp();
+    }
+
+    /// Zoom range from the page: a bound that is not a number is left as it was, and the two are put in order
+    pub fn set_zoom_range(&mut self, min: f64, max: f64) {
+        let min = if min.is_finite() { min } else { self.min_zoom };
+        let max = if max.is_finite() { max } else { self.max_zoom };
+        (self.min_zoom, self.max_zoom) = (min.min(max), min.max(max));
+        self.clamp();
+    }
+
+    /// Pitch limit from the page, degrees: up to `PITCH_LIMIT`, ignored if not a number
+    pub fn set_max_pitch(&mut self, max: f64) {
+        if max.is_finite() {
+            self.max_pitch = max.clamp(0.0, PITCH_LIMIT);
+        }
+        self.clamp();
+    }
+
+    /// Brings the camera back into its limits. Never panics, whatever the fields hold: bounds out of order give way
+    /// to the lower one, and a value that is not a number falls back to a limit (the zoom), 0 (pitch, bearing) or
+    /// the middle of the world (center)
+    #[allow(
+        clippy::manual_clamp,
+        reason = "`f64::clamp` panics on bounds out of order or not numbers"
+    )]
     pub fn clamp(&mut self) {
+        if !self.center.x.is_finite() {
+            self.center.x = 0.5;
+        }
+        if !self.center.y.is_finite() {
+            self.center.y = 0.5;
+        }
         // On the globe, the zoom follows the latitude to keep the globe's size (`shift_center`): the floor is the
         // equator's, lowered by the same amount, so the whole globe can be seen from any latitude
         let floor = if self.globe {
@@ -288,8 +335,14 @@ impl Camera {
         } else {
             self.min_zoom
         };
-        self.zoom = self.zoom.clamp(floor, self.max_zoom);
-        self.pitch = self.pitch.clamp(0.0, self.max_pitch.clamp(0.0, PITCH_LIMIT));
+        // `max` then `min` rather than `clamp`, which panics on bounds out of order or not numbers; the zoom stays
+        // finite even then
+        let zoom = self.zoom.max(floor).min(self.max_zoom);
+        self.zoom = if zoom.is_finite() { zoom } else { MIN_ZOOM };
+        self.pitch = self.pitch.max(0.0).min(self.max_pitch.max(0.0).min(PITCH_LIMIT));
+        if !self.bearing.is_finite() {
+            self.bearing = 0.0;
+        }
         self.bearing = (self.bearing + 540.0).rem_euclid(360.0) - 180.0;
         self.center.x = self.center.x.rem_euclid(1.0);
         let lat_limit = mercator(0.0, MAX_LAT).y;
@@ -888,5 +941,56 @@ mod tests {
         // The top of the screen looks above the horizon: no ground there
         assert!(c.ground(&view, 600.0, 0.0).is_none());
         assert!(c.ground(&view, 600.0, 799.0).is_some());
+    }
+
+    #[test]
+    fn limits_from_the_page_never_panic() {
+        let mut c = camera();
+        // A minimum above the maximum: put in order
+        c.set_zoom_range(15.0, 14.0);
+        assert_eq!((c.min_zoom, c.max_zoom), (14.0, 15.0));
+        assert!((14.0..=15.0).contains(&c.zoom));
+        // A bound that is not a number is left as it was
+        c.set_zoom_range(3.0, f64::NAN);
+        assert_eq!((c.min_zoom, c.max_zoom), (3.0, 15.0));
+        c.set_zoom_range(f64::NEG_INFINITY, 18.0);
+        assert_eq!((c.min_zoom, c.max_zoom), (3.0, 18.0));
+        c.set_max_pitch(f64::NAN);
+        assert_eq!(c.max_pitch, MAX_PITCH);
+        c.set_max_pitch(200.0);
+        assert_eq!(c.max_pitch, PITCH_LIMIT);
+        c.set_max_pitch(-5.0);
+        assert_eq!(c.max_pitch, 0.0);
+        // Fields set directly, out of order or not numbers: clamp still holds
+        c.min_zoom = 10.0;
+        c.max_zoom = 2.0;
+        c.max_pitch = f64::NAN;
+        c.zoom = f64::NAN;
+        c.pitch = f64::INFINITY;
+        c.bearing = f64::NAN;
+        c.center = DVec2::new(f64::NAN, f64::INFINITY);
+        c.clamp();
+        assert!(c.zoom.is_finite() && c.pitch.is_finite() && c.bearing.is_finite());
+        assert!(c.center.is_finite());
+        c.globe = true;
+        c.min_zoom = f64::NAN;
+        c.clamp();
+        assert!(c.zoom.is_finite());
+    }
+
+    #[test]
+    fn a_view_not_a_number_keeps_the_camera() {
+        let mut c = camera();
+        let before = c.clone();
+        c.set_view(f64::NAN, 10.0, f64::NAN, f64::INFINITY, f64::NAN);
+        assert_eq!(c.center, before.center);
+        assert_eq!(
+            (c.zoom, c.pitch, c.bearing),
+            (before.zoom, before.pitch, before.bearing)
+        );
+        c.set_view(10.0, 20.0, 5.0, 30.0, 90.0);
+        assert!((lon_lat(c.center) - DVec2::new(10.0, 20.0)).length() < 1e-9);
+        assert_eq!((c.zoom, c.pitch, c.bearing), (5.0, 30.0, 90.0));
+        assert!(c.view().view_proj.is_finite());
     }
 }

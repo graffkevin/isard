@@ -3,7 +3,15 @@
  * the map recreates its engine and every layer in order, with the same handle (its id is updated).
  */
 import { parseColor, rampTexels, stops } from './features.ts';
-import type { LayerHost, LonLat, NetworkOptions, NetworkStyle, RasterOptions, Tiles3dStyle } from './types.ts';
+import type {
+  LayerHost,
+  LonLat,
+  NetworkOptions,
+  NetworkStyle,
+  RasterOptions,
+  RasterStyle,
+  Tiles3dStyle,
+} from './types.ts';
 import type { Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
 
 export abstract class Layer {
@@ -22,10 +30,19 @@ export abstract class Layer {
     return this.#id;
   }
 
-  /** @internal Creates the layer in an engine (again after a context loss) */
+  /** @internal Creates the layer in an engine (again after a context loss); its id is -1 if that fails */
   attach(engine: Engine): void {
+    this.#id = -1;
     this.#id = this.create(engine);
   }
+
+  /** @internal Forgets its id in an engine that is gone (before the layers are created in a new one) */
+  forgetEngine(): void {
+    this.#id = -1;
+  }
+
+  /** @internal Sends what refers to other layers, once every layer of a new engine has its id */
+  relink(_engine: Engine): void {}
 
   /** @internal */
   protected abstract create(engine: Engine): number;
@@ -33,6 +50,7 @@ export abstract class Layer {
   remove(): void {
     // Not created yet: a 3D Tiles layer waiting for the engine with 3D Tiles
     if (this.#id >= 0) this.map.engine.removeLayer(this.#id);
+    this.#id = -1;
     this.map.detach(this);
     this.map.requestRender();
   }
@@ -56,10 +74,15 @@ export class RasterLayer extends Layer {
     super(map);
   }
 
-  setStyle(opacity: number, saturation = 1): void {
-    this.options.opacity = opacity;
-    this.options.saturation = saturation;
-    this.map.engine.setRasterStyle(this.id, opacity, saturation);
+  /** Changes the opacity or saturation, the other kept */
+  setStyle(style: Partial<RasterStyle>): void;
+  /** @deprecated Positional form (saturation back to 1 when not given): `setStyle({ opacity, saturation })` */
+  setStyle(opacity: number, saturation?: number): void;
+  setStyle(style: Partial<RasterStyle> | number, saturation = 1): void {
+    const changed = typeof style === 'number' ? { opacity: style, saturation } : style;
+    this.options.opacity = changed.opacity ?? this.options.opacity;
+    this.options.saturation = changed.saturation ?? this.options.saturation;
+    this.map.engine.setRasterStyle(this.id, this.options.opacity, this.options.saturation);
     this.map.requestRender();
   }
 

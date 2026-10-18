@@ -3,6 +3,57 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [0.2.1] - 2026-10-18
+
+### Changed
+
+- A mouse moving over a map with no `hover` nor `hoverfeature` listener draws nothing (it drew a frame per move);
+  the position under the pointer is computed only for `hover` listeners.
+- Vector basemap workers: each keeps its share of the pool's decoded tiles (96 in all, instead of 96 each); an opaque
+  tile is moved out of its canvas instead of being copied; their canvases are reused. Images no longer used (evicted
+  source tiles of equirectangular rasters and of a style's raster layers, a style's sprite) are freed at once.
+- The pointer's position no longer reads the layout at every move; the Terrarium and Terrain-RGB relief decodes
+  faster.
+- `RasterLayer.setStyle(opacity, saturation)` is deprecated: `setStyle({ opacity, saturation })`, either value alone
+  (the positional form still works, and still sets the saturation back to 1 when it is not given).
+
+### Added
+
+- `tiles3d: 'preload'`: the engine with 3D Tiles downloaded and compiled once the map is idle, for its first 3D Tiles
+  layer; the map is rebuilt on it in a task of its own.
+- `RasterLayer.setStyle({ opacity, saturation })` (`RasterStyle`), either value alone.
+- NASA's relief of the Moon and Mars is credited by the attribution control (`terrain: true` there).
+
+### Fixed
+
+- A WebGL context restored while the engine with 3D Tiles loads, or after it failed to, no longer throws: the 3D
+  Tiles layers wait for it, the others are created again; a layer that fails to be created again is reported and the
+  others are created. Buildings linked to a network above them keep the link after a context loss or the move onto
+  the engine with 3D Tiles.
+- A destroyed map stays destroyed when its context comes back (no engine rebuilt, no tiles fetched), and glyphs
+  arriving after `destroy` no longer reach the freed engine.
+- An equirectangular raster with a `minZoom` has no holes at its first levels.
+- The hover picking stops polling when the engine cannot pick, and gives up an answer that never comes.
+- `VectorTiles` no longer changes the style object it is given; `destroy()` removes its raster and label layers
+  from the map, and the map forgets it and a removed labels layer.
+- An unknown basemap name throws `isard: unknown basemap '…'` (it failed on an undefined); a `'terrarium'` or
+  `'mapbox'` relief given an image service or a `{bbox}` URL throws instead of fetching the template, and every
+  `{z}`, `{x}`, `{y}` of its URL is replaced.
+- A layer removed twice is removed once from the engine.
+- Values that are not numbers or out of range no longer stop the engine: a minimum zoom above the maximum, a pitch
+  limit, camera, size or pick radius that is not a number (ignored); an infinite point in a circle, line or network
+  layer (left out); index arrays of lines, fills and labels pointing past their data.
+- A 3D Tiles glb reusing one accessor in many primitives, or a tileset grafting itself, is an error instead of using
+  up the memory; a texture of the wrong size or format is left out instead of drawing black.
+- More features than the GPU's textures hold throw an error instead of drawing black; a failed restyle or relabel
+  keeps the layer drawable.
+- The relief's altitudes near the antimeridian are read on the right side of it; the RAF20 geoid is applied only when
+  asked (`geoid: true`) and only on the Earth.
+- Tiles of a page's loader at another size are resized; lines and buildings of translucent colors no longer darken
+  where their pieces overlap.
+- Browsing over a regional raster source no longer remembers every missing tile; 3D Tiles siblings are no longer
+  prefetched near the memory budget, only to be unloaded again.
+
 ## [0.2.0] - 2026-10-18
 
 ### Changed
@@ -25,6 +76,17 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   the IGN only for the Géoplateforme's data, the Terrain Tiles (`OPENFREEMAP_ATTRIBUTION`, `IGN_ATTRIBUTION`,
   `TERRAIN_TILES_ATTRIBUTION`; `DEFAULT_ATTRIBUTION` deprecated).
 - Licence: © 2026 Kevin Graff.
+- Fewer GPU readbacks (zoom anchored on the relief from the CPU), labels placed only when something moved, layers
+  out of view not drawn, an LRU for raster tiles.
+- The vector basemap and the vector tiles of a map share one pool of workers and their decoded tiles; raster, vector
+  and 3D Tiles near the center of the view are fetched first (fetch priority).
+- Circles and fills drawn by the squares in view only.
+- The package ships its modules as they are (an application's bundler keeps what it uses), the workers and the
+  engine next to them; releases are published from the Release workflow, with provenance.
+- A map without 3D Tiles downloads a third less WebAssembly: maps load the engine without 3D Tiles
+  (`isard_core_bg.wasm`, 220 KB gzipped instead of 330 KB) and the full one for their first 3D Tiles layer only
+  (`tiles3d: true` to load it from the start, `coreWasmUrl` for bundlers). Given `wasmUrl` alone, a map loads the full
+  engine from the start, as before.
 
 ### Added
 
@@ -34,7 +96,6 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Relief tiles of PNG encodings: `terrain.encoding`, `'terrarium'` or `'mapbox'` (Terrain-RGB), decoded in the page.
 - Vector basemaps: the raster layers of a style (its shaded relief), extrusions drawn flat, `line-gap-width`, text
   sizes of zoom expressions; a text written over its icon (a road shield's number) is left out, icons not being drawn.
-
 - 3D Tiles: implicit tiling (quadtree and octree, binary or JSON subtrees), several contents per tile, sparse and
   zero-filled accessors, `texCoord` sets, content recognized by its bytes; horizon culling on the globe.
 - Style expressions of vector basemaps: arithmetic, `format`, conversions, `coalesce`, `length`, `at`… (an unknown
@@ -76,19 +137,20 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Lines, circles, labels and networks no longer jitter at high zoom over large layers.
 - Circles and labels past the horizon of the globe are hidden instead of showing through it.
 
-### Changed
+### Migrating from @ign-junn/isard 0.1.1
 
-- Fewer GPU readbacks (zoom anchored on the relief from the CPU), labels placed only when something moved, layers
-  out of view not drawn, an LRU for raster tiles.
-- The vector basemap and the vector tiles of a map share one pool of workers and their decoded tiles; raster, vector
-  and 3D Tiles near the center of the view are fetched first (fetch priority).
-- Circles and fills drawn by the squares in view only.
-- The package ships its modules as they are (an application's bundler keeps what it uses), the workers and the
-  engine next to them; releases are published from the Release workflow, with provenance.
-- A map without 3D Tiles downloads a third less WebAssembly: maps load the engine without 3D Tiles
-  (`isard_core_bg.wasm`, 220 KB gzipped instead of 330 KB) and the full one for their first 3D Tiles layer only
-  (`tiles3d: true` to load it from the start, `coreWasmUrl` for bundlers). Given `wasmUrl` alone, a map loads the full
-  engine from the start, as before.
+- The package: `npm install isard`, `import … from 'isard'` (instead of `@ign-junn/isard`).
+- The basemaps: the default is `'osm-positron'` (OpenFreeMap), no longer PLAN.IGN; the Géoplateforme's are
+  `'ign-plan'`, `'ign-plan-grey'`, `'ign-ortho'`, `'ign-plan-vector'`, `'ign-plan-grey-vector'` (the former names
+  still work, with a warning). `basemap: 'ign-plan-grey'` brings back the former default (`'plan-grey'`).
+- The hillshade: `setBasemap(basemap)` and the `hillshade` option default to 0 (0.4 before): pass `0.4` to keep the
+  IGN hillshade.
+- The relief: `terrain: { exaggeration }` without `url` (and `terrain: true`) is now the worldwide Terrain Tiles;
+  `terrain: 'ign'` or `{ model: 'ign' }` for the IGN's model. A custom `terrain.url` no longer gets the RAF20 geoid by
+  default: add `geoid: true` to keep it.
+- The credits: `AttributionControl` shows those of the sources in use (OpenFreeMap and OpenStreetMap, the IGN only
+  for its data, the Terrain Tiles, NASA); `DEFAULT_ATTRIBUTION` is deprecated (`IGN_ATTRIBUTION`); credit your own
+  rasters with `RasterOptions.attribution`, other data with `customAttribution`.
 
 ## [0.1.1] - 2026-10-16
 

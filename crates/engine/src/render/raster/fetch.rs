@@ -52,10 +52,12 @@ pub async fn fetch_bitmap(
     decode(&response, size).await.map_err(|_| Fetch::Transient)
 }
 
-/// A tile drawn by the page's loader: an image of the pool's size, `null` for no tile here
+/// A tile drawn by the page's loader: an image of the pool's size (`size`; another size is resized: uploaded as it
+/// is, it would fail and leave the slot's old pixels), `null` for no tile here
 pub async fn draw_tile(
     loader: &js_sys::Function,
     tile: TileId,
+    size: i32,
     signal: &web_sys::AbortSignal,
 ) -> Result<web_sys::ImageBitmap, Fetch> {
     let promise = loader
@@ -73,7 +75,31 @@ pub async fn draw_tile(
     if value.is_null() || value.is_undefined() {
         return Err(Fetch::Missing);
     }
-    value.dyn_into().map_err(|_| Fetch::Transient)
+    let bitmap: web_sys::ImageBitmap = value.dyn_into().map_err(|_| Fetch::Transient)?;
+    if bitmap.width() == size as u32 && bitmap.height() == size as u32 {
+        return Ok(bitmap);
+    }
+    let resized = resize(&bitmap, size).await;
+    bitmap.close();
+    resized.map_err(|_| Fetch::Transient)
+}
+
+/// An image at the pool's size, decoded again off the main thread
+async fn resize(bitmap: &web_sys::ImageBitmap, size: i32) -> Result<web_sys::ImageBitmap, JsValue> {
+    let window = web_sys::window().ok_or("no window")?;
+    let options = bitmap_options(size);
+    let promise = window.create_image_bitmap_with_image_bitmap_and_image_bitmap_options(bitmap, &options)?;
+    JsFuture::from(promise).await?.dyn_into()
+}
+
+/// Straight alpha (the shader blends it), colors as they are, `size` × `size`
+fn bitmap_options(size: i32) -> web_sys::ImageBitmapOptions {
+    let options = web_sys::ImageBitmapOptions::new();
+    options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
+    options.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
+    options.set_resize_width(size as u32);
+    options.set_resize_height(size as u32);
+    options
 }
 
 /// Altitudes of a tile drawn by the page's loader (decoded from an encoding the engine does not read, such as the
@@ -182,12 +208,8 @@ async fn fetch_response(
 async fn decode(response: &web_sys::Response, size: i32) -> Result<web_sys::ImageBitmap, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let blob: web_sys::Blob = JsFuture::from(response.blob()?).await?.dyn_into()?;
-    let options = web_sys::ImageBitmapOptions::new();
-    options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
-    options.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
     // Every slot has the pool's size: any other size (512 px tiles, an error image) is resized, never half-copied
-    options.set_resize_width(size as u32);
-    options.set_resize_height(size as u32);
+    let options = bitmap_options(size);
     let bitmap =
         JsFuture::from(window.create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &options)?).await?;
     bitmap.dyn_into()

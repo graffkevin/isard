@@ -4,7 +4,13 @@
 
 use super::{COOLDOWN_MAX_MS, COOLDOWN_MS, COVER_LEVELS, CPU_HEIGHTS, DESCENDANT_LEVELS};
 use geo::tiles::{Selected, TileId};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
+
+/// Missing tiles (404) remembered at most: past it, the oldest are forgotten (asked again if wanted again). Browsing
+/// the world over a regional source would otherwise remember every tile outside its region
+const MAX_MISSING: usize = 1 << 16;
+/// Tiles in cooldown remembered before those whose cooldown is over are let go
+const MAX_COOLING: usize = 4096;
 
 /// A tile held in the pool
 struct Loaded {
@@ -104,8 +110,12 @@ pub struct Cache {
     free: Vec<u16>,
     /// The tiles of the pool by the last frame they were drawn: least recently used first
     lru: BTreeSet<(u64, TileId)>,
-    /// Tiles that could not load: time (ms) they may be asked again (never for a missing tile), failures so far
+    /// Tiles that kept failing: time (ms) they may be asked again, failures so far
     failed: HashMap<TileId, (f64, u32)>,
+    /// Tiles not served (404), never asked again while remembered: the order they came in (`MAX_MISSING`)
+    missing: HashMap<TileId, u64>,
+    missing_order: VecDeque<(u64, TileId)>,
+    missing_count: u64,
 }
 
 impl Cache {
@@ -118,6 +128,9 @@ impl Cache {
             free: (0..slots).rev().collect(),
             lru: BTreeSet::new(),
             failed: HashMap::new(),
+            missing: HashMap::new(),
+            missing_order: VecDeque::new(),
+            missing_count: 0,
         }
     }
 
@@ -181,15 +194,32 @@ impl Cache {
     /// The tile arrived: its failures are forgotten
     pub fn succeeded(&mut self, tile: TileId) {
         self.failed.remove(&tile);
+        self.missing.remove(&tile);
     }
 
-    /// No tile there (404): never asked again
+    /// No tile there (404): never asked again, while among the last `MAX_MISSING` missing tiles
     pub fn missing(&mut self, tile: TileId) {
-        self.failed.insert(tile, (f64::INFINITY, 1));
+        self.failed.remove(&tile);
+        self.missing_count += 1;
+        self.missing.insert(tile, self.missing_count);
+        self.missing_order.push_back((self.missing_count, tile));
+        while self.missing.len() > MAX_MISSING || self.missing_order.len() > 2 * MAX_MISSING {
+            let Some((order, old)) = self.missing_order.pop_front() else {
+                break;
+            };
+            // An entry of a tile marked missing again later (or that arrived since) is stale
+            if self.missing.get(&old) == Some(&order) {
+                self.missing.remove(&old);
+            }
+        }
     }
 
     /// A transient error after the retries: asked again after a delay doubled at each new failure
     pub fn failed(&mut self, tile: TileId, now: f64) {
+        if self.failed.len() >= MAX_COOLING {
+            // The tiles whose cooldown is over go first: they may be asked again anyway
+            self.failed.retain(|_, (until, _)| *until > now);
+        }
         let strikes = self.failed.get(&tile).map_or(0, |f| f.1) + 1;
         let delay = (COOLDOWN_MS * f64::from(1u32 << (strikes - 1).min(8))).min(COOLDOWN_MAX_MS);
         self.failed.insert(tile, (now + delay, strikes));
@@ -197,22 +227,18 @@ impl Cache {
 
     /// Whether the tile failed before (its next request bypasses the HTTP cache)
     pub fn failed_before(&self, tile: TileId) -> bool {
-        self.failed.contains_key(&tile)
+        self.failed.contains_key(&tile) || self.missing.contains_key(&tile)
     }
 
     pub fn is_failed(&self, tile: TileId, now: f64) -> bool {
-        self.failed.get(&tile).is_some_and(|&(until, _)| now < until)
+        self.missing.contains_key(&tile) || self.failed.get(&tile).is_some_and(|&(until, _)| now < until)
     }
 
-    /// Tiles waiting before a new attempt, and tiles not served
+    /// Tiles waiting before a new attempt, and tiles not served: the missing ones counted as they come, only the few
+    /// in cooldown walked
     pub fn failure_counts(&self, now: f64) -> (usize, usize) {
-        let cooling = self
-            .failed
-            .values()
-            .filter(|(until, _)| until.is_finite() && *until > now)
-            .count();
-        let missing = self.failed.values().filter(|(until, _)| until.is_infinite()).count();
-        (cooling, missing)
+        let cooling = self.failed.values().filter(|(until, _)| *until > now).count();
+        (cooling, self.missing.len())
     }
 
     fn loaded_ancestor(&self, tile: TileId) -> Option<TileId> {
@@ -399,7 +425,12 @@ impl Cache {
 
     /// Altitude (metres) at a Mercator point, from the finest elevation tile loaded there; None if none is
     pub fn altitude(&self, m: glam::DVec2) -> Option<f64> {
-        let m = m.clamp(glam::DVec2::ZERO, glam::DVec2::splat(1.0 - 1e-9));
+        if !m.is_finite() {
+            return None;
+        }
+        // Across the antimeridian x wraps around the world (a point of another copy of the world), y stops at the
+        // poles
+        let m = glam::DVec2::new(m.x.rem_euclid(1.0), m.y).clamp(glam::DVec2::ZERO, glam::DVec2::splat(1.0 - 1e-9));
         for z in (self.min_z..=self.max_z).rev() {
             let n = f64::from(1u32 << z);
             let tile = TileId::new(z, (m.x * n) as u32, (m.y * n) as u32);
@@ -609,5 +640,59 @@ mod tests {
         assert_eq!(cache.altitude(glam::DVec2::new(0.4, 0.4)), Some(10.0));
         assert_eq!(cache.altitude(glam::DVec2::new(0.9, 0.9)), None);
         assert_eq!(cache.heights(TileId::new(4, 5, 5), 2), [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn altitudes_wrap_across_the_antimeridian() {
+        let mut cache = Cache::new(0, 20, 16);
+        // Two tiles at the ends of the world, west at 100 m, east at 900 m
+        let (west, east) = (TileId::new(3, 0, 3), TileId::new(3, 7, 3));
+        cache.install(
+            west,
+            Some(vec![100.0; CPU_HEIGHTS * CPU_HEIGHTS].into_boxed_slice()),
+            1,
+            0.0,
+        );
+        cache.install(
+            east,
+            Some(vec![900.0; CPU_HEIGHTS * CPU_HEIGHTS].into_boxed_slice()),
+            1,
+            0.0,
+        );
+        let y = 3.5 / 8.0;
+        // Just east of the antimeridian, on the next copy of the world: the western tile, not the eastern one
+        assert_eq!(cache.altitude(glam::DVec2::new(1.01, y)), Some(100.0));
+        // Just west of it, on the copy before
+        assert_eq!(cache.altitude(glam::DVec2::new(-0.01, y)), Some(900.0));
+        assert_eq!(cache.altitude(glam::DVec2::new(0.99, y)), Some(900.0));
+        assert_eq!(cache.altitude(glam::DVec2::new(f64::NAN, y)), None);
+        assert_eq!(cache.altitude(glam::DVec2::new(f64::INFINITY, y)), None);
+    }
+
+    #[test]
+    fn missing_tiles_are_remembered_within_a_bound() {
+        let mut cache = Cache::new(0, 20, 4);
+        let first = TileId::new(20, 0, 0);
+        for k in 0..=MAX_MISSING as u32 {
+            cache.missing(TileId::new(20, k, 0));
+        }
+        // The oldest forgotten, the newest kept, the count without walking them
+        assert!(!cache.is_failed(first, 0.0));
+        assert!(cache.is_failed(TileId::new(20, MAX_MISSING as u32, 0), 0.0));
+        assert_eq!(cache.failure_counts(0.0), (0, MAX_MISSING));
+        // A tile marked missing again keeps its place; one that arrived is forgotten
+        let again = TileId::new(20, 5, 0);
+        cache.missing(again);
+        cache.succeeded(TileId::new(20, 6, 0));
+        for k in 0..MAX_MISSING as u32 - 2 {
+            cache.missing(TileId::new(19, k, 0));
+        }
+        assert!(cache.is_failed(again, 0.0));
+        assert!(cache.missing.len() <= MAX_MISSING && cache.missing_order.len() <= 2 * MAX_MISSING);
+        // Tiles in cooldown: those whose cooldown is over let go past the bound
+        for k in 0..MAX_COOLING as u32 + 10 {
+            cache.failed(TileId::new(18, k, 0), f64::from(k) * 100_000.0);
+        }
+        assert!(cache.failed.len() < MAX_COOLING);
     }
 }

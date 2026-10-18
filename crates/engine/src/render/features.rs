@@ -131,6 +131,12 @@ impl LayerStyle {
     pub fn shows(&self, zoom: f64) -> bool {
         self.visible && zoom >= self.min_zoom && zoom < self.max_zoom
     }
+
+    /// Whether its opacity is under 1 at some zoom
+    #[must_use]
+    pub fn translucent(&self) -> bool {
+        self.opacity[1].iter().any(|&o| o < 1.0)
+    }
 }
 
 /// The feature textures of a layer
@@ -141,6 +147,9 @@ pub struct Features {
     mask: glow::Texture,
     ramp: glow::Texture,
     ramp_range: Option<(f32, f32)>,
+    /// A feature's color or the ramp has an alpha under 1 (`colors_translucent`)
+    translucent_style: bool,
+    translucent_ramp: bool,
     pub layer: LayerStyle,
 }
 
@@ -149,7 +158,7 @@ pub struct FeatureUniforms([Option<glow::UniformLocation>; 9]);
 
 impl FeatureUniforms {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
-        Self(crate::render::gl::uniforms(
+        let uniforms = crate::render::gl::uniforms(
             gl,
             program,
             [
@@ -163,7 +172,18 @@ impl FeatureUniforms {
                 "u_opacity_values",
                 "u_pixel_ratio",
             ],
-        ))
+        );
+        gl::sampler_units(
+            gl,
+            program,
+            &[
+                (uniforms[0].as_ref(), STYLE_UNIT),
+                (uniforms[1].as_ref(), VALUES_UNIT),
+                (uniforms[2].as_ref(), MASK_UNIT),
+                (uniforms[3].as_ref(), RAMP_UNIT),
+            ],
+        );
+        Self(uniforms)
     }
 }
 
@@ -172,7 +192,7 @@ impl Features {
     pub fn new(gl: &glow::Context, count: usize) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
-        let style = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, count * TEXELS)?);
+        let style = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, count.saturating_mul(TEXELS))?);
         let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, count)?);
         let mask = objects.adopt_texture(gl::table_texture(gl, glow::R8, count)?);
         let ramp = objects.texture()?;
@@ -190,13 +210,15 @@ impl Features {
             }
         }
         objects.keep();
-        let features = Self {
+        let mut features = Self {
             count,
             style,
             values,
             mask,
             ramp,
             ramp_range: None,
+            translucent_style: false,
+            translucent_ramp: false,
             layer: LayerStyle::default(),
         };
         features.set_style(gl, &default_style(count));
@@ -206,8 +228,11 @@ impl Features {
     }
 
     /// `FLOATS` per feature: color (RGBA 0-1), second color, then two sizes as stops: four zooms, four values each
-    pub fn set_style(&self, gl: &glow::Context, style: &[f32]) {
+    pub fn set_style(&mut self, gl: &glow::Context, style: &[f32]) {
         let n = (style.len() / FLOATS).min(self.count) * FLOATS;
+        // The features past the style given keep theirs, and whether one of them was translucent
+        let translucent = style_translucent(&style[..n]);
+        self.translucent_style = translucent || (n < self.count * FLOATS && self.translucent_style);
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.style)) };
         gl::upload_table(gl, gl::bytes(&style[..n]), n / 4, glow::RGBA, glow::FLOAT, 16);
@@ -243,6 +268,7 @@ impl Features {
             self.ramp_range = None;
             return;
         }
+        self.translucent_ramp = ramp_translucent(&rgba[..RAMP * 4]);
         // SAFETY: upload of the whole ramp texture
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.ramp));
@@ -260,31 +286,33 @@ impl Features {
         }
     }
 
+    /// Whether a feature's color, or the ramp in use, has an alpha under 1: what is drawn may then show through
+    /// itself where it overlaps (the joins of a line), as with a layer opacity under 1
+    #[must_use]
+    pub fn colors_translucent(&self) -> bool {
+        self.translucent_style || (self.ramp_range.is_some() && self.translucent_ramp)
+    }
+
+    /// Whether the layer draws translucent: its opacity or its colors (`colors_translucent`)
+    #[must_use]
+    pub fn translucent(&self) -> bool {
+        self.layer.translucent() || self.colors_translucent()
+    }
+
     /// Binds the textures and sets the uniforms of `FEATURES` (program in use)
     pub fn bind(&self, gl: &glow::Context, uniforms: &FeatureUniforms, zoom: f64, pixel_ratio: f64) {
-        let [
-            style,
-            values,
-            mask,
-            ramp,
-            range,
-            zoom_u,
-            opacity_zooms,
-            opacity_values,
-            ratio,
-        ] = &uniforms.0;
+        let [_, _, _, _, range, zoom_u, opacity_zooms, opacity_values, ratio] = &uniforms.0;
         let (lo, hi, on) = self.ramp_range.map_or((0.0, 1.0, 0.0), |(lo, hi)| (lo, hi, 1.0));
-        // SAFETY: uniforms and bindings on the program in use
+        // SAFETY: uniforms and bindings on the program in use (its sampler units set once, by `FeatureUniforms::new`)
         unsafe {
-            for (unit, location, texture) in [
-                (STYLE_UNIT, style, self.style),
-                (VALUES_UNIT, values, self.values),
-                (MASK_UNIT, mask, self.mask),
-                (RAMP_UNIT, ramp, self.ramp),
+            for (unit, texture) in [
+                (STYLE_UNIT, self.style),
+                (VALUES_UNIT, self.values),
+                (MASK_UNIT, self.mask),
+                (RAMP_UNIT, self.ramp),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-                gl.uniform_1_i32(location.as_ref(), unit as i32);
             }
             gl.active_texture(glow::TEXTURE0);
             gl.uniform_3_f32(range.as_ref(), lo, hi, on);
@@ -311,6 +339,17 @@ pub fn index_texture(gl: &glow::Context, entries: &[f32]) -> Result<glow::Textur
     let texture = gl::table_texture(gl, glow::RG32F, entries.len() / 2)?;
     gl::upload_table(gl, gl::bytes(entries), entries.len() / 2, glow::RG, glow::FLOAT, 8);
     Ok(texture)
+}
+
+/// Whether a style (`FLOATS` per feature) has a color with an alpha under 1 (the first color: the second, a circle's
+/// stroke, never overlaps itself)
+fn style_translucent(style: &[f32]) -> bool {
+    style.as_chunks::<FLOATS>().0.iter().any(|s| s[3] < 1.0)
+}
+
+/// Whether a ramp (RGBA bytes) has a color with an alpha under 1
+fn ramp_translucent(rgba: &[u8]) -> bool {
+    rgba.as_chunks::<4>().0.iter().any(|c| c[3] < 255)
 }
 
 /// The style of `count` features before any is given: opaque black, sizes 1 at every zoom
@@ -449,5 +488,27 @@ mod tests {
             }
             .shows(12.0)
         );
+    }
+
+    #[test]
+    fn translucent_colors_are_noticed() {
+        let mut style = default_style(3);
+        assert!(!style_translucent(&style));
+        // The second color (a stroke) does not count, the first does
+        style[FLOATS + 7] = 0.5;
+        assert!(!style_translucent(&style));
+        style[2 * FLOATS + 3] = 0.99;
+        assert!(style_translucent(&style));
+        let mut ramp = vec![255u8; RAMP * 4];
+        assert!(!ramp_translucent(&ramp));
+        ramp[RAMP * 4 - 1] = 128;
+        assert!(ramp_translucent(&ramp));
+        let opaque = LayerStyle::default();
+        assert!(!opaque.translucent());
+        let fading = LayerStyle {
+            opacity: [[10.0, 12.0, 12.0, 12.0], [0.0, 1.0, 1.0, 1.0]],
+            ..opaque
+        };
+        assert!(fading.translucent());
     }
 }

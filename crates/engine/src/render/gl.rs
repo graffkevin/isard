@@ -170,6 +170,18 @@ pub fn uniforms<const N: usize>(
     names.map(|name| unsafe { gl.get_uniform_location(program, name) })
 }
 
+/// Sets the texture units of samplers of a program, once after it is linked (they never change): the program is left
+/// in use
+pub fn sampler_units(gl: &glow::Context, program: glow::Program, units: &[(Option<&glow::UniformLocation>, u32)]) {
+    // SAFETY: uniforms of a linked program, put in use
+    unsafe {
+        gl.use_program(Some(program));
+        for &(location, unit) in units {
+            gl.uniform_1_i32(location, unit as i32);
+        }
+    }
+}
+
 /// Column-major f32 copy of an f64 matrix, for `uniform_matrix_4_f32_slice`
 #[must_use]
 pub fn mat4(m: &glam::DMat4) -> [f32; 16] {
@@ -375,7 +387,8 @@ pub fn upload_bitmap_layer(gl: &glow::Context, layer: i32, size: i32, bitmap: &w
     let _ = (gl, layer, size, bitmap);
 }
 
-/// Allocates and fills level 0 of the bound `TEXTURE_2D` from a decoded image (RGBA8)
+/// Allocates and fills level 0 of the bound `TEXTURE_2D` from a decoded image (RGBA8): the textures of the 3D Tiles
+#[cfg(feature = "tiles3d")]
 pub fn image_bitmap_2d(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) {
     // SAFETY: (re)allocation of the bound texture from the image
     #[cfg(target_arch = "wasm32")]
@@ -403,19 +416,28 @@ pub fn table_rows(texels: usize) -> usize {
     texels.div_ceil(TABLE_WIDTH).max(1)
 }
 
-/// A table texture of `texels` texels in `format`, `TABLE_WIDTH` wide, nearest filtering, left bound
+/// Rows of a table of `texels` texels if the GPU takes them (`max`: its `MAX_TEXTURE_SIZE`), else an error saying how
+/// many entries fit: past it the texture would be missing and the layer drawn black, without a word
+pub fn table_rows_within(texels: usize, max: i32) -> Result<i32, String> {
+    let rows = table_rows(texels);
+    match i32::try_from(rows) {
+        Ok(rows) if rows <= max => Ok(rows),
+        _ => Err(format!(
+            "{texels} table entries: more than this GPU takes ({} at most)",
+            usize::try_from(max).unwrap_or(0) * TABLE_WIDTH
+        )),
+    }
+}
+
+/// A table texture of `texels` texels in `format`, `TABLE_WIDTH` wide, nearest filtering, left bound; an error if the
+/// GPU cannot hold that many (`table_rows_within`)
 pub fn table_texture(gl: &glow::Context, format: u32, texels: usize) -> Result<glow::Texture, String> {
     // SAFETY: creation and storage on a live context
     unsafe {
+        let rows = table_rows_within(texels, gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE))?;
         let texture = gl.create_texture()?;
         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-        gl.tex_storage_2d(
-            glow::TEXTURE_2D,
-            1,
-            format,
-            TABLE_WIDTH as i32,
-            table_rows(texels) as i32,
-        );
+        gl.tex_storage_2d(glow::TEXTURE_2D, 1, format, TABLE_WIDTH as i32, rows);
         for (key, value) in [
             (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
             (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
@@ -501,5 +523,19 @@ mod tests {
         assert_eq!(table_rows(0), 1);
         assert_eq!(table_rows(TABLE_WIDTH), 1);
         assert_eq!(table_rows(TABLE_WIDTH + 1), 2);
+    }
+
+    #[test]
+    fn tables_past_the_gpu_are_errors() {
+        // 2.1 M features of 8 texels on a GPU of 4096: past it
+        assert_eq!(table_rows_within(4096 * 4096, 4096), Ok(4096));
+        assert!(table_rows_within(4096 * 4096 + 1, 4096).is_err());
+        assert!(
+            table_rows_within(2_100_000 * 8, 4096)
+                .unwrap_err()
+                .contains("16777216 at most")
+        );
+        assert!(table_rows_within(usize::MAX, 16_384).is_err());
+        assert!(table_rows_within(10, 0).is_err());
     }
 }

@@ -244,9 +244,9 @@ impl Tiles3dLayer {
             }
         }
         // Uploads within the frame's time budget (at least one), the rest waits for the next frames
-        let start = js_sys::Date::now();
+        let start = crate::js::now();
         let mut uploaded = 0;
-        while uploaded == 0 || js_sys::Date::now() - start < budget_ms {
+        while uploaded == 0 || crate::js::now() - start < budget_ms {
             let Some((tile, arrival)) = self.queue.pop_front() else {
                 break;
             };
@@ -425,6 +425,7 @@ impl Tiles3dLayer {
             &selection.request,
             &selection.prefetch,
             loading.mesh_requests,
+            self.budget,
             &mut requests,
         );
         // The first visible tiles of the frame (largest error first: the most visible gaps) are urgent; the others

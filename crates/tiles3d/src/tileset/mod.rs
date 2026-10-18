@@ -86,11 +86,32 @@ pub struct Node {
     pub depth: u32,
 }
 
-#[derive(Default)]
+/// Most nodes of a tree: an external tileset grafted past it is refused. Each graft adds a whole tileset, and a
+/// tileset may graft others (itself under another name) without end
+pub const MAX_NODES: usize = 1 << 20;
+
 pub struct Tree {
     pub nodes: Vec<Node>,
+    /// `MAX_NODES` (fewer in the tests)
+    max_nodes: usize,
     /// Implicit-tiling placeholders not expanded yet, by node
     pending: HashMap<usize, Placeholder>,
+    /// The tilesets added: their URL and the tileset they were grafted into (None for the root)
+    tilesets: Vec<(String, Option<usize>)>,
+    /// The tileset of each node
+    node_tileset: Vec<usize>,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Self {
+            nodes: Vec::new(),
+            max_nodes: MAX_NODES,
+            pending: HashMap::new(),
+            tilesets: Vec::new(),
+            node_tileset: Vec::new(),
+        }
+    }
 }
 
 /// Content of a URI, by its extension; unknown ones are taken for meshes (the decoder checks the first bytes)
@@ -123,11 +144,28 @@ impl Tree {
     ///
     /// Under an implicit-tiling placeholder, `json` is its subtree file (binary or JSON; ignored when the subtree is
     /// in memory already, see `expandable`): the tiles it makes available are grafted under the placeholder.
+    ///
+    /// An external tileset already among the tilesets above `parent` (one that grafts itself, directly or through
+    /// others) is refused, and so is anything once the tree holds `MAX_NODES` nodes.
     pub fn add(&mut self, json: &[u8], url: &str, parent: Option<usize>) -> Result<usize, String> {
+        if self.nodes.len() >= self.max_nodes {
+            return Err(format!("tileset: more than {} tiles", self.max_nodes));
+        }
         if let Some(p) = parent
             && let Some(placeholder) = self.pending.remove(&p)
         {
-            return self.expand(p, placeholder, json, url);
+            let expanded = self.expand(p, placeholder, json, url);
+            let tileset = self.node_tileset.get(p).copied().unwrap_or(0);
+            self.node_tileset.resize(self.nodes.len(), tileset);
+            return expanded;
+        }
+        let above = parent.and_then(|p| self.node_tileset.get(p).copied());
+        let mut ancestor = above;
+        while let Some(t) = ancestor {
+            if self.tilesets[t].0 == url {
+                return Err(format!("tileset {url} includes itself"));
+            }
+            ancestor = self.tilesets[t].1;
         }
         let tileset: TilesetJson = serde_json::from_slice(json).map_err(|e| format!("tileset: {e}"))?;
         let y_up = !tileset
@@ -139,7 +177,16 @@ impl Tree {
             let n = &self.nodes[p];
             (n.transform, n.depth + 1, n.replace)
         });
-        let root = self.add_tile(&tileset.root, url, &transform, replace, y_up, depth)?;
+        let first = self.nodes.len();
+        let added = self.add_tile(&tileset.root, url, &transform, replace, y_up, depth);
+        let Ok(root) = added else {
+            // Nothing half-added: the nodes of a refused tileset are not in the tree
+            self.nodes.truncate(first);
+            self.pending.retain(|&node, _| node < first);
+            return added;
+        };
+        self.tilesets.push((url.to_owned(), above));
+        self.node_tileset.resize(self.nodes.len(), self.tilesets.len() - 1);
         if let Some(p) = parent {
             self.nodes[p].children.push(root);
         }
@@ -190,6 +237,9 @@ impl Tree {
     ) -> Result<usize, String> {
         if depth > 64 {
             return Err("tileset too deep".into());
+        }
+        if self.nodes.len() >= self.max_nodes {
+            return Err(format!("tileset: more than {} tiles", self.max_nodes));
         }
         let transform = tile.transform.map_or(*parent, |t| *parent * DMat4::from_cols_array(&t));
         let volume = Volume::parse(&tile.bounding_volume)?;
@@ -351,5 +401,71 @@ mod tests {
         assert_eq!(sniff(b" \n{\"asset\":{}}"), Kind::Json);
         assert_eq!(sniff(b"pnts"), Kind::Other);
         assert_eq!(sniff(b""), Kind::Other);
+    }
+
+    #[test]
+    fn tilesets_grafting_themselves_are_refused() {
+        let (mut tree, _) = tree();
+        let external = 4;
+        let sub = "https://example.org/mesh/sub/tileset.json?key=1";
+        // The external tileset holds a tile whose content is itself
+        let p = geodesy::to_ecef(3.07, 50.64, 30.0);
+        let json = format!(
+            r#"{{"asset":{{"version":"1.0"}},"geometricError":5,"root":{{"boundingVolume":{{"sphere":[{},{},{},800]}},"geometricError":2,"content":{{"uri":"tileset.json"}}}}}}"#,
+            p.x, p.y, p.z
+        );
+        let root = tree.add(json.as_bytes(), sub, Some(external)).unwrap();
+        assert_eq!(tree.nodes[root].content, Content::Tileset(sub.into()));
+        let before = tree.nodes.len();
+        let err = tree.add(json.as_bytes(), sub, Some(root)).unwrap_err();
+        assert!(err.contains("includes itself"), "{err}");
+        // So is the root tileset, deeper down
+        assert!(
+            tree.add(
+                json.as_bytes(),
+                "https://example.org/mesh/tileset.json?key=1",
+                Some(root)
+            )
+            .is_err()
+        );
+        assert_eq!(tree.nodes.len(), before);
+        // Another tileset is grafted, and the same one elsewhere (a sibling, not an ancestor) too
+        assert!(
+            tree.add(
+                json.as_bytes(),
+                "https://example.org/mesh/sub/other.json?key=1",
+                Some(root)
+            )
+            .is_ok()
+        );
+        assert!(tree.add(json.as_bytes(), sub, Some(0)).is_ok());
+    }
+
+    #[test]
+    fn a_tree_stops_growing_at_its_limit() {
+        let (mut tree, root) = tree();
+        tree.max_nodes = 7;
+        let json = |n: usize| {
+            let children = vec![sphere_tile(3.06, 50.63, 100.0, 1.0, ""); n].join(",");
+            format!(
+                r#"{{"asset":{{"version":"1.0"}},"geometricError":5,"root":{}}}"#,
+                sphere_tile(3.06, 50.63, 800.0, 2.0, &format!(r#","children":[{children}]"#))
+            )
+        };
+        // 5 nodes and 3 more: past the limit, refused, nothing added
+        let err = tree
+            .add(json(2).as_bytes(), "https://example.org/x.json", Some(root))
+            .unwrap_err();
+        assert!(err.contains("more than 7"), "{err}");
+        assert_eq!(tree.nodes.len(), 5);
+        assert!(
+            tree.add(json(1).as_bytes(), "https://example.org/x.json", Some(root))
+                .is_ok()
+        );
+        assert_eq!(tree.nodes.len(), 7);
+        assert!(
+            tree.add(json(0).as_bytes(), "https://example.org/y.json", Some(root))
+                .is_err()
+        );
     }
 }

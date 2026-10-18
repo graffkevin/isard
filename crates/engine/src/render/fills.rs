@@ -19,7 +19,7 @@ use crate::layer::{Frame, Layer};
 use crate::render::features::{FEATURES, FeatureUniforms, Features};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay;
-use geo::pieces::{self, Grid};
+use geo::pieces::{self, Grid, Visible};
 use geo::shapes::{self, Mesh, Polygons};
 use glam::DVec2;
 use glow::HasContext;
@@ -101,6 +101,38 @@ impl Shape {
     }
 }
 
+/// The polygons kept for picking. Rings past `ring_start` are left out: a polygon claiming 4 billion rings costs
+/// nothing more than the rings there are
+fn shapes_of(polygons: &Polygons, feature: &[u32]) -> Vec<Shape> {
+    let rings = polygons.ring_start.len().saturating_sub(1);
+    (0..polygons.polygon_start.len().saturating_sub(1))
+        .map(|p| {
+            let (first, last) = (
+                (polygons.polygon_start[p] as usize).min(rings),
+                (polygons.polygon_start[p + 1] as usize).min(rings),
+            );
+            let rings: Vec<Vec<DVec2>> = (first..last)
+                .filter_map(|r| {
+                    let (s, e) = (polygons.ring_start[r] as usize, polygons.ring_start[r + 1] as usize);
+                    polygons.points.get(s..e).map(<[DVec2]>::to_vec)
+                })
+                .collect();
+            let (min, max) = rings
+                .iter()
+                .flatten()
+                .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &q| {
+                    (a.min(q), b.max(q))
+                });
+            Shape {
+                feature: feature.get(p).copied().unwrap_or(u32::MAX),
+                rings,
+                min,
+                max,
+            }
+        })
+        .collect()
+}
+
 pub struct FillLayer {
     pub features: Features,
     program: glow::Program,
@@ -118,6 +150,9 @@ pub struct FillLayer {
     grid: Grid,
     top_start: Vec<u32>,
     rest_start: Vec<u32>,
+    /// The squares in view and their ranges of the top cap, and of the rest, kept from frame to frame
+    visible: Visible,
+    rest: Vec<(u32, u32)>,
 }
 
 impl FillLayer {
@@ -163,6 +198,8 @@ impl FillLayer {
             grid: Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0),
             top_start: vec![0, 0],
             rest_start: vec![0, 0],
+            visible: Visible::default(),
+            rest: Vec::new(),
         };
         layer.set_geometry(gl, polygons, feature);
         Ok(layer)
@@ -178,34 +215,11 @@ impl FillLayer {
         for v in &mut mesh.vertices {
             v.polygon = feature.get(v.polygon as usize).copied().unwrap_or(u32::MAX);
         }
-        self.shapes = (0..polygons.polygon_start.len().saturating_sub(1))
-            .map(|p| {
-                let rings: Vec<Vec<DVec2>> = (polygons.polygon_start[p]..polygons.polygon_start[p + 1])
-                    .filter_map(|r| {
-                        let (s, e) = (
-                            *polygons.ring_start.get(r as usize)? as usize,
-                            *polygons.ring_start.get(r as usize + 1)? as usize,
-                        );
-                        polygons.points.get(s..e).map(<[DVec2]>::to_vec)
-                    })
-                    .collect();
-                let (min, max) = rings
-                    .iter()
-                    .flatten()
-                    .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &q| {
-                        (a.min(q), b.max(q))
-                    });
-                Shape {
-                    feature: feature.get(p).copied().unwrap_or(u32::MAX),
-                    rings,
-                    min,
-                    max,
-                }
-            })
-            .collect();
+        self.shapes = shapes_of(polygons, feature);
         self.grid = chunks.grid;
         self.top_start = chunks.top;
         self.rest_start = chunks.rest;
+        self.visible.invalidate();
         // SAFETY: uploads into buffers owned by this layer
         unsafe {
             gl.bind_vertex_array(Some(self.vao));
@@ -263,18 +277,23 @@ impl Layer for FillLayer {
             let (bottom, top) = prism_range(&frame.view.body);
             (bottom * k, top * k)
         });
-        let squares = pieces::squares_in_view(&self.grid, frame.view, heights, 0.0, 0.0, !volume);
-        let top = pieces::ranges(&squares, &self.top_start);
+        let mut visible = std::mem::take(&mut self.visible);
+        let mut rest = std::mem::take(&mut self.rest);
+        visible.update(&self.grid, &self.top_start, frame.view, (heights, 0.0, 0.0, !volume));
+        let top = visible.ranges();
         if top.is_empty() {
+            self.visible = visible;
+            self.rest = rest;
             return false;
         }
         // The bottom caps and the walls too, in relief
-        let mut all = top.clone();
         if volume {
-            all.extend(pieces::ranges(&squares, &self.rest_start));
+            pieces::ranges_into(visible.squares(), &self.rest_start, &mut rest);
+        } else {
+            rest.clear();
         }
-        let draw = |ranges: &[(u32, u32)]| {
-            for &(first, end) in ranges {
+        let draw = |ranges: &[&[(u32, u32)]]| {
+            for &(first, end) in ranges.iter().copied().flatten() {
                 // SAFETY: a draw of indices inside the index buffer, the vertex array bound by `set_uniforms`
                 unsafe {
                     frame.gl.draw_elements(
@@ -303,21 +322,23 @@ impl Layer for FillLayer {
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LESS);
                 gl.depth_mask(false);
-                draw(&all);
+                draw(&[top, &rest]);
                 // Color the counted ground, once per pixel
                 gl.color_mask(true, true, true, true);
                 gl.disable(glow::DEPTH_TEST);
                 gl.stencil_func(glow::NOTEQUAL, 0, 0xff);
                 gl.stencil_op(glow::ZERO, glow::ZERO, glow::ZERO);
-                draw(&all);
+                draw(&[top, &rest]);
                 gl.disable(glow::STENCIL_TEST);
                 gl.depth_mask(true);
             } else {
-                draw(&top);
+                draw(&[top]);
             }
             gl.bind_vertex_array(None);
             gl.enable(glow::CULL_FACE);
         }
+        self.visible = visible;
+        self.rest = rest;
         false
     }
 
@@ -416,5 +437,33 @@ mod tests {
         assert!(shape.contains(DVec2::new(0.1, 0.1)));
         assert!(!shape.contains(DVec2::new(0.5, 0.5)));
         assert!(!shape.contains(DVec2::new(1.5, 0.5)));
+    }
+
+    #[test]
+    fn malformed_polygons_keep_only_the_rings_there_are() {
+        let points = [DVec2::ZERO, DVec2::X, DVec2::ONE, DVec2::Y];
+        // Polygons 0 and 3 claim every ring there could be, polygon 1 starts past the rings, polygon 2 runs backwards
+        let polygons = Polygons {
+            points: &points,
+            ring_start: &[0, 4, u32::MAX],
+            polygon_start: &[0, u32::MAX, 1, 0, u32::MAX],
+        };
+        let shapes = shapes_of(&polygons, &[3]);
+        assert_eq!(shapes.len(), 4);
+        assert_eq!(shapes[0].rings.len(), 1, "the ring past the points is left out");
+        assert!(shapes[0].contains(DVec2::splat(0.5)) && shapes[3].contains(DVec2::splat(0.5)));
+        assert_eq!(shapes[1].feature, u32::MAX);
+        assert!(shapes[1].rings.is_empty() && shapes[2].rings.is_empty());
+        assert!(
+            shapes_of(
+                &Polygons {
+                    points: &[],
+                    ring_start: &[],
+                    polygon_start: &[]
+                },
+                &[]
+            )
+            .is_empty()
+        );
     }
 }

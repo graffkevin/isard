@@ -1,5 +1,5 @@
 //! Building JavaScript values returned by the engine (their TypeScript types are declared next to the exports), and
-//! request options web-sys does not expose yet, a timer
+//! request options web-sys does not expose yet, a timer, a clock
 
 use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::JsValue;
@@ -35,4 +35,15 @@ pub async fn sleep(ms: i32) {
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+thread_local! {
+    /// The page's high-resolution clock, looked up once
+    static PERFORMANCE: Option<web_sys::Performance> = web_sys::window().and_then(|w| w.performance());
+}
+
+/// Milliseconds on the page's monotonic, sub-millisecond clock (`performance.now()`), for time budgets within a frame:
+/// `Date.now()` steps by whole milliseconds and follows the wall clock's adjustments
+pub fn now() -> f64 {
+    PERFORMANCE.with(|p| p.as_ref().map_or_else(js_sys::Date::now, web_sys::Performance::now))
 }

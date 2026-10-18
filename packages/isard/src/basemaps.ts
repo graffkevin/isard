@@ -56,16 +56,18 @@ export const TERRAIN_URL =
   '&STYLES=&CRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32';
 
 /** The relief of the Moon and Mars by default: NASA's Trek image services (ArcGIS), raw 32-bit altitudes in metres
- * asked for in the body's Mercator. The Moon: LOLA's global model, 128 pixels per degree (237 m); Mars: MOLA's, 128 and
- * 64 pixels per degree merged (463 m), above the areoid */
+ * asked for in the body's Mercator, with their credits. The Moon: LOLA's global model, 128 pixels per degree (237 m);
+ * Mars: MOLA's, 128 and 64 pixels per degree merged (463 m), above the areoid */
 export const BODY_TERRAINS = {
   moon: {
     url: 'https://trek.nasa.gov/moon/trekarcgis/rest/services/LRO_LOLA_DEM_Global_128ppd_v04/ImageServer',
     maxZoom: 8,
+    attribution: '<a href="https://trek.nasa.gov/moon/">NASA Moon Trek</a>: LOLA terrain model, NASA/GSFC/MIT',
   },
   mars: {
     url: 'https://trek.nasa.gov/mars/trekarcgis/rest/services/mola128_mola64_merge_90Nto90S_SimpleC_clon0/ImageServer',
     maxZoom: 8,
+    attribution: '<a href="https://trek.nasa.gov/mars/">NASA Mars Trek</a>: MOLA terrain model, NASA/JPL/GSFC',
   },
 } as const;
 
@@ -96,7 +98,7 @@ export function imageServerTerrain(url: string, earth: boolean, radius: number):
 }
 
 /** The Earth's relief for `terrain: true`: the Terrain Tiles of AWS's open data registry, worldwide (SRTM, EU-DEM,
- * GMTED… merged by Mapzen), Terrarium PNGs of 256 px to level 15, altitudes above the mean sea level */
+ * GMTED… merged by Mapzen), Terrarium PNGs of 256 px to level 14, altitudes above the mean sea level */
 export const TERRAIN_TILES = {
   url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
   maxZoom: 14,

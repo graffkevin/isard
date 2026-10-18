@@ -19,9 +19,6 @@
 //! The crate also compiles natively, for the unit tests of its pure logic: what needs the browser (the WebGL2
 //! context, image uploads) is behind `cfg(target_arch = "wasm32")` in `render::gl`.
 
-// Without 3D Tiles, what only they read (the frame's raw context, their loading settings) is left unused
-#![cfg_attr(not(feature = "tiles3d"), allow(dead_code))]
-
 mod engine;
 mod js;
 mod layer;

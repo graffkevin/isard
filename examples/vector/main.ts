@@ -49,4 +49,5 @@ for (const id of styles) {
     for (const other of styles) element(other).classList.toggle('on', other === id);
   };
 }
-element<HTMLInputElement>('rivers').onchange = (e) => rivers.setStyle((e.target as HTMLInputElement).checked ? 1 : 0);
+element<HTMLInputElement>('rivers').onchange = (e) =>
+  rivers.setStyle({ opacity: (e.target as HTMLInputElement).checked ? 1 : 0 });

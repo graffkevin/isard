@@ -46,9 +46,10 @@ jobs:
       - name: Run
         run: |
           mkdir -p "corpus/$TARGET"
-          seeds="seeds/$TARGET"
-          if [ "$TARGET" = decode ]; then seeds=../crates/tiles3d/tests/data; fi
-          [ -d "$seeds" ] || seeds=
+          seeds=
+          [ -d "seeds/$TARGET" ] && seeds="seeds/$TARGET"
+          # The tile decoder also starts from the test tiles
+          if [ "$TARGET" = decode ]; then seeds="$seeds ../crates/tiles3d/tests/data"; fi
           cargo fuzz run "$TARGET" "corpus/$TARGET" $seeds -- -max_total_time="$SECONDS_PER_TARGET" -timeout=10 -rss_limit_mb=2048
         env:
           TARGET: ${{ matrix.target }}

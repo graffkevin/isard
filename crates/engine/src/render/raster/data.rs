@@ -52,6 +52,13 @@ pub fn terrain_levels(body: &Body, max_z: Option<u8>) -> (u8, u8) {
     (min_z, max_z.unwrap_or(TERRAIN_MAX_Z).clamp(min_z, TERRAIN_MAX_Z))
 }
 
+/// Whether the altitudes of a relief are raised by the RAF20 geoid: when asked (not by default: the altitudes as
+/// served), and only on the Earth, whose geoid it is
+#[must_use]
+pub fn terrain_geoid(geoid: Option<bool>, body: &Body) -> bool {
+    geoid.unwrap_or(false) && body.is_earth()
+}
+
 /// Below this, an altitude of the body is no-data
 #[must_use]
 pub fn no_data(body: &Body) -> f32 {
@@ -131,6 +138,15 @@ mod tests {
             assert!((unpack_depth(pack(z)) - z).abs() < 1e-5, "{z}");
         }
         assert_eq!(unpack_depth([0, 0, 0, 255]), 0.0);
+    }
+
+    #[test]
+    fn the_geoid_only_when_asked_and_on_the_earth() {
+        assert!(!terrain_geoid(None, &Body::EARTH));
+        assert!(terrain_geoid(Some(true), &Body::EARTH));
+        assert!(!terrain_geoid(Some(false), &Body::EARTH));
+        assert!(!terrain_geoid(Some(true), &Body::MOON));
+        assert!(!terrain_geoid(Some(true), &Body::MARS));
     }
 
     #[test]

@@ -11,9 +11,24 @@ Draco geometry and KTX2 (Basis Universal) textures decoded in workers by the off
 KTX2 textures stay compressed on the GPU (ASTC, BC7, ETC2 or S3TC). Traversal by screen-space error, children
 replacing their parent only once all are ready, downloads aborted when they leave the view, a GPU memory budget.
 
+## The engine with 3D Tiles
+
 The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer loads
-the full one (the layer shows once it is there, `stats()` is undefined until then). `tiles3d: true` in the map's
-options loads it from the start, for a map that shows 3D Tiles at once.
+the full one (the layer shows once it is there, `stats()` is undefined until then). The map then moves onto it: a
+new engine on the same canvas, the camera, settings and every layer created again in it, in order, with the same
+handles. That costs a download (some 330 KB gzipped, compiled off the main thread) and, once it is there, a stall
+of a frame or two while the map is rebuilt (shaders, the layers' buffers, the raster tiles fetched again): the
+view may hold or flash once. The rebuild runs in a task of its own, after the one that instantiated the engine.
+
+- `tiles3d: true` loads the full engine from the start, for a map that shows 3D Tiles at once: one engine
+  downloaded instead of two, no move.
+- `tiles3d: 'preload'` starts on the engine without 3D Tiles and downloads and compiles the full one once the map
+  is idle, without running it: the first 3D Tiles layer does not wait for the download, only for the rebuild. For a
+  map that offers 3D Tiles later, on demand.
+- A map that never adds a 3D Tiles layer never downloads the full engine (`false`, the default).
+
+A failed download is reported (the console shows it as an uncaught error); the 3D Tiles layers stay empty and the
+next one added tries again.
 
 Meshes have ellipsoidal heights: over France, the IGN's relief (`terrain: 'ign'`) gets the RAF20 geoid height so
 that they sit on the ground (`geoid: true` does it for another model).

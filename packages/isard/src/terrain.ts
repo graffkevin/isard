@@ -13,11 +13,19 @@ export function decodeHeights(
   encoding: Exclude<TerrainEncoding, 'float32'>,
   floor = Number.NEGATIVE_INFINITY,
 ): Float32Array {
-  const out = new Float32Array(rgba.length / 4);
-  for (let i = 0; i < out.length; i += 1) {
-    const [r, g, b] = [rgba[4 * i] ?? 0, rgba[4 * i + 1] ?? 0, rgba[4 * i + 2] ?? 0];
-    const h = encoding === 'terrarium' ? r * 256 + g + b / 256 - 32768 : -10000 + (r * 65536 + g * 256 + b) * 0.1;
-    out[i] = Math.max(h, floor);
+  const n = rgba.length >> 2;
+  const out = new Float32Array(n);
+  // A loop per encoding, without allocations: 65 536 pixels a tile
+  if (encoding === 'terrarium') {
+    for (let i = 0, j = 0; i < n; i += 1, j += 4) {
+      const h = (rgba[j] as number) * 256 + (rgba[j + 1] as number) + (rgba[j + 2] as number) / 256 - 32768;
+      out[i] = h > floor ? h : floor;
+    }
+  } else {
+    for (let i = 0, j = 0; i < n; i += 1, j += 4) {
+      const h = -10000 + ((rgba[j] as number) * 65536 + (rgba[j + 1] as number) * 256 + (rgba[j + 2] as number)) * 0.1;
+      out[i] = h > floor ? h : floor;
+    }
   }
   return out;
 }
@@ -34,9 +42,8 @@ export function encodedTerrainLoader(
 ): (z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null> {
   let canvas: OffscreenCanvas | undefined;
   return async (z, x, y, signal) => {
-    const response = await fetch(url.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)), {
-      signal,
-    });
+    const tile = url.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y));
+    const response = await fetch(tile, { signal });
     if (response.status === 404 || response.status === 204 || response.status === 410) return null;
     if (!response.ok) throw new Error(`${response.url}: ${response.status}`);
     // The colors as stored: no color management, no premultiplied alpha
@@ -44,14 +51,17 @@ export function encodedTerrainLoader(
       premultiplyAlpha: 'none',
       colorSpaceConversion: 'none',
     });
-    canvas ??= new OffscreenCanvas(SIZE, SIZE);
-    const g = canvas.getContext('2d', { willReadFrequently: true });
-    if (!g) throw new Error('no 2D context');
-    // Another size is resampled to the nearest pixel: an interpolated color is no altitude
-    g.imageSmoothingEnabled = false;
-    g.clearRect(0, 0, SIZE, SIZE);
-    g.drawImage(bitmap, 0, 0, SIZE, SIZE);
-    bitmap.close();
-    return decodeHeights(g.getImageData(0, 0, SIZE, SIZE).data, encoding, floor);
+    try {
+      canvas ??= new OffscreenCanvas(SIZE, SIZE);
+      const g = canvas.getContext('2d', { willReadFrequently: true });
+      if (!g) throw new Error('no 2D context');
+      // Another size is resampled to the nearest pixel: an interpolated color is no altitude
+      g.imageSmoothingEnabled = false;
+      g.clearRect(0, 0, SIZE, SIZE);
+      g.drawImage(bitmap, 0, 0, SIZE, SIZE);
+      return decodeHeights(g.getImageData(0, 0, SIZE, SIZE).data, encoding, floor);
+    } finally {
+      bitmap.close();
+    }
   };
 }

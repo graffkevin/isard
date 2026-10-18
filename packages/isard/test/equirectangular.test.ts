@@ -44,6 +44,13 @@ describe('plan', () => {
     expect(plan(4, 3, 1, 256, 5).level).toBe(5);
     expect(plan(12, 0, 0, 256, 8).level).toBe(8);
   });
+
+  test('never coarser than the first level of the source', () => {
+    // Level 1 at zoom 2, but the source starts at 2
+    expect(plan(2, 1, 1, 256, 8).level).toBe(1);
+    expect(plan(2, 1, 1, 256, 8, 2).level).toBe(2);
+    expect(plan(4, 9, 7, 256, 8, 2).level).toBe(3);
+  });
 });
 
 describe('equirectangularLoader', () => {
@@ -55,20 +62,33 @@ describe('equirectangularLoader', () => {
       readonly height: number,
     ) {}
     getContext() {
-      return { drawImage: (...args: unknown[]) => drawn.push(args) };
+      // The state of the image when drawn, last
+      return { drawImage: (...args: unknown[]) => drawn.push([...args, (args[0] as { closed?: boolean }).closed]) };
     }
     transferToImageBitmap() {
       return { width: this.width, height: this.height };
     }
   }
+  /** Downloads held until their promise resolves */
+  const gates = new Map<string, Promise<void>>();
   const restore = setGlobals({
     fetch: mock(async (url: string) => {
       fetched.push(url);
+      await gates.get(url);
       // The eastern half is missing, and everything of missing.example
       const missing = url.endsWith('/1.jpg') || url.includes('missing');
       return new Response(missing ? null : 'jpeg', { status: missing ? 404 : 200 });
     }),
-    createImageBitmap: async (blob: Blob) => ({ source: await blob.text() }),
+    createImageBitmap: async (blob: Blob) => {
+      const image = {
+        source: await blob.text(),
+        closed: false,
+        close() {
+          image.closed = true;
+        },
+      };
+      return image;
+    },
     OffscreenCanvas: FakeCanvas,
   });
   afterAll(restore);
@@ -88,6 +108,36 @@ describe('equirectangularLoader', () => {
     // No source at all: no tile
     const nothing = equirectangularLoader('https://missing.example/{z}/{y}/{x}.jpg', 8, 256);
     expect(await nothing(3, 4, 3, signal)).toBeNull();
+  });
+
+  test('source tiles past the cache are freed; one still in use once drawn', async () => {
+    const imageOf = (entry: unknown[] | undefined) => entry?.[0] as { closed: boolean } | undefined;
+    const loader = equirectangularLoader('https://evict.example/{z}/{y}/{x}.jpg', 8, 256);
+    const signal = new AbortController().signal;
+    // Tiles along the equator, one source tile each (level 7, column x, row 63)
+    let open = () => {};
+    gates.set(
+      'https://evict.example/7/63/0.jpg',
+      new Promise((resolve) => {
+        open = resolve;
+      }),
+    );
+    const held = loader(8, 0, 127, signal);
+    const firsts = drawn.length;
+    for (let x = 1; x <= 100; x += 1) await loader(8, x, 127, signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The tile of x = 1 was drawn from an open image, closed since it left the cache
+    const first = drawn[firsts]?.[0] as { closed: boolean; source: string };
+    expect(drawn[firsts]?.at(-1)).toBe(false);
+    expect(first.closed).toBe(true);
+    // The latest ones are kept
+    expect(imageOf(drawn.at(-1))?.closed).toBe(false);
+    // The held one, evicted meanwhile, is drawn open, then freed
+    open();
+    await held;
+    expect(drawn.at(-1)?.at(-1)).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(imageOf(drawn.at(-1))?.closed).toBe(true);
   });
 
   test('an aborted request rejects', async () => {

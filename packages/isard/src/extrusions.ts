@@ -274,7 +274,9 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
   private sendLink(engine: Engine, id: number): void {
     const n = this.network;
-    engine.linkExtrusionNetwork(id, n?.layer.id, n ? Math.min(n.max, 1e29) : 0);
+    // A network removed (or not created) links to nothing
+    const network = n && n.layer.id >= 0 ? n.layer.id : undefined;
+    engine.linkExtrusionNetwork(id, network, n ? Math.min(n.max, 1e29) : 0);
   }
 
   /** @internal */
@@ -282,8 +284,14 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     const id = engine.addExtrusions();
     this.sendLayer(engine, id);
     for (const tile of this.tiles.values()) this.sendTile(engine, id, tile);
-    this.sendLink(engine, id);
+    // A network created before (on a new engine, the map relinks once every layer is there)
+    if (!this.network || this.network.layer.id >= 0) this.sendLink(engine, id);
     return id;
+  }
+
+  /** @internal On a new engine, the network may come after the buildings: linked once both are there */
+  override relink(engine: Engine): void {
+    if (this.network) this.sendLink(engine, this.id);
   }
 }
 

@@ -109,12 +109,10 @@ impl Drape {
     /// Binds the table and the pool, sets the uniforms of `ALTITUDE` (program in use); `relief`: the source and its
     /// exaggeration, None for flat
     pub fn bind(&self, gl: &glow::Context, uniforms: &DrapeUniforms, relief: Option<(&RasterSource, f32)>) {
-        let [page, heights, rect, exaggeration] = &uniforms.0;
+        let [_, _, rect, exaggeration] = &uniforms.0;
         let relief = relief.filter(|_| self.texture.is_some());
-        // SAFETY: uniforms and bindings on the program in use
+        // SAFETY: uniforms and bindings on the program in use (its sampler units set once, by `DrapeUniforms::new`)
         unsafe {
-            gl.uniform_1_i32(page.as_ref(), PAGE_UNIT as i32);
-            gl.uniform_1_i32(heights.as_ref(), HEIGHTS_UNIT as i32);
             gl.uniform_1_f32(exaggeration.as_ref(), relief.map_or(0.0, |(_, e)| e));
             let Some((source, _)) = relief else {
                 return;
@@ -142,10 +140,12 @@ pub struct DrapeUniforms([Option<glow::UniformLocation>; 4]);
 
 impl DrapeUniforms {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
-        Self(crate::render::gl::uniforms(
+        let uniforms = crate::render::gl::uniforms(gl, program, ["u_page", "u_heights", "u_page_rect", "u_relief"]);
+        crate::render::gl::sampler_units(
             gl,
             program,
-            ["u_page", "u_heights", "u_page_rect", "u_relief"],
-        ))
+            &[(uniforms[0].as_ref(), PAGE_UNIT), (uniforms[1].as_ref(), HEIGHTS_UNIT)],
+        );
+        Self(uniforms)
     }
 }

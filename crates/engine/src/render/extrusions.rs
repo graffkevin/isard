@@ -166,9 +166,18 @@ impl ExtrusionLayer {
             ),
             &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
         )?;
+        let uniforms = gl::uniforms(gl, program, UNIFORMS);
+        gl::sampler_units(
+            gl,
+            program,
+            &[
+                (uniforms[2].as_ref(), ANCHORS_UNIT),
+                (uniforms[3].as_ref(), NETWORK_UNIT),
+            ],
+        );
         Ok(Self {
             program,
-            uniforms: gl::uniforms(gl, program, UNIFORMS),
+            uniforms,
             anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
@@ -307,7 +316,7 @@ impl ExtrusionLayer {
             relief,
             ..
         } = frame;
-        let [pick_base, linked, anchors, network, linked_max, layer, pick_u] = &self.uniforms;
+        let [pick_base, linked, _, _, linked_max, layer, pick_u] = &self.uniforms;
         // Batches out of view are skipped (their features still count for the picking ids)
         let (low, high) = overlay::heights(view, relief);
         let heights = (
@@ -321,8 +330,6 @@ impl ExtrusionLayer {
             self.anchor.set_view(gl, view, viewport, false, 0.0);
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
-            gl.uniform_1_i32(anchors.as_ref(), ANCHORS_UNIT as i32);
-            gl.uniform_1_i32(network.as_ref(), NETWORK_UNIT as i32);
             gl.uniform_1_f32(linked_max.as_ref(), self.link.map_or(0.0, |(_, _, max)| max));
             gl.active_texture(glow::TEXTURE0 + NETWORK_UNIT);
             gl.bind_texture(glow::TEXTURE_2D, self.link.map(|(_, t, _)| t));
@@ -370,7 +377,8 @@ impl Layer for ExtrusionLayer {
             }
         }
         let gl = frame.gl;
-        let translucent = self.layer.opacity[1].iter().any(|&o| o < 1.0);
+        // A translucent color too (a feature's, or the ramp's): the faces behind would show through
+        let translucent = self.layer.translucent() || self.batches.values().any(|b| b.features.colors_translucent());
         // SAFETY: state changes on the live context, set back below
         unsafe {
             gl.enable(glow::DEPTH_TEST);

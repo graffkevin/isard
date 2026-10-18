@@ -85,6 +85,7 @@ export type {
   Projection,
   RasterGrid,
   RasterOptions,
+  RasterStyle,
   TerrainEncoding,
   TerrainModel,
   TerrainOptions,

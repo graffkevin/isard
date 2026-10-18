@@ -13,7 +13,7 @@ use crate::render::drape::{self, Drape, DrapeUniforms};
 use crate::render::features::{self, FEATURES, FeatureUniforms, Features};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
-use geo::pieces::{self, Grid, Lines};
+use geo::pieces::{self, Grid, Lines, Visible};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
@@ -105,6 +105,40 @@ pub struct Polylines<'a> {
     pub feature: &'a [u32],
 }
 
+/// The pieces of polylines (`geo::pieces`), the table of their lines (feature and length of each) and their origin.
+/// Each line is an edge from its first point to its last, along its points; `start` and `feature` as they come from
+/// the page, whatever their lengths and values
+fn build(geometry: &Polylines) -> (pieces::Pieces, Vec<f32>, DVec2) {
+    let points = overlay::points(geometry.points);
+    let count = geometry.start.len().saturating_sub(1).min(geometry.feature.len());
+    let mut nodes = Vec::with_capacity(count * 2);
+    let mut edges = Vec::with_capacity(count * 2);
+    let mut table = Vec::with_capacity(count * 2);
+    for l in 0..count {
+        let (s, e) = (
+            geometry.start[l] as usize,
+            (geometry.start[l + 1] as usize).min(points.len()),
+        );
+        let line = &points[s.min(e)..e];
+        let (a, b) = match line {
+            [a, .., b] => (*a, *b),
+            [a] => (*a, *a),
+            [] => (DVec2::ZERO, DVec2::ZERO),
+        };
+        edges.extend([nodes.len() as u32, nodes.len() as u32 + 1]);
+        nodes.extend([a, b]);
+        let length: f64 = line.windows(2).map(|w| w[0].distance(w[1])).sum();
+        table.extend([geometry.feature[l] as f32, length as f32]);
+    }
+    let origin = overlay::bounds(&points).map_or(DVec2::ZERO, |(min, max)| (min + max) / 2.0);
+    let lines = Lines {
+        // No line: no entry either (`start` may be empty)
+        start: geometry.start.get(..=count).unwrap_or_default(),
+        points: &points,
+    };
+    (pieces::build(&nodes, &edges, Some(&lines), origin), table, origin)
+}
+
 pub struct LineLayer {
     pub features: Features,
     /// Dash and gap lengths, in line widths; 0: solid
@@ -121,6 +155,8 @@ pub struct LineLayer {
     origin: DVec2,
     grid: Grid,
     start: Vec<u32>,
+    /// The squares in view and their pieces, kept from frame to frame
+    visible: Visible,
     drape: Drape,
     pieces: usize,
 }
@@ -153,11 +189,13 @@ impl LineLayer {
         }
         let features = Features::new(gl, feature_count)?;
         objects.keep();
+        let uniforms = gl::uniforms(gl, program, UNIFORMS);
+        gl::sampler_units(gl, program, &[(uniforms[1].as_ref(), LINES_UNIT)]);
         let mut layer = Self {
             features,
             dash: [0.0, 0.0],
             program,
-            uniforms: gl::uniforms(gl, program, UNIFORMS),
+            uniforms,
             anchor: Anchor::new(gl, program),
             projection: Projection::new(gl, program),
             drape_uniforms: DrapeUniforms::new(gl, program),
@@ -173,6 +211,7 @@ impl LineLayer {
                 rows: 1,
             },
             start: vec![0, 0],
+            visible: Visible::default(),
             drape: Drape::new(),
             pieces: 0,
         };
@@ -185,44 +224,21 @@ impl LineLayer {
 
     /// Replaces the lines (the styles stay, by feature)
     pub fn set_geometry(&mut self, gl: &glow::Context, geometry: &Polylines) -> Result<(), String> {
-        let points = overlay::points(geometry.points);
-        let count = geometry.start.len().saturating_sub(1).min(geometry.feature.len());
-        // Each line is an edge from its first point to its last, along its points
-        let mut nodes = Vec::with_capacity(count * 2);
-        let mut edges = Vec::with_capacity(count * 2);
-        let mut table = Vec::with_capacity(count * 2);
-        for l in 0..count {
-            let (s, e) = (
-                geometry.start[l] as usize,
-                (geometry.start[l + 1] as usize).min(points.len()),
-            );
-            let line = &points[s.min(e)..e];
-            let (a, b) = match line {
-                [a, .., b] => (*a, *b),
-                [a] => (*a, *a),
-                [] => (DVec2::ZERO, DVec2::ZERO),
-            };
-            edges.extend([nodes.len() as u32, nodes.len() as u32 + 1]);
-            nodes.extend([a, b]);
-            let length: f64 = line.windows(2).map(|w| w[0].distance(w[1])).sum();
-            table.extend([geometry.feature[l] as f32, length as f32]);
-        }
-        self.origin = overlay::bounds(&points).map_or(DVec2::ZERO, |(min, max)| (min + max) / 2.0);
-        let lines = Lines {
-            start: &geometry.start[..=count],
-            points: &points,
-        };
-        let built = pieces::build(&nodes, &edges, Some(&lines), self.origin);
-        // SAFETY: uploads into objects owned by this layer
+        let (built, table, origin) = build(geometry);
+        // The new table first: if it cannot be made, the layer keeps its lines
+        let lines = features::index_texture(gl, &table)?;
+        // SAFETY: uploads into objects owned by this layer; the old table, replaced, is not used afterwards
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&built.pieces), glow::STATIC_DRAW);
             gl.delete_texture(self.lines);
         }
-        self.lines = features::index_texture(gl, &table)?;
+        self.lines = lines;
+        self.origin = origin;
         self.grid = built.grid;
         self.start = built.start;
         self.pieces = built.pieces.len();
+        self.visible.invalidate();
         // The extent changed: a new page table
         self.drape.delete(gl);
         self.drape = Drape::new();
@@ -239,7 +255,7 @@ impl LineLayer {
             relief,
             ..
         } = frame;
-        let [segments, lines, dash, layer, pick_u, slop] = &self.uniforms;
+        let [segments, _, dash, layer, pick_u, slop] = &self.uniforms;
         let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
         // SAFETY: draw with objects owned by this layer
         unsafe {
@@ -258,7 +274,6 @@ impl LineLayer {
             self.features.bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
             gl.active_texture(glow::TEXTURE0 + LINES_UNIT);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.lines));
-            gl.uniform_1_i32(lines.as_ref(), LINES_UNIT as i32);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
@@ -294,10 +309,13 @@ impl Layer for LineLayer {
             return false;
         }
         self.update_drape(frame);
-        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, frame.view, frame.relief);
+        let look = overlay::look(self.origin, frame.view, frame.relief, 0.0);
+        let mut visible = std::mem::take(&mut self.visible);
+        let ranges = visible.update(&self.grid, &self.start, frame.view, look);
         let gl = frame.gl;
         // Translucent: each pixel blended once (the joins overlap)
-        let translucent = self.features.layer.opacity[1].iter().any(|&o| o < 1.0);
+        // A translucent color too (a feature's, or the ramp's): the joins would show as darker dots
+        let translucent = self.features.translucent();
         // SAFETY: state changes on the live context, set back below
         unsafe {
             gl.disable(glow::CULL_FACE);
@@ -314,7 +332,8 @@ impl Layer for LineLayer {
                 gl.stencil_op(glow::KEEP, glow::KEEP, glow::INCR);
             }
         }
-        self.render(frame, &ranges, None);
+        self.render(frame, ranges, None);
+        self.visible = visible;
         // SAFETY: state changes on the live context
         unsafe {
             gl.disable(glow::STENCIL_TEST);
@@ -333,7 +352,8 @@ impl Layer for LineLayer {
         if !self.shows(frame) {
             return;
         }
-        let ranges = overlay::visible_pieces(&self.grid, &self.start, self.origin, frame.view, frame.relief);
+        let look = overlay::look(self.origin, frame.view, frame.relief, 0.0);
+        let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, frame.view, look);
         self.render(frame, &ranges, Some(layer));
     }
 
@@ -382,5 +402,49 @@ impl Engine {
         if let Some((layer, _)) = self.layer_mut::<LineLayer>(id) {
             layer.dash = [dash.max(0.0), gap.max(0.0)];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_lines_do_not_panic() {
+        let points = [0.5, 0.5, 0.5001, 0.5, 0.5001, 0.5001, f64::INFINITY, 0.5];
+        for (start, feature) in [
+            (&[][..], &[][..]),
+            (&[], &[1, 2]),
+            (&[0], &[0]),
+            (&[0, 3], &[]),
+            (&[0, u32::MAX], &[0]),
+            (&[u32::MAX, 0, 3], &[0, 1]),
+            (&[3, 1, 4], &[0, 1]),
+        ] {
+            let (built, table, origin) = build(&Polylines {
+                points: &points,
+                start,
+                feature,
+            });
+            let lines = start.len().saturating_sub(1).min(feature.len());
+            assert_eq!(table.len(), lines * 2, "{start:?}");
+            assert!(origin.is_finite());
+            assert!(
+                built
+                    .pieces
+                    .iter()
+                    .all(|q| q.from.iter().chain(&q.to).all(|v| v.is_finite()))
+            );
+            assert_eq!(built.start.len(), built.grid.len() + 1);
+        }
+        // A good line: its pieces, its feature and length
+        let (built, table, _) = build(&Polylines {
+            points: &points,
+            start: &[0, 3],
+            feature: &[7],
+        });
+        assert_ne!(built.pieces.len(), 0);
+        assert_eq!(table[0], 7.0);
+        assert!((f64::from(table[1]) - 0.0002).abs() < 1e-9);
     }
 }

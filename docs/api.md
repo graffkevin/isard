@@ -24,7 +24,7 @@ declarations.
 | `ariaLabel` | `'Map'` | accessible name of the map |
 | `attributionControl` | true | the credits of the data shown; `false`, or `{ compact, customAttribution }` |
 | `coreWasmUrl`, `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start |
-| `tiles3d` | false | load the engine with 3D Tiles from the start (else with the first 3D Tiles layer) |
+| `tiles3d` | false | `true`: the engine with 3D Tiles from the start (else loaded with the first 3D Tiles layer, a short stall); `'preload'`: downloaded and compiled once the map is idle ([3D Tiles](./layers/tiles3d#the-engine-with-3d-tiles)) |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread |
 | `decoders`, `glyphs` | official builds, OpenFreeMap's fonts | to self-host them |
 
@@ -47,7 +47,10 @@ declarations.
 | `setBasemap(basemap, hillshade)` | under the other layers |
 | `setTerrain(terrain)` | `true`, `'ign'`, `false` or its options |
 | `setAtmosphere(options)` | undefined to remove it |
-| `vectorTiles({ style, workers })` (the map's workers, shared) | `.raster({ layers, extraLayers, size, opacity, before })`, `.labels({ layers })` |
+| `vectorTiles({ style, workers, workerUrl, attribution })` (the map's workers, shared) | `.raster({ layers, extraLayers, size, opacity, minZoom, maxZoom, before })`, `.labels({ layers, maxTiles })`, `.ready`, `.destroy()` (removes its layers) |
+
+`OPENFREEMAP_STYLES` (`positron`, `liberty`, `bright`) and `PLAN_STYLES` (`standard`, `grey`) are the URLs of the
+styles the basemaps use, for `vectorTiles({ style })`.
 
 ## Layers
 
@@ -60,7 +63,7 @@ declarations.
 | `addExtrusions(options)` | `ExtrusionLayer` | `setData`, `setTile`, `removeTile`, `setValues`, `linkNetwork`, `setAnchors` |
 | `addNetwork(options)` | `NetworkLayer` | `setValues`, `setCosts`, `setEdgeWidths`, `setStyle`, `stats` |
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
-| `addRaster(options)` | `RasterLayer` | `setStyle(opacity, saturation)`; `attribution` credits it while shown; `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
+| `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, or `'equirectangular'` reprojected in the page), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
 | `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
 
 Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`. Every `add…` takes `before`.
@@ -70,8 +73,9 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 | | |
 |---|---|
 | `on(type, listener)` | returns the function that stops listening; see [Events](./guide/events) |
-| `pickFeature(point, { radius, layers })` | `{ layer, index, feature }` |
-| `pick(point, radius, layers)` | `{ layer: id, index }` |
+| `pickFeature(point, { radius, layers })` | `{ layer, index, feature }`; waits for the GPU (a stall): for clicks |
+| `pick(point, radius, layers)` | `{ layer: id, index }`, the same way |
+| `hoverPicking = { radius, layers }` | what the `hoverfeature` event looks for under the pointer, picked without waiting for the GPU |
 | `stats()` | tile counters of the raster layers |
 
 ## Overlays
@@ -82,3 +86,13 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 | `new Popup({ closeButton, closeOnClick, maxWidth, anchor, offset })` | `setLonLat`, `setHTML`, `setText`, `setDOMContent`, `addTo` |
 | `addControl(control, position)`, `removeControl(control)` | `NavigationControl`, `AttributionControl`, or yours |
 | `getContainer()`, `getCanvas()`, `destroy()` | |
+
+## Data and helpers
+
+| | |
+|---|---|
+| `geoplateformeWmts(layer, options)`, `geoplateformeWms(layers, options)` | raster options of the Géoplateforme's layers, crediting the IGN |
+| `geoplateformeWfs(typeName, [west, south, east, north], { count, signal })` | the Géoplateforme's features in a box, as GeoJSON |
+| `IGN_ATTRIBUTION`, `OPENFREEMAP_ATTRIBUTION`, `TERRAIN_TILES_ATTRIBUTION` | credits of the sources, for `customAttribution` or `attribution` |
+| `GLYPHS_URL`, `DEFAULT_FONT` | the default glyphs (OpenFreeMap's fonts) and font of labels |
+| `parseColor(color)`, `interpolate(stops, zoom)` | a CSS color as RGBA 0-1; the value of zoom stops at a zoom |

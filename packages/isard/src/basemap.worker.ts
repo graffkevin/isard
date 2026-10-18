@@ -48,6 +48,8 @@ export type BasemapRequest =
       rasters?: Record<string, RasterSource>;
       /** The style's sprite, for the fill patterns (loaded once by the page) */
       sprite?: Sprite;
+      /** Workers of the pool: each keeps its share of the decoded tiles */
+      workers?: number;
     }
   | (BasemapWork & { id: number })
   | { type: 'abort'; id: number }
@@ -78,7 +80,16 @@ export interface Sprite {
 const renderers = new Map<string, Renderer>();
 /** Decoded tiles by URL, the most recent last */
 const cache = new Map<string, Promise<Map<string, TileLayer> | undefined>>();
+/** Decoded tiles kept by the pool, shared among its workers (a vector tile always goes to the same worker): some
+ * 2 MB each */
 const CACHE = 96;
+/** This worker's share, set by the renderers */
+let cacheSize = CACHE;
+
+/** The decoded tiles one worker of `workers` keeps */
+export function cacheShare(workers: number): number {
+  return Math.max(16, Math.ceil(CACHE / Math.max(1, workers)));
+}
 /** Requests in progress, and those of them aborted (both forgotten once answered) */
 const active = new Set<number>();
 const aborted = new Set<number>();
@@ -105,9 +116,14 @@ function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
   pending.catch(() => images.delete(url));
   images.set(url, pending);
   while (images.size > IMAGES) {
-    const oldest = images.keys().next().value;
-    if (oldest === undefined) break;
+    const [oldest, evicted] = images.entries().next().value ?? [];
+    if (oldest === undefined || evicted === undefined) break;
     images.delete(oldest);
+    // Freed once settled, after the renders that awaited it have drawn it (they draw without awaiting again)
+    evicted.then(
+      (bitmap) => setTimeout(() => bitmap?.close(), 0),
+      () => undefined,
+    );
   }
   return pending;
 }
@@ -138,7 +154,7 @@ function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, Til
   })();
   pending.catch(() => cache.delete(url));
   cache.set(url, pending);
-  while (cache.size > CACHE) {
+  while (cache.size > cacheSize) {
     const oldest = cache.keys().next().value;
     if (oldest === undefined) break;
     cache.delete(oldest);
@@ -192,28 +208,84 @@ function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
   return image;
 }
 
+/** Canvases free for the next tiles, by size: one per tile being drawn at most */
+const canvases = new Map<number, OffscreenCanvas[]>();
+
+/** A blank canvas of `size` pixels and its context, from the free ones if any */
+function takeCanvas(size: number): { canvas: OffscreenCanvas; g: OffscreenCanvasRenderingContext2D } {
+  const canvas = canvases.get(size)?.pop() ?? new OffscreenCanvas(size, size);
+  // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
+  const g = canvas.getContext('2d', { willReadFrequently: true });
+  if (!g) throw new Error('no 2D context');
+  // The state a former tile left
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1;
+  g.setLineDash([]);
+  g.clearRect(0, 0, size, size);
+  return { canvas, g };
+}
+
+function giveCanvas(canvas: OffscreenCanvas): void {
+  const free = canvases.get(canvas.width) ?? [];
+  canvases.set(canvas.width, free);
+  if (free.length < 4) free.push(canvas);
+}
+
+/**
+ * The image of a drawn canvas, its alpha straight (the engine blends straight alpha). An opaque tile (a background
+ * of full opacity, as a basemap's) is moved out of the canvas as it is, premultiplied and straight being the same
+ * there; another one is read back unpremultiplied, copied
+ */
+export function tileImage(
+  canvas: OffscreenCanvas,
+  g: OffscreenCanvasRenderingContext2D,
+  opaque: boolean,
+): Promise<ImageBitmap> {
+  if (opaque) return Promise.resolve(canvas.transferToImageBitmap());
+  return createImageBitmap(g.getImageData(0, 0, canvas.width, canvas.height), { premultiplyAlpha: 'none' });
+}
+
 async function render(r: Renderer, z: number, x: number, y: number, size: number, id: number, priority?: Priority) {
   const s = source(r, z, x, y);
   const layers = await tile(s.url, priority);
   if (aborted.has(id)) return undefined;
+  const { canvas, g } = takeCanvas(size);
+  try {
+    return await draw(r, s, layers, canvas, g, z, x, y, size, id, priority);
+  } finally {
+    giveCanvas(canvas);
+  }
+}
+
+async function draw(
+  r: Renderer,
+  s: ReturnType<typeof source>,
+  layers: Map<string, TileLayer> | undefined,
+  canvas: OffscreenCanvas,
+  g: OffscreenCanvasRenderingContext2D,
+  z: number,
+  x: number,
+  y: number,
+  size: number,
+  id: number,
+  priority?: Priority,
+) {
   const sprite = r.sprite;
   const zoom = Math.max(0, z - 1);
-  const canvas = new OffscreenCanvas(size, size);
-  // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
-  const g = canvas.getContext('2d', { willReadFrequently: true });
-  if (!g) throw new Error('no 2D context');
   // CSS pixels to canvas pixels: the tile is 256 CSS pixels across at its zoom
   const px = size / 256;
   let drawn = false;
+  /** A background of full opacity covers the tile: every pixel stays opaque */
+  let opaque = false;
   for (const layer of r.layers) {
     if (!shown(layer, zoom)) continue;
     const zctx: Context = { zoom, properties: {}, type: 'Unknown' };
     if (layer.type === 'background') {
-      g.fillStyle = paint(
-        value(layer, 'paint', 'background-color', zctx, '#000'),
-        Number(value(layer, 'paint', 'background-opacity', zctx, 1)),
-      );
+      const fill = value(layer, 'paint', 'background-color', zctx, '#000');
+      const opacity = Number(value(layer, 'paint', 'background-opacity', zctx, 1));
+      g.fillStyle = paint(fill, opacity);
       g.fillRect(0, 0, size, size);
+      if ((color(fill) ?? [0, 0, 0, 1])[3] * opacity >= 1) opaque = true;
       drawn = true;
       continue;
     }
@@ -338,7 +410,7 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
     }
   }
   if (!drawn && !layers) return null;
-  return createImageBitmap(g.getImageData(0, 0, size, size), { premultiplyAlpha: 'none' });
+  return tileImage(canvas, g, opaque);
 }
 
 /** A text written over its icon (a road shield's number: no halo, centered on it, no offset): icons are not drawn, and
@@ -470,6 +542,7 @@ const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
 
 self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   if (data.type === 'init') {
+    if (data.workers !== undefined) cacheSize = cacheShare(data.workers);
     renderers.set(data.key, {
       tiles: data.tiles,
       maxzoom: data.maxzoom,
@@ -481,6 +554,8 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
     return;
   }
   if (data.type === 'drop') {
+    // Its copy of the sprite
+    renderers.get(data.key)?.sprite?.image.close();
     renderers.delete(data.key);
     return;
   }
