@@ -10,7 +10,10 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPES: &str = r#"
-/** A primitive of a tile decoded by `decodeTile`: vertices x, y, z, u, v around the anchor; the image still encoded */
+/**
+ * A primitive of a tile decoded by `decodeTile`: vertices x, y, z, u, v around the anchor; the image still encoded,
+ * the same array for the primitives sharing it
+ */
 export interface EncodedPrimitive {
   vertices: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
@@ -32,7 +35,10 @@ export interface CompressedTexture {
   levels: { width: number; height: number; data: Uint8Array<ArrayBuffer> }[];
 }
 
-/** A primitive ready for the GPU: its image decoded (bitmap) or transcoded (texture) */
+/**
+ * A primitive ready for the GPU: its image decoded (bitmap) or transcoded (texture); primitives given the same bitmap
+ * or texture object share one GPU texture
+ */
 export interface DecodedPrimitive {
   vertices: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
@@ -158,6 +164,12 @@ pub fn decode_tile(
     let out = Object::new();
     let set = |target: &Object, key: &str, value: &JsValue| Reflect::set(target, &JsValue::from_str(key), value);
     set(&out, "anchor", &Float64Array::from(&mesh.anchor.to_array()[..]))?;
+    // One array per image, shared by the primitives that use it
+    let images: Vec<Uint8Array> = mesh
+        .images
+        .iter()
+        .map(|(bytes, _)| Uint8Array::from(&bytes[..]))
+        .collect();
     let primitives = Array::new();
     for p in &mesh.primitives {
         let vertices: Vec<f32> = p
@@ -171,8 +183,8 @@ pub fn decode_tile(
         let primitive = Object::new();
         set(&primitive, "vertices", &Float32Array::from(&vertices[..]))?;
         set(&primitive, "indices", &Uint32Array::from(&p.indices[..]))?;
-        if let Some((image, mime)) = &p.image {
-            set(&primitive, "image", &Uint8Array::from(&image[..]))?;
+        if let (Some(image), Some((_, mime))) = (p.image.and_then(|i| images.get(i)), mesh.image(p)) {
+            set(&primitive, "image", image)?;
             set(&primitive, "mime", &JsValue::from_str(mime))?;
         }
         primitives.push(&primitive);

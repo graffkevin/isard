@@ -2,6 +2,7 @@
 import type { AttributionOptions } from './controls.ts';
 import type { DecoderUrls } from './decoders.ts';
 import type { Feature, Ramp, Size } from './features.ts';
+import type { TileGrid } from './grid.ts';
 import type { Layer } from './layers.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
@@ -131,11 +132,16 @@ export interface GeoMapOptions extends Partial<Camera> {
   tiles3d?: boolean | 'preload';
   /** Where to load the vector basemap worker from, when a bundler does not resolve the default URL */
   basemapWorkerUrl?: string | URL;
+  /** Texture size of the vector basemap's tiles, pixels (default 512: lines and edges sharp at every zoom on a screen
+   * of pixel ratio 1). 256: a quarter of the drawing in the workers, of the uploads and of the GPU memory, for lines
+   * and edges a little softer between two zoom levels (the tiles are shown 181 to 362 CSS pixels wide) */
+  basemapTileSize?: number;
   /** Glyphs of the symbol layers: a URL with `{fontstack}` and `{range}` (MapLibre's glyph format; default
    * OpenFreeMap's fonts, Noto Sans). A vector basemap's labels take the glyphs of its style */
   glyphs?: string;
   /** Workers decoding 3D Tiles off the main thread: a count, or false to decode on the main thread (default: cores - 1,
-   * 1 to 4) */
+   * 1 to 4). False (or 0) also decodes the PNG relief and reprojects the equirectangular rasters on the main thread,
+   * else done by the vector basemap's workers */
   workers?: number | false;
   /** Where to load the decoding worker from, when a bundler does not resolve the default URL */
   workerUrl?: string | URL;
@@ -204,9 +210,11 @@ export interface FlyToOptions extends AnimationOptions {
 /**
  * Tile grid of a raster's URL. 'mercator': Web Mercator (XYZ, WMTS PM), the engine's own. 'equirectangular':
  * longitudes and latitudes (Plate Carrée, EPSG:4326-like), two 256 px tiles side by side at level 0, rows from the
- * north (NASA's Trek WMTS, WorldCRS84Quad), reprojected in the page into Web Mercator tiles.
+ * north (NASA's Trek WMTS, WorldCRS84Quad). A `TileGrid`: the tile matrices of a WMTS in any CRS (Lambert-93…), or a
+ * WMS asked for each tile's box in its CRS. The last two are reprojected into Web Mercator tiles by the map's workers
+ * (in the page with `workers: false`).
  */
-export type RasterGrid = 'mercator' | 'equirectangular';
+export type RasterGrid = 'mercator' | 'equirectangular' | TileGrid;
 
 /** What `RasterLayer.setStyle` changes */
 export interface RasterStyle {
@@ -219,7 +227,7 @@ export interface RasterOptions {
   /** Tile URL with {z}, {x} and {y} (256 px tiles); unused with a `loader` */
   url: string;
   /** Tile grid of `url` (default 'mercator'); with 'equirectangular', `minZoom` and `maxZoom` are levels of that
-   * grid */
+   * grid; with a `TileGrid`, they are map zooms, by default those its matrices span */
   grid?: RasterGrid;
   minZoom?: number;
   maxZoom?: number;

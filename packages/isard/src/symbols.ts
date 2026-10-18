@@ -18,6 +18,7 @@ import {
   type Styled,
   stops,
 } from './features.ts';
+import { toMercator } from './geo.ts';
 import { codes, DEFAULT_FONT, type Glyph, type Glyphs, shape, type TextPart } from './glyphs.ts';
 import { Layer } from './layers.ts';
 import type { Anchor } from './overlay.ts';
@@ -114,24 +115,81 @@ function points(geometry: Geometry | null): Position[] {
   }
 }
 
-const MAX_LAT = 85.051128779806589;
-const merc = ([lon, lat]: Position): [number, number] => {
-  const phi = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * Math.PI) / 180;
-  return [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI)];
-};
-
 /** The map's glyphs, for a layer */
 export interface GlyphHost extends LayerHost {
   readonly glyphs: Glyphs;
 }
 
+/** Labels built for the engine: an anchor (Mercator x, y), a collision box, a style per label; glyph quads whose first
+ * number is their label's index */
+interface Labels {
+  anchors: Float64Array;
+  boxes: Float32Array;
+  styles: Float32Array;
+  quads: Float32Array;
+}
+
+/** Numbers per glyph quad: its label's index, its place, its atlas coordinates, its scale */
+const QUAD = 10;
+
+/** The labels of a group of features, kept while they stay valid: same style, the same index of the group's first
+ * feature (unless the style reads no index), and their glyphs complete or none loaded since */
+interface Chunk extends Labels {
+  count: number;
+  style: number;
+  base: number;
+  glyphs: number;
+  complete: boolean;
+}
+
+/** Every character of a run has its glyph */
+function present(part: TextPart, loaded: Map<string, Map<number, Glyph>>): boolean {
+  const glyphs = loaded.get(part.font ?? DEFAULT_FONT);
+  if (!glyphs) return false;
+  for (const ch of part.text) if (ch !== '\n' && !glyphs.has(ch.codePointAt(0) ?? 32)) return false;
+  return true;
+}
+
+/** The labels of chunks one after the other, the quads' label indices moved past those of the chunks before */
+function concat(chunks: readonly Chunk[]): Labels {
+  if (chunks.length === 1 && chunks[0]) return chunks[0];
+  const length = (key: keyof Labels) => chunks.reduce((n, c) => n + c[key].length, 0);
+  const out: Labels = {
+    anchors: new Float64Array(length('anchors')),
+    boxes: new Float32Array(length('boxes')),
+    styles: new Float32Array(length('styles')),
+    quads: new Float32Array(length('quads')),
+  };
+  const at = { anchors: 0, boxes: 0, styles: 0, quads: 0 };
+  let labels = 0;
+  for (const c of chunks) {
+    out.anchors.set(c.anchors, at.anchors);
+    out.boxes.set(c.boxes, at.boxes);
+    out.styles.set(c.styles, at.styles);
+    out.quads.set(c.quads, at.quads);
+    if (labels > 0)
+      for (let q = at.quads; q < at.quads + c.quads.length; q += QUAD) out.quads[q] = (out.quads[q] ?? 0) + labels;
+    at.anchors += c.anchors.length;
+    at.boxes += c.boxes.length;
+    at.styles += c.styles.length;
+    at.quads += c.quads.length;
+    labels += c.count;
+  }
+  return out;
+}
+
 export class SymbolLayer<P = Properties> extends Layer {
   private list: Feature<P>[];
+  /** The features in groups that do not change (`setGroups`): each group's labels kept between updates */
+  private groups: readonly (readonly Feature<P>[])[] | undefined;
+  private readonly chunks = new WeakMap<readonly Feature<P>[], Chunk>();
   /** Bumped by each change: a shaping that finished after a newer one began is dropped */
   private generation = 0;
-  private labels:
-    | { anchors: Float64Array; boxes: Float32Array; styles: Float32Array; quads: Float32Array; feature: number[] }
-    | undefined;
+  /** Bumped by each change of style: the labels kept are shaped again */
+  private styleGeneration = 0;
+  /** No style function takes the index of a feature: a group's labels do not depend on its place */
+  private indexFree = true;
+  private labels: Labels | undefined;
 
   /** @internal */
   constructor(
@@ -141,6 +199,7 @@ export class SymbolLayer<P = Properties> extends Layer {
   ) {
     super(host);
     this.list = featuresOf(data);
+    this.styled();
   }
 
   get features(): readonly Feature<P>[] {
@@ -149,11 +208,23 @@ export class SymbolLayer<P = Properties> extends Layer {
 
   setData(data: FeatureData<P>): void {
     this.list = featuresOf(data);
+    this.groups = undefined;
+    void this.update();
+  }
+
+  /**
+   * @internal The features as groups that are never changed once given (the labels of a vector tile and style layer),
+   * in order: the labels of a group seen before are not shaped again
+   */
+  setGroups(groups: readonly (readonly Feature<P>[])[]): void {
+    this.groups = groups;
+    this.list = groups.flat();
     void this.update();
   }
 
   setStyle(style: Partial<SymbolStyle<P>>): void {
     this.style = { ...this.style, ...style };
+    this.styled();
     void this.update();
   }
 
@@ -167,47 +238,91 @@ export class SymbolLayer<P = Properties> extends Layer {
     this.map.requestRender();
   }
 
-  /** Shapes the labels (loading their glyphs first) and sends them */
-  private async update(): Promise<void> {
-    const generation = ++this.generation;
+  private styled(): void {
+    this.styleGeneration += 1;
+    // A function of one parameter reads the properties only
+    this.indexFree = Object.values(this.style).every((v) => typeof v !== 'function' || v.length < 2);
+  }
+
+  /** The runs of text of each feature of a group (none for a feature filtered out) */
+  private parts(group: readonly Feature<P>[], base: number): TextPart[][] {
     const { text, font, filter } = this.style;
-    const parts = this.list.map((f, i): TextPart[] => {
+    return group.map((f, k): TextPart[] => {
+      const i = base + k;
       if (filter && !filter(f.properties, i)) return [];
       const t = evaluate(text, f.properties, i);
       const own = evaluate(font, f.properties, i);
       // Each run in its font, the feature's by default
       return (typeof t === 'string' ? [{ text: t }] : t).map((p) => ({ ...p, font: p.font ?? own }));
     });
+  }
+
+  /** Shapes the labels (loading their glyphs first) and sends them; the groups' labels still valid are kept */
+  private async update(): Promise<void> {
+    const generation = ++this.generation;
+    const groups = this.groups ?? [this.list];
+    const keep = this.groups !== undefined;
+    const glyphs = this.host.glyphs;
+    const todo: { group: readonly Feature<P>[]; base: number; parts: TextPart[][] }[] = [];
+    let base = 0;
+    for (const group of groups) {
+      const c = keep ? this.chunks.get(group) : undefined;
+      const valid =
+        c !== undefined &&
+        c.style === this.styleGeneration &&
+        (c.base === base || this.indexFree) &&
+        (c.complete || c.glyphs === glyphs.version);
+      if (!valid) todo.push({ group, base, parts: this.parts(group, base) });
+      base += group.length;
+    }
     const byFont = new Map<string, Set<number>>();
-    for (const p of parts.flat()) {
-      const key = p.font ?? DEFAULT_FONT;
-      const set = byFont.get(key) ?? new Set<number>();
-      for (const code of codes([p])) set.add(code);
-      byFont.set(key, set);
+    for (const { parts } of todo) {
+      for (const p of parts.flat()) {
+        const key = p.font ?? DEFAULT_FONT;
+        const set = byFont.get(key) ?? new Set<number>();
+        for (const code of codes([p])) set.add(code);
+        byFont.set(key, set);
+      }
     }
     const loaded = new Map<string, Map<number, Glyph>>();
     await Promise.all(
       [...byFont].map(async ([f, set]) => {
-        loaded.set(f, await this.host.glyphs.load(f, set));
+        loaded.set(f, await glyphs.load(f, set));
       }),
     );
     if (generation !== this.generation) return;
-    this.labels = this.build(parts, loaded);
+    const built = new Map<readonly Feature<P>[], Chunk>();
+    for (const { group, base: b, parts } of todo) {
+      const chunk = this.build(group, b, parts, loaded);
+      built.set(group, chunk);
+      if (keep) this.chunks.set(group, chunk);
+    }
+    this.labels = concat(groups.map((g) => built.get(g) ?? (this.chunks.get(g) as Chunk)));
     this.send(this.map.engine, this.id);
     this.map.requestRender();
   }
 
-  private build(parts: TextPart[][], loaded: Map<string, Map<number, Glyph>>) {
+  /** The labels of a group of features, `base` the index of its first feature */
+  private build(
+    group: readonly Feature<P>[],
+    base: number,
+    parts: TextPart[][],
+    loaded: Map<string, Map<number, Glyph>>,
+  ): Chunk {
     const { font, size, anchor, offset, maxWidth, lineHeight, color, haloColor, haloWidth, overlap, placement } =
       this.style;
     const anchorList: number[] = [];
     const boxes: number[] = [];
     const styles: number[] = [];
     const quads: number[] = [];
-    const feature: number[] = [];
-    this.list.forEach((f, i) => {
-      const text = parts[i];
+    let count = 0;
+    let complete = true;
+    group.forEach((f, k) => {
+      const i = base + k;
+      const text = parts[k];
       if (!text?.length || text.every((p) => !p.text)) return;
+      // Glyphs still missing: shaped again once more glyphs are loaded
+      if (complete && !text.every((p) => present(p, loaded))) complete = false;
       // Shaped at its largest size; the engine scales by the zoom stops
       const s0 = evaluate(size, f.properties, i);
       const shaped = typeof s0 === 'number' ? s0 : Math.max(...s0.map(([, v]) => v), 1);
@@ -225,14 +340,13 @@ export class SymbolLayer<P = Properties> extends Layer {
       const fill = parseColor(evaluate(color, f.properties, i));
       const haloRgba = parseColor(evaluate(haloColor, f.properties, i));
       for (const { at, along } of anchors(f.geometry)) {
-        const label = feature.length;
-        feature.push(i);
-        const [x, y] = merc(at);
+        const label = count++;
+        const [x, y] = toMercator(at);
         anchorList.push(x, y);
         // Along the line: its direction in Mercator (y towards the south)
         let direction: [number, number] = [0, 0];
         if (placement === 'line' && along) {
-          const [x1, y1] = merc([at[0] + along[0], at[1] + along[1]]);
+          const [x1, y1] = toMercator([at[0] + along[0], at[1] + along[1]]);
           direction = [x1 - x, y1 - y];
         }
         // The collision box: the ink, with the halo and a little room
@@ -254,7 +368,11 @@ export class SymbolLayer<P = Properties> extends Layer {
       boxes: Float32Array.from(boxes),
       styles: Float32Array.from(styles),
       quads: Float32Array.from(quads),
-      feature,
+      count,
+      style: this.styleGeneration,
+      base,
+      glyphs: this.host.glyphs.version,
+      complete,
     };
   }
 

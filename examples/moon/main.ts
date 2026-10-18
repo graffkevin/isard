@@ -1,7 +1,7 @@
 /**
- * The Moon: a map of another body. The globe takes the Moon's radius (no atmosphere, no Earth basemap), the
- * Lunar Reconnaissance Orbiter's wide-angle mosaic comes from NASA's Moon Trek in longitudes and latitudes, reprojected
- * in the page into Web Mercator tiles; its relief is LOLA's terrain model, from Trek too (`terrain: true` on the Moon).
+ * The Moon: a map of another body. The globe takes the Moon's radius (no atmosphere, no Earth basemap), the Lunar
+ * Reconnaissance Orbiter's wide-angle mosaic comes from NASA's Moon Trek in longitudes and latitudes, reprojected by
+ * the workers into Web Mercator tiles; its relief is LOLA's terrain model, from Trek too (`terrain: true` on the Moon).
  * The Apollo landing sites as circles and labels; pitched views over the craters Tycho and Copernicus (a link opens
  * one: #tycho). A click flies to the point.
  */

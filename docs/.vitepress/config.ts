@@ -14,6 +14,7 @@ const examples = [
   ['Relief and a ground shader', 'relief'],
   ['3D Tiles', 'tiles3d'],
   ['Vector basemaps', 'vector'],
+  ['Lambert-93 data', 'lambert93'],
   ['The Moon', 'moon'],
   ['Mars', 'mars'],
 ];
@@ -54,6 +55,7 @@ export default defineConfig({
             { text: 'Concepts', link: '/guide/concepts' },
             { text: 'Basemaps and relief', link: '/guide/basemaps' },
             { text: 'Géoplateforme (IGN) data', link: '/guide/geoplateforme' },
+            { text: 'Projections', link: '/guide/projections' },
             { text: 'Events and picking', link: '/guide/events' },
             { text: 'Markers, popups, controls', link: '/guide/overlays' },
             { text: 'Performance', link: '/guide/performance' },

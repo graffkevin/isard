@@ -27,7 +27,7 @@ use implicit::{Coord, Implicit, Placeholder};
 use json::{ContentJson, ImplicitJson, TileJson, TilesetJson};
 use std::collections::HashMap;
 use std::rc::Rc;
-pub use traversal::{Readiness, Selection, select};
+pub use traversal::{Readiness, Scratch, Selection, select, select_into};
 use volume::Volume;
 
 /// What the content of a tile is

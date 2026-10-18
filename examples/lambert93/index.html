@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lambert-93 data · Isard</title>
+    <link rel="stylesheet" href="../shared/page.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="panel">
+      <h1>Lambert-93 data</h1>
+      <p>PLAN IGN served in Lambert-93, reprojected over the Web Mercator basemap; the arrondissements from a WFS in EPSG:2154; a GPX trip down the Seine.</p><p><button type="button" id="2154_10cm_6_20" class="on">Lambert-93</button> <button type="button" id="PM">Web Mercator</button></p><p><input id="opacity" type="range" min="0" max="1" step="0.05" value="0.6" aria-label="Opacity of PLAN IGN" /></p>
+    </div>
+    <script type="module" src="../dist/lambert93/main.js"></script>
+  </body>
+</html>

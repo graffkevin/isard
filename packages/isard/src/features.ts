@@ -6,6 +6,8 @@
  */
 
 import { parseCssColor } from './color.ts';
+import { crsOf, reproject } from './crs.ts';
+import { mercatorX, mercatorY } from './geo.ts';
 import { Layer } from './layers.ts';
 import type { LayerHost } from './types.ts';
 import type { Engine } from './wasm/isard.js';
@@ -31,6 +33,9 @@ export interface Feature<P = Properties> {
 export interface FeatureCollection<P = Properties> {
   type: 'FeatureCollection';
   features: Feature<P>[];
+  /** The CRS of the coordinates, a legacy member (GeoJSON of 2008, the output of a WFS in another CRS): the feature
+   * layers reproject a collection that names one (see `reproject`) */
+  crs?: { type: 'name'; properties: { name: string } };
 }
 /** What a feature layer takes: a collection, its features, or one feature */
 export type FeatureData<P = Properties> = FeatureCollection<P> | Feature<P>[] | Feature<P>;
@@ -178,16 +183,19 @@ export function evaluate<T, P>(value: Styled<T, P>, properties: P, index: number
 
 // ── Geometry ──
 
-const MAX_LAT = 85.051128779806589;
-const mercX = (lon: number) => (lon + 180) / 360;
-const mercY = (lat: number) => {
-  const phi = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * Math.PI) / 180;
-  return 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI);
-};
+/** Collections in another CRS, reprojected once (the layers read their data again) */
+const reprojected = new WeakMap<object, Feature<unknown>[]>();
 
 export function featuresOf<P>(data: FeatureData<P>): Feature<P>[] {
   if (Array.isArray(data)) return data;
-  return data.type === 'FeatureCollection' ? data.features : [data];
+  if (data.type !== 'FeatureCollection') return [data];
+  if (crsOf(data) === undefined) return data.features;
+  let features = reprojected.get(data) as Feature<P>[] | undefined;
+  if (!features) {
+    features = reproject(data).features;
+    reprojected.set(data, features);
+  }
+  return features;
 }
 
 /** Every geometry of a feature, collections flattened */
@@ -224,7 +232,7 @@ function lineGeometry(features: Feature<unknown>[]) {
   const line = (coords: Position[], f: number) => {
     start.push(points.length / 2);
     feature.push(f);
-    for (const [lon, lat] of coords) points.push(mercX(lon), mercY(lat));
+    for (const [lon, lat] of coords) points.push(mercatorX(lon), mercatorY(lat));
   };
   features.forEach((f, i) => {
     for (const g of geometries(f.geometry)) {
@@ -242,7 +250,7 @@ function pointGeometry(features: Feature<unknown>[]) {
   const points = new Grow(new Float64Array(1024));
   const feature = new Grow(new Uint32Array(64));
   const point = ([lon, lat]: Position, f: number) => {
-    points.push(mercX(lon), mercY(lat));
+    points.push(mercatorX(lon), mercatorY(lat));
     feature.push(f);
   };
   features.forEach((f, i) => {
@@ -264,7 +272,7 @@ export function polygonGeometry(features: Feature<unknown>[]) {
     feature.push(f);
     for (const ring of rings) {
       ringStart.push(points.length / 2);
-      for (const [lon, lat] of ring) points.push(mercX(lon), mercY(lat));
+      for (const [lon, lat] of ring) points.push(mercatorX(lon), mercatorY(lat));
     }
   };
   features.forEach((f, i) => {

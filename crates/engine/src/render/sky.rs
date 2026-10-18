@@ -7,7 +7,7 @@
 //! towards the far plane (the raster pass reads `Atmosphere::fog`).
 
 use crate::render::gl;
-use geo::camera::View;
+use geo::camera::{FOV, View};
 use glow::HasContext;
 
 const VERTEX: &str = r"#version 300 es
@@ -73,9 +73,9 @@ void main() {
   color = vec4(space, u_factor);
 }";
 
-/// Sky over the plane, with `MapLibre`'s settings
-const ATMOSPHERE: &str = r"#version 300 es
-precision highp float;
+/// Sky over the plane, with `MapLibre`'s settings, after the camera's vertical field of view (`FOV`, radians) and its
+/// half (`atmosphere`)
+const ATMOSPHERE: &str = r"
 uniform mat4 u_inverse;
 uniform vec3 u_sky;
 uniform vec3 u_horizon;
@@ -93,10 +93,18 @@ void main() {
   // Elevation of the ray over the horizon, radians (local frame: z up)
   float elevation = asin(clamp(dir.z, -1.0, 1.0));
   vec3 c = elevation >= 0.0
-    ? mix(u_horizon, u_sky, smoothstep(0.0, max(u_blend.x, 1e-3) * 0.6435, elevation))
-    : mix(u_horizon, u_fog, smoothstep(0.0, max(u_blend.y, 1e-3) * 0.3218, -elevation));
+    ? mix(u_horizon, u_sky, smoothstep(0.0, max(u_blend.x, 1e-3) * FOV, elevation))
+    : mix(u_horizon, u_fog, smoothstep(0.0, max(u_blend.y, 1e-3) * HALF_FOV, -elevation));
   color = vec4(c, 1.0 - u_factor);
 }";
+
+/// The fragment shader of the sky over the plane: `ATMOSPHERE` after the field of view of the camera
+fn atmosphere() -> String {
+    format!(
+        "#version 300 es\nprecision highp float;\nconst float FOV = {FOV:?};\nconst float HALF_FOV = {:?};\n{ATMOSPHERE}",
+        FOV / 2.0
+    )
+}
 
 /// Sky, horizon and fog over the plane (`MapLibre`'s `setSky`)
 #[derive(Clone, Copy, Debug)]
@@ -163,7 +171,7 @@ impl Sky {
                 "u_halo",
             ],
         );
-        let atmosphere_program = objects.program(VERTEX, ATMOSPHERE)?;
+        let atmosphere_program = objects.program(VERTEX, &atmosphere())?;
         let atmosphere_uniforms = gl::uniforms(
             gl,
             atmosphere_program,
@@ -250,6 +258,13 @@ impl Sky {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sky_takes_the_field_of_view_of_the_camera() {
+        let shader = atmosphere();
+        assert!(shader.contains("const float FOV = 0.6435011"), "{shader}");
+        assert!(shader.contains("const float HALF_FOV = 0.32175"), "{shader}");
+    }
 
     #[test]
     fn halo_of_the_body() {

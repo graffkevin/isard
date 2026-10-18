@@ -58,23 +58,37 @@ async function load(
     const requests = dracoRequests(bytes);
     const draco = requests.length > 0 ? await decodeDraco(decoders, requests) : undefined;
     const tile = decodeTile(bytes, transform, yUp, draco);
+    // An image shared by primitives (instanced meshes) is decoded once: the engine then shares its texture
+    type Image = NonNullable<(typeof tile.primitives)[number]['image']>;
+    const decoded = new Map<Image, Promise<Pick<DecodedPrimitive, 'bitmap' | 'texture'>>>();
+    const decode = (image: Image, mime: string | undefined) => {
+      let pending = decoded.get(image);
+      if (!pending) {
+        pending =
+          mime === 'image/ktx2'
+            ? transcodeKtx2(decoders, formats, image).then((texture) => ({ bitmap: null, texture }))
+            : createImageBitmap(new Blob([image], { type: mime ?? '' }), { premultiplyAlpha: 'none' }).then(
+                (bitmap) => ({ bitmap }),
+              );
+        decoded.set(image, pending);
+      }
+      return pending;
+    };
     const primitives = await Promise.all(
-      tile.primitives.map(async ({ vertices, indices, image, mime }): Promise<DecodedPrimitive> => {
-        if (!image) return { vertices, indices, bitmap: null };
-        if (mime === 'image/ktx2') {
-          return { vertices, indices, bitmap: null, texture: await transcodeKtx2(decoders, formats, image) };
-        }
-        const blob = new Blob([image], { type: mime ?? '' });
-        return { vertices, indices, bitmap: await createImageBitmap(blob, { premultiplyAlpha: 'none' }) };
-      }),
+      tile.primitives.map(
+        async ({ vertices, indices, image, mime }): Promise<DecodedPrimitive> =>
+          image ? { vertices, indices, ...(await decode(image, mime)) } : { vertices, indices, bitmap: null },
+      ),
     );
-    const transfer = primitives.flatMap((p): Transferable[] => [
-      p.vertices.buffer,
-      p.indices.buffer,
-      ...(p.bitmap ? [p.bitmap] : []),
-      ...(p.texture?.levels.map((level) => level.data.buffer) ?? []),
-    ]);
-    reply({ type: 'tile', id, tile: { anchor: tile.anchor, primitives } }, transfer);
+    // Each object once: a buffer or bitmap listed twice makes the transfer throw
+    const transfer = new Set<Transferable>();
+    for (const p of primitives) {
+      transfer.add(p.vertices.buffer);
+      transfer.add(p.indices.buffer);
+      if (p.bitmap) transfer.add(p.bitmap);
+      for (const level of p.texture?.levels ?? []) transfer.add(level.data.buffer);
+    }
+    reply({ type: 'tile', id, tile: { anchor: tile.anchor, primitives } }, [...transfer]);
   } catch (error) {
     reply({ type: 'error', id, error: String(error), aborted: controller.signal.aborted });
   } finally {

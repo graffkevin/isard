@@ -10,17 +10,18 @@
 //!
 //! The triangles are cut along a grid fine enough for the layer (`geo::shapes::square_for`) and sorted by square,
 //! their order kept within a square (triangles of different squares never overlap): only the squares in view are
-//! drawn, flat or in relief.
+//! drawn, flat or in relief. On flat ground only the top cap is built and uploaded; the prism is, from the polygons
+//! the layer keeps, on its first frame in relief.
 //!
 //! Picking is done on the CPU: the ground position under the cursor tested against the polygons.
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
-use crate::render::features::{FEATURES, FeatureUniforms, Features};
+use crate::render::features::{FeatureUniforms, Features, Layout};
 use crate::render::gl::{self, Objects, Projection, bytes};
 use crate::render::overlay;
 use geo::pieces::{self, Grid, Visible};
-use geo::shapes::{self, Mesh, Polygons};
+use geo::shapes::{self, Mesh, OwnedPolygons, Polygons};
 use glam::DVec2;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
@@ -73,61 +74,45 @@ fn prism_range(body: &geo::geodesy::Body) -> (f64, f64) {
     (body.relief.0 - BOTTOM_MARGIN, body.relief.1 + TOP_MARGIN)
 }
 
-/// One polygon kept on the CPU for picking: its rings and bounds
-struct Shape {
-    feature: u32,
-    rings: Vec<Vec<DVec2>>,
-    min: DVec2,
-    max: DVec2,
-}
-
-impl Shape {
-    /// Even-odd rule over all rings (the holes cut out)
-    fn contains(&self, p: DVec2) -> bool {
-        if p.x < self.min.x || p.y < self.min.y || p.x > self.max.x || p.y > self.max.y {
-            return false;
-        }
-        let mut inside = false;
-        for ring in &self.rings {
-            let n = ring.len();
-            for i in 0..n {
-                let (a, b) = (ring[i], ring[(i + 1) % n]);
-                if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                    inside = !inside;
-                }
+/// Whether a point lies inside a polygon's rings, even-odd (the holes cut out)
+fn contains<'a>(rings: impl Iterator<Item = &'a [DVec2]>, p: DVec2) -> bool {
+    let mut inside = false;
+    for ring in rings {
+        let n = ring.len();
+        for i in 0..n {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                inside = !inside;
             }
         }
-        inside
     }
+    inside
 }
 
-/// The polygons kept for picking. Rings past `ring_start` are left out: a polygon claiming 4 billion rings costs
-/// nothing more than the rings there are
-fn shapes_of(polygons: &Polygons, feature: &[u32]) -> Vec<Shape> {
-    let rings = polygons.ring_start.len().saturating_sub(1);
-    (0..polygons.polygon_start.len().saturating_sub(1))
-        .map(|p| {
-            let (first, last) = (
-                (polygons.polygon_start[p] as usize).min(rings),
-                (polygons.polygon_start[p + 1] as usize).min(rings),
-            );
-            let rings: Vec<Vec<DVec2>> = (first..last)
-                .filter_map(|r| {
-                    let (s, e) = (polygons.ring_start[r] as usize, polygons.ring_start[r + 1] as usize);
-                    polygons.points.get(s..e).map(<[DVec2]>::to_vec)
-                })
-                .collect();
-            let (min, max) = rings
-                .iter()
+/// A polygon as the picking tests it: its feature, its bounds (empty without a point), its rings (`polygon_rings`)
+struct Pick {
+    feature: u32,
+    min: DVec2,
+    max: DVec2,
+    rings: std::ops::Range<usize>,
+}
+
+/// The polygons as the picking tests them
+fn picks_of(polygons: &Polygons, feature: &[u32]) -> Vec<Pick> {
+    shapes::polygon_rings(polygons)
+        .enumerate()
+        .map(|(p, rings)| {
+            let (min, max) = polygons
+                .rings(rings.clone())
                 .flatten()
                 .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &q| {
                     (a.min(q), b.max(q))
                 });
-            Shape {
+            Pick {
                 feature: feature.get(p).copied().unwrap_or(u32::MAX),
-                rings,
                 min,
                 max,
+                rings,
             }
         })
         .collect()
@@ -142,11 +127,17 @@ pub struct FillLayer {
     vao: glow::VertexArray,
     vertices: glow::Buffer,
     indices: glow::Buffer,
-    /// Index count
+    /// Index count of the top cap
     all: i32,
-    shapes: Vec<Shape>,
+    /// The polygons: tested by the picking, and the prism built from them in relief
+    polygons: OwnedPolygons,
+    picks: Vec<Pick>,
+    /// The side of the squares the triangles are cut along (`shapes::square_for`)
+    square: f64,
+    /// The prism (the bottom cap and the walls) is uploaded with the top cap: since the first frame in relief
+    prism: bool,
     /// The grid the triangles are sorted by, and the first index of each square in the top cap and in the rest (the
-    /// bottom cap and the walls), with the ends
+    /// bottom cap and the walls, empty without the prism), with the ends
     grid: Grid,
     top_start: Vec<u32>,
     rest_start: Vec<u32>,
@@ -160,8 +151,8 @@ impl FillLayer {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let program = objects.program(
-            &format!("#version 300 es\n{}{FEATURES}{VERTEX}", gl::PROJECT),
-            &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
+            &gl::vertex_shader(&[gl::PROJECT, &Layout::FILL.glsl(), VERTEX]),
+            &gl::fragment_shader(&[FRAGMENT]),
         )?;
         let vao = objects.vertex_array()?;
         let vertices = objects.buffer()?;
@@ -182,7 +173,7 @@ impl FillLayer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
             gl.bind_vertex_array(None);
         }
-        let features = Features::new(gl, feature_count)?;
+        let features = Features::new(gl, feature_count, Layout::FILL)?;
         objects.keep();
         let mut layer = Self {
             features,
@@ -194,7 +185,10 @@ impl FillLayer {
             vertices,
             indices,
             all: 0,
-            shapes: Vec::new(),
+            polygons: OwnedPolygons::default(),
+            picks: Vec::new(),
+            square: shapes::SQUARE,
+            prism: false,
             grid: Grid::over(DVec2::ZERO, DVec2::ZERO, 1.0),
             top_start: vec![0, 0],
             rest_start: vec![0, 0],
@@ -208,14 +202,21 @@ impl FillLayer {
     /// Replaces the polygons; `feature`: the feature of each polygon
     pub fn set_geometry(&mut self, gl: &glow::Context, polygons: &Polygons, feature: &[u32]) {
         let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
-        let square = shapes::square_for(min, max);
-        let mut mesh: Mesh = shapes::triangulate_in(polygons, square);
+        self.square = shapes::square_for(min, max);
+        self.polygons = OwnedPolygons::new(polygons);
+        self.picks = picks_of(polygons, feature);
+        self.upload(gl);
+    }
+
+    /// Builds the mesh of the polygons (with the prism once the layer was drawn in relief) and uploads it
+    fn upload(&mut self, gl: &glow::Context) {
+        let square = self.square;
+        let mut mesh: Mesh = shapes::triangulate_with(&self.polygons.as_polygons(), square, self.prism);
         let chunks = shapes::chunk(&mut mesh, square);
         // Polygon numbers to features
         for v in &mut mesh.vertices {
-            v.polygon = feature.get(v.polygon as usize).copied().unwrap_or(u32::MAX);
+            v.feature = self.picks.get(v.feature as usize).map_or(u32::MAX, |p| p.feature);
         }
-        self.shapes = shapes_of(polygons, feature);
         self.grid = chunks.grid;
         self.top_start = chunks.top;
         self.rest_start = chunks.rest;
@@ -229,7 +230,7 @@ impl FillLayer {
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&mesh.indices), glow::STATIC_DRAW);
             gl.bind_vertex_array(None);
         }
-        self.all = mesh.indices.len() as i32;
+        self.all = mesh.top as i32;
     }
 
     fn set_uniforms(&self, frame: &Frame, volume: bool) {
@@ -270,6 +271,10 @@ impl Layer for FillLayer {
             return false;
         }
         let volume = frame.relief.is_some();
+        if volume && !self.prism {
+            self.prism = true;
+            self.upload(frame.gl);
+        }
         // The squares in view (the prisms of a volume reach through `prism_range`, and their faces past the far plane
         // still count: kept on it); the fills are drawn where they are, on no other copy of the world
         let heights = frame.relief.map_or((0.0, 0.0), |(_, e)| {
@@ -351,7 +356,13 @@ impl Layer for FillLayer {
             return None;
         }
         // The last polygon drawn is on top
-        self.shapes.iter().rev().find(|s| s.contains(m)).map(|s| s.feature)
+        let polygons = self.polygons.as_polygons();
+        let inside = |p: &Pick| m.x >= p.min.x && m.y >= p.min.y && m.x <= p.max.x && m.y <= p.max.y;
+        self.picks
+            .iter()
+            .rev()
+            .find(|p| inside(p) && contains(polygons.rings(p.rings.clone()), m))
+            .map(|p| p.feature)
     }
 
     fn delete(&mut self, gl: &glow::Context) {
@@ -419,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn shapes_hold_their_inside_holes_cut_out() {
+    fn polygons_hold_their_inside_holes_cut_out() {
         let square = |o: f64, s: f64| {
             vec![
                 DVec2::new(o, o),
@@ -428,42 +439,38 @@ mod tests {
                 DVec2::new(o, o + s),
             ]
         };
-        let shape = Shape {
-            feature: 7,
-            rings: vec![square(0.0, 1.0), square(0.25, 0.5)],
-            min: DVec2::ZERO,
-            max: DVec2::ONE,
-        };
-        assert!(shape.contains(DVec2::new(0.1, 0.1)));
-        assert!(!shape.contains(DVec2::new(0.5, 0.5)));
-        assert!(!shape.contains(DVec2::new(1.5, 0.5)));
+        let rings = [square(0.0, 1.0), square(0.25, 0.5)];
+        let inside = |p: DVec2| contains(rings.iter().map(Vec::as_slice), p);
+        assert!(inside(DVec2::new(0.1, 0.1)));
+        assert!(!inside(DVec2::new(0.5, 0.5)));
+        assert!(!inside(DVec2::new(1.5, 0.5)));
     }
 
     #[test]
     fn malformed_polygons_keep_only_the_rings_there_are() {
         let points = [DVec2::ZERO, DVec2::X, DVec2::ONE, DVec2::Y];
-        // Polygons 0 and 3 claim every ring there could be, polygon 1 starts past the rings, polygon 2 runs backwards
+        // Polygon 0 claims every ring there could be, polygon 1 starts past the rings, polygons 2 and 3 run backwards
+        // or start inside polygon 0: no ring is shared
         let polygons = Polygons {
             points: &points,
             ring_start: &[0, 4, u32::MAX],
             polygon_start: &[0, u32::MAX, 1, 0, u32::MAX],
         };
-        let shapes = shapes_of(&polygons, &[3]);
-        assert_eq!(shapes.len(), 4);
-        assert_eq!(shapes[0].rings.len(), 1, "the ring past the points is left out");
-        assert!(shapes[0].contains(DVec2::splat(0.5)) && shapes[3].contains(DVec2::splat(0.5)));
-        assert_eq!(shapes[1].feature, u32::MAX);
-        assert!(shapes[1].rings.is_empty() && shapes[2].rings.is_empty());
-        assert!(
-            shapes_of(
-                &Polygons {
-                    points: &[],
-                    ring_start: &[],
-                    polygon_start: &[]
-                },
-                &[]
-            )
-            .is_empty()
-        );
+        let picks = picks_of(&polygons, &[3]);
+        assert_eq!(picks.len(), 4);
+        assert_eq!(picks[0].rings, 0..2);
+        let rings: Vec<&[DVec2]> = polygons.rings(0..2).collect();
+        assert!(rings[1].is_empty(), "the ring past the points is empty");
+        assert!(contains(rings.into_iter(), DVec2::splat(0.5)));
+        assert_eq!((picks[0].feature, picks[1].feature), (3, u32::MAX));
+        for pick in &picks[1..] {
+            assert!(pick.rings.is_empty() && !pick.min.is_finite());
+        }
+        let empty = Polygons {
+            points: &[],
+            ring_start: &[],
+            polygon_start: &[],
+        };
+        assert!(picks_of(&empty, &[]).is_empty());
     }
 }

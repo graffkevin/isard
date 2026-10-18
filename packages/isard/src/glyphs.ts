@@ -1,8 +1,8 @@
 /**
  * Glyphs for the symbol layers: signed distance fields in MapLibre's glyph format (ranges of 256 code points per
  * protobuf file, 24 px glyphs with a 3 px buffer), loaded on first use (from OpenFreeMap's fonts by default, a vector
- * basemap's labels from the glyphs of its style), packed into an atlas the engine samples; and the shaping of a label: its lines (explicit and wrapped), their glyphs placed around
- * the anchor.
+ * basemap's labels from the glyphs of its style), packed into an atlas the engine samples; and the shaping of a label:
+ * its lines (explicit and wrapped), their glyphs placed around the anchor.
  *
  * The atlas has pages of one size: the first one grows up to the page size limit, then pages are added, so it never
  * runs out. A glyph's atlas row counts the rows of the pages before its own (`y + page × size`, the pages stacked):
@@ -148,6 +148,8 @@ export class Glyphs {
   /** Pages allocated in the engine (doubled when more are needed: fewer reallocations) */
   private capacity = 1;
   private shelves: Shelf[] = [];
+  /** Rows of each page holding glyphs (from its top): the rest is blank, never sent */
+  private readonly used: number[] = [0];
   private readonly fonts = new Map<string, Map<number, Glyph>>();
   private readonly ranges = new Map<string, Promise<void>>();
   /** Glyph URLs of fonts other than the map's (those of a vector basemap's style) */
@@ -159,6 +161,8 @@ export class Glyphs {
   private full = false;
   /** Largest side of a page */
   private readonly maxSize: number;
+  /** Bumped each time glyphs are added: labels shaped while some of theirs were missing are shaped again */
+  version = 0;
 
   /** `maxSize`: the GPU's texture size limit if known (the pages are at most 2048 × 2048) */
   constructor(
@@ -215,6 +219,7 @@ export class Glyphs {
             }
             glyphs.set(id, glyph);
           }
+          this.version += 1;
           // One upload for the range
           this.flush();
         })
@@ -227,13 +232,17 @@ export class Glyphs {
     return pending;
   }
 
-  /** Allocates the pages in the engine and sends them all */
+  /**
+   * Allocates the pages in the engine and sends what they hold (their rows with glyphs). The engine allocates its
+   * pages again empty: everything is sent each time, the pages doubled to make it rare
+   */
   private upload(): void {
     const engine = this.engine;
     if (!engine) return;
     engine.setGlyphPages(this.size, this.size, this.capacity);
     this.pages.forEach((page, i) => {
-      engine.updateGlyphPage(i, 0, 0, this.size, this.size, page);
+      const rows = this.used[i] ?? 0;
+      if (rows > 0) engine.updateGlyphPage(i, 0, 0, this.size, rows, page.subarray(0, rows * this.size));
     });
   }
 
@@ -285,6 +294,7 @@ export class Glyphs {
     for (let row = 0; row < h; row += 1) {
       data.set(bitmap.subarray(row * w, row * w + w), (shelf.y + row) * this.size + glyph.x);
     }
+    this.used[shelf.page] = Math.max(this.used[shelf.page] ?? 0, shelf.y + h);
     const dirty = this.dirty.get(shelf.page);
     this.dirty.set(shelf.page, [Math.min(dirty?.[0] ?? shelf.y, shelf.y), Math.max(dirty?.[1] ?? 0, shelf.y + h)]);
   }
@@ -307,6 +317,7 @@ export class Glyphs {
   /** A new empty page, after the others; the engine's pages are allocated again only past its capacity */
   private addPage(): void {
     this.pages.push(new Uint8Array(this.size * this.size));
+    this.used.push(0);
     if (this.pages.length > this.capacity) {
       this.capacity = Math.min(MAX_PAGES, this.capacity * 2);
       // The pages are allocated again: everything is sent, pending changes included

@@ -9,10 +9,12 @@
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
-use crate::render::drape::{self, Drape, DrapeUniforms};
-use crate::render::features::{self, FEATURES, FeatureUniforms, Features};
-use crate::render::gl::{self, Objects, Projection, bytes};
-use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
+use crate::render::drape::Drape;
+use crate::render::features::{self, FeatureUniforms, Features, Layout};
+use crate::render::gl::{self, DepthState, Objects, bytes, unit};
+use crate::render::overlay::{
+    self, LINE, LINE_DEPTH_BIAS, Overlay, PIECE_ATTRIBUTES, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS,
+};
 use geo::pieces::{self, Grid, Lines, Visible};
 use glam::DVec2;
 use glow::HasContext;
@@ -33,7 +35,7 @@ out float v_along;
 out float v_dash;
 
 void main() {
-  vec2 line = texelFetch(u_lines, feature_texel(a_line), 0).xy;
+  vec2 line = texelFetch(u_lines, table_texel(a_line), 0).xy;
   uint f = uint(line.x);
   float width = feature_size(f, 0u) * u_pixel_ratio + u_slop;
   v_color = feature_color(f, 0u);
@@ -81,19 +83,19 @@ void main() {
   if (alpha <= 0.0) discard;
   if (u_pick) {
     if (alpha < 0.5) discard;
-    color = vec4(float(v_id & 255u), float((v_id >> 8) & 255u), float((v_id >> 16) & 255u), u_layer) / 255.0;
+    color = pick_color(v_id, u_layer);
     return;
   }
   color = vec4(v_color.rgb, v_color.a * alpha);
 }";
 
-/// Uniforms of the pass, by name (besides `Anchor`'s)
+/// Uniforms of the pass, by name (besides `Overlay`'s)
 const UNIFORMS: [&str; 6] = ["u_segments", "u_lines", "u_dash", "u_layer", "u_pick", "u_slop"];
 
 /// Extra width in the picking pass, device pixels
 const PICK_SLOP: f32 = 8.0;
 /// Texture unit of the line table
-const LINES_UNIT: u32 = 1;
+const LINES_UNIT: u32 = unit::OWN[0];
 
 /// Geometry of a line layer: polylines in Mercator, each with its feature
 pub struct Polylines<'a> {
@@ -143,11 +145,8 @@ pub struct LineLayer {
     pub features: Features,
     /// Dash and gap lengths, in line widths; 0: solid
     pub dash: [f32; 2],
-    program: glow::Program,
+    overlay: Overlay,
     uniforms: [Option<glow::UniformLocation>; 6],
-    anchor: Anchor,
-    projection: Projection,
-    drape_uniforms: DrapeUniforms,
     feature_uniforms: FeatureUniforms,
     vao: glow::VertexArray,
     buffer: glow::Buffer,
@@ -166,14 +165,8 @@ impl LineLayer {
         overlay::pick_ids_fit(feature_count, "line layer");
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
-        let program = objects.program(
-            &format!(
-                "#version 300 es\n{}{}{ANCHOR}{LINE}{FEATURES}{VERTEX}",
-                gl::PROJECT,
-                drape::ALTITUDE
-            ),
-            &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
-        )?;
+        let overlay = Overlay::new(&mut objects, gl, &[LINE, &Layout::LINE.glsl(), VERTEX], &[FRAGMENT])?;
+        let program = overlay.program;
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
         let lines = objects.texture()?;
@@ -187,18 +180,15 @@ impl LineLayer {
             }
             gl.bind_vertex_array(None);
         }
-        let features = Features::new(gl, feature_count)?;
+        let features = Features::new(gl, feature_count, Layout::LINE)?;
         objects.keep();
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
         gl::sampler_units(gl, program, &[(uniforms[1].as_ref(), LINES_UNIT)]);
         let mut layer = Self {
             features,
             dash: [0.0, 0.0],
-            program,
+            overlay,
             uniforms,
-            anchor: Anchor::new(gl, program),
-            projection: Projection::new(gl, program),
-            drape_uniforms: DrapeUniforms::new(gl, program),
             feature_uniforms: FeatureUniforms::new(gl, program),
             vao,
             buffer,
@@ -250,40 +240,27 @@ impl LineLayer {
         let &Frame {
             gl,
             camera,
-            view,
             pixel_ratio,
             relief,
             ..
         } = frame;
         let [segments, _, dash, layer, pick_u, slop] = &self.uniforms;
         let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+        self.overlay.begin(frame, self.origin, LINE_DEPTH_BIAS, &self.drape);
         // SAFETY: draw with objects owned by this layer
         unsafe {
-            gl.use_program(Some(self.program));
-            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
-            self.anchor
-                .set_view(gl, view, viewport, relief.is_some(), LINE_DEPTH_BIAS);
-            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_i32(segments.as_ref(), parts);
             gl.uniform_2_f32(dash.as_ref(), self.dash[0], self.dash[1]);
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
             gl.uniform_1_f32(slop.as_ref(), if pick.is_some() { PICK_SLOP } else { 0.0 });
-            self.projection.set(gl, view);
-            self.drape.bind(gl, &self.drape_uniforms, relief);
             self.features.bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
             gl.active_texture(glow::TEXTURE0 + LINES_UNIT);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.lines));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
-            for &(first, end) in ranges {
-                let offset = first as i32 * STRIDE;
-                gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, STRIDE, offset);
-                gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, STRIDE, offset + 16);
-                gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, STRIDE, offset + 24);
-                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 2 * (parts + 1), (end - first) as i32);
-            }
+            gl::draw_instances(gl, &PIECE_ATTRIBUTES, STRIDE, 2 * (parts + 1), ranges);
             gl.bind_vertex_array(None);
         }
     }
@@ -316,14 +293,9 @@ impl Layer for LineLayer {
         // Translucent: each pixel blended once (the joins overlap)
         // A translucent color too (a feature's, or the ramp's): the joins would show as darker dots
         let translucent = self.features.translucent();
+        let depth = DepthState::over_ground(gl, frame.relief.is_some());
         // SAFETY: state changes on the live context, set back below
         unsafe {
-            gl.disable(glow::CULL_FACE);
-            if frame.relief.is_some() {
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LEQUAL);
-                gl.depth_mask(false);
-            }
             if translucent {
                 gl.clear_stencil(0);
                 gl.clear(glow::STENCIL_BUFFER_BIT);
@@ -334,13 +306,9 @@ impl Layer for LineLayer {
         }
         self.render(frame, ranges, None);
         self.visible = visible;
-        // SAFETY: state changes on the live context
-        unsafe {
-            gl.disable(glow::STENCIL_TEST);
-            gl.enable(glow::CULL_FACE);
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_mask(true);
-        }
+        // SAFETY: state change on the live context
+        unsafe { gl.disable(glow::STENCIL_TEST) };
+        drop(depth);
         false
     }
 
@@ -354,13 +322,15 @@ impl Layer for LineLayer {
         }
         let look = overlay::look(self.origin, frame.view, frame.relief, 0.0);
         let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, frame.view, look);
+        // Hidden by the hills as on screen (the picking pass drew the ground's depth)
+        let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
         self.render(frame, &ranges, Some(layer));
     }
 
     fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
-            gl.delete_program(self.program);
+            gl.delete_program(self.overlay.program);
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.buffer);
             gl.delete_texture(self.lines);

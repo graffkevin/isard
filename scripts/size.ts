@@ -18,13 +18,21 @@ const BUDGETS = {
   'isard_bg.wasm': 341,
   /** The package's modules (dist/*.js but the workers), all together */
   // 61 until the equirectangular grid (the Moon), about 2 KB; 64 until the OpenFreeMap basemaps, the Terrarium decoding
-  // of the worldwide relief, the credits by source, the glyphs of a style and the Géoplateforme helpers, about 5.5 KB
-  modules: 71,
+  // of the worldwide relief, the credits by source, the glyphs of a style and the Géoplateforme helpers, about 5.5 KB;
+  // 71 until the map split in modules (engine loading, settings, animations; Web Mercator and the LRU cache shared with
+  // the worker), each gzipped on its own here, about 2 KB (nothing in an application's bundle), the basemap's labels
+  // kept per tile, the relief and reprojection handed to the workers, about 3 KB (1.3 KB minified in a bundle); 79
+  // until the data in other CRSs and the vector formats, about 16.5 KB here: the CRSs (Lambert-93, CC zones, UTM) and
+  // the reprojection of rasters in any tile grid in place of the equirectangular one, about 8 KB (3.7 KB minified in a
+  // bundle, the GeoJSON of the feature layers reprojected included); the WMTS capabilities, the XML reader, KML, GPX
+  // and TopoJSON, about 8.5 KB, each a module of its own, in a bundle only when imported
+  modules: 97,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   bindings: 38,
   'decoder.worker.js': 13,
-  // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes
-  'basemap.worker.js': 9.2,
+  // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes; 9.2 until
+  // the PNG relief decoded and the equirectangular rasters reprojected in the workers, about 1.3 KB
+  'basemap.worker.js': 11,
 } as const;
 
 const root = join(import.meta.dir, '..');

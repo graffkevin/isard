@@ -2,6 +2,7 @@
  * Mouse, touch and keyboard controls. Every gesture only updates the camera and asks for a frame: the engine draws at most
  * once per display refresh, whatever the event rate of the device.
  */
+import { latitude, mercatorX, mercatorY } from './geo.ts';
 import type { GeoMap } from './map.ts';
 import type { Point } from './types.ts';
 import type { Camera } from './wasm/isard.js';
@@ -68,11 +69,10 @@ export function keyCamera(action: KeyAction, camera: Camera): Partial<Camera> {
   const dx = (sx * Math.cos(b) - sy * Math.sin(b)) / world;
   const dy = (sx * Math.sin(b) + sy * Math.cos(b)) / world;
   const [lon, lat] = camera.center;
-  const phi = (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180;
-  const x = (lon + 180) / 360 + dx;
-  const y = Math.max(0, Math.min(1, (1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2 + dy));
+  const x = mercatorX(lon) + dx;
+  const y = Math.max(0, Math.min(1, mercatorY(lat) + dy));
   const wrapped = ((((x * 360) % 360) + 360) % 360) - 180;
-  return { center: [wrapped, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI] };
+  return { center: [wrapped, latitude(y)] };
 }
 
 /** An element that takes the keys typed in it */

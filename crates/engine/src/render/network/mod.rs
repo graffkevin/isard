@@ -17,12 +17,12 @@ mod shaders;
 use crate::engine::Engine;
 use crate::js;
 use crate::layer::{Frame, Layer};
-use crate::render::drape::{self, Drape, DrapeUniforms};
+use crate::render::drape::Drape;
 use crate::render::features::{stops, stops_of};
-use crate::render::gl::{self, Objects, Projection, bytes as as_bytes};
-use crate::render::overlay::{self, ANCHOR, Anchor, LINE, LINE_DEPTH_BIAS, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS};
-use crate::render::raster::RasterSource;
-use geo::camera::{Camera, View};
+use crate::render::gl::{self, DepthState, Objects, RAMP_TEXELS, bytes as as_bytes, unit};
+use crate::render::overlay::{
+    self, LINE, LINE_DEPTH_BIAS, Overlay, PIECE_ATTRIBUTES, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS,
+};
 use geo::pieces::{self, Grid, Lines, Visible};
 use glam::DVec2;
 use glow::HasContext;
@@ -37,7 +37,7 @@ const CLOSED: f32 = 1e30;
 /// Extra width of the lines in the picking pass, CSS pixels: thin lines stay easy to hover
 const PICK_SLOP: f64 = 6.0;
 
-/// Uniforms of a pass, by name (besides `Anchor`'s)
+/// Uniforms of a pass, by name (besides `Overlay`'s)
 const UNIFORMS: [&str; 15] = [
     "u_width",
     "u_values",
@@ -60,23 +60,14 @@ const LAYER_UNIFORM: usize = 5;
 
 /// A program with its uniforms
 struct Pass {
-    program: glow::Program,
+    overlay: Overlay,
     uniforms: [Option<glow::UniformLocation>; 15],
-    anchor: Anchor,
-    projection: Projection,
-    drape: DrapeUniforms,
 }
 
 impl Pass {
     fn new(objects: &mut Objects, gl: &glow::Context, defines: &str, fragment: &str) -> Result<Self, String> {
-        let program = objects.program(
-            &format!(
-                "#version 300 es\n{defines}{}{}{ANCHOR}{LINE}{VERTEX}",
-                gl::PROJECT,
-                drape::ALTITUDE
-            ),
-            &format!("#version 300 es\nprecision highp float;\n{defines}{VALUE}{fragment}"),
-        )?;
+        let overlay = Overlay::new(objects, gl, &[defines, LINE, VERTEX], &[defines, VALUE, fragment])?;
+        let program = overlay.program;
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
         gl::sampler_units(
             gl,
@@ -89,13 +80,7 @@ impl Pass {
                 (uniforms[12].as_ref(), RAMP_UNIT),
             ],
         );
-        Ok(Self {
-            program,
-            uniforms,
-            anchor: Anchor::new(gl, program),
-            projection: Projection::new(gl, program),
-            drape: DrapeUniforms::new(gl, program),
-        })
+        Ok(Self { overlay, uniforms })
     }
 }
 
@@ -137,12 +122,12 @@ impl NetworkStyle {
 /// Floats of a style for `setNetworkStyle`
 const FLOATS: usize = 25;
 
-/// Texture units of the layer's own textures (the drape takes 6 and 7)
-const VALUES_UNIT: u32 = 1;
-const EDGES_UNIT: u32 = 2;
-const COSTS_UNIT: u32 = 3;
-const SCALES_UNIT: u32 = 4;
-const RAMP_UNIT: u32 = 5;
+/// Texture units of the layer's own textures
+const VALUES_UNIT: u32 = unit::OWN[0];
+const EDGES_UNIT: u32 = unit::OWN[1];
+const COSTS_UNIT: u32 = unit::OWN[2];
+const SCALES_UNIT: u32 = unit::OWN[3];
+const RAMP_UNIT: u32 = unit::OWN[4];
 
 /// The ramp used without one given: green to red, five stops
 const DEFAULT_RAMP: [[f32; 3]; 5] = [
@@ -163,7 +148,7 @@ pub struct NetworkLayer {
     values: glow::Texture,
     edges: glow::Texture,
     costs: glow::Texture,
-    /// Width factor of each edge (R32F), colors of the values (256 RGBA)
+    /// Width factor of each edge (R32F), colors of the values (`RAMP_TEXELS` RGBA)
     scales: glow::Texture,
     ramp: glow::Texture,
     with_costs: bool,
@@ -221,7 +206,7 @@ impl NetworkLayer {
         // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, 256, 1);
+            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP_TEXELS as i32, 1);
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
@@ -307,10 +292,10 @@ impl NetworkLayer {
         gl::upload_table(gl, as_bytes(&all), self.edge_count, glow::RED, glow::FLOAT, 4);
     }
 
-    /// Colors of the values from 0 to the maximum: 256 RGBA texels; None: the default ramp, green to red
+    /// Colors of the values from 0 to the maximum: `RAMP_TEXELS` RGBA texels; None: the default ramp, green to red
     pub fn set_ramp(&mut self, gl: &glow::Context, rgba: Option<&[u8]>) {
         let default = default_ramp();
-        let data = rgba.filter(|r| r.len() >= 1024).unwrap_or(&default);
+        let data = rgba.filter(|r| r.len() >= RAMP_TEXELS * 4).unwrap_or(&default);
         // SAFETY: upload of the whole ramp texture
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.ramp));
@@ -319,11 +304,11 @@ impl NetworkLayer {
                 0,
                 0,
                 0,
-                256,
+                RAMP_TEXELS as i32,
                 1,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(&data[..1024])),
+                glow::PixelUnpackData::Slice(Some(&data[..RAMP_TEXELS * 4])),
             );
         }
     }
@@ -339,15 +324,8 @@ impl NetworkLayer {
     }
 
     /// Sets up a pass for this layer: its program, the view, the style but the width, the textures, the pieces
-    fn bind(
-        &self,
-        gl: &glow::Context,
-        pass: &Pass,
-        camera: &Camera,
-        view: &View,
-        pixel_ratio: f64,
-        relief: Option<(&RasterSource, f32)>,
-    ) {
+    fn bind(&self, frame: &Frame, pass: &Pass) {
+        let gl = frame.gl;
         let [
             _,
             _,
@@ -366,16 +344,10 @@ impl NetworkLayer {
             fade,
         ] = &pass.uniforms;
         let style = &self.style;
+        pass.overlay.begin(frame, self.origin, LINE_DEPTH_BIAS, &self.drape);
         // SAFETY: state setup with objects owned by this layer (the sampler units set once, by `Pass::new`)
         unsafe {
-            gl.use_program(Some(pass.program));
-            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
-            pass.anchor
-                .set_view(gl, view, viewport, relief.is_some(), LINE_DEPTH_BIAS);
-            pass.anchor.set_origin(gl, view, self.origin);
-            pass.projection.set(gl, view);
-            self.drape.bind(gl, &pass.drape, relief);
-            let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+            let parts = if frame.relief.is_some() { RELIEF_SEGMENTS } else { 1 };
             gl.uniform_1_i32(segments.as_ref(), parts);
             gl.uniform_1_f32(max.as_ref(), style.max);
             gl.uniform_1_f32(contour.as_ref(), style.contour);
@@ -400,33 +372,19 @@ impl NetworkLayer {
 
     /// Draws the pieces of `ranges` at a width, the pass set up by `bind` (the halo then the lines share it: only
     /// their width and opacity change)
-    fn draw_ranges(
-        &self,
-        gl: &glow::Context,
-        pass: &Pass,
-        pixel_ratio: f64,
-        width: Width,
-        relief: Option<(&RasterSource, f32)>,
-        ranges: &[(u32, u32)],
-    ) {
+    fn draw_ranges(&self, frame: &Frame, pass: &Pass, width: Width, ranges: &[(u32, u32)]) {
         let [width_u, _, _, _, opacity, _, _, _, _, _, halo, ..] = &pass.uniforms;
+        let (gl, pixel_ratio) = (frame.gl, frame.pixel_ratio);
         let style = &self.style;
-        let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+        let parts = if frame.relief.is_some() { RELIEF_SEGMENTS } else { 1 };
         // SAFETY: draws with the objects bound by `bind`
         unsafe {
             gl.uniform_1_f32(width_u.as_ref(), (width.pixels * pixel_ratio) as f32);
             let alpha = if width.halo { style.halo_opacity } else { style.opacity };
             gl.uniform_1_f32(opacity.as_ref(), alpha);
             gl.uniform_1_f32(halo.as_ref(), if width.halo { 1.0 } else { 0.0 });
-            // No base instance in WebGL2: the instanced attributes are pointed at the first piece of each range
-            for &(first, end) in ranges {
-                let offset = first as i32 * STRIDE;
-                gl.vertex_attrib_pointer_f32(0, 4, glow::FLOAT, false, STRIDE, offset);
-                gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, STRIDE, offset + 16);
-                gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, STRIDE, offset + 24);
-                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 2 * (parts + 1), (end - first) as i32);
-            }
         }
+        gl::draw_instances(gl, &PIECE_ATTRIBUTES, STRIDE, 2 * (parts + 1), ranges);
     }
 }
 
@@ -438,7 +396,6 @@ impl Layer for NetworkLayer {
             gl,
             camera,
             view,
-            pixel_ratio,
             relief,
             ..
         } = frame;
@@ -456,41 +413,28 @@ impl Layer for NetworkLayer {
         let ranges = visible.update(&self.grid, &self.start, view, look);
         self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
         // Line quads are built on screen, either way round
-        // SAFETY: state changes on the live context, set back below
-        unsafe {
-            gl.disable(glow::CULL_FACE);
-            if relief.is_some() {
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LEQUAL);
-                gl.depth_mask(false);
-            }
-        }
+        let depth = DepthState::over_ground(gl, relief.is_some());
         let style = self.style;
         if !ranges.is_empty() {
-            self.bind(gl, &self.shaded, camera, view, pixel_ratio, relief);
+            self.bind(frame, &self.shaded);
             let halo_width = stops(&style.halo, camera.zoom);
             if halo_width > 0.0 && style.halo_opacity > 0.0 {
                 let halo = Width {
                     pixels: halo_width,
                     halo: true,
                 };
-                self.draw_ranges(gl, &self.shaded, pixel_ratio, halo, relief, ranges);
+                self.draw_ranges(frame, &self.shaded, halo, ranges);
             }
             let lines = Width {
                 pixels: stops(&style.width, camera.zoom),
                 halo: false,
             };
-            self.draw_ranges(gl, &self.shaded, pixel_ratio, lines, relief, ranges);
+            self.draw_ranges(frame, &self.shaded, lines, ranges);
             // SAFETY: unbinding on the live context
             unsafe { gl.bind_vertex_array(None) };
         }
         self.visible = visible;
-        // SAFETY: state changes on the live context
-        unsafe {
-            gl.enable(glow::CULL_FACE);
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_mask(true);
-        }
+        drop(depth);
         false
     }
 
@@ -504,13 +448,12 @@ impl Layer for NetworkLayer {
             gl,
             camera,
             view,
-            pixel_ratio,
             relief,
             ..
         } = frame;
         // SAFETY: uniform on the picking program
         unsafe {
-            gl.use_program(Some(self.pick.program));
+            gl.use_program(Some(self.pick.overlay.program));
             gl.uniform_1_f32(self.pick.uniforms[LAYER_UNIFORM].as_ref(), f32::from(layer));
         }
         let look = overlay::look(self.origin, view, relief, 0.0);
@@ -522,8 +465,10 @@ impl Layer for NetworkLayer {
             pixels: stops(&self.style.width, camera.zoom) + PICK_SLOP,
             halo: false,
         };
-        self.bind(gl, &self.pick, camera, view, pixel_ratio, relief);
-        self.draw_ranges(gl, &self.pick, pixel_ratio, width, relief, &ranges);
+        // Hidden by the hills as on screen (the picking pass drew the ground's depth)
+        let _depth = DepthState::over_ground(gl, relief.is_some());
+        self.bind(frame, &self.pick);
+        self.draw_ranges(frame, &self.pick, width, &ranges);
         // SAFETY: unbinding on the live context
         unsafe { gl.bind_vertex_array(None) };
     }
@@ -531,8 +476,8 @@ impl Layer for NetworkLayer {
     fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
-            gl.delete_program(self.shaded.program);
-            gl.delete_program(self.pick.program);
+            gl.delete_program(self.shaded.overlay.program);
+            gl.delete_program(self.pick.overlay.program);
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.pieces);
             gl.delete_texture(self.values);
@@ -563,20 +508,20 @@ fn check_edges(edges: &[u32], nodes: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// The ramp used without one given: `DEFAULT_RAMP` over 256 RGBA texels
+/// The ramp used without one given: `DEFAULT_RAMP` over `RAMP_TEXELS` RGBA texels
 fn default_ramp() -> Vec<u8> {
-    (0..256)
-        .flat_map(|i| {
-            let t = i as f32 / 255.0 * 4.0;
-            let k = (t.floor() as usize).min(3);
-            let f = t - k as f32;
-            let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
-            [0, 1, 2]
-                .map(|c| ((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8)
-                .into_iter()
-                .chain([255])
-        })
-        .collect()
+    let mut rgba = Vec::with_capacity(RAMP_TEXELS * 4);
+    for i in 0..RAMP_TEXELS {
+        let t = i as f32 / (RAMP_TEXELS - 1) as f32 * 4.0;
+        let k = (t.floor() as usize).min(3);
+        let f = t - k as f32;
+        let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
+        for c in 0..3 {
+            rgba.push(((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8);
+        }
+        rgba.push(255);
+    }
+    rgba
 }
 
 #[wasm_bindgen(typescript_custom_section)]

@@ -74,8 +74,46 @@ pub struct Selection {
     pub visible: Vec<usize>,
 }
 
+impl Selection {
+    fn clear(&mut self) {
+        self.draw.clear();
+        self.backfill.clear();
+        self.request.clear();
+        self.prefetch.clear();
+        self.visible.clear();
+    }
+}
+
+/// The working buffers of the traversal, kept from frame to frame with the selection (`select_into`)
+#[derive(Default)]
+pub struct Scratch {
+    requests: Vec<(usize, f64, f64)>,
+    measures: IndexMap<Option<(f64, f64)>>,
+    seen: IndexSet,
+}
+
 /// Selects the tiles to draw and to load for a view. `max_error`: screen-space error threshold (CSS pixels).
 pub fn select(tree: &Tree, root: usize, view: &View, max_error: f64, ready: &dyn Fn(usize) -> Readiness) -> Selection {
+    let mut out = Selection::default();
+    select_into(tree, root, view, max_error, ready, &mut out, &mut Scratch::default());
+    out
+}
+
+/// `select` into a selection and buffers kept from the last frame (cleared first): no allocation once they have
+/// grown to the tileset's needs
+pub fn select_into(
+    tree: &Tree,
+    root: usize,
+    view: &View,
+    max_error: f64,
+    ready: &dyn Fn(usize) -> Readiness,
+    out: &mut Selection,
+    scratch: &mut Scratch,
+) {
+    out.clear();
+    scratch.requests.clear();
+    scratch.measures.clear();
+    scratch.seen.clear();
     let planes = frustum(view);
     let mut traversal = Traversal {
         tree,
@@ -83,20 +121,21 @@ pub fn select(tree: &Tree, root: usize, view: &View, max_error: f64, ready: &dyn
         planes,
         max_error,
         ready,
-        out: Selection::default(),
-        requests: Vec::new(),
-        measures: RefCell::default(),
+        out: std::mem::take(out),
+        requests: std::mem::take(&mut scratch.requests),
+        measures: RefCell::new(std::mem::take(&mut scratch.measures)),
     };
     traversal.visit(root);
     let mut requests = traversal.requests;
     // Largest screen-space error first (as Cesium does): coarse tiles and nearby tiles, the most visible gaps
     requests.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.total_cmp(&b.2)));
-    let mut seen = IndexSet::default();
+    let seen = &mut scratch.seen;
     requests.retain(|r| seen.insert(r.0));
-    let mut out = traversal.out;
-    out.request = requests.into_iter().map(|r| r.0).collect();
+    *out = traversal.out;
+    out.request.extend(requests.iter().map(|r| r.0));
     out.backfill.sort_by_key(|&i| std::cmp::Reverse(tree.nodes[i].depth));
-    out
+    scratch.requests = requests;
+    scratch.measures = traversal.measures.into_inner();
 }
 
 struct Traversal<'a> {
@@ -258,6 +297,34 @@ mod tests {
     use super::*;
     use geo::camera::Camera;
     use geo::geodesy;
+
+    #[test]
+    fn selections_kept_from_frame_to_frame_are_the_same() {
+        let (tree, root) = tree();
+        let (mut out, mut scratch) = (Selection::default(), Scratch::default());
+        let ready = |i: usize| {
+            if i.is_multiple_of(2) {
+                Readiness::Pending
+            } else {
+                Readiness::Ready
+            }
+        };
+        for zoom in [9.0, 16.0, 14.0, 16.0] {
+            let fresh = select(&tree, root, &view(zoom), 16.0, &ready);
+            select_into(&tree, root, &view(zoom), 16.0, &ready, &mut out, &mut scratch);
+            assert_eq!(
+                (&out.draw, &out.backfill, &out.request, &out.prefetch, &out.visible),
+                (
+                    &fresh.draw,
+                    &fresh.backfill,
+                    &fresh.request,
+                    &fresh.prefetch,
+                    &fresh.visible
+                ),
+                "{zoom}"
+            );
+        }
+    }
 
     #[test]
     fn far_view_draws_the_root_only() {

@@ -15,5 +15,6 @@ Mars's come from NASA, no key needed.
 | [Relief and a ground shader](./relief) | your GLSL over the mountains |
 | [3D Tiles](./tiles3d) | the Lille photomesh |
 | [Vector basemaps](./vector) | OpenFreeMap's styles, a restyled subset |
+| [Lambert-93 data](./lambert93) | PLAN IGN reprojected from Lambert-93, a WFS in EPSG:2154, a GPX file |
 | [The Moon](./moon) | another body: the LRO mosaic reprojected over LOLA's relief, the Apollo sites, its craters in 3D |
 | [Mars](./mars) | a body with an atmosphere: its dusty halo, the Viking mosaic over MOLA's relief, Olympus Mons in 3D |

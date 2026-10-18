@@ -1,7 +1,6 @@
 //! The glTF of a tile: its scene's node hierarchy walked down to world positions, its triangle primitives with
 //! their texture coordinates and image, its buffer views (sliced from the binary chunk or decompressed by meshopt).
 
-use super::accessor::index_reader;
 use super::container::{parse_glb, slice};
 use super::{DracoGeometry, Mesh, Primitive};
 use crate::meshopt;
@@ -116,11 +115,20 @@ pub(super) fn decode_glb(
             primitive
         })
         .collect();
-    Ok(Mesh { anchor, primitives })
+    Ok(Mesh {
+        anchor,
+        primitives,
+        images: gltf
+            .images
+            .into_inner()
+            .into_iter()
+            .map(|(_, bytes, mime)| (bytes, mime))
+            .collect(),
+    })
 }
 
-/// Positions and uv as stored (before the node transforms), triangle indices
-type Geometry = (Vec<f32>, Vec<f32>, Vec<u32>);
+/// Positions and uv as stored (before the node transforms), triangle indices: shared by the nodes using a mesh
+type Geometry = (Rc<[f32]>, Rc<[f32]>, Rc<[u32]>);
 
 /// glTF extensions this decoder handles (a tile requiring another one is refused)
 const SUPPORTED: [&str; 6] = [
@@ -137,10 +145,14 @@ const MAX_DEPTH: u32 = 32;
 /// Node visits allowed per node of the file: a hierarchy is a tree (each node once), some slack for files sharing
 /// nodes, none for a graph whose shared children would multiply the visits
 const VISITS_PER_NODE: usize = 4;
-/// Values (f32 components, indices) a tile may decode in all: accessors are read again for each primitive and node
-/// that uses them, and one without buffer view costs no byte of the file, so a tiny file could otherwise ask for
-/// gigabytes. 16 M values: 64 MB, far above a real tile
+/// Values a tile may hand over in all, counted for each primitive of each node (5 per vertex: its position and uv,
+/// and its indices): an accessor is decoded once however many use it, but each use is a primitive to upload, and one
+/// without buffer view costs no byte of the file, so a tiny file could otherwise ask for gigabytes. An accessor is
+/// decoded only if it fits in what is left. 16 M values: 64 MB, far above a real tile
 const MAX_VALUES: usize = 1 << 24;
+
+/// An image of the glTF used by a primitive: its index in the glTF, its bytes, its media type
+type Image = (usize, Rc<[u8]>, String);
 
 pub(super) struct Gltf<'a> {
     pub(super) json: &'a Value,
@@ -149,6 +161,13 @@ pub(super) struct Gltf<'a> {
     draco: &'a [DracoGeometry],
     /// Buffer views decompressed so far (`EXT_meshopt_compression`)
     views: RefCell<HashMap<usize, Rc<[u8]>>>,
+    /// Accessors read so far, by index (`floats`, `indices`)
+    pub(super) floats: RefCell<HashMap<usize, Rc<[f32]>>>,
+    pub(super) indices: RefCell<HashMap<usize, Rc<[u32]>>>,
+    /// Indices 0 to n - 1 of the primitives without indices, by n
+    sequences: RefCell<HashMap<usize, Rc<[u32]>>>,
+    /// Images used so far, in that order: their index in the glTF, bytes and media type
+    images: RefCell<Vec<Image>>,
     /// Node visits left
     visits: Cell<usize>,
     /// Values left to decode (`MAX_VALUES`)
@@ -163,16 +182,28 @@ impl<'a> Gltf<'a> {
             bin,
             draco,
             views: RefCell::default(),
+            floats: RefCell::default(),
+            indices: RefCell::default(),
+            sequences: RefCell::default(),
+            images: RefCell::default(),
             visits: Cell::new(nodes.saturating_mul(VISITS_PER_NODE)),
             values: Cell::new(MAX_VALUES),
         }
     }
 
-    /// Takes `count` values from the tile's budget, before they are allocated: an error past `MAX_VALUES`
+    /// Takes `count` values from the tile's budget, before they are handed over: an error past `MAX_VALUES`
     pub(super) fn spend(&self, count: usize) -> Result<(), String> {
-        let left = self.values.get().checked_sub(count).ok_or("glTF tile too large")?;
+        let left = self.within(count)?;
         self.values.set(left);
         Ok(())
+    }
+
+    /// The budget left after `count` values, an error if they do not fit (nothing spent)
+    pub(super) fn within(&self, count: usize) -> Result<usize, String> {
+        self.values
+            .get()
+            .checked_sub(count)
+            .ok_or_else(|| "glTF tile too large".into())
     }
 
     fn node(
@@ -232,12 +263,12 @@ impl<'a> Gltf<'a> {
                 .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
             let count = g.positions.len() / 3;
             self.spend(count.saturating_mul(5).saturating_add(g.indices.len()))?;
-            let uvs = if g.uvs.is_empty() {
-                vec![0.0; count * 2]
+            let uvs: Rc<[f32]> = if g.uvs.is_empty() {
+                vec![0.0; count * 2].into()
             } else {
-                g.uvs.clone()
+                g.uvs.as_slice().into()
             };
-            return Ok(Some((g.positions.clone(), uvs, g.indices.clone())));
+            return Ok(Some((g.positions.as_slice().into(), uvs, g.indices.as_slice().into())));
         }
         let Some(position) = self::index(&primitive["attributes"]["POSITION"]) else {
             return Ok(None);
@@ -245,17 +276,27 @@ impl<'a> Gltf<'a> {
         let positions = self.floats(position)?;
         let count = positions.len() / 3;
         let uv = &primitive["attributes"][format!("TEXCOORD_{}", uv_set(self.json, primitive))];
-        let uvs = if let Some(uv) = self::index(uv) {
-            self.floats(uv)?
-        } else {
-            self.spend(count.saturating_mul(2))?;
-            vec![0.0; count * 2]
+        let uv = self::index(uv);
+        let indices = self::index(&primitive["indices"]);
+        // This use of the mesh: its vertices and indices, counted before any is made
+        let index_count = match indices {
+            Some(i) => self.indices(i)?.len(),
+            None => count,
         };
-        let indices: Vec<u32> = if let Some(i) = self::index(&primitive["indices"]) {
-            self.accessor(i, |l| index_reader(l.component_type))?
+        self.spend(count.saturating_mul(5).saturating_add(index_count))?;
+        let uvs = match uv {
+            Some(uv) => self.floats(uv)?,
+            None => vec![0.0; count * 2].into(),
+        };
+        let indices = if let Some(i) = indices {
+            self.indices(i)?
         } else {
-            self.spend(count)?;
-            (0..u32::try_from(count).map_err(|_| "too many vertices")?).collect()
+            let n = u32::try_from(count).map_err(|_| "too many vertices")?;
+            self.sequences
+                .borrow_mut()
+                .entry(count)
+                .or_insert_with(|| (0..n).collect())
+                .clone()
         };
         Ok(Some((positions, uvs, indices)))
     }
@@ -270,7 +311,7 @@ impl<'a> Gltf<'a> {
         if primitive["mode"].as_u64().unwrap_or(4) != 4 {
             return Ok(None);
         }
-        let Some((positions, mut uvs, indices)) = self.geometry(key, primitive)? else {
+        let Some((positions, uvs, indices)) = self.geometry(key, primitive)? else {
             return Ok(None);
         };
         let count = positions.len() / 3;
@@ -288,7 +329,8 @@ impl<'a> Gltf<'a> {
         let texture = index(&base_color["index"]);
         // KHR_texture_transform (gltfpack uses it for quantized uv): uv' = offset + rotation · (scale · uv)
         let transform = &base_color["extensions"]["KHR_texture_transform"];
-        if transform.is_object() {
+        let uvs = if transform.is_object() {
+            let mut uvs = uvs.to_vec();
             let pair = |key: &str, default: f64| {
                 let v = &transform[key];
                 DVec2::new(v[0].as_f64().unwrap_or(default), v[1].as_f64().unwrap_or(default))
@@ -302,7 +344,10 @@ impl<'a> Gltf<'a> {
                     (-sin * u + cos * v + offset.y) as f32,
                 ];
             }
-        }
+            uvs.into()
+        } else {
+            uvs
+        };
         // KHR_texture_basisu: the KTX2 image first (transcoded by the workers), else the plain one
         let image = texture.and_then(|t| {
             let texture = &self.json["textures"][t];
@@ -358,11 +403,18 @@ impl<'a> Gltf<'a> {
         Ok(bytes)
     }
 
-    fn image(&self, index: usize) -> Option<(Vec<u8>, String)> {
+    /// An image of the glTF as its place in `Mesh::images`: added on its first use, its bytes shared with its buffer
+    /// view
+    fn image(&self, index: usize) -> Option<usize> {
+        if let Some(k) = self.images.borrow().iter().position(|(i, _, _)| *i == index) {
+            return Some(k);
+        }
         let image = &self.json["images"][index];
         let bytes = self.view(self::index(&image["bufferView"])?).ok()?;
         let mime = image["mimeType"].as_str().unwrap_or("image/jpeg").to_owned();
-        Some((bytes.to_vec(), mime))
+        let mut images = self.images.borrow_mut();
+        images.push((index, bytes, mime));
+        Some(images.len() - 1)
     }
 }
 
@@ -393,8 +445,8 @@ mod tests {
         });
         let mesh = triangle(&json, &bin).unwrap();
         let p = &mesh.primitives[0];
-        assert_eq!(p.uvs, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
-        assert_eq!(p.indices, [0, 1, 2]);
+        assert_eq!(*p.uvs, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+        assert_eq!(*p.indices, [0, 1, 2]);
         assert!((vertex(&mesh, 1) - DVec3::X).length() < 1e-6);
         // A stride smaller than an element is refused
         let mut bad = json;
@@ -425,7 +477,7 @@ mod tests {
             "nodes": [{"mesh": 0}]
         });
         assert_eq!(
-            triangle(&json, &bin).unwrap().primitives[0].uvs,
+            *triangle(&json, &bin).unwrap().primitives[0].uvs,
             [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
         );
     }
@@ -494,6 +546,47 @@ mod tests {
             no_view["accessors"][0].as_object_mut().unwrap().remove("bufferView");
             assert!(triangle(&no_view, &bin).is_err() || count == 4, "{count}");
         }
+    }
+
+    #[test]
+    fn instances_share_their_accessors_and_images() {
+        // One textured mesh used by three nodes, moved apart; the image bytes after the positions and uv
+        let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        bin.extend(f32s(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+        bin.extend([0xFF, 0xD8, 0xFF, 0xE0]);
+        let json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 64}],
+            "bufferViews": [
+                {"buffer": 0, "byteLength": 36},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 24},
+                {"buffer": 0, "byteOffset": 60, "byteLength": 4}
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"}
+            ],
+            "images": [{"bufferView": 2, "mimeType": "image/jpeg"}],
+            "textures": [{"source": 0}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "material": 0}]}],
+            "nodes": [
+                {"mesh": 0},
+                {"mesh": 0, "translation": [5.0, 0.0, 0.0]},
+                {"mesh": 0, "translation": [10.0, 0.0, 0.0]}
+            ]
+        });
+        let mesh = triangle(&json, &bin).unwrap();
+        let [a, b, c] = &mesh.primitives[..] else {
+            panic!("three primitives expected");
+        };
+        assert!(Rc::ptr_eq(&a.uvs, &b.uvs) && Rc::ptr_eq(&a.uvs, &c.uvs));
+        assert!(Rc::ptr_eq(&a.indices, &c.indices));
+        assert_ne!(a.positions, c.positions);
+        // The image once, its bytes those of its buffer view
+        assert_eq!(mesh.images.len(), 1);
+        assert_eq!((a.image, b.image, c.image), (Some(0), Some(0), Some(0)));
+        assert_eq!(mesh.image(b).unwrap(), (&[0xFF, 0xD8, 0xFF, 0xE0][..], "image/jpeg"));
     }
 
     #[test]

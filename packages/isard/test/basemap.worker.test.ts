@@ -91,6 +91,13 @@ const restore = setGlobals({
     return { width: 256, height: 256, close() {} };
   },
   postMessage: (message: BasemapResponse) => posted.push(message),
+  ImageData: class {
+    constructor(
+      readonly data: Uint8ClampedArray,
+      readonly width: number,
+      readonly height: number,
+    ) {}
+  },
 });
 afterAll(restore);
 
@@ -242,5 +249,59 @@ describe('cache', () => {
     expect(worker.cacheShare(1)).toBe(96);
     expect(worker.cacheShare(4)).toBe(24);
     expect(worker.cacheShare(16)).toBe(16);
+  });
+});
+
+describe("the map's other layers", () => {
+  test('a relief tile decoded into altitudes, moved out; a missing one answered as such', async () => {
+    tiles.set('https://dem/3/4/5.png', Uint8Array.of(1));
+    const answer = await ask({ type: 'heights', url: 'https://dem/3/4/5.png', encoding: 'terrarium', floor: 0 });
+    // The colors as stored
+    expect(bitmaps[0]?.options).toEqual({ premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    // One transparent black pixel of the fake canvas: -32768 m, raised to the floor
+    expect('heights' in answer && [...answer.heights]).toEqual([0]);
+    tiles.set('https://dem/3/4/6.png', 404);
+    expect(await ask({ type: 'heights', url: 'https://dem/3/4/6.png', encoding: 'mapbox' })).toMatchObject({
+      missing: true,
+    });
+  });
+
+  test('a tile reprojected from the images of its plan, kept for the next tiles; straight alpha', async () => {
+    tiles.set('https://eq/0/0/0.jpg', Uint8Array.of(1));
+    tiles.set('https://eq/0/1/0.jpg', Uint8Array.of(1));
+    // The world in two source tiles side by side, onto a tile of 4 pixels
+    const sources = [
+      { url: 'https://eq/0/0/0.jpg', x: 0, y: 0, w: 256, h: 256 },
+      { url: 'https://eq/0/1/0.jpg', x: 256, y: 0, w: 256, h: 256 },
+    ];
+    const job = {
+      size: 4,
+      width: 512,
+      height: 256,
+      sources,
+      n: 1,
+      mesh: Float32Array.of(0, 0, 512, 0, 0, 256, 512, 256),
+    };
+    const answer = await ask({ type: 'reproject', job, cached: 16 });
+    expect(answer).toMatchObject({ image: { width: 256 } });
+    // Both drawn into the mosaic, read back, the tile made of its pixels as they are
+    const canvas = FakeCanvas.all.at(-1);
+    expect(canvas?.ops.filter(([name]) => name === 'drawImage').map(([, [, ...rect]]) => rect)).toEqual([
+      [0, 0, 256, 256],
+      [256, 0, 256, 256],
+    ]);
+    expect(bitmaps.at(-1)?.options).toEqual({ premultiplyAlpha: 'none' });
+    const fetched = bitmaps.length;
+    await ask({ type: 'reproject', job, cached: 16 });
+    expect(bitmaps.length).toBe(fetched + 1);
+    // Nothing at all there: no image
+    const none = { ...job, sources: [{ ...sources[0], url: 'https://none/0/0/0.jpg' }] };
+    expect(await ask({ type: 'reproject', job: none as typeof job, cached: 16 })).toMatchObject({ missing: true });
+  });
+
+  test('an error is answered as one (the engine retries)', async () => {
+    tiles.set('https://dem/2/1/1.png', 500);
+    const answer = await ask({ type: 'heights', url: 'https://dem/2/1/1.png', encoding: 'terrarium' });
+    expect('error' in answer && answer.error).toContain('500');
   });
 });

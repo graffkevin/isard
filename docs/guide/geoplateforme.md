@@ -48,6 +48,15 @@ map.addRaster(geoplateformeWms('CADASTRALPARCELS.PARCELLAIRE_EXPRESS', { opacity
 for tile by tile in EPSG:3857. Both return the options of `addRaster` (opacity, zoom range, saturation…), the IGN's
 credits included.
 
+The layers served in Lambert-93 (PLAN IGN, the high resolution orthophotos, the cadastre…) are reprojected by the map:
+
+```ts
+map.addRaster(geoplateformeWmts('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2.L93', { matrixSet: '2154_10cm_6_20', format: 'image/jpeg' }));
+map.addRaster(geoplateformeWms('CADASTRALPARCELS.PARCELLAIRE_EXPRESS', { crs: 'EPSG:2154' }));
+```
+
+See [Projections](./projections#the-geoplateforme-in-lambert-93).
+
 ## Features: BD TOPO, ADMIN EXPRESS…
 
 ```ts
@@ -59,10 +68,11 @@ map.addExtrusions({ data: buildings, height: (p) => p.hauteur ?? 6 });
 `geoplateformeWfs` fetches the features of a WFS type in a box (west, south, east, north) as GeoJSON in longitudes and
 latitudes, up to `count` (5000 by default): buildings, roads (`BDTOPO_V3:troncon_de_route`), communes
 (`ADMINEXPRESS-COG.LATEST:commune`)… The features are your layers' data: credit them with the map's
-`attributionControl: { customAttribution: IGN_ATTRIBUTION }` when no IGN basemap shows.
+`attributionControl: { customAttribution: IGN_ATTRIBUTION }` when no IGN basemap shows. With `srsName: 'EPSG:2154'`
+they come in Lambert-93 (the box stays in degrees), the collection naming its CRS: the layers reproject it.
 
 ## Examples
 
 The [network](../examples/network), [buildings](../examples/buildings), [GeoJSON](../examples/geojson),
-[relief](../examples/relief), [globe](../examples/globe) and [3D Tiles](../examples/tiles3d) examples are built on
-the Géoplateforme's data.
+[relief](../examples/relief), [globe](../examples/globe), [3D Tiles](../examples/tiles3d) and
+[Lambert-93](../examples/lambert93) examples are built on the Géoplateforme's data.

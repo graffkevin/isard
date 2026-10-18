@@ -3,6 +3,7 @@
 //! the slot and level of the deepest loaded tile at each place, so a vertex finds its altitude with two fetches and a
 //! bilinear read, as the ground does. The table is rebuilt only when the pool changes.
 
+use crate::render::gl::unit;
 use crate::render::raster::RasterSource;
 use geo::page::table;
 use glam::DVec2;
@@ -38,10 +39,6 @@ float altitude(vec2 merc) {
   return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y) * u_relief;
 }
 ";
-
-/// Texture units of the table and the elevation pool, kept apart from the layers' own
-pub const PAGE_UNIT: u32 = 6;
-pub const HEIGHTS_UNIT: u32 = 7;
 
 /// Page table of one layer
 pub struct Drape {
@@ -84,7 +81,7 @@ impl Drape {
                     Err(_) => return,
                 },
             };
-            gl.active_texture(glow::TEXTURE0 + PAGE_UNIT);
+            gl.active_texture(glow::TEXTURE0 + unit::PAGE);
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
@@ -119,9 +116,9 @@ impl Drape {
             };
             let n = f64::from(1u32 << self.level);
             gl.uniform_3_f32(rect.as_ref(), self.first.0 as f32, self.first.1 as f32, n as f32);
-            gl.active_texture(glow::TEXTURE0 + PAGE_UNIT);
+            gl.active_texture(glow::TEXTURE0 + unit::PAGE);
             gl.bind_texture(glow::TEXTURE_2D, self.texture);
-            gl.active_texture(glow::TEXTURE0 + HEIGHTS_UNIT);
+            gl.active_texture(glow::TEXTURE0 + unit::HEIGHTS);
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(source.pool()));
             gl.active_texture(glow::TEXTURE0);
         }
@@ -144,7 +141,10 @@ impl DrapeUniforms {
         crate::render::gl::sampler_units(
             gl,
             program,
-            &[(uniforms[0].as_ref(), PAGE_UNIT), (uniforms[1].as_ref(), HEIGHTS_UNIT)],
+            &[
+                (uniforms[0].as_ref(), unit::PAGE),
+                (uniforms[1].as_ref(), unit::HEIGHTS),
+            ],
         );
         Self(uniforms)
     }

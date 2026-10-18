@@ -20,22 +20,35 @@ mod gltf;
 use container::{parse_glb, split};
 use glam::{DMat4, DVec3};
 use gltf::{Gltf, decode_glb, index, uv_set};
+use std::rc::Rc;
 
-/// One textured triangle mesh
+/// One textured triangle mesh. A mesh used by several nodes of the scene (instances) gives a primitive per node: its
+/// positions are its own (moved by the node), its texture coordinates, triangles and image shared
 pub struct Primitive {
     /// x, y, z relative to the anchor (ECEF axes, metres)
     pub positions: Vec<f32>,
     /// u, v per vertex (zeros without texture coordinates)
-    pub uvs: Vec<f32>,
-    pub indices: Vec<u32>,
-    /// Encoded image (JPEG, PNG, WebP) and its media type
-    pub image: Option<(Vec<u8>, String)>,
+    pub uvs: Rc<[f32]>,
+    pub indices: Rc<[u32]>,
+    /// Its image in `Mesh::images`
+    pub image: Option<usize>,
 }
 
 pub struct Mesh {
     /// ECEF origin of the positions
     pub anchor: DVec3,
     pub primitives: Vec<Primitive>,
+    /// Encoded images (JPEG, PNG, WebP, KTX2) and their media types, each once however many primitives use it
+    pub images: Vec<(Rc<[u8]>, String)>,
+}
+
+impl Mesh {
+    /// The encoded image of a primitive and its media type
+    #[must_use]
+    pub fn image(&self, primitive: &Primitive) -> Option<(&[u8], &str)> {
+        let (bytes, mime) = self.images.get(primitive.image?)?;
+        Some((bytes, mime))
+    }
 }
 
 /// A Draco-compressed primitive (`KHR_draco_mesh_compression`), for an external Draco decoder
@@ -110,7 +123,7 @@ mod tests {
         assert_eq!(p.positions.len(), 59 * 3);
         assert_eq!(p.uvs.len(), 59 * 2);
         assert_eq!(p.indices.len(), 171);
-        let (bytes, mime) = p.image.as_ref().unwrap();
+        let (bytes, mime) = mesh.image(p).unwrap();
         assert_eq!(mime, "image/jpeg");
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
         // Near Lille, close to the ellipsoid
@@ -206,7 +219,7 @@ mod tests {
             indices: vec![0, 1, 2],
         };
         let mesh = decode(bytes, &DMat4::IDENTITY, true, &[geometry]).unwrap();
-        assert_eq!(mesh.primitives[0].indices, [0, 1, 2]);
+        assert_eq!(*mesh.primitives[0].indices, [0, 1, 2]);
         assert!(mesh.primitives[0].image.is_some());
     }
 
@@ -220,7 +233,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let (bytes, mime) = mesh.primitives[0].image.as_ref().unwrap();
+        let (bytes, mime) = mesh.image(&mesh.primitives[0]).unwrap();
         assert_eq!(mime, "image/ktx2");
         assert_eq!(&bytes[..12], b"\xabKTX 20\xbb\r\n\x1a\n");
     }

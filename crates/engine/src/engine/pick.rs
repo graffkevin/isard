@@ -9,7 +9,7 @@
 
 use super::{Engine, Slot};
 use crate::js;
-use crate::render::gl::Objects;
+use crate::render::gl::{self, Objects};
 use crate::render::raster::unpack_depth;
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
@@ -288,9 +288,10 @@ impl Engine {
         let Some((terrain, _)) = self.terrain.as_ref() else {
             return;
         };
+        let gl = &self.gl;
+        gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after
         unsafe {
-            let gl = &self.gl;
             gl.enable(glow::SCISSOR_TEST);
             gl.scissor(px, py, 1, 1);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
@@ -299,13 +300,9 @@ impl Engine {
             gl.disable(glow::CULL_FACE);
             gl.enable(glow::DEPTH_TEST);
             gl.depth_func(glow::LESS);
-            gl.depth_mask(true);
             self.raster_pass.draw_depth(gl, view, terrain);
-            gl.disable(glow::DEPTH_TEST);
-            gl.disable(glow::SCISSOR_TEST);
-            gl.enable(glow::BLEND);
-            gl.enable(glow::CULL_FACE);
         }
+        gl::reset_state(gl);
     }
 
     /// Altitude (metres, exaggeration included) of the relief drawn under a screen point (CSS pixels), None without
@@ -397,30 +394,43 @@ impl Engine {
     }
 
     /// Draws a picking pass into the bound picking target. Call with the target bound and the viewport set; the state
-    /// is set back but for the framebuffer
+    /// is set back (`gl::reset_state`) but for the framebuffer.
+    ///
+    /// In relief the ground's depth is drawn first (no color), clipped to the block as the rest: the layers test
+    /// against it as on screen, and a feature behind a hill is not picked. It is the ground of the last frame, drawn
+    /// with that frame's view (its tiles are placed for it): the whole pass is, what is on screen.
     unsafe fn draw_feature_pass(&self, pass: &FeaturePass) {
-        let view = self.camera.view();
+        let view = match (&self.terrain, &self.drawn) {
+            (Some(_), Some(drawn)) => drawn.clone(),
+            _ => self.camera.view(),
+        };
         let (x0, y0, w, h) = pass.block;
+        let gl = &self.gl;
+        gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after
         unsafe {
-            let gl = &self.gl;
             gl.enable(glow::SCISSOR_TEST);
             gl.scissor(x0, y0, w, h);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            // Depth too: the blocks of extrusion layers hide one another
+            // Depth too: the blocks of extrusion layers hide one another, the hills what lies behind them
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
             gl.disable(glow::BLEND);
             gl.disable(glow::CULL_FACE);
+            if let Some((terrain, _)) = &self.terrain {
+                gl.color_mask(false, false, false, false);
+                gl.enable(glow::DEPTH_TEST);
+                self.raster_pass.draw_depth(gl, &view, terrain);
+                gl.disable(glow::DEPTH_TEST);
+                gl.color_mask(true, true, true, true);
+            }
             let frame = self.frame_state(&view);
             for (ordinal, &index) in pass.slots.iter().enumerate() {
                 if let Some((_, Slot::Layer(layer))) = self.layers.get(index) {
                     layer.draw_pick(&frame, (ordinal + 1) as u8);
                 }
             }
-            gl.disable(glow::SCISSOR_TEST);
-            gl.enable(glow::BLEND);
-            gl.enable(glow::CULL_FACE);
         }
+        gl::reset_state(gl);
     }
 
     /// Layer id and feature index under a screen point, or nearest to it within `radius` CSS pixels (see `pick`)

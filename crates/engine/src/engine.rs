@@ -6,7 +6,7 @@ mod pick;
 
 use crate::js;
 use crate::layer::{Frame, Layer, Loading};
-use crate::render::gl::Grid;
+use crate::render::gl::{self, Grid};
 use crate::render::globe::GlobeBase;
 use crate::render::raster::{
     DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_geoid, terrain_levels,
@@ -246,7 +246,7 @@ impl Engine {
     /// atmosphere around the globe (RGB 0-1 and its strength, 4 numbers; `undefined` for an airless body), and the
     /// lowest and highest altitudes of its ground (metres: what its relief may raise into view). WGS 84, the Earth's
     /// blue halo and the range of its relief worldwide (-450 m to 8900 m) by default; set before the layers and the
-    /// relief, whose shaders may take its size (`ISARD_EARTH` of the ground layers)
+    /// relief, whose shaders may take its size (`ISARD_CIRCUMFERENCE` of the ground layers)
     #[wasm_bindgen(js_name = setBody)]
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>, lowest: f64, highest: f64) {
@@ -705,25 +705,18 @@ impl Engine {
         self.camera.body
     }
 
-    /// Clears the canvas and sets the state every layer starts from
+    /// Sets the state every layer starts from, whatever the last frame or a picking pass left (`gl::reset_state`: the
+    /// far side of the globe faces away and is culled), then clears the canvas (the depth written, no scissor: all of
+    /// it is cleared)
     fn begin_frame(&self, w: f64, h: f64) {
+        let gl = &self.gl;
+        gl::reset_state(gl);
         // SAFETY: frame setup on the live context
         unsafe {
-            let gl = &self.gl;
             gl.viewport(0, 0, w.round() as i32, h.round() as i32);
             let [r, g, b] = self.background;
             gl.clear_color(r, g, b, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
-            gl.enable(glow::BLEND);
-            // The far side of the globe faces away: culled
-            gl.enable(glow::CULL_FACE);
-            gl.front_face(glow::CW);
-            gl.blend_func_separate(
-                glow::SRC_ALPHA,
-                glow::ONE_MINUS_SRC_ALPHA,
-                glow::ONE,
-                glow::ONE_MINUS_SRC_ALPHA,
-            );
         }
     }
 

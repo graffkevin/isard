@@ -11,7 +11,7 @@
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
-use crate::render::gl::{self, Projection};
+use crate::render::gl::{self, DepthState, Projection};
 use crate::render::raster::{self, STACK};
 use glam::DVec2;
 use glow::HasContext;
@@ -145,7 +145,7 @@ pub struct GroundLayer {
 }
 
 impl GroundLayer {
-    /// `circumference`: the body's, in metres (`ISARD_EARTH`)
+    /// `circumference`: the body's, in metres (`ISARD_CIRCUMFERENCE`)
     pub fn new(
         gl: &glow::Context,
         code: &str,
@@ -154,8 +154,11 @@ impl GroundLayer {
         min: DVec2,
         max: DVec2,
     ) -> Result<Self, String> {
-        // Length of the Mercator world in metres of the body (offsets times this: metres of EPSG:3857 on the Earth)
-        let earth = format!("const float ISARD_EARTH = {circumference:.3};\n");
+        // Length of the Mercator world in metres of the body (offsets times this: metres of EPSG:3857 on the Earth);
+        // `ISARD_EARTH`, its first name (when the Earth was the only body), kept for the code written with it
+        let earth = format!(
+            "const float ISARD_CIRCUMFERENCE = {circumference:.3};\nconst float ISARD_EARTH = ISARD_CIRCUMFERENCE;\n"
+        );
         let program = gl::program(
             gl,
             &format!("#version 300 es\n{}{}", gl::PROJECT, raster::VERTEX),
@@ -453,19 +456,12 @@ impl Layer for GroundLayer {
             gl.active_texture(glow::TEXTURE0);
             self.apply_values(gl);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            if relief.is_some() {
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LEQUAL);
-                gl.depth_mask(false);
-                gl.disable(glow::CULL_FACE);
-            }
+            let depth = DepthState::ground(gl, relief.is_some());
             let (min, max) = (self.min, self.max);
             ground.redraw(gl, view, |a, b| {
                 a.x <= max.x && a.y <= max.y && b.x >= min.x && b.y >= min.y
             });
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_mask(true);
-            gl.enable(glow::CULL_FACE);
+            drop(depth);
             gl.blend_func_separate(
                 glow::SRC_ALPHA,
                 glow::ONE_MINUS_SRC_ALPHA,

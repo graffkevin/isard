@@ -8,14 +8,18 @@
 //! layer-wide style are shared. In relief, a wall's foot stands on the ground under it and the roof at the given height
 //! over the ground at the block's centroid. A translucent layer is drawn in two passes, depth then color, so that each
 //! pixel shows its nearest face only.
+//!
+//! The blocks of a batch are sorted by square of a grid over their centroids (`geo::shapes::chunk_blocks`), each one's
+//! triangles together: only the squares in view are drawn, a batch of a whole city as a tile's.
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
-use crate::render::features::{FEATURES, FeatureUniforms, Features, LayerStyle};
-use crate::render::gl::{self, Objects, Projection, bytes};
+use crate::render::features::{FeatureUniforms, Features, LayerStyle, Layout};
+use crate::render::gl::{self, DepthState, Objects, Projection, bytes, unit};
 use crate::render::network::NetworkLayer;
 use crate::render::overlay::{self, ANCHOR, Anchor};
+use geo::pieces::{Grid, Look, Visible};
 use geo::shapes::{self, Polygons};
 use glam::DVec2;
 use glow::HasContext;
@@ -41,7 +45,7 @@ out float v_level;
 
 float node(float i) {
   uint k = uint(i);
-  float t = texelFetch(u_network, ivec2(int(k & 4095u), int(k >> 12)), 0).r;
+  float t = texelFetch(u_network, table_texel(k), 0).r;
   return t >= 0.0 && t < 1e29 ? t : 1e30;
 }
 
@@ -49,21 +53,15 @@ void main() {
   uint f = a_feature;
   float height = feature_size(f, 0u);
   float base = feature_size(f, 1u);
-  vec4 color = style_texel(f, 0u);
   float value = 1e30;
   if (u_linked) {
-    vec4 a = texelFetch(u_anchors, feature_texel(f), 0);
+    vec4 a = texelFetch(u_anchors, table_texel(f), 0);
     value = min(node(a.x) + a.z, node(a.y) + a.w);
     if (value > u_linked_max) value = 1e30;
   } else {
-    value = texelFetch(u_values, feature_texel(f), 0).r;
+    value = texelFetch(u_values, table_texel(f), 0).r;
   }
-  if (u_ramp_range.z > 0.5 && value < 1e29 && value == value) {
-    float t = clamp((value - u_ramp_range.x) / max(u_ramp_range.y - u_ramp_range.x, 1e-30), 0.0, 1.0);
-    vec4 r = texture(u_ramp, vec2((t * 255.0 + 0.5) / 256.0, 0.5));
-    color = vec4(r.rgb, r.a * color.a);
-  }
-  v_color = color;
+  v_color = ramp_color(style_texel(f, 0u), value);
   v_color.a *= layer_opacity();
   if (!feature_visible(f) || height <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec2 merc = u_origin + a_offset;
@@ -86,7 +84,7 @@ out vec4 color;
 
 void main() {
   if (u_pick) {
-    color = vec4(float(v_id & 255u), float((v_id >> 8) & 255u), float((v_id >> 16) & 255u), u_layer) / 255.0;
+    color = pick_color(v_id, u_layer);
     return;
   }
   // Darker towards the foot of the walls (the roofs, at level 1, are not)
@@ -107,9 +105,9 @@ const UNIFORMS: [&str; 7] = [
 /// Highest block above its ground, metres, to bound the batches in view (the tallest towers are lower)
 const MAX_HEIGHT: f64 = 1000.0;
 
-/// Texture units of the anchors and the network values (the features take 8 to 11, the drape 6 and 7)
-const ANCHORS_UNIT: u32 = 1;
-const NETWORK_UNIT: u32 = 2;
+/// Texture units of the anchors and the network values
+const ANCHORS_UNIT: u32 = unit::OWN[0];
+const NETWORK_UNIT: u32 = unit::OWN[1];
 
 struct Batch {
     features: Features,
@@ -122,6 +120,13 @@ struct Batch {
     max: DVec2,
     anchors: Option<glow::Texture>,
     drape: Drape,
+    /// The grid its blocks are sorted by, the first index of each square (and the end), how far a block reaches out
+    /// of its centroid (Mercator)
+    grid: Grid,
+    start: Vec<u32>,
+    reach: f64,
+    /// The squares in view and their indices, kept from frame to frame
+    visible: Visible,
 }
 
 impl Batch {
@@ -159,12 +164,8 @@ impl ExtrusionLayer {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let program = gl::program(
             gl,
-            &format!(
-                "#version 300 es\n{}{}{ANCHOR}{FEATURES}{VERTEX}",
-                gl::PROJECT,
-                drape::ALTITUDE
-            ),
-            &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
+            &gl::vertex_shader(&[gl::PROJECT, drape::ALTITUDE, ANCHOR, &Layout::EXTRUSION.glsl(), VERTEX]),
+            &gl::fragment_shader(&[FRAGMENT]),
         )?;
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
         gl::sampler_units(
@@ -208,15 +209,17 @@ impl ExtrusionLayer {
         let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         let origin = (min + max) / 2.0;
         let mut blocks = shapes::extrude(polygons, origin);
+        let chunks = shapes::chunk_blocks(&mut blocks);
+        // Polygon numbers to features
         for v in &mut blocks.vertices {
-            v.polygon = feature.get(v.polygon as usize).copied().unwrap_or(u32::MAX);
+            v.feature = feature.get(v.feature as usize).copied().unwrap_or(u32::MAX);
         }
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let vao = objects.vertex_array()?;
         let vertices = objects.buffer()?;
         let indices = objects.buffer()?;
-        let mut features = Features::new(gl, feature_count)?;
+        let mut features = Features::new(gl, feature_count, Layout::EXTRUSION)?;
         objects.keep();
         features.set_ramp(gl, self.ramp.as_ref().map(|(rgba, lo, hi)| (rgba.as_slice(), *lo, *hi)));
         // SAFETY: state setup and uploads of objects just created on the live context
@@ -249,6 +252,10 @@ impl ExtrusionLayer {
                 max,
                 anchors: None,
                 drape: Drape::new(),
+                grid: chunks.grid,
+                start: chunks.start,
+                reach: chunks.reach,
+                visible: Visible::default(),
             }
         };
         if let Some(old) = self.batches.insert(key, batch) {
@@ -307,6 +314,19 @@ impl ExtrusionLayer {
         Ok(())
     }
 
+    /// How a batch looks for its squares in view: its blocks stand on the relief, up to `MAX_HEIGHT` above it, and
+    /// reach `reach` out of their centroids
+    fn look(frame: &Frame, batch: &Batch) -> Look {
+        let (view, relief) = (frame.view, frame.relief);
+        let (low, high) = overlay::heights(view, relief);
+        let heights = (
+            low,
+            high + MAX_HEIGHT * view.vertical * f64::from(relief.map_or(1.0, |(_, e)| e)),
+        );
+        (heights, overlay::shift(batch.origin, view), batch.reach, true)
+    }
+
+    /// Draws the squares in view of each batch (worked out by `draw`; anew for the picking pass if the view changed)
     fn render(&self, frame: &Frame, pick: Option<u8>) {
         let &Frame {
             gl,
@@ -317,12 +337,6 @@ impl ExtrusionLayer {
             ..
         } = frame;
         let [pick_base, linked, _, _, linked_max, layer, pick_u] = &self.uniforms;
-        // Batches out of view are skipped (their features still count for the picking ids)
-        let (low, high) = overlay::heights(view, relief);
-        let heights = (
-            low,
-            high + MAX_HEIGHT * view.vertical * f64::from(relief.map_or(1.0, |(_, e)| e)),
-        );
         // SAFETY: draws with objects owned by this layer (and the linked network's values texture)
         unsafe {
             gl.use_program(Some(self.program));
@@ -337,8 +351,23 @@ impl ExtrusionLayer {
             let mut base = 0u32;
             for batch in self.batches.values() {
                 let first = base;
+                // Batches out of view are skipped (their features still count for the picking ids)
                 base = base.wrapping_add(batch.features.count as u32);
-                if batch.count == 0 || !overlay::in_view(view, batch.min, batch.max, heights) {
+                if batch.count == 0 {
+                    continue;
+                }
+                let ranges = if pick.is_some() {
+                    overlay::pick_ranges(
+                        &batch.visible,
+                        &batch.grid,
+                        &batch.start,
+                        view,
+                        Self::look(frame, batch),
+                    )
+                } else {
+                    std::borrow::Cow::Borrowed(batch.visible.ranges())
+                };
+                if ranges.is_empty() {
                     continue;
                 }
                 self.anchor.set_origin(gl, view, batch.origin);
@@ -353,7 +382,14 @@ impl ExtrusionLayer {
                     .features
                     .bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
                 gl.bind_vertex_array(Some(batch.vao));
-                gl.draw_elements(glow::TRIANGLES, batch.count, glow::UNSIGNED_INT, 0);
+                for &(first, end) in ranges.iter() {
+                    gl.draw_elements(
+                        glow::TRIANGLES,
+                        (end - first) as i32,
+                        glow::UNSIGNED_INT,
+                        first as i32 * 4,
+                    );
+                }
             }
             gl.bind_vertex_array(None);
         }
@@ -375,33 +411,27 @@ impl Layer for ExtrusionLayer {
                 let pad = DVec2::splat(1e-6);
                 batch.drape.update(frame.gl, batch.min - pad, batch.max + pad, source);
             }
+            let look = Self::look(frame, batch);
+            batch.visible.update(&batch.grid, &batch.start, frame.view, look);
         }
         let gl = frame.gl;
         // A translucent color too (a feature's, or the ramp's): the faces behind would show through
         let translucent = self.layer.translucent() || self.batches.values().any(|b| b.features.colors_translucent());
-        // SAFETY: state changes on the live context, set back below
-        unsafe {
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(true);
-            gl.disable(glow::CULL_FACE);
-            if translucent {
-                // Depth first: then each pixel is colored by its nearest face only
-                gl.color_mask(false, false, false, false);
-                self.render(frame, None);
+        let depth = DepthState::solid(gl);
+        if translucent {
+            // Depth first: then each pixel is colored by its nearest face only
+            // SAFETY: state changes on the live context, set back below and by the guard
+            unsafe { gl.color_mask(false, false, false, false) };
+            self.render(frame, None);
+            // SAFETY: as above
+            unsafe {
                 gl.color_mask(true, true, true, true);
                 gl.depth_func(glow::EQUAL);
                 gl.depth_mask(false);
             }
         }
         self.render(frame, None);
-        // SAFETY: state changes on the live context
-        unsafe {
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(true);
-            gl.enable(glow::CULL_FACE);
-        }
+        drop(depth);
         false
     }
 
@@ -413,15 +443,9 @@ impl Layer for ExtrusionLayer {
         if !self.shows(frame.camera.zoom) {
             return;
         }
-        // SAFETY: state changes on the live context, set back below
-        unsafe {
-            frame.gl.enable(glow::DEPTH_TEST);
-            frame.gl.depth_func(glow::LEQUAL);
-            frame.gl.depth_mask(true);
-        }
+        // The blocks hide one another and what is drawn after them, and are hidden by the hills, as on screen
+        let _depth = DepthState::solid(frame.gl);
         self.render(frame, Some(layer));
-        // SAFETY: as above
-        unsafe { frame.gl.disable(glow::DEPTH_TEST) };
     }
 
     fn forget(&mut self, id: u32) {

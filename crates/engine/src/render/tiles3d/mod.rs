@@ -132,6 +132,9 @@ pub struct Tiles3dLayer {
     /// Buffers of `draw_tiles`, kept from frame to frame
     stale: Vec<Loading>,
     requests: Vec<usize>,
+    /// The selection of the last frame and the traversal's buffers, reused (`tileset::select_into`)
+    selection: tileset::Selection,
+    scratch: tileset::Scratch,
     redraw: Rc<dyn Fn()>,
 }
 
@@ -162,6 +165,8 @@ impl Tiles3dLayer {
             stats: Tiles3dStats::default(),
             stale: Vec::new(),
             requests: Vec::new(),
+            selection: tileset::Selection::default(),
+            scratch: tileset::Scratch::default(),
             redraw: redraw.clone(),
         };
         layer.fetch_root(0.0);
@@ -412,7 +417,17 @@ impl Tiles3dLayer {
         };
         let now = js_sys::Date::now();
         let states = &self.states;
-        let selection = tileset::select(&self.tree, root, view, self.max_error, &|i| states.readiness(i, now));
+        let mut selection = std::mem::take(&mut self.selection);
+        let ready = |i| states.readiness(i, now);
+        tileset::select_into(
+            &self.tree,
+            root,
+            view,
+            self.max_error,
+            &ready,
+            &mut selection,
+            &mut self.scratch,
+        );
         // Downloads of tiles that left the view are aborted
         let mut stale = std::mem::take(&mut self.stale);
         self.states.take_stale(&selection.visible, &mut stale);
@@ -453,6 +468,7 @@ impl Tiles3dLayer {
             gpu_bytes,
             tiles: self.tree.nodes.len(),
         };
+        self.selection = selection;
         if !self.queue.is_empty() {
             (self.redraw)();
         }

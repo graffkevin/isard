@@ -2,12 +2,17 @@
  * Worker of the vector basemaps: fetches and decodes vector tiles (kept for the tiles that share them), draws their
  * fills, lines and circles with a MapLibre style into images (Canvas 2D, off the main thread) for the raster pool,
  * with the style's raster layers under them, and lists the label candidates of the style's symbol layers for the page
- * to shape and place. Extrusions are drawn flat, as fills.
+ * to shape and place. Extrusions are drawn flat, as fills. It also decodes the altitudes of PNG relief tiles and
+ * draws the rasters reprojected from other grids (planned by the page), for the map's other layers.
  *
  * A raster tile of level z covers 256 CSS pixels at map zoom z - 1 (MapLibre's 512 px convention): it is drawn from
  * the vector tile of level z - 1 (or the deepest one the source has), with the style at that zoom.
  */
+import { latitude, longitude } from './geo.ts';
+import { Lru } from './lru.ts';
 import { decode, type TileFeature, type TileLayer } from './mvt.ts';
+import { type Job, resampler } from './resample.ts';
+import { fetchHeights, type PngEncoding, type Surface } from './terrain.ts';
 import {
   type Context,
   color,
@@ -31,10 +36,13 @@ export type { LabelCandidate, RasterSource };
 /** Fetch priority of a request (`fetch`'s `priority`, a hint to the browser) */
 export type Priority = 'high' | 'low' | 'auto';
 
-/** A tile's image or labels, asked of a worker */
+/** A tile's image or labels, asked of a worker; or a tile of another layer decoded: the altitudes of a PNG relief
+ * tile, a Mercator tile reprojected from the source images of its plan (keeping `cached` of them) */
 export type BasemapWork =
   | { type: 'render'; key: string; z: number; x: number; y: number; size: number; priority?: Priority }
-  | { type: 'labels'; key: string; z: number; x: number; y: number; priority?: Priority };
+  | { type: 'labels'; key: string; z: number; x: number; y: number; priority?: Priority }
+  | { type: 'heights'; url: string; encoding: PngEncoding; floor?: number }
+  | { type: 'reproject'; job: Job; cached: number };
 
 export type BasemapRequest =
   | {
@@ -60,7 +68,8 @@ export type BasemapResponse =
   | { id: number; image: ImageBitmap }
   | { id: number; missing: true }
   | { id: number; error: string }
-  | { id: number; labels: LabelCandidate[] };
+  | { id: number; labels: LabelCandidate[] }
+  | { id: number; heights: Float32Array };
 
 interface Renderer {
   tiles: string;
@@ -78,13 +87,11 @@ export interface Sprite {
 }
 
 const renderers = new Map<string, Renderer>();
-/** Decoded tiles by URL, the most recent last */
-const cache = new Map<string, Promise<Map<string, TileLayer> | undefined>>();
 /** Decoded tiles kept by the pool, shared among its workers (a vector tile always goes to the same worker): some
  * 2 MB each */
 const CACHE = 96;
-/** This worker's share, set by the renderers */
-let cacheSize = CACHE;
+/** Decoded tiles by URL; this worker's share of them, set by the renderers */
+const cache = new Lru<string, Promise<Map<string, TileLayer> | undefined>>(CACHE);
 
 /** The decoded tiles one worker of `workers` keeps */
 export function cacheShare(workers: number): number {
@@ -93,19 +100,28 @@ export function cacheShare(workers: number): number {
 /** Requests in progress, and those of them aborted (both forgotten once answered) */
 const active = new Set<number>();
 const aborted = new Set<number>();
+/** The signals of the relief and reprojection requests in progress, aborted with them */
+const controllers = new Map<number, AbortController>();
 
-/** Images of the raster sources by URL, the most recent last */
-const images = new Map<string, Promise<ImageBitmap | undefined>>();
-const IMAGES = 64;
+/** Where this worker reads the colors of the relief tiles back */
+const heightsSurface: Surface = {};
+
+/** The reprojected rasters' source images this worker keeps, shared by every source */
+const reprojection = resampler();
+
+/** Images of the raster sources by URL. An image dropped is freed once settled, after the renders that awaited it have
+ * drawn it (they draw without awaiting again) */
+const images = new Lru<string, Promise<ImageBitmap | undefined>>(64, (evicted) =>
+  evicted.then(
+    (bitmap) => setTimeout(() => bitmap?.close(), 0),
+    () => undefined,
+  ),
+);
 
 /** An image of a raster source (shared by every renderer); undefined where the source has none */
 function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | undefined> {
   const hit = images.get(url);
-  if (hit) {
-    images.delete(url);
-    images.set(url, hit);
-    return hit;
-  }
+  if (hit) return hit;
   const pending = (async () => {
     const init: PriorityInit = { priority };
     const response = await fetch(url, init);
@@ -115,16 +131,6 @@ function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
   })();
   pending.catch(() => images.delete(url));
   images.set(url, pending);
-  while (images.size > IMAGES) {
-    const [oldest, evicted] = images.entries().next().value ?? [];
-    if (oldest === undefined || evicted === undefined) break;
-    images.delete(oldest);
-    // Freed once settled, after the renders that awaited it have drawn it (they draw without awaiting again)
-    evicted.then(
-      (bitmap) => setTimeout(() => bitmap?.close(), 0),
-      () => undefined,
-    );
-  }
   return pending;
 }
 
@@ -134,11 +140,7 @@ type PriorityInit = RequestInit & { priority?: Priority };
 /** A vector tile, decoded (shared by every renderer of its URL); the first request's priority fetches it */
 function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, TileLayer> | undefined> {
   const hit = cache.get(url);
-  if (hit) {
-    cache.delete(url);
-    cache.set(url, hit);
-    return hit;
-  }
+  if (hit) return hit;
   const pending = (async () => {
     for (let attempt = 0; ; attempt += 1) {
       const init: PriorityInit = { priority };
@@ -154,11 +156,6 @@ function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, Til
   })();
   pending.catch(() => cache.delete(url));
   cache.set(url, pending);
-  while (cache.size > cacheSize) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
-  }
   return pending;
 }
 
@@ -429,9 +426,7 @@ function onIcon(layer: StyleLayer): boolean {
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */
 function lonLat(z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] {
   const n = 2 ** z;
-  const mx = (x + px / extent) / n;
-  const my = (y + py / extent) / n;
-  return [mx * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180) / Math.PI];
+  return [longitude((x + px / extent) / n), latitude((y + py / extent) / n)];
 }
 
 async function labels(
@@ -542,7 +537,7 @@ const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
 
 self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   if (data.type === 'init') {
-    if (data.workers !== undefined) cacheSize = cacheShare(data.workers);
+    if (data.workers !== undefined) cache.capacity = cacheShare(data.workers);
     renderers.set(data.key, {
       tiles: data.tiles,
       maxzoom: data.maxzoom,
@@ -562,6 +557,11 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   if (data.type === 'abort') {
     // An abort that arrives after the answer is ignored
     if (active.has(data.id)) aborted.add(data.id);
+    controllers.get(data.id)?.abort();
+    return;
+  }
+  if (data.type === 'heights' || data.type === 'reproject') {
+    await decodeTile(data);
     return;
   }
   active.add(data.id);
@@ -582,3 +582,25 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
     aborted.delete(data.id);
   }
 };
+
+/** A tile of another layer: the altitudes of a relief tile, or a reprojected raster tile */
+async function decodeTile(data: Extract<BasemapWork, { type: 'heights' | 'reproject' }> & { id: number }) {
+  const controller = new AbortController();
+  controllers.set(data.id, controller);
+  try {
+    if (data.type === 'heights') {
+      const heights = await fetchHeights(data.url, data.encoding, data.floor, controller.signal, heightsSurface);
+      if (heights) post({ id: data.id, heights }, [heights.buffer]);
+      else post({ id: data.id, missing: true });
+    } else {
+      reprojection.cache.capacity = data.cached;
+      const image = await reprojection.draw(data.job, controller.signal);
+      if (image) post({ id: data.id, image }, [image]);
+      else post({ id: data.id, missing: true });
+    }
+  } catch (error) {
+    post({ id: data.id, error: String(error) });
+  } finally {
+    controllers.delete(data.id);
+  }
+}

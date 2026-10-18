@@ -7,11 +7,13 @@
 //! layer as wide as France stays still to the pixel at zoom 22, where `origin + offset × world` in f32 jittered by
 //! several pixels.
 
-use crate::render::gl;
+use crate::layer::Frame;
+use crate::render::drape::{self, Drape, DrapeUniforms};
+use crate::render::gl::{self, Objects, Projection};
 use crate::render::raster::RasterSource;
 use geo::camera::View;
 use geo::pieces::{Grid, Look, Visible};
-use glam::{DVec2, DVec3, DVec4};
+use glam::DVec2;
 use glow::HasContext;
 
 /// GLSL after `PROJECT`: the uniforms of `Anchor` and `plane_of(offset)`, the position on the plane (pixels from the
@@ -93,6 +95,55 @@ pub const LINE_DEPTH_BIAS: f64 = 0.002;
 pub const RELIEF_SEGMENTS: i32 = 8;
 /// Bytes per piece (`geo::pieces::Piece`)
 pub const PIECE_STRIDE: i32 = 28;
+/// The attributes of a piece (`LINE`, the edge at location 2): from and to, fractions, edge
+pub const PIECE_ATTRIBUTES: [gl::Attribute; 3] = [(0, 4, true, 0), (1, 2, true, 16), (2, 1, false, 24)];
+const _: () = assert!(PIECE_STRIDE as usize == size_of::<geo::pieces::Piece>());
+
+/// A program of a layer drawn over the ground (lines, circles, networks, symbols), its vertex shader made of
+/// `PROJECT`, `drape::ALTITUDE`, `ANCHOR` then `vertex`, and the uniforms they share
+pub struct Overlay {
+    pub program: glow::Program,
+    anchor: Anchor,
+    projection: Projection,
+    drape: DrapeUniforms,
+}
+
+impl Overlay {
+    /// The program of `vertex` (with `gl::common` before the parts above) and `fragment` (`gl::fragment_shader`)
+    pub fn new(objects: &mut Objects, gl: &glow::Context, vertex: &[&str], fragment: &[&str]) -> Result<Self, String> {
+        let mut source = gl::vertex_shader(&[gl::PROJECT, drape::ALTITUDE, ANCHOR]);
+        for part in vertex {
+            source.push_str(part);
+        }
+        let program = objects.program(&source, &gl::fragment_shader(fragment))?;
+        Ok(Self {
+            program,
+            anchor: Anchor::new(gl, program),
+            projection: Projection::new(gl, program),
+            drape: DrapeUniforms::new(gl, program),
+        })
+    }
+
+    /// Puts the program in use and sets what they share: the view (with `depth_bias` in relief), the origin of the
+    /// offsets drawn, the projection and the relief under them (`drape`)
+    pub fn begin(&self, frame: &Frame, origin: DVec2, depth_bias: f64, drape: &Drape) {
+        let &Frame {
+            gl,
+            camera,
+            view,
+            pixel_ratio,
+            relief,
+            ..
+        } = frame;
+        // SAFETY: a program of this layer, on the live context
+        unsafe { gl.use_program(Some(self.program)) };
+        let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+        self.anchor.set_view(gl, view, viewport, relief.is_some(), depth_bias);
+        self.anchor.set_origin(gl, view, origin);
+        self.projection.set(gl, view);
+        drape.bind(gl, &self.drape, relief);
+    }
+}
 
 /// Mercator points of interleaved coordinates
 #[must_use]
@@ -158,30 +209,6 @@ pub fn pick_ranges<'a>(
         },
         std::borrow::Cow::Borrowed,
     )
-}
-
-/// Whether a Mercator box (standing between `heights`, pixels of the local frame) may show in the view: sample
-/// points of it, out only if all are beyond the same plane of the frustum (as `geo::tiles`)
-#[must_use]
-pub fn in_view(view: &View, min: DVec2, max: DVec2, heights: (f64, f64)) -> bool {
-    if !(min.is_finite() && max.is_finite()) {
-        return true;
-    }
-    let shift = shift((min + max) / 2.0, view);
-    let mut clip = [DVec4::ZERO; 18];
-    for (k, c) in clip.iter_mut().enumerate() {
-        let (i, j, h) = (k % 3, (k / 3) % 3, if k < 9 { heights.0 } else { heights.1 });
-        let m = min + (max - min) * DVec2::new(i as f64, j as f64) / 2.0;
-        let p = view.position(m, shift) + DVec3::Z * h;
-        *c = view.view_proj * p.extend(1.0);
-    }
-    let outside = |f: fn(&DVec4) -> bool| clip.iter().all(f);
-    !(outside(|c| c.x < -c.w)
-        || outside(|c| c.x > c.w)
-        || outside(|c| c.y < -c.w)
-        || outside(|c| c.y > c.w)
-        || outside(|c| c.z < -c.w)
-        || outside(|c| c.z > c.w))
 }
 
 /// An f64 as two f32 whose sum is it to about 1e-14
@@ -351,26 +378,6 @@ mod tests {
         assert!((gpu - exact).length() < 1.0, "{gpu} {exact}");
         let old = (origin - v.center).as_vec2() * v.world_size as f32 + offset.0 * v.world_size as f32;
         assert!((old.as_dvec2() - exact).length() > 1.0);
-    }
-
-    #[test]
-    fn boxes_out_of_the_frustum_are_culled() {
-        let v = view(2.35, 48.85, 14.0, 0.0);
-        let here = mercator(2.35, 48.85);
-        let d = DVec2::splat(1e-5);
-        assert!(in_view(&v, here - d, here + d, (0.0, 0.0)));
-        // Lyon, far off screen at zoom 14
-        let lyon = mercator(4.83, 45.76);
-        assert!(!in_view(&v, lyon - d, lyon + d, (0.0, 0.0)));
-        // A box around the screen sees it
-        assert!(in_view(
-            &v,
-            here - DVec2::splat(0.1),
-            here + DVec2::splat(0.1),
-            (0.0, 0.0)
-        ));
-        // Unknown bounds: drawn
-        assert!(in_view(&v, DVec2::INFINITY, DVec2::NEG_INFINITY, (0.0, 0.0)));
     }
 
     #[test]

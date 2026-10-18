@@ -41,14 +41,11 @@ pub fn close(images: Vec<Option<web_sys::ImageBitmap>>) {
     }
 }
 
-/// Decodes the images of a mesh off the main thread (`createImageBitmap`)
+/// Decodes the images of a mesh off the main thread (`createImageBitmap`), each once (`Mesh::images`)
 pub async fn decode_images(mesh: &Mesh) -> Vec<Option<web_sys::ImageBitmap>> {
     let mut out = Vec::new();
-    for p in &mesh.primitives {
-        out.push(match &p.image {
-            Some((bytes, mime)) => decode_image(bytes, mime).await.ok(),
-            None => None,
-        });
+    for (bytes, mime) in &mesh.images {
+        out.push(decode_image(bytes, mime).await.ok());
     }
     out
 }

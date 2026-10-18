@@ -25,7 +25,8 @@ declarations.
 | `attributionControl` | true | the credits of the data shown; `false`, or `{ compact, customAttribution }` |
 | `coreWasmUrl`, `wasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start |
 | `tiles3d` | false | `true`: the engine with 3D Tiles from the start (else loaded with the first 3D Tiles layer, a short stall); `'preload'`: downloaded and compiled once the map is idle ([3D Tiles](./layers/tiles3d#the-engine-with-3d-tiles)) |
-| `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread |
+| `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread (the PNG relief and the reprojected rasters too) |
+| `basemapTileSize` | 512 | texture size of the vector basemap's tiles; 256: a quarter of the work and memory, lines a little softer |
 | `decoders`, `glyphs` | official builds, OpenFreeMap's fonts | to self-host them |
 
 ## Camera
@@ -63,7 +64,7 @@ styles the basemaps use, for `vectorTiles({ style })`.
 | `addExtrusions(options)` | `ExtrusionLayer` | `setData`, `setTile`, `removeTile`, `setValues`, `linkNetwork`, `setAnchors` |
 | `addNetwork(options)` | `NetworkLayer` | `setValues`, `setCosts`, `setEdgeWidths`, `setStyle`, `stats` |
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
-| `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, or `'equirectangular'` reprojected in the page), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
+| `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, `'equirectangular'`, or a `TileGrid` in another CRS: tile matrices or a WMS's `{bbox}`, reprojected by the map's workers, see [projections](./guide/projections)), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
 | `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
 
 Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`. Every `add…` takes `before`.
@@ -91,8 +92,12 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 
 | | |
 |---|---|
-| `geoplateformeWmts(layer, options)`, `geoplateformeWms(layers, options)` | raster options of the Géoplateforme's layers, crediting the IGN |
-| `geoplateformeWfs(typeName, [west, south, east, north], { count, signal })` | the Géoplateforme's features in a box, as GeoJSON |
+| `geoplateformeWmts(layer, options)`, `geoplateformeWms(layers, options)` | raster options of the Géoplateforme's layers, crediting the IGN; `matrixSet: '2154_10cm_6_20'` (WMTS) or `crs: 'EPSG:2154'` (WMS) for Lambert-93 |
+| `geoplateformeWfs(typeName, [west, south, east, north], { count, signal, srsName })` | the Géoplateforme's features in a box, as GeoJSON (in `srsName` if given, reprojected by the layers) |
+| `wmtsGrid(capabilitiesUrl, layer, matrixSet)`, `parseWmtsGrid(xml, layer, matrixSet)` | the `TileGrid` of a WMTS layer, for `addRaster({ url, grid })` |
+| `getCrs(crs)`, `registerCrs(name, crs)`, `lambertConformalConic(…)`, `transverseMercator(…)` | CRSs: built in (EPSG:4326, 3857, 2154, 3942-3950, UTM), proj4's converters, or yours ([projections](./guide/projections)) |
+| `reproject(data, crs)` | GeoJSON in a CRS (default the one its `crs` member names) to longitudes and latitudes |
+| `parseKml(text)`, `parseGpx(text)`, `parseTopoJson(topology, name)` | other formats as GeoJSON ([formats](./layers/features#other-crss-and-formats)) |
 | `IGN_ATTRIBUTION`, `OPENFREEMAP_ATTRIBUTION`, `TERRAIN_TILES_ATTRIBUTION` | credits of the sources, for `customAttribution` or `attribution` |
 | `GLYPHS_URL`, `DEFAULT_FONT` | the default glyphs (OpenFreeMap's fonts) and font of labels |
 | `parseColor(color)`, `interpolate(stops, zoom)` | a CSS color as RGBA 0-1; the value of zoom stops at a zoom |

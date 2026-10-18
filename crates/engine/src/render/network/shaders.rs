@@ -1,7 +1,7 @@
 //! Shaders of the network layer: the pieces expanded on screen (`overlay::LINE`), the value along each edge, the
 //! colors and the picking
 
-/// After `PROJECT`, `drape::ALTITUDE`, `overlay::ANCHOR` and `overlay::LINE`
+/// After `gl::common`, `PROJECT`, `drape::ALTITUDE`, `overlay::ANCHOR` and `overlay::LINE`
 pub const VERTEX: &str = r"
 uniform float u_width;
 uniform bool u_with_costs;
@@ -22,20 +22,18 @@ flat out vec4 v_ends;
 out float v_across;
 flat out float v_half;
 
-ivec2 texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
-
 void main() {
-  uvec2 nodes = texelFetch(u_edges, texel(a_edge), 0).xy;
-  vec2 costs = u_with_costs ? texelFetch(u_costs, texel(a_edge), 0).xy : vec2(0.0);
+  uvec2 nodes = texelFetch(u_edges, table_texel(a_edge), 0).xy;
+  vec2 costs = u_with_costs ? texelFetch(u_costs, table_texel(a_edge), 0).xy : vec2(0.0);
   // An edge closed both ways is not drawn
   if (u_with_costs && costs.x >= 1e29 && costs.y >= 1e29) { hide(); return; }
-  v_ends = vec4(texelFetch(u_values, texel(nodes.x), 0).r, texelFetch(u_values, texel(nodes.y), 0).r, costs);
+  v_ends = vec4(texelFetch(u_values, table_texel(nodes.x), 0).r, texelFetch(u_values, table_texel(nodes.y), 0).r, costs);
   // The halo of an edge reached at neither end within the maximum draws nothing: out of the clip space, it costs no
   // pixel (a million wide quads zoomed out would saturate the graphics card)
   bool near_a = v_ends.x >= 0.0 && v_ends.x <= u_max;
   bool near_b = v_ends.y >= 0.0 && v_ends.y <= u_max;
   if (u_halo > 0.0 && !near_a && !near_b) { hide(); return; }
-  float width = u_width * texelFetch(u_scales, texel(a_edge), 0).r;
+  float width = u_width * texelFetch(u_scales, table_texel(a_edge), 0).r;
   // The piece is a strip of `u_segments` parts (1 on flat ground; in relief each part follows the ground), its ends
   // pushed out by half the half width
   StripVertex v;
@@ -82,7 +80,7 @@ in float v_across;
 flat in float v_half;
 out vec4 color;
 
-vec3 ramp(float t) { return texture(u_ramp, vec2((clamp(t, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.5)).rgb; }
+vec3 ramp(float t) { return texture(u_ramp, ramp_uv(t)).rgb; }
 
 void main() {
   float v = value();
@@ -115,5 +113,5 @@ flat in uint v_id;
 out vec4 color;
 void main() {
   if (abs(v_across) > v_half) discard;
-  color = vec4(float(v_id & 255u), float((v_id >> 8) & 255u), float((v_id >> 16) & 255u), u_layer) / 255.0;
+  color = pick_color(v_id, u_layer);
 }";

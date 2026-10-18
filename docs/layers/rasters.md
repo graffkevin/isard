@@ -4,8 +4,8 @@
 map.addRaster({ url: 'https://…/{z}/{x}/{y}.png', minZoom: 6, maxZoom: 17, opacity: 0.55, saturation: 1 });
 ```
 
-Any XYZ / WMTS tiles in Web Mercator, a WMS with `{bbox}`, or tiles in longitudes and latitudes
-([below](#equirectangular-tiles)). All the tiles of a layer share a texture array (a fixed pool, recycled least
+Any XYZ / WMTS tiles in Web Mercator, a WMS with `{bbox}`, tiles in longitudes and latitudes
+([below](#equirectangular-tiles)), or tiles and WMS images in another CRS: Lambert-93, UTM… ([below](#other-grids)). All the tiles of a layer share a texture array (a fixed pool, recycled least
 recently used first); consecutive raster layers are composited in one pass. A loading tile is replaced by its nearest
 loaded ancestor, coarse tiles load first, transient errors are retried past the HTTP cache, missing tiles (404) are
 covered by their ancestor.
@@ -33,7 +33,22 @@ map.addRaster({ url: 'https://trek.nasa.gov/tiles/Moon/EQ/…/default028mm/{z}/{
 ```
 
 Tiles in longitudes and latitudes (Plate Carrée, EPSG:4326-like): two 256 px tiles side by side at level 0, rows from
-the north, as NASA's Trek WMTS and the WorldCRS84Quad grid. They are reprojected in the page into the Web Mercator
-tiles the engine draws, one row of pixels at a time; `minZoom` and `maxZoom` are levels of the source grid, drawn one
-Mercator level finer (the last level of the service: 8 for the Moon's LRO mosaic, 7 for the Viking mosaic of Mars,
-from the `TileMatrix` list of its `WMTSCapabilities.xml`). The source tiles are fetched with CORS and kept for the neighbouring tiles.
+the north, as NASA's Trek WMTS and the WorldCRS84Quad grid. They are reprojected by the map's workers (in the page with
+`workers: false`) into the Web Mercator tiles the engine draws, as any [other grid](#other-grids); `minZoom` and
+`maxZoom` are levels of the source grid, drawn one Mercator level finer (the last level of the service: 8 for the Moon's LRO mosaic, 7
+for the Viking mosaic of Mars, from the `TileMatrix` list of its `WMTSCapabilities.xml`). The source tiles are fetched
+with CORS and kept for the neighbouring tiles.
+
+## Other grids
+
+```ts
+map.addRaster(geoplateformeWmts('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2.L93', { matrixSet: '2154_10cm_6_20', format: 'image/jpeg' }));
+map.addRaster({ url, grid: await wmtsGrid(capabilitiesUrl, 'LAYER', 'MATRIXSET') });
+map.addRaster({ url: '…&CRS=EPSG:2154&BBOX={bbox}&WIDTH={width}&HEIGHT={height}', grid: { crs: 'EPSG:2154' } });
+```
+
+A `grid` in another CRS: the tile matrices of a WMTS (`matrices`: resolution, origin, tile size per level, `{z}` the
+level's `id`), or none for a WMS asked for each tile's box in that CRS. Each Web Mercator tile is planned in the page
+(a mesh of control points projected into the source CRS, the source level of the same pixel size) and drawn by a
+worker of the map from the source tiles it spans, sampled through the mesh, without seams. The CRSs, the WMTS
+capabilities, plugging proj4 and the limits: [Projections](../guide/projections).

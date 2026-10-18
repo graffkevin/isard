@@ -75,7 +75,7 @@ stand on the ground and the hills hide what lies behind them; fills and ground s
 
 | Model | What it is |
 |---|---|
-| `true`, `'terrain-tiles'` | the [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) of AWS's open data registry: worldwide, SRTM, EU-DEM, GMTED… merged by Mapzen (30 m in most places), Terrarium PNGs decoded in the page; the sea floor flattened at sea level |
+| `true`, `'terrain-tiles'` | the [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) of AWS's open data registry: worldwide, SRTM, EU-DEM, GMTED… merged by Mapzen (30 m in most places), Terrarium PNGs decoded in the map's workers; the sea floor flattened at sea level |
 | `'ign'` | the IGN's RGE ALTI and its fill-ins (France, 1 to 5 m), raw float altitudes from the Géoplateforme's WMS |
 
 The French geoid: the IGN's model gives NGF-IGN69 altitudes, raised by the height of the RAF20 geoid (some 45 to 50 m
@@ -85,8 +85,9 @@ are taken as served (`geoid: true` raises them over France too).
 `url` takes altitudes of 256 × 256 tiles: a WMS `GetMap` with `{bbox}` (EPSG:3857 metres), tiles with `{z}`, `{x}`,
 `{y}`, or an ArcGIS image service (a URL ending in `/ImageServer`), which the map asks for raw altitudes
 (`exportImage`, `format=bsq`, its validity mask marking the no-data). They are raw 32-bit floats, or the colors of PNG
-tiles with `encoding: 'terrarium'` or `'mapbox'` (Terrain-RGB), decoded in the page. On the Moon and Mars,
-`terrain: true` takes NASA's models (see [below](#relief-of-the-moon-and-mars)).
+tiles with `encoding: 'terrarium'` or `'mapbox'` (Terrain-RGB), decoded in the map's workers (in the page with
+`workers: false`). On the Moon and Mars, `terrain: true` takes NASA's models (see
+[below](#relief-of-the-moon-and-mars)).
 
 ## Sky and fog
 

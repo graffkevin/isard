@@ -11,10 +11,10 @@
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
-use crate::render::drape::{self, Drape, DrapeUniforms};
+use crate::render::drape::Drape;
 use crate::render::features::{stops, stops_of};
-use crate::render::gl::{self, Objects, Projection, TABLE_WIDTH as WIDTH, bytes};
-use crate::render::overlay::{self, ANCHOR, Anchor};
+use crate::render::gl::{self, DepthState, Objects, TABLE_WIDTH as WIDTH, Table, bytes, unit};
+use crate::render::overlay::{self, Overlay};
 use geo::collision;
 use glam::{DVec2, DVec4};
 use glow::HasContext;
@@ -38,17 +38,15 @@ flat out vec4 v_halo;
 // Halo edge in distance units, and the font scale
 flat out vec2 v_edges;
 
-ivec2 texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
-
 void main() {
   // Placed this frame: shown, its angle on screen and its scale (see `place`)
-  vec4 state = texelFetch(u_visible, texel(a_label), 0);
+  vec4 state = texelFetch(u_visible, table_texel(a_label), 0);
   if (state.x < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   float scale = state.z;
-  vec2 offset = texelFetch(u_labels, texel(a_label * 4u), 0).xy;
-  v_fill = texelFetch(u_labels, texel(a_label * 4u + 1u), 0);
-  v_halo = texelFetch(u_labels, texel(a_label * 4u + 2u), 0);
-  float halo_width = texelFetch(u_labels, texel(a_label * 4u + 3u), 0).x;
+  vec2 offset = texelFetch(u_labels, table_texel(a_label * 4u), 0).xy;
+  v_fill = texelFetch(u_labels, table_texel(a_label * 4u + 1u), 0);
+  v_halo = texelFetch(u_labels, table_texel(a_label * 4u + 2u), 0);
+  float halo_width = texelFetch(u_labels, table_texel(a_label * 4u + 3u), 0).x;
   vec2 merc = u_origin + offset;
   vec4 c = u_matrix * vec4(project_up(plane_of(offset), merc, altitude(merc)), 1.0);
   c.z -= u_depth_bias;
@@ -106,9 +104,9 @@ pub const QUAD_FLOATS: usize = 10;
 /// hiding others), direction (Mercator; 0, 0: none, the text stays horizontal; else it runs along it, kept upright),
 /// then its scale as zoom stops (four zooms, four values: displayed size over shaped size)
 pub const LABEL_FLOATS: usize = 20;
-const LABELS_UNIT: u32 = 1;
-const VISIBLE_UNIT: u32 = 2;
-const ATLAS_UNIT: u32 = 3;
+const LABELS_UNIT: u32 = unit::OWN[0];
+const VISIBLE_UNIT: u32 = unit::OWN[1];
+const ATLAS_UNIT: u32 = unit::OWN[2];
 /// Labels in relief are pulled towards the camera by this fraction of their distance
 const DEPTH_BIAS: f64 = 0.01;
 /// Labels whose anchor is further than this out of the screen are not placed (CSS pixels)
@@ -215,16 +213,15 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
 
 pub struct SymbolLayer {
     pub style: SymbolStyle,
-    program: glow::Program,
+    overlay: Overlay,
     uniforms: [Option<glow::UniformLocation>; 6],
-    anchor: Anchor,
-    projection: Projection,
-    drape_uniforms: DrapeUniforms,
     vao: glow::VertexArray,
     quads: glow::Buffer,
     quad_count: i32,
-    labels_texture: glow::Texture,
-    visible_texture: glow::Texture,
+    /// Per label: offset, fill, halo, halo width (4 texels); its state this frame (`visible`). Kept from one set of
+    /// labels to the next while they fit (`gl::Table`): new labels come several times a second while the map moves
+    labels_table: Table,
+    visible_table: Table,
     labels: Vec<Label>,
     /// Per label, this frame: shown (1 or 0), angle on screen (radians, clockwise), scale, unused
     visible: Vec<f32>,
@@ -245,14 +242,14 @@ impl SymbolLayer {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
-        let program = objects.program(
-            &format!("#version 300 es\n{}{}{ANCHOR}{VERTEX}", gl::PROJECT, drape::ALTITUDE),
-            &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
-        )?;
+        let overlay = Overlay::new(&mut objects, gl, &[VERTEX], &[FRAGMENT])?;
+        let program = overlay.program;
         let vao = objects.vertex_array()?;
         let quads = objects.buffer()?;
-        let labels_texture = objects.texture()?;
-        let visible_texture = objects.texture()?;
+        let labels_table = Table::new(gl, glow::RGBA32F, 0)?;
+        objects.adopt_texture(labels_table.texture);
+        let visible_table = Table::new(gl, glow::RGBA32F, 0)?;
+        objects.adopt_texture(visible_table.texture);
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -290,16 +287,13 @@ impl SymbolLayer {
                 max_zoom: 24.0,
                 visible: true,
             },
-            program,
+            overlay,
             uniforms,
-            anchor: Anchor::new(gl, program),
-            projection: Projection::new(gl, program),
-            drape_uniforms: DrapeUniforms::new(gl, program),
             vao,
             quads,
             quad_count: 0,
-            labels_texture,
-            visible_texture,
+            labels_table,
+            visible_table,
             labels: Vec::new(),
             visible: Vec::new(),
             previous: Vec::new(),
@@ -332,20 +326,27 @@ impl SymbolLayer {
         } = build(anchors, boxes, styles, quads);
         let n = labels.len();
         let rows = gl::table_rows(n * 4);
-        // The new textures first: if one cannot be made, the layer keeps the old ones (and nothing to draw)
-        let mut objects = Objects::new(gl);
-        let labels_texture = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, n * 4)?);
-        gl::upload_table(gl, bytes(&table), rows * WIDTH, glow::RGBA, glow::FLOAT, 16);
-        let visible_texture = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, n)?);
-        objects.keep();
-        // SAFETY: upload into the buffer owned by this layer; the old textures, replaced, are not used afterwards
+        // Larger tables first if they do not fit: if one cannot be made, the layer keeps its labels
+        let labels_table = self.labels_table.prepare(gl, n * 4)?;
+        let visible_table = match self.visible_table.prepare(gl, n) {
+            Ok(made) => made,
+            Err(e) => {
+                if let Some((texture, _)) = labels_table {
+                    // SAFETY: a texture just made, not used
+                    unsafe { gl.delete_texture(texture) };
+                }
+                return Err(e);
+            }
+        };
+        self.labels_table.replace(gl, labels_table);
+        self.visible_table.replace(gl, visible_table);
+        // SAFETY: uploads into objects owned by this layer
         unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.labels_table.texture));
+            gl::upload_table(gl, bytes(&table), rows * WIDTH, glow::RGBA, glow::FLOAT, 16);
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quads));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&data), glow::STATIC_DRAW);
-            gl.delete_texture(self.labels_texture);
-            gl.delete_texture(self.visible_texture);
         }
-        (self.labels_texture, self.visible_texture) = (labels_texture, visible_texture);
         (self.min, self.max, self.origin) = (min, max, origin);
         self.labels = labels;
         self.visible = vec![0.0; n * 4];
@@ -524,7 +525,6 @@ impl Layer for SymbolLayer {
         let &Frame {
             gl,
             camera,
-            view,
             pixel_ratio,
             relief,
             glyphs,
@@ -543,44 +543,31 @@ impl Layer for SymbolLayer {
         if !self.uploaded {
             // The states changed: one upload
             // SAFETY: binding the state texture owned by this layer, for the upload inside its storage
-            unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_texture)) };
+            unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.visible_table.texture)) };
             gl::upload_table(gl, bytes(&self.visible), self.labels.len(), glow::RGBA, glow::FLOAT, 16);
             self.uploaded = true;
         }
         let [ratio, atlas_size_u, _, _, _, opacity] = &self.uniforms;
+        self.overlay.begin(frame, self.origin, DEPTH_BIAS, &self.drape);
         // SAFETY: draw with objects owned by this layer and the engine's glyph atlas
         unsafe {
-            gl.use_program(Some(self.program));
-            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
-            self.anchor.set_view(gl, view, viewport, relief.is_some(), DEPTH_BIAS);
-            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_f32(ratio.as_ref(), pixel_ratio as f32);
             gl.uniform_2_f32(atlas_size_u.as_ref(), atlas_size.0 as f32, atlas_size.1 as f32);
             gl.uniform_1_f32(opacity.as_ref(), stops(&self.style.opacity, camera.zoom) as f32);
-            self.projection.set(gl, view);
-            self.drape.bind(gl, &self.drape_uniforms, relief);
             // The sampler units are set once, by `SymbolLayer::new`
             for (unit, target, texture) in [
-                (LABELS_UNIT, glow::TEXTURE_2D, self.labels_texture),
-                (VISIBLE_UNIT, glow::TEXTURE_2D, self.visible_texture),
+                (LABELS_UNIT, glow::TEXTURE_2D, self.labels_table.texture),
+                (VISIBLE_UNIT, glow::TEXTURE_2D, self.visible_table.texture),
                 (ATLAS_UNIT, glow::TEXTURE_2D_ARRAY, atlas),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(target, Some(texture));
             }
             gl.active_texture(glow::TEXTURE0);
-            gl.disable(glow::CULL_FACE);
-            if relief.is_some() {
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LEQUAL);
-                gl.depth_mask(false);
-            }
+            let _depth = DepthState::over_ground(gl, relief.is_some());
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, self.quad_count);
             gl.bind_vertex_array(None);
-            gl.enable(glow::CULL_FACE);
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_mask(true);
         }
         false
     }
@@ -588,12 +575,12 @@ impl Layer for SymbolLayer {
     fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
-            gl.delete_program(self.program);
+            gl.delete_program(self.overlay.program);
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.quads);
-            gl.delete_texture(self.labels_texture);
-            gl.delete_texture(self.visible_texture);
         }
+        self.labels_table.delete(gl);
+        self.visible_table.delete(gl);
         self.drape.delete(gl);
     }
 }

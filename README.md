@@ -94,11 +94,11 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 | Layer | | |
 |---|---|---|
 | [Networks](https://graffkevin.github.io/isard/layers/networks) | `addNetwork` | millions of edges colored by a value per node, worked out per pixel along the edges |
-| [Lines, circles, fills](https://graffkevin.github.io/isard/layers/features) | `addLines`, `addCircles`, `addFills` | GeoJSON styled per feature: zoom stops, functions, values through a ramp, filters |
+| [Lines, circles, fills](https://graffkevin.github.io/isard/layers/features) | `addLines`, `addCircles`, `addFills` | GeoJSON styled per feature: zoom stops, functions, values through a ramp, filters; in any CRS, KML, GPX and TopoJSON parsed |
 | [Labels](https://graffkevin.github.io/isard/layers/labels) | `addSymbols` | SDF fonts (Noto Sans by default, any glyphs), halos, along lines, collisions shared by all layers |
 | [Buildings](https://graffkevin.github.io/isard/layers/buildings) | `addExtrusions` | tiles or one set, colored by values or by a network's times |
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
-| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS, equirectangular tiles reprojected, or tiles drawn by your code |
+| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS; in Web Mercator, or reprojected from another grid (longitudes and latitudes, Lambert-93, UTM, any CRS through proj4); or tiles drawn by your code |
 | [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, glb, external tilesets, compressed or not |
 
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in

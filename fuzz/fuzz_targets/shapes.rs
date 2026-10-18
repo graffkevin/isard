@@ -4,7 +4,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use geo::shapes::{Polygons, extrude, triangulate};
+use geo::shapes::{OwnedPolygons, Polygons, chunk_blocks, extrude, polygon_rings, triangulate, triangulate_with};
 use glam::DVec2;
 use libfuzzer_sys::fuzz_target;
 
@@ -36,7 +36,19 @@ fuzz_target!(|input: Input| {
     let mesh = triangulate(&polygons);
     let n = mesh.vertices.len() as u32;
     assert!(mesh.indices.iter().all(|&i| i < n), "index out of the vertices");
-    let blocks = extrude(&polygons, origin);
+    let top = mesh.top_vertices as u32;
+    assert!(mesh.indices[..mesh.top].iter().all(|&i| i < top), "top cap past its vertices");
+    // A fill layer keeps the polygons and builds the flat cap, then the prism, from them
+    let kept = OwnedPolygons::new(&polygons);
+    let flat = triangulate_with(&kept.as_polygons(), geo::shapes::SQUARE, false);
+    assert_eq!(flat.indices, mesh.indices[..mesh.top], "flat cap not the prism's");
+    let rings: usize = polygon_rings(&polygons).map(|r| r.len()).sum();
+    assert!(rings < ring_start.len().max(1), "a ring shared by two polygons");
+    let mut blocks = extrude(&polygons, origin);
+    let count = blocks.indices.len();
+    let chunks = chunk_blocks(&mut blocks);
     let n = blocks.vertices.len() as u32;
+    assert_eq!(blocks.indices.len(), count, "blocks lost in the sort");
+    assert_eq!(chunks.start.last().map(|&s| s as usize), Some(count), "squares not covering the blocks");
     assert!(blocks.indices.iter().all(|&i| i < n), "index out of the blocks");
 });

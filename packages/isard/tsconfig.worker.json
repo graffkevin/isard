@@ -9,7 +9,11 @@
     "src/protocol.ts",
     "src/decoders.ts",
     "src/basemap.worker.ts",
+    "src/resample.ts",
+    "src/geo.ts",
+    "src/lru.ts",
     "src/mvt.ts",
+    "src/terrain.ts",
     "src/vectorstyle.ts"
   ]
 }

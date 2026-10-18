@@ -4,6 +4,7 @@
 use super::container::slice;
 use super::gltf::{Gltf, index, offset};
 use serde_json::Value;
+use std::rc::Rc;
 
 /// Most values of an accessor without buffer view (zeros, possibly sparse)
 const MAX_ZEROS: usize = 1 << 22;
@@ -94,9 +95,27 @@ fn fits(length: usize, offset: usize, stride: usize, count: usize, element: usiz
 }
 
 impl Gltf<'_> {
-    /// Accessor values as f32 (normalized integers mapped to [0, 1] or [-1, 1], other integers kept as values)
-    pub(super) fn floats(&self, index: usize) -> Result<Vec<f32>, String> {
-        self.accessor(index, |l| float_reader(l.component_type, l.normalized))
+    /// Accessor values as f32 (normalized integers mapped to [0, 1] or [-1, 1], other integers kept as values), read
+    /// once per tile however many primitives and nodes use them
+    pub(super) fn floats(&self, index: usize) -> Result<Rc<[f32]>, String> {
+        if let Some(values) = self.floats.borrow().get(&index) {
+            return Ok(values.clone());
+        }
+        let values: Rc<[f32]> = self
+            .accessor(index, |l| float_reader(l.component_type, l.normalized))?
+            .into();
+        self.floats.borrow_mut().insert(index, values.clone());
+        Ok(values)
+    }
+
+    /// Accessor values as triangle indices, read once per tile as `floats`
+    pub(super) fn indices(&self, index: usize) -> Result<Rc<[u32]>, String> {
+        if let Some(values) = self.indices.borrow().get(&index) {
+            return Ok(values.clone());
+        }
+        let values: Rc<[u32]> = self.accessor(index, |l| index_reader(l.component_type))?.into();
+        self.indices.borrow_mut().insert(index, values.clone());
+        Ok(values)
     }
 
     /// Values of an accessor, read by `reader`: from its buffer view (interleaved or not), or zeros without one, then
@@ -111,7 +130,8 @@ impl Gltf<'_> {
         let read = reader(&layout)?;
         let (count, components, size, element) = (layout.count, layout.components, layout.size, layout.element());
         let total = count.checked_mul(components).ok_or("accessor too large")?;
-        self.spend(total)?;
+        // Spent by the primitives that use them (`Gltf::spend`); not more than the budget left, before the allocation
+        self.within(total)?;
         let mut out = if let Some(view_index) = self::index(&accessor["bufferView"]) {
             let bytes = self.view(view_index)?;
             let start = offset(&accessor["byteOffset"])?;
@@ -220,7 +240,7 @@ mod tests {
         let p = &mesh.primitives[0];
         let at = |i: usize| vertex(&mesh, i);
         assert!(at(0).length() < 1e-6 && (at(1) - DVec3::X).length() < 1e-6 && (at(2) - DVec3::Y).length() < 1e-6);
-        assert_eq!(p.uvs, [0.0, 0.0, 0.0, 0.0, 0.5, 0.25]);
+        assert_eq!(*p.uvs, [0.0, 0.0, 0.0, 0.0, 0.5, 0.25]);
         // A sparse index past the accessor, too many sparse values: errors
         let mut bad = json.clone();
         bad["accessors"][1]["sparse"]["indices"]["componentType"] = json!(5125);

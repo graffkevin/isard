@@ -16,9 +16,12 @@ Isard is built for maps where everything changes at every mouse move. What makes
   draws. `pick` and `pickFeature` wait for the GPU: on hover, `hoverfeature` picks without waiting.
 - **Work off the main thread.** Images decoded by the browser, 3D Tiles decoded in workers (Draco, meshopt, KTX2),
   vector tiles drawn in workers on CPU canvases (an opaque tile moved out of its canvas without a copy, no read-back
-  on the main thread at the upload), each worker keeping its share of the decoded tiles. Still on the main thread:
-  the Terrarium and Terrain-RGB relief (each PNG decoded by the browser, its colors turned into altitudes in the
-  page: 256 × 256 pixels a tile) and the reprojection of equirectangular rasters (a Canvas 2D drawing per tile).
+  on the main thread at the upload), each worker keeping its share of the decoded tiles. The same workers turn the
+  colors of the Terrarium and Terrain-RGB relief into altitudes (256 × 256 a tile, moved to the page without a copy)
+  and draw the rasters reprojected from another grid (longitudes and latitudes, Lambert-93…: each tile planned in the
+  page, 289 points projected, then sampled in a worker from the source tiles each worker keeps); with `workers:
+  false`, both run in the page. The basemap's labels are shaped in the page, each vector tile's once
+  while it is kept: as the view moves, only the labels of the tiles that come into view are shaped.
 - **Less WebAssembly for most maps.** The engine comes in two builds: without 3D Tiles (`isard_core_bg.wasm`, 220 KB
   gzipped), loaded by every map, and with them (`isard_bg.wasm`, 330 KB), loaded for the first 3D Tiles layer. That
   move costs a download and a stall of a frame or two, the map being rebuilt on the new engine; `tiles3d: true`

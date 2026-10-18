@@ -32,7 +32,8 @@ const restore = setGlobals({
 });
 afterAll(restore);
 
-const { GeoMap, defaultEasing } = await import('../src/map.ts');
+const { GeoMap } = await import('../src/map.ts');
+const { defaultEasing } = await import('../src/animation.ts');
 const { TileLoader } = await import('../src/loader.ts');
 const { geoplateformeWms, geoplateformeWmts } = await import('../src/geoplateforme.ts');
 const {
@@ -377,6 +378,65 @@ describe('options', () => {
     expect(loader).toBeInstanceOf(Function);
     map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png' });
     expect(engine.last('addRaster')?.slice(2)).toEqual([19, 1, 1, undefined, undefined]);
+  });
+
+  test("the vector basemap's tiles are 512 pixels, or the size asked for", async () => {
+    const warn = console.warn;
+    // The style is not served here
+    console.warn = () => undefined;
+    try {
+      const { engine: sharp } = await create({ basemap: 'osm-positron' });
+      expect(sharp.last('addRaster')?.[5]).toBe(512);
+      const { engine: light } = await create({ basemap: 'osm-positron', basemapTileSize: 256 });
+      expect(light.last('addRaster')?.[5]).toBe(256);
+      // The styles failed meanwhile
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test('the relief and the reprojected rasters are decoded by the workers of the map, or in the page without', async () => {
+    const sent: { type: string; id: number }[] = [];
+    class RecordingWorker {
+      onmessage: ((event: { data: unknown }) => void) | undefined;
+      postMessage(message: { type: string; id: number }) {
+        sent.push(message);
+        const answer =
+          message.type === 'heights' ? { heights: Float32Array.of(1) } : { image: { width: 256, height: 256 } };
+        queueMicrotask(() => this.onmessage?.({ data: { id: message.id, ...answer } }));
+      }
+      terminate() {}
+    }
+    const restoreWorkers = setGlobals({ Worker: RecordingWorker, OffscreenCanvas: class {} });
+    const signal = new AbortController().signal;
+    try {
+      const { map, engine } = await create({ workers: 2, terrain: true });
+      const terrain = engine.last('setTerrain')?.[4] as (...a: unknown[]) => Promise<Float32Array | null>;
+      expect(await terrain(3, 4, 5, signal)).toEqual(Float32Array.of(1));
+      const url = TERRAIN_TILES.url.replace('{z}', '3').replace('{x}', '4').replace('{y}', '5');
+      expect(sent[0]).toMatchObject({ type: 'heights', url, encoding: 'terrarium', floor: 0 });
+      map.addRaster({ url: 'https://trek.example/{z}/{y}/{x}.jpg', grid: 'equirectangular', maxZoom: 8 });
+      const raster = engine.last('addRaster')?.[6] as (...a: unknown[]) => Promise<unknown>;
+      expect(await raster(3, 1, 1, signal)).toEqual({ width: 256, height: 256 });
+      // Planned here (level 4 around 74° N, as in the old strips: z - 1 and two levels finer there), drawn by a worker
+      // from the source tiles under the Mercator tile
+      const { job } = sent.at(-1) as unknown as { job: { size: number; sources: { url: string }[] } };
+      expect(sent.at(-1)).toMatchObject({ type: 'reproject', job: { size: 256, n: 16 } });
+      const rows = [0, 1, 2].flatMap((row) => [4, 5, 6, 7].map((col) => `https://trek.example/4/${row}/${col}.jpg`));
+      expect(job.sources.map((s) => s.url)).toEqual(rows);
+      // Without workers: fetched in the page
+      sent.length = 0;
+      fetchMock.mockClear();
+      const { engine: alone } = await create({ workers: false, terrain: true });
+      const local = alone.last('setTerrain')?.[4] as (...a: unknown[]) => Promise<Float32Array | null>;
+      // The fetched bytes are no PNG (and the test has no createImageBitmap): a rejection, the engine retries
+      await expect(local(3, 4, 5, signal)).rejects.toThrow();
+      expect(fetchMock.mock.calls.map(([u]) => u)).toEqual([url]);
+      expect(sent).toEqual([]);
+    } finally {
+      restoreWorkers();
+    }
   });
 
   test('an unknown basemap throws, before anything is created or removed', async () => {

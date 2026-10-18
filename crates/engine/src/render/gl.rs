@@ -266,9 +266,12 @@ impl Grid {
 
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let n = GRID + 1;
-        let mut vertices: Vec<f32> = (0..n)
-            .flat_map(|j| (0..n).flat_map(move |i| [f32::from(i) / f32::from(GRID), f32::from(j) / f32::from(GRID)]))
-            .collect();
+        let mut vertices: Vec<f32> = Vec::new();
+        for j in 0..n {
+            for i in 0..n {
+                vertices.extend([f32::from(i) / f32::from(GRID), f32::from(j) / f32::from(GRID)]);
+            }
+        }
         let mut indices: Vec<u16> = Vec::new();
         for j in 0..GRID {
             for i in 0..GRID {
@@ -407,8 +410,228 @@ pub fn image_bitmap_2d(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) {
 }
 
 /// Width of the tables read with `texelFetch` (an entry per texel, row after row): 4096 is supported everywhere
-/// WebGL2 is. GLSL: `ivec2(int(i & 4095u), int(i >> 12))`
+/// WebGL2 is. GLSL: `table_texel(i)` (`COMMON`)
 pub const TABLE_WIDTH: usize = 4096;
+const _: () = assert!(TABLE_WIDTH.is_power_of_two());
+
+/// Texels of the ramps (RGBA8, one row) that turn values into colors: the feature layers' and the networks'
+pub const RAMP_TEXELS: usize = 256;
+
+/// Texture units, set once per program (`sampler_units`). The raster pass takes 0 to `STACK - 1` for its tile pools and
+/// `STACK` for the relief, the ground layers their own textures from `STACK + 1` up (`render::ground`); the layers
+/// drawn over the ground share these
+pub mod unit {
+    /// A layer's own textures (a line layer's table, a network's values…)
+    pub const OWN: [u32; 5] = [1, 2, 3, 4, 5];
+    /// The drape: the page table and the elevation pool (`render::drape`)
+    pub const PAGE: u32 = 6;
+    pub const HEIGHTS: u32 = 7;
+    /// The feature textures (`render::features`)
+    pub const STYLE: u32 = 8;
+    pub const VALUES: u32 = 9;
+    pub const MASK: u32 = 10;
+    pub const RAMP: u32 = 11;
+}
+
+/// GLSL shared by the programs of the layers, generated from the constants above: `table_texel(i)`, the texel of entry
+/// `i` of a table; `ramp_uv(t)`, where a ramp holds the color at `t` (0 to 1, clamped); `pick_color(id, layer)`, the
+/// color of the picking pass for an id (a feature's number + 1, 24 bits, little end in red) and a layer
+#[must_use]
+pub fn common() -> String {
+    let last = RAMP_TEXELS - 1;
+    format!(
+        "ivec2 table_texel(highp uint i) {{ return ivec2(int(i & {mask}u), int(i >> {shift}u)); }}
+vec2 ramp_uv(float t) {{ return vec2((clamp(t, 0.0, 1.0) * {last}.0 + 0.5) / {RAMP_TEXELS}.0, 0.5); }}
+vec4 pick_color(highp uint id, float layer) {{
+  return vec4(float(id & 255u), float((id >> 8) & 255u), float((id >> 16) & 255u), layer) / 255.0;
+}}
+",
+        mask = TABLE_WIDTH - 1,
+        shift = TABLE_WIDTH.trailing_zeros(),
+    )
+}
+
+/// A vertex shader of the layers: `common()` then `parts`
+#[must_use]
+pub fn vertex_shader(parts: &[&str]) -> String {
+    shader("#version 300 es\n", parts)
+}
+
+/// A fragment shader of the layers: high precision, `common()`, then `parts`
+#[must_use]
+pub fn fragment_shader(parts: &[&str]) -> String {
+    shader("#version 300 es\nprecision highp float;\nprecision highp int;\n", parts)
+}
+
+fn shader(head: &str, parts: &[&str]) -> String {
+    let mut source = head.to_owned() + &common();
+    for part in parts {
+        source.push_str(part);
+    }
+    source
+}
+
+/// Sets the state every layer starts from (`Layer`): blending on (straight alpha), back faces culled (clockwise front
+/// faces), no depth or stencil test, depth and stencil written (`LEQUAL` when tested), every color channel written, no
+/// scissor.
+/// The frame and the picking pass start from it whatever was left before
+pub fn reset_state(gl: &glow::Context) {
+    // SAFETY: state changes on a live context
+    unsafe {
+        gl.enable(glow::BLEND);
+        gl.blend_func_separate(
+            glow::SRC_ALPHA,
+            glow::ONE_MINUS_SRC_ALPHA,
+            glow::ONE,
+            glow::ONE_MINUS_SRC_ALPHA,
+        );
+        gl.enable(glow::CULL_FACE);
+        gl.front_face(glow::CW);
+        gl.disable(glow::DEPTH_TEST);
+        gl.depth_func(glow::LEQUAL);
+        gl.depth_mask(true);
+        gl.disable(glow::STENCIL_TEST);
+        gl.stencil_mask(0xff);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.color_mask(true, true, true, true);
+    }
+}
+
+/// The depth state of a layer while it draws, set back to `reset_state`'s when dropped (culling on, no depth test,
+/// depth written). Culling is off but for the flat ground: quads built on screen face either way, and blocks are seen
+/// from inside
+#[must_use = "the state is set back when the guard is dropped"]
+pub struct DepthState<'a>(&'a glow::Context);
+
+impl<'a> DepthState<'a> {
+    /// Drawn over the ground: in relief, tested against the ground's depth (`LEQUAL`, the hills hide what lies behind
+    /// them) and not written; flat, no test
+    pub fn over_ground(gl: &'a glow::Context, relief: bool) -> Self {
+        // SAFETY: state changes on a live context, set back by `drop`
+        unsafe {
+            gl.disable(glow::CULL_FACE);
+            if relief {
+                gl.enable(glow::DEPTH_TEST);
+                gl.depth_func(glow::LEQUAL);
+                gl.depth_mask(false);
+            }
+        }
+        Self(gl)
+    }
+
+    /// The ground drawn again (`RasterPass::redraw`): in relief as `over_ground`, both faces (the skirts hang either
+    /// side); flat, as the frame starts (the far side of the globe culled)
+    pub fn ground(gl: &'a glow::Context, relief: bool) -> Self {
+        if relief {
+            return Self::over_ground(gl, true);
+        }
+        Self(gl)
+    }
+
+    /// Solid: tested (`LEQUAL`) and written, the blocks of an extrusion layer hiding one another
+    pub fn solid(gl: &'a glow::Context) -> Self {
+        // SAFETY: state changes on a live context, set back by `drop`
+        unsafe {
+            gl.disable(glow::CULL_FACE);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+        }
+        Self(gl)
+    }
+}
+
+impl Drop for DepthState<'_> {
+    fn drop(&mut self) {
+        let gl = self.0;
+        // SAFETY: state changes on a live context
+        unsafe {
+            gl.enable(glow::CULL_FACE);
+            gl.disable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+        }
+    }
+}
+
+/// An attribute of the instances of a buffer: location, components, whether they are floats (else one u32), byte
+/// offset in the instance
+pub type Attribute = (u32, i32, bool, i32);
+
+/// Draws ranges of instances (`first..end`) of the bound vertex array, `vertices` each as a triangle strip: WebGL2 has
+/// no base instance, so the instance attributes are pointed at the first instance of each range (buffer bound to
+/// `ARRAY_BUFFER`, `stride` bytes per instance)
+pub fn draw_instances(gl: &glow::Context, attributes: &[Attribute], stride: i32, vertices: i32, ranges: &[(u32, u32)]) {
+    // SAFETY: the caller bound the vertex array and the instance buffer; the ranges are within it
+    unsafe {
+        for &(first, end) in ranges {
+            let base = first as i32 * stride;
+            for &(location, size, float, offset) in attributes {
+                if float {
+                    gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, base + offset);
+                } else {
+                    gl.vertex_attrib_pointer_i32(location, size, glow::UNSIGNED_INT, stride, base + offset);
+                }
+            }
+            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, vertices, (end - first) as i32);
+        }
+    }
+}
+
+/// A table texture kept from one content to the next (`table_texture`): reused while what comes fits, replaced by a
+/// larger one (half as large again as needed, room for what follows) otherwise, or by a smaller one when it would
+/// stay four times too large. A new texture is made before the old one is deleted: if it cannot be, nothing changes
+pub struct Table {
+    pub texture: glow::Texture,
+    format: u32,
+    /// Texels it holds
+    capacity: usize,
+}
+
+impl Table {
+    pub fn new(gl: &glow::Context, format: u32, texels: usize) -> Result<Self, String> {
+        Ok(Self {
+            texture: table_texture(gl, format, texels)?,
+            format,
+            capacity: table_rows(texels) * TABLE_WIDTH,
+        })
+    }
+
+    /// A texture with room for `texels` if this one has not (or is far too large), for `replace`: half as large again
+    /// as needed, or just enough if the GPU takes no more. Without one, this table's texture is left bound
+    pub fn prepare(&self, gl: &glow::Context, texels: usize) -> Result<Option<(glow::Texture, usize)>, String> {
+        let rows = table_rows(texels);
+        if keeps(self.capacity / TABLE_WIDTH, rows) {
+            // SAFETY: binding a texture owned by this table
+            unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.texture)) };
+            return Ok(None);
+        }
+        let roomy = rows.saturating_add(rows / 2).saturating_mul(TABLE_WIDTH);
+        let made = table_texture(gl, self.format, roomy)
+            .map(|t| (t, roomy))
+            .or_else(|_| table_texture(gl, self.format, texels).map(|t| (t, rows * TABLE_WIDTH)))?;
+        Ok(Some(made))
+    }
+
+    /// Takes the texture `prepare` made (if any), the old one deleted
+    pub fn replace(&mut self, gl: &glow::Context, made: Option<(glow::Texture, usize)>) {
+        if let Some((texture, capacity)) = made {
+            // SAFETY: the old texture, replaced, is not used afterwards
+            unsafe { gl.delete_texture(self.texture) };
+            (self.texture, self.capacity) = (texture, capacity);
+        }
+    }
+
+    pub fn delete(&self, gl: &glow::Context) {
+        // SAFETY: texture owned by this table, not used afterwards
+        unsafe { gl.delete_texture(self.texture) };
+    }
+}
+
+/// Whether a table of `have` rows is kept for `rows`: they fit, and it is not four times too large
+fn keeps(have: usize, rows: usize) -> bool {
+    rows <= have && rows.saturating_mul(4) >= have
+}
 
 /// Rows of a table of `texels` texels (at least one)
 #[must_use]
@@ -523,6 +746,16 @@ mod tests {
         assert_eq!(table_rows(0), 1);
         assert_eq!(table_rows(TABLE_WIDTH), 1);
         assert_eq!(table_rows(TABLE_WIDTH + 1), 2);
+    }
+
+    #[test]
+    fn tables_are_kept_while_they_fit() {
+        assert!(keeps(1, 1) && keeps(6, 4) && keeps(4, 1));
+        // Too small, or four times too large: replaced
+        assert!(!keeps(4, 5) && !keeps(5, 1));
+        let shader = common();
+        assert!(shader.contains("i & 4095u") && shader.contains("i >> 12u"), "{shader}");
+        assert!(shader.contains("* 255.0 + 0.5) / 256.0"), "{shader}");
     }
 
     #[test]

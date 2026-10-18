@@ -3,6 +3,7 @@
  * the map recreates its engine and every layer in order, with the same handle (its id is updated).
  */
 import { parseColor, rampTexels, stops } from './features.ts';
+import { mercatorX, mercatorY, toMercator } from './geo.ts';
 import type {
   LayerHost,
   LonLat,
@@ -157,7 +158,7 @@ export class NetworkLayer extends Layer {
       mercator = { nodes: unpack(n, origin), lines: l && unpack(l, origin) };
     } else {
       // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
-      mercator = { nodes: toMercator(nodes), lines: lines && toMercator(lines.points) };
+      mercator = { nodes: mercatorPoints(nodes), lines: lines && mercatorPoints(lines.points) };
       const origin: [number, number] = [mercator.nodes[0] ?? 0, mercator.nodes[1] ?? 0];
       this.kept = {
         origin,
@@ -218,15 +219,12 @@ function unpack(points: Float32Array, [ox, oy]: [number, number]): Float64Array 
   return out;
 }
 
-const MAX_LAT = 85.051128779806589;
-
 /** Longitudes and latitudes (degrees, interleaved) to Mercator [0, 1], y towards the south */
-function toMercator(lonLat: Float64Array): Float64Array {
+function mercatorPoints(lonLat: Float64Array): Float64Array {
   const out = new Float64Array(lonLat.length);
   for (let i = 0; i < lonLat.length; i += 2) {
-    const lat = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lonLat[i + 1] ?? 0)) * Math.PI) / 180;
-    out[i] = ((lonLat[i] ?? 0) + 180) / 360;
-    out[i + 1] = 0.5 - Math.log(Math.tan(Math.PI / 4 + lat / 2)) / (2 * Math.PI);
+    out[i] = mercatorX(lonLat[i] ?? 0);
+    out[i + 1] = mercatorY(lonLat[i + 1] ?? 0);
   }
   return out;
 }
@@ -282,7 +280,7 @@ export interface GroundTexture {
 export interface GroundOptions {
   /**
    * GLSL ES 3.0 defining `vec4 ground(vec2 offset)`: the color of the ground (premultiplied alpha, 0 for nothing) at
-   * `offset`, the Mercator offset of the pixel from `anchor` (times `ISARD_EARTH`: metres of EPSG:3857), exact to
+   * `offset`, the Mercator offset of the pixel from `anchor` (times `ISARD_CIRCUMFERENCE`: metres of EPSG:3857), exact to
    * the millimetre at any zoom. The code declares its own uniforms and samplers; also there: `u_zoom`,
    * `u_pixel_ratio`
    */
@@ -361,7 +359,7 @@ export class GroundLayer extends Layer {
 
   /** @internal */
   protected create(engine: Engine): number {
-    const [ax, ay] = mercatorPoint(this.options.anchor);
+    const [ax, ay] = toMercator(this.options.anchor);
     const id = engine.addGround(
       this.options.code,
       ax,
@@ -375,14 +373,9 @@ export class GroundLayer extends Layer {
   }
 }
 
-function mercatorPoint([lon, lat]: LonLat): [number, number] {
-  const out = toMercator(Float64Array.of(lon, lat));
-  return [out[0] ?? 0, out[1] ?? 0];
-}
-
 /** A lon/lat box to Mercator min x, min y, max x, max y (y towards the south) */
 function mercatorBox([west, south, east, north]: [number, number, number, number]): [number, number, number, number] {
-  const [x0, y1] = mercatorPoint([west, south]);
-  const [x1, y0] = mercatorPoint([east, north]);
+  const [x0, y1] = toMercator([west, south]);
+  const [x1, y0] = toMercator([east, north]);
   return [x0, y0, x1, y1];
 }

@@ -133,8 +133,9 @@ fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
             points[j * n + i] = view.position(min + (max - min) * t, shift);
         }
     }
-    // In relief, the ground is taken at the altitude of the center; it is visible if any of its height range (sea
-    // level to twice the center's: valleys and peaks) is
+    // The samples stand at the altitude of the camera's center (`view.lift`, its ground's: 0 without relief or over
+    // the sea), for the size and the distance. Lifted, the tile counts as visible if any of 0 to twice that altitude
+    // is (valleys and peaks around the center); a center at sea level tests sea level only
     let up = DVec3::new(0.0, 0.0, view.lift);
     for p in &mut points[..n * n] {
         *p += up;

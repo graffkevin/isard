@@ -1,8 +1,9 @@
 /**
  * Vector basemaps from a MapLibre style (OpenFreeMap's Positron by default): the fills, lines, circles and raster
- * layers drawn tile by tile in workers into the raster pool, so that they lie on the relief like any basemap and composite
- * with the hillshade in one pass; and the labels of the style's symbol layers in a symbol layer of their own, kept
- * above the application's layers (as MapLibre's `beforeId: firstSymbol` does), shaped and placed by the engine.
+ * layers drawn tile by tile in workers into the raster pool, so that they lie on the relief like any basemap and
+ * composite with the hillshade in one pass; and the labels of the style's symbol layers in a symbol layer of their own,
+ * kept above the application's layers (as MapLibre's `beforeId: firstSymbol` does), listed by the workers, shaped in
+ * the page once per vector tile, placed by the engine.
  *
  * Any subset of the style can be drawn on its own raster layer (`raster({ layers })`), at its own place in the stack:
  * rivers from the basemap's data over a flood layer, for instance, restyled with `extraLayers`.
@@ -10,11 +11,15 @@
 import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } from './basemap.worker.ts';
 import { OPENFREEMAP_ATTRIBUTION } from './basemaps.ts';
 import type { Feature, Size } from './features.ts';
+import { mercatorX, mercatorY } from './geo.ts';
 import { IGN_ATTRIBUTION } from './geoplateforme.ts';
 import type { Layer, RasterLayer } from './layers.ts';
+import { Lru } from './lru.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
+import { type Job, SOURCE_CACHE } from './resample.ts';
 import type { SymbolLayer } from './symbols.ts';
+import type { PngEncoding } from './terrain.ts';
 import {
   type Json,
   type LabelCandidate,
@@ -109,9 +114,8 @@ export function tilePriority(z: number, x: number, y: number, camera: Pick<Camer
   if (z - 1 > camera.zoom + 1) return 'low';
   const n = 2 ** z;
   const [lon, lat] = camera.center;
-  const cx = ((lon + 180) / 360) * n;
-  const phi = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
-  const cy = ((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * n;
+  const cx = mercatorX(lon) * n;
+  const cy = mercatorY(lat) * n;
   // Across the antimeridian, the short way
   let dx = Math.abs(x + 0.5 - cx) % n;
   dx = Math.min(dx, n - dx);
@@ -239,6 +243,33 @@ export class BasemapWorkers {
     });
   }
 
+  /** The altitudes of a PNG relief tile `z`/`x`/`y` at `url`, decoded by a worker (see `fetchHeights`) */
+  heights(
+    url: string,
+    encoding: PngEncoding,
+    floor: number | undefined,
+    [z, x, y]: [number, number, number],
+    signal: AbortSignal,
+    owner: object,
+  ): Promise<Float32Array | null> {
+    const work: BasemapWork = { type: 'heights', url, encoding, ...(floor === undefined ? {} : { floor }) };
+    return this.request(this.worker(z, x, y), work, owner, signal).then((r) => ('heights' in r ? r.heights : null));
+  }
+
+  /** Mercator tile `z`/`x`/`y` reprojected by a worker from the source images of its plan (see `resampler`) */
+  reproject(
+    job: Job,
+    [z, x, y]: [number, number, number],
+    signal: AbortSignal,
+    owner: object,
+  ): Promise<ImageBitmap | null> {
+    // Blocks of 4 × 4 Mercator tiles go to the same worker: neighbours share source tiles, each worker keeps its share
+    const worker = this.worker(Math.max(0, z - 2), x >> 2, y >> 2);
+    const cached = Math.max(16, Math.ceil(SOURCE_CACHE / this.workers.length));
+    const work: BasemapWork = { type: 'reproject', job, cached };
+    return this.request(worker, work, owner, signal).then((r) => ('image' in r ? r.image : null));
+  }
+
   /** Cancels the requests of an owner (the workers stop them) */
   cancel(owner: object): void {
     for (const [id, p] of this.pending) {
@@ -258,6 +289,33 @@ export class BasemapWorkers {
     this.pending.clear();
     for (const p of pending) p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
   }
+}
+
+/** The labels of a vector tile: features by style layer (its index in the style), the higher layers first */
+type TileLabels = [layer: number, features: Feature<LabelCandidate>[]][];
+
+/** A tile's label candidates as features, by style layer */
+export function tileLabels(candidates: readonly LabelCandidate[]): TileLabels {
+  const byLayer = new Map<number, Feature<LabelCandidate>[]>();
+  for (const p of candidates) {
+    const feature: Feature<LabelCandidate> = {
+      type: 'Feature',
+      properties: p,
+      geometry: p.along
+        ? {
+            type: 'LineString',
+            coordinates: [
+              [p.lon - p.along[0] / 2, p.lat - p.along[1] / 2],
+              [p.lon + p.along[0] / 2, p.lat + p.along[1] / 2],
+            ],
+          }
+        : { type: 'Point', coordinates: [p.lon, p.lat] },
+    };
+    const list = byLayer.get(p.layer);
+    if (list) list.push(feature);
+    else byLayer.set(p.layer, [feature]);
+  }
+  return [...byLayer].sort((a, b) => b[0] - a[0]);
 }
 
 export class VectorTiles {
@@ -452,8 +510,9 @@ export class VectorTiles {
       return this.renderer((l) => l.type === 'symbol' && layers(l), []);
     });
     renderer.catch(() => undefined);
-    /** The labels of the tiles, the most recently used last */
-    const tiles = new Map<string, Promise<LabelCandidate[]>>();
+    /** The labels of the tiles, as features by style layer, the higher layers first: each list is given to the symbol
+     * layer as a group, shaped once while the tile is kept */
+    const tiles = new Lru<string, Promise<TileLabels>>(256);
     let generation = 0;
     /** The tiles whose labels are shown */
     let shown = '';
@@ -465,12 +524,9 @@ export class VectorTiles {
       const z = Math.max(0, Math.min(Math.floor(camera.zoom), maxzoom));
       const n = 2 ** z;
       const [west, south, east, north] = this.map.getBounds();
-      const tx = (lon: number) => Math.floor(((lon + 180) / 360) * n);
-      const ty = (lat: number) => {
-        const phi = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
-        return Math.floor(((1 - Math.log(Math.tan(phi) + 1 / Math.cos(phi)) / Math.PI) / 2) * n);
-      };
-      const [cx, cy] = [((camera.center[0] + 180) / 360) * n, ty(camera.center[1])];
+      const tx = (lon: number) => Math.floor(mercatorX(lon) * n);
+      const ty = (lat: number) => Math.floor(mercatorY(lat) * n);
+      const [cx, cy] = [mercatorX(camera.center[0]) * n, ty(camera.center[1])];
       // The tiles of the bounds, within a window around the center: a tilted view's bounds reach far, and only the
       // nearest `maxTiles` are kept anyway
       const reach = Math.ceil(Math.sqrt(maxTiles)) + 2;
@@ -495,56 +551,37 @@ export class VectorTiles {
       const lists = await Promise.all(
         keys.map((k, index) => {
           let p = tiles.get(k);
-          if (p) {
-            // Used again: the most recent
-            tiles.delete(k);
-            tiles.set(k, p);
-            return p;
-          }
+          if (p) return p;
           const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
           // The nearest tiles first: the others wait for the raster tiles
           const priority: Priority = index < 4 ? 'auto' : 'low';
           p = this.request(tz, x, y, { type: 'labels', key, z: tz, x, y, priority }).then(
-            (r) => ('labels' in r ? r.labels : []),
+            (r) => tileLabels('labels' in r ? r.labels : []),
             () => {
               // A network error is not kept: the tile is asked for again on the next update
               tiles.delete(k);
               return [];
             },
           );
-          tiles.set(k, p);
           // A bounded cache of tiles' labels, the least recently used dropped
-          if (tiles.size > 256) {
-            const oldest = tiles.keys().next().value;
-            if (oldest !== undefined) tiles.delete(oldest);
-          }
+          tiles.set(k, p);
           return p;
         }),
       );
       if (run !== generation || this.destroyed) return;
       // A tile that failed is missing: the next update asks for it again
       shown = keys.every((k) => tiles.has(k)) ? set : '';
-      const features: Feature<LabelCandidate>[] = lists
-        .flat()
-        // The labels of the higher style layers first: they win the collisions
-        .sort((a, b) => b.layer - a.layer)
-        .map(
-          (p) =>
-            ({
-              type: 'Feature',
-              properties: p,
-              geometry: {
-                type: p.along ? 'LineString' : 'Point',
-                coordinates: p.along
-                  ? [
-                      [p.lon - p.along[0] / 2, p.lat - p.along[1] / 2],
-                      [p.lon + p.along[0] / 2, p.lat + p.along[1] / 2],
-                    ]
-                  : [p.lon, p.lat],
-              },
-            }) as Feature<LabelCandidate>,
-        );
-      symbol.setData(features);
+      // The labels of the higher style layers first: they win the collisions; for each style layer, the tiles nearest
+      // to the center first
+      const layerIds = [...new Set(lists.flatMap((list) => list.map(([layer]) => layer)))].sort((a, b) => b - a);
+      const groups: Feature<LabelCandidate>[][] = [];
+      for (const layer of layerIds) {
+        for (const list of lists) {
+          const group = list.find(([l]) => l === layer)?.[1];
+          if (group) groups.push(group);
+        }
+      }
+      symbol.setGroups(groups);
     };
     // The style failed to load: reported by `ready`
     const refresh = () => {

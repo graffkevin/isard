@@ -146,11 +146,63 @@ fn fill_triangulation(c: &mut Criterion) {
     group.finish();
 }
 
+/// `n` regular pentagons about 20 m wide, 30 m apart, south-east of Paris (the polygons of a building layer)
+fn pentagons(n: u32) -> (Vec<DVec2>, Vec<u32>, Vec<u32>) {
+    let step = 30.0 / 40_075_016.686;
+    let o = isard_geo::camera::mercator(2.35, 48.85);
+    let side = f64::from(n).sqrt().ceil() as u32;
+    let (mut points, mut ring_start, mut polygon_start) = (Vec::new(), vec![0u32], vec![0u32]);
+    for k in 0..n {
+        let c = o + DVec2::new(f64::from(k % side), f64::from(k / side)) * step;
+        points.extend((0..5).map(|i| {
+            let a = f64::from(i) * std::f64::consts::TAU / 5.0;
+            c + DVec2::new(a.cos(), a.sin()) * step / 3.0
+        }));
+        ring_start.push(points.len() as u32);
+        polygon_start.push(ring_start.len() as u32 - 1);
+    }
+    (points, ring_start, polygon_start)
+}
+
+fn fill_memory(c: &mut Criterion) {
+    // 100,000 pentagons: 500,000 points. What a fill layer of them uploads, flat and in relief
+    let (points, ring_start, polygon_start) = pentagons(100_000);
+    let polygons = Polygons {
+        points: &points,
+        ring_start: &ring_start,
+        polygon_start: &polygon_start,
+    };
+    let (min, max) = (points[0], *points.last().unwrap_or(&points[0]));
+    let square = shapes::square_for(min.min(max), min.max(max));
+    let mesh = shapes::triangulate_in(&polygons, square);
+    let vertex = size_of::<shapes::Vertex>();
+    let mb = |bytes: usize| bytes as f64 / 1e6;
+    println!(
+        "fill mesh of 100k pentagons: prism {} vertices, {} indices ({:.1} MB); flat {} vertices, {} indices ({:.1} MB)",
+        mesh.vertices.len(),
+        mesh.indices.len(),
+        mb(mesh.vertices.len() * vertex + mesh.indices.len() * 4),
+        mesh.top_vertices,
+        mesh.top,
+        mb(mesh.top_vertices * vertex + mesh.top * 4),
+    );
+    let mut group = c.benchmark_group("shapes 100k pentagons");
+    group.sample_size(10);
+    group.bench_function("triangulated and chunked", |b| {
+        b.iter(|| {
+            let mut mesh = shapes::triangulate_in(black_box(&polygons), square);
+            shapes::chunk(&mut mesh, square)
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     tile_selection,
     pieces_build,
     collision_placement,
-    fill_triangulation
+    fill_triangulation,
+    fill_memory
 );
 criterion_main!(benches);

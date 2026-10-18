@@ -2,9 +2,10 @@
 //! shaders, so that restyling, recoloring or filtering thousands of features is one texture upload and never touches
 //! the geometry.
 //!
-//! - The style texture holds `TEXELS` RGBA32F texels per feature: its color, its second color (a circle's stroke),
-//!   then two sizes given as zoom stops (up to four zoom-value pairs each, linear in between, as `MapLibre`'s
-//!   `interpolate linear zoom`): a line's width, a circle's radius and stroke width.
+//! - The style texture holds the RGBA32F texels of each feature's style its layer needs (`Layout`): its color, two
+//!   sizes given as zoom stops (up to four zoom-value pairs each, linear in between, as `MapLibre`'s
+//!   `interpolate linear zoom`), its second color: a line's color and width, a circle's colors, radius and stroke
+//!   width, a block's color, height and base height, a fill's color.
 //! - A value per feature (R32F), turned into a color by the layer's ramp when it has one: water depth, a gauge's
 //!   level… Values from 1e29 up (or NaN) keep the feature's own color.
 //! - A visibility mask (R8): the filter.
@@ -15,23 +16,65 @@ use crate::engine::Engine;
 use crate::render::circles::CircleLayer;
 use crate::render::extrusions::ExtrusionLayer;
 use crate::render::fills::FillLayer;
-use crate::render::gl::{self, Objects};
+use crate::render::gl::{self, Objects, RAMP_TEXELS as RAMP, unit};
 use crate::render::lines::LineLayer;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
-/// Texels per feature in the style texture
+/// Texels per feature in the style given to `Features::set_style`: color, second color, size 0 (zooms, values), size
+/// 1 (zooms, values), two unused
 pub const TEXELS: usize = 8;
 /// Floats per feature in the style given to `Features::set_style`
 pub const FLOATS: usize = TEXELS * 4;
 /// Values from here up keep the feature's own color
 pub const NO_VALUE: f32 = 1e29;
-/// Texels of the ramp texture
-const RAMP: usize = 256;
 
-/// GLSL of the feature styles: `feature_visible`, `feature_color`, `feature_size` (sizes 0 and 1, CSS pixels at the
-/// current zoom) and `layer_opacity`
-pub const FEATURES: &str = r"
+/// The texels of the style a layer keeps per feature, in this order (the texel of the given style each one is): color,
+/// size 0 zooms and values, size 1 zooms and values, second color. A layer keeps the first ones it needs
+const ORDER: [usize; 6] = [0, 2, 3, 4, 5, 1];
+
+/// How many texels of the style a layer keeps per feature (the first of `ORDER`)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout(usize);
+
+impl Layout {
+    /// A fill's color
+    pub const FILL: Self = Self(1);
+    /// A line's color and width
+    pub const LINE: Self = Self(3);
+    /// A block's color, height and base height
+    pub const EXTRUSION: Self = Self(5);
+    /// A circle's colors, radius and stroke width
+    pub const CIRCLE: Self = Self(6);
+
+    /// Texels per feature
+    #[must_use]
+    pub fn texels(self) -> usize {
+        self.0
+    }
+
+    /// GLSL of the feature styles for this layout (after `gl::common`): `feature_visible`, `feature_color` (the second
+    /// color only if the layout keeps it), `feature_size` (sizes 0 and 1, as given), `ramp_color`, `style_texel` and
+    /// `layer_opacity`
+    #[must_use]
+    pub fn glsl(self) -> String {
+        format!("const uint STYLE_TEXELS = {}u;\n{FEATURES}", self.0)
+    }
+
+    /// A style as given (`FLOATS` per feature) in this layout
+    fn pack(self, style: &[f32]) -> Vec<f32> {
+        let mut packed = Vec::with_capacity(style.len() / FLOATS * self.0 * 4);
+        for s in style.as_chunks::<FLOATS>().0 {
+            for &k in &ORDER[..self.0] {
+                packed.extend_from_slice(&s[k * 4..k * 4 + 4]);
+            }
+        }
+        packed
+    }
+}
+
+/// GLSL of the feature styles, after `STYLE_TEXELS` (`Layout::glsl`)
+const FEATURES: &str = r"
 uniform highp sampler2D u_style;
 uniform highp sampler2D u_values;
 uniform highp sampler2D u_mask;
@@ -43,8 +86,7 @@ uniform float u_pixel_ratio;
 uniform vec4 u_opacity_zooms;
 uniform vec4 u_opacity_values;
 
-ivec2 feature_texel(uint i) { return ivec2(int(i & 4095u), int(i >> 12)); }
-vec4 style_texel(uint f, uint k) { return texelFetch(u_style, feature_texel(f * 8u + k), 0); }
+vec4 style_texel(uint f, uint k) { return texelFetch(u_style, table_texel(f * STYLE_TEXELS + k), 0); }
 
 // Linear between up to four (zoom, value) stops, constant outside
 float stops(vec4 z, vec4 v) {
@@ -55,31 +97,29 @@ float stops(vec4 z, vec4 v) {
   return v.w;
 }
 
-bool feature_visible(uint f) { return texelFetch(u_mask, feature_texel(f), 0).r > 0.5; }
+bool feature_visible(uint f) { return texelFetch(u_mask, table_texel(f), 0).r > 0.5; }
 
-vec4 feature_color(uint f, uint k) {
-  vec4 c = style_texel(f, k);
-  if (k == 0u && u_ramp_range.z > 0.5) {
-    float v = texelFetch(u_values, feature_texel(f), 0).r;
-    if (v < 1e29 && v == v) {
-      float t = clamp((v - u_ramp_range.x) / max(u_ramp_range.y - u_ramp_range.x, 1e-30), 0.0, 1.0);
-      vec4 r = texture(u_ramp, vec2((t * 255.0 + 0.5) / 256.0, 0.5));
-      c = vec4(r.rgb, r.a * c.a);
-    }
+// The color of value `v` through the layer's ramp, with the alpha of `c`; `c` without a ramp or a value
+vec4 ramp_color(vec4 c, float v) {
+  if (u_ramp_range.z > 0.5 && v < 1e29 && v == v) {
+    float t = clamp((v - u_ramp_range.x) / max(u_ramp_range.y - u_ramp_range.x, 1e-30), 0.0, 1.0);
+    vec4 r = texture(u_ramp, ramp_uv(t));
+    c = vec4(r.rgb, r.a * c.a);
   }
   return c;
 }
 
-float feature_size(uint f, uint k) { return stops(style_texel(f, 2u + 2u * k), style_texel(f, 3u + 2u * k)); }
+// Its color (k = 0), through the ramp by its value; its second color (k = 1), the last texel of its style
+vec4 feature_color(uint f, uint k) {
+  if (k > 0u) return style_texel(f, STYLE_TEXELS - 1u);
+  vec4 c = style_texel(f, 0u);
+  return u_ramp_range.z > 0.5 ? ramp_color(c, texelFetch(u_values, table_texel(f), 0).r) : c;
+}
+
+float feature_size(uint f, uint k) { return stops(style_texel(f, 1u + 2u * k), style_texel(f, 2u + 2u * k)); }
 
 float layer_opacity() { return stops(u_opacity_zooms, u_opacity_values); }
 ";
-
-/// Texture units of the feature textures (the drape takes 6 and 7)
-pub const STYLE_UNIT: u32 = 8;
-pub const VALUES_UNIT: u32 = 9;
-pub const MASK_UNIT: u32 = 10;
-pub const RAMP_UNIT: u32 = 11;
 
 /// Value of four zoom stops (zooms, then values) at a zoom, as the shaders' `stops`
 #[must_use]
@@ -142,6 +182,7 @@ impl LayerStyle {
 /// The feature textures of a layer
 pub struct Features {
     pub count: usize,
+    layout: Layout,
     style: glow::Texture,
     values: glow::Texture,
     mask: glow::Texture,
@@ -177,10 +218,10 @@ impl FeatureUniforms {
             gl,
             program,
             &[
-                (uniforms[0].as_ref(), STYLE_UNIT),
-                (uniforms[1].as_ref(), VALUES_UNIT),
-                (uniforms[2].as_ref(), MASK_UNIT),
-                (uniforms[3].as_ref(), RAMP_UNIT),
+                (uniforms[0].as_ref(), unit::STYLE),
+                (uniforms[1].as_ref(), unit::VALUES),
+                (uniforms[2].as_ref(), unit::MASK),
+                (uniforms[3].as_ref(), unit::RAMP),
             ],
         );
         Self(uniforms)
@@ -188,11 +229,15 @@ impl FeatureUniforms {
 }
 
 impl Features {
-    /// Textures for `count` features: black, size 1, visible, no value
-    pub fn new(gl: &glow::Context, count: usize) -> Result<Self, String> {
+    /// Textures for `count` features styled as `layout` says: black, size 1, visible, no value
+    pub fn new(gl: &glow::Context, count: usize, layout: Layout) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
-        let style = objects.adopt_texture(gl::table_texture(gl, glow::RGBA32F, count.saturating_mul(TEXELS))?);
+        let style = objects.adopt_texture(gl::table_texture(
+            gl,
+            glow::RGBA32F,
+            count.saturating_mul(layout.texels()),
+        )?);
         let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, count)?);
         let mask = objects.adopt_texture(gl::table_texture(gl, glow::R8, count)?);
         let ramp = objects.texture()?;
@@ -212,6 +257,7 @@ impl Features {
         objects.keep();
         let mut features = Self {
             count,
+            layout,
             style,
             values,
             mask,
@@ -227,15 +273,17 @@ impl Features {
         Ok(features)
     }
 
-    /// `FLOATS` per feature: color (RGBA 0-1), second color, then two sizes as stops: four zooms, four values each
+    /// `FLOATS` per feature: color (RGBA 0-1), second color, then two sizes as stops: four zooms, four values each.
+    /// What the layout keeps of it is uploaded
     pub fn set_style(&mut self, gl: &glow::Context, style: &[f32]) {
         let n = (style.len() / FLOATS).min(self.count) * FLOATS;
         // The features past the style given keep theirs, and whether one of them was translucent
         let translucent = style_translucent(&style[..n]);
         self.translucent_style = translucent || (n < self.count * FLOATS && self.translucent_style);
+        let packed = self.layout.pack(&style[..n]);
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.style)) };
-        gl::upload_table(gl, gl::bytes(&style[..n]), n / 4, glow::RGBA, glow::FLOAT, 16);
+        gl::upload_table(gl, gl::bytes(&packed), packed.len() / 4, glow::RGBA, glow::FLOAT, 16);
     }
 
     /// One value per feature; from `NO_VALUE` up (or NaN), the feature keeps its own color
@@ -306,10 +354,10 @@ impl Features {
         // SAFETY: uniforms and bindings on the program in use (its sampler units set once, by `FeatureUniforms::new`)
         unsafe {
             for (unit, texture) in [
-                (STYLE_UNIT, self.style),
-                (VALUES_UNIT, self.values),
-                (MASK_UNIT, self.mask),
-                (RAMP_UNIT, self.ramp),
+                (unit::STYLE, self.style),
+                (unit::VALUES, self.values),
+                (unit::MASK, self.mask),
+                (unit::RAMP, self.ramp),
             ] {
                 gl.active_texture(glow::TEXTURE0 + unit);
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -333,7 +381,7 @@ impl Features {
     }
 }
 
-/// A texture of two floats per entry (RG32F), read with `feature_texel`: the feature of each line and its length,
+/// A texture of two floats per entry (RG32F), read with `table_texel`: the feature of each line and its length,
 /// exact up to 2^24 features
 pub fn index_texture(gl: &glow::Context, entries: &[f32]) -> Result<glow::Texture, String> {
     let texture = gl::table_texture(gl, glow::RG32F, entries.len() / 2)?;
@@ -471,6 +519,30 @@ mod tests {
         // Zooms 0, sizes 1
         assert_eq!(&s[8..16], &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
         assert_eq!(&s[16..24], &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn layouts_keep_the_texels_their_layer_reads() {
+        let mut style = default_style(2);
+        for (k, v) in style.iter_mut().enumerate() {
+            *v = k as f32;
+        }
+        // A line: color, width zooms, width values (texels 0, 2, 3 of each feature)
+        let line = Layout::LINE.pack(&style);
+        assert_eq!(line.len(), 2 * 3 * 4);
+        assert_eq!(&line[..4], &[0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(&line[4..12], &[8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
+        assert_eq!(line[12], 32.0);
+        // A circle: its second color last; a fill: its color only
+        let circle = Layout::CIRCLE.pack(&style);
+        assert_eq!(circle.len(), 2 * 6 * 4);
+        assert_eq!(&circle[20..24], &[4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(Layout::FILL.pack(&style), [0.0, 1.0, 2.0, 3.0, 32.0, 33.0, 34.0, 35.0]);
+        assert_eq!(
+            &Layout::EXTRUSION.pack(&style)[12..20],
+            &[16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0]
+        );
+        assert!(Layout::LINE.glsl().starts_with("const uint STYLE_TEXELS = 3u;"));
     }
 
     #[test]

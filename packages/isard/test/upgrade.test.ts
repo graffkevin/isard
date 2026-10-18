@@ -44,7 +44,8 @@ const restoreGlobals = setGlobals({
   Worker: class {},
 });
 
-const { GeoMap, forgetEngines } = await import('../src/map.ts');
+const { GeoMap } = await import('../src/map.ts');
+const { forgetEngines } = await import('../src/engine-loader.ts');
 
 // Each test file starts with no engine loaded, and leaves none
 beforeAll(forgetEngines);

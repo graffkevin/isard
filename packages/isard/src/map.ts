@@ -1,25 +1,21 @@
 /**
- * The map: canvas, camera, layers, events and the frame loop. Frames are drawn on demand only: an idle map costs
- * nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are drawn in the
- * same frame.
+ * The map: canvas, camera, layers, events, overlays, credits and the frame loop. Frames are drawn on demand only: an
+ * idle map costs nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are
+ * drawn in the same frame. The engine's loading is in engine-loader.ts, its settings from the options in settings.ts,
+ * the camera animations in animation.ts.
  */
-import {
-  BASEMAPS,
-  BODY_TERRAINS,
-  basemapName,
-  HILLSHADE,
-  IGN_ATTRIBUTION,
-  IMAGE_SERVER,
-  imageServerTerrain,
-  SEA,
-  TERRAIN_TILES,
-  TERRAIN_TILES_ATTRIBUTION,
-  TERRAIN_URL,
-} from './basemaps.ts';
-import { parseCssColor } from './color.ts';
+import { easeTo, flyTo, type Step } from './animation.ts';
+import { BASEMAPS, basemapName, HILLSHADE, SEA } from './basemaps.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
-import { DEFAULT_DECODERS } from './decoders.ts';
-import { equirectangularLoader } from './equirectangular.ts';
+import {
+  destroyedEngine,
+  type EngineClass,
+  engineUrl,
+  loadEngine,
+  loadFullEngineLater,
+  preloadFullEngine,
+  startTileLoader,
+} from './engine-loader.ts';
 import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './extrusions.ts';
 import {
   CircleLayer,
@@ -34,19 +30,28 @@ import {
   lineStyle,
 } from './features.ts';
 import { Glyphs } from './glyphs.ts';
+import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './grid.ts';
 import { Interaction } from './interaction.ts';
 import { GroundLayer, type GroundOptions, type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
-import { TileLoader } from './loader.ts';
+import type { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
+import {
+  atmosphereSettings,
+  bodySettings,
+  haloSettings,
+  rgb,
+  type Settings,
+  type TerrainLoader,
+  terrainSettings,
+} from './settings.ts';
 import { injectStyle } from './style.ts';
 import { SymbolLayer, type SymbolOptions, symbolStyle } from './symbols.ts';
-import { encodedTerrainLoader } from './terrain.ts';
+import { encodedTerrainLoader, type PngEncoding, type RemoteHeights } from './terrain.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
   BasemapName,
-  BodyOptions,
   CelestialBody,
   FeatureHit,
   FlyToOptions,
@@ -58,7 +63,6 @@ import type {
   Point,
   Projection,
   RasterOptions,
-  TerrainEncoding,
   TerrainModel,
   TerrainOptions,
   Tiles3dOptions,
@@ -73,21 +77,6 @@ import {
 } from './vectortiles.ts';
 import type { Camera, Engine, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
 
-/** The engine of a destroyed map: every method a no-op returning undefined, but the camera (the last one) and the
- * bounds, which late callers read */
-function destroyed(camera: Camera): Engine {
-  return new Proxy(
-    {},
-    {
-      get: (_, name) => {
-        if (name === 'camera') return () => camera;
-        if (name === 'bounds') return () => Float64Array.of(-180, -85, 180, 85);
-        return () => undefined;
-      },
-    },
-  ) as Engine;
-}
-
 /** Reports an error without throwing it here: the console shows it, as an uncaught one */
 function report(error: unknown): void {
   if (typeof reportError === 'function') reportError(error);
@@ -99,72 +88,6 @@ function report(error: unknown): void {
 
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
-type EngineClass = new (canvas: HTMLCanvasElement, redraw: () => void) => Engine;
-
-/** An engine loaded: its compiled module and its class */
-interface Bindings {
-  module: WebAssembly.Module;
-  Engine: EngineClass;
-}
-
-/** The two builds of the engine, each compiled once per page: `core` without 3D Tiles (a third smaller), loaded by
- * every map; `full` with them, loaded for the first 3D Tiles layer, its module shared with the decoding workers. The
- * core engine has the same API but the 3D Tiles methods: its class is typed as the full one. */
-const engines: { core?: Promise<Bindings>; full?: Promise<Bindings> } = {};
-/** The modules compiled (downloaded and compiled off the main thread, not instantiated): `tiles3d: 'preload'`
- * compiles the full engine ahead, its first 3D Tiles layer then only instantiates it */
-const modules: { core?: Promise<WebAssembly.Module>; full?: Promise<WebAssembly.Module> } = {};
-
-/** @internal Forgets the engines loaded (tests) */
-export function forgetEngines(): void {
-  for (const kind of ['core', 'full'] as const) {
-    delete engines[kind];
-    delete modules[kind];
-  }
-}
-
-function compileEngine(kind: 'core' | 'full', url: string | URL): Promise<WebAssembly.Module> {
-  const compiled = modules[kind];
-  if (compiled) return compiled;
-  const compiling = compile(url).catch((error: unknown) => {
-    // A later call tries again (a network error, a wrong URL fixed)
-    delete modules[kind];
-    throw error;
-  });
-  modules[kind] = compiling;
-  return compiling;
-}
-
-function loadEngine(kind: 'core' | 'full', url: string | URL): Promise<Bindings> {
-  const loaded = engines[kind];
-  if (loaded) return loaded;
-  const loading = (async () => {
-    // The bindings by dynamic import: an application bundles the ones it loads only
-    const [module, bindings] = await Promise.all([
-      compileEngine(kind, url),
-      kind === 'core' ? import('./wasm/isard_core.js') : import('./wasm/isard.js'),
-    ]);
-    await bindings.default({ module_or_path: module });
-    return { module, Engine: bindings.Engine as unknown as EngineClass };
-  })().catch((error: unknown) => {
-    delete engines[kind];
-    throw error;
-  });
-  engines[kind] = loading;
-  return loading;
-}
-
-async function compile(url: string | URL): Promise<WebAssembly.Module> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`isard: failed to load the engine from ${url}: ${response.status}`);
-  try {
-    return await WebAssembly.compileStreaming(response.clone());
-  } catch {
-    // Servers that do not send application/wasm
-    return WebAssembly.compile(await response.arrayBuffer());
-  }
-}
-
 /** Checks a network's arrays before the engine reads them: node index pairs, indices of existing nodes */
 function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
   if (nodes.length % 2 !== 0) throw new Error(`isard: network nodes must be lon, lat pairs (length ${nodes.length})`);
@@ -174,173 +97,6 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
     const node = edges[i] as number;
     if (node >= count) throw new Error(`isard: network edge ${i >> 1} refers to node ${node}, of ${count} nodes`);
   }
-}
-
-/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap), its
- * `relief` the range of its ground (the Earth's dry land, from the Dead Sea to Everest). Mars: the sphere of its
- * equatorial radius (its data take planetocentric latitudes), a faint butterscotch halo of dust */
-const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>> = {
-  earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca', relief: [-450, 8900] },
-  moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f', relief: [-9200, 10800] },
-  mars: {
-    radius: 3396190,
-    flattening: 0,
-    atmosphere: 'rgba(232, 168, 120, 0.6)',
-    color: '#b5714a',
-    relief: [-8300, 21300],
-  },
-};
-
-/** The Earth's halo, RGB 0-1 and its strength: what `atmosphere: true` draws */
-const EARTH_HALO = Float32Array.of(0.42, 0.66, 1, 1);
-
-/** A body from the option, its defaults filled in */
-function bodySettings(body: CelestialBody | undefined): Required<BodyOptions> {
-  if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
-  const relief: [number, number] = [-0.01 * body.radius, 0.01 * body.radius];
-  return { flattening: 0, atmosphere: false, color: '#808080', relief, ...body };
-}
-
-/** The halo of an atmosphere for the engine (RGB 0-1 and its strength, the color's alpha): undefined for none */
-function haloSettings(atmosphere: boolean | string): Float32Array | undefined {
-  if (atmosphere === true) return EARTH_HALO;
-  const color = atmosphere === false ? undefined : parseCssColor(atmosphere);
-  return color && Float32Array.from(color);
-}
-
-/** The loaders of the relief by encoding, URL and floor: the same loader for the same tiles (the engine keeps its
- * tiles when only the exaggeration changes) */
-const terrainLoaders = new Map<string, ReturnType<typeof encodedTerrainLoader>>();
-
-function terrainLoader(url: string, encoding: Exclude<TerrainEncoding, 'float32'>, floor?: number) {
-  const key = `${encoding} ${floor ?? ''} ${url}`;
-  let loader = terrainLoaders.get(key);
-  if (!loader) {
-    loader = encodedTerrainLoader(url, encoding, floor);
-    terrainLoaders.set(key, loader);
-  }
-  return loader;
-}
-
-/** Relief settings from the option: undefined when off. On the Earth the Terrain Tiles by default (worldwide,
- * Terrarium PNGs decoded in the page) or the IGN terrain model (France, raised by the geoid); NASA's on the Moon and
- * Mars; an ArcGIS image service asked for in the body's Mercator */
-function terrainSettings(
-  terrain: boolean | TerrainModel | TerrainOptions | undefined,
-  body: CelestialBody | undefined,
-  radius: number,
-): Settings['terrain'] {
-  if (!terrain) return undefined;
-  let options: TerrainOptions = {};
-  if (typeof terrain === 'string') options = { model: terrain };
-  else if (terrain !== true) options = terrain;
-  const earth = (body ?? 'earth') === 'earth';
-  const exaggeration = options.exaggeration ?? 1;
-  if (options.url === undefined && earth) {
-    if (options.model === 'ign') {
-      const geoid = options.geoid ?? true;
-      return { url: TERRAIN_URL, exaggeration, maxZoom: options.maxZoom ?? 15, geoid, attribution: IGN_ATTRIBUTION };
-    }
-    return {
-      url: TERRAIN_TILES.url,
-      exaggeration,
-      maxZoom: options.maxZoom ?? TERRAIN_TILES.maxZoom,
-      geoid: options.geoid ?? false,
-      // The sea floor of the model at sea level: the oceans stay flat under the basemap's water
-      loader: terrainLoader(TERRAIN_TILES.url, 'terrarium', 0),
-      attribution: TERRAIN_TILES_ATTRIBUTION,
-    };
-  }
-  const preset = body === 'moon' || body === 'mars' ? BODY_TERRAINS[body] : undefined;
-  const url = options.url ?? preset?.url;
-  if (url === undefined) throw new Error('isard: the relief of this body needs a url');
-  const encoding = options.encoding ?? 'float32';
-  // PNG encodings are fetched tile by tile: a {bbox} or an image service would be fetched as it is
-  if (
-    encoding !== 'float32' &&
-    (IMAGE_SERVER.test(url) || !/\{z\}/.test(url) || !/\{x\}/.test(url) || !/\{y\}/.test(url))
-  ) {
-    throw new Error(`isard: the '${encoding}' terrain encoding takes a tile URL with {z}, {x} and {y} (${url})`);
-  }
-  return {
-    url: IMAGE_SERVER.test(url) ? imageServerTerrain(url, earth, radius) : url,
-    exaggeration,
-    maxZoom: options.maxZoom ?? (options.url === undefined && preset ? preset.maxZoom : 15),
-    geoid: options.geoid ?? false,
-    ...(encoding === 'float32' ? {} : { loader: terrainLoader(url, encoding) }),
-    // NASA's credits for its models
-    ...(options.url === undefined && preset ? { attribution: preset.attribution } : {}),
-  };
-}
-
-/** Sky settings for the engine: colors (RGB 0-1) and blends, MapLibre's defaults */
-function atmosphereSettings(options: AtmosphereOptions | undefined): Float32Array | undefined {
-  if (!options) return undefined;
-  return Float32Array.from([
-    ...rgb(options.skyColor ?? '#9cc7ec'),
-    ...rgb(options.horizonColor ?? '#e8f1f8'),
-    ...rgb(options.fogColor ?? '#f2f5f8'),
-    options.skyHorizonBlend ?? 0.6,
-    options.horizonFogBlend ?? 0.7,
-    options.fogGroundBlend ?? 0.4,
-  ]);
-}
-
-/** MapLibre's default easing: cubic Bézier (0.25, 0.1, 0.25, 1) */
-export function defaultEasing(t: number): number {
-  if (t <= 0 || t >= 1) return Math.max(0, Math.min(1, t));
-  // Solve x(u) = t for the curve parameter, Newton then bisection
-  const [x1, y1, x2, y2] = [0.25, 0.1, 0.25, 1];
-  const bezier = (u: number, a: number, b: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
-  let u = t;
-  for (let i = 0; i < 8; i += 1) {
-    const x = bezier(u, x1, x2) - t;
-    const dx = 3 * x1 * (1 - u) ** 2 + 6 * (x2 - x1) * u * (1 - u) + 3 * (1 - x2) * u * u;
-    if (Math.abs(x) < 1e-6 || dx === 0) break;
-    u = Math.max(0, Math.min(1, u - x / dx));
-  }
-  return bezier(u, y1, y2);
-}
-
-const MERCATOR_LAT = 85.051128779806589;
-const toMercator = ([lon, lat]: LonLat): [number, number] => {
-  const phi = (Math.max(-MERCATOR_LAT, Math.min(MERCATOR_LAT, lat)) * Math.PI) / 180;
-  return [(lon + 180) / 360, 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI)];
-};
-const fromMercator = ([x, y]: [number, number]): LonLat => [
-  x * 360 - 180,
-  (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI,
-];
-
-/** A CSS color to RGB 0-1 (its alpha dropped); black if unknown */
-function rgb(color: string): [r: number, g: number, b: number] {
-  const [r, g, b] = parseCssColor(color) ?? [0, 0, 0, 1];
-  return [r, g, b];
-}
-
-/** Settings replayed on a new engine after a WebGL context loss */
-interface Settings {
-  body: Required<BodyOptions>;
-  zoomRange: [min: number, max: number];
-  maxPitch: number;
-  globe: boolean;
-  sky: boolean;
-  atmosphere: Float32Array | undefined;
-  terrain:
-    | {
-        url: string;
-        exaggeration: number;
-        maxZoom: number;
-        geoid: boolean;
-        /** Decodes the tiles of `url` for the engine (an encoding other than raw floats) */
-        loader?: (z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>;
-        /** Credits of the model */
-        attribution?: string;
-      }
-    | undefined;
-  loading: LoadingMode;
-  background: [r: number, g: number, b: number];
-  globeColor: [r: number, g: number, b: number];
 }
 
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
@@ -367,6 +123,8 @@ export class GeoMap {
   private vector: { tiles: VectorTiles; labels: SymbolLayer<unknown> } | undefined;
   private readonly glyphsUrl: string | undefined;
   private readonly basemapWorkerUrl: string | URL | undefined;
+  /** Texture size of the vector basemap's tiles */
+  private readonly basemapTileSize: number | undefined;
   private readonly container: HTMLElement;
   /** Markers and popups, over the canvas */
   private readonly overlay: HTMLDivElement;
@@ -415,7 +173,7 @@ export class GeoMap {
   private readonly attributionListeners = new Set<() => void>();
   /** Credits of the raster layers that have some (basemaps, hillshade, the Géoplateforme's rasters…) */
   private readonly rasterCredits = new Map<object, string>();
-  private animation: ((now: number) => boolean) | undefined;
+  private animation: Step | undefined;
   private hoverPoint: Point | undefined;
   /** Frame polling the engine for the answer of the hover picking, 0 if none */
   private hoverPoll = 0;
@@ -439,15 +197,18 @@ export class GeoMap {
   /** Stops listening to the canvas's context loss and restoration */
   private readonly unwatchContext: () => void;
 
+  /** The loaders of the relief by encoding, URL and floor: the same loader for the same tiles (the engine keeps its
+   * tiles when only the exaggeration changes) */
+  private readonly terrainLoaders = new Map<string, TerrainLoader>();
+
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
     // With 3D Tiles from the start when asked, or when only that engine's URL is given (as before the core engine)
     const full = options.tiles3d === true || (options.wasmUrl !== undefined && options.coreWasmUrl === undefined);
     // Before anything is created
     if (options.basemap !== undefined) checkBasemap(options.basemap);
-    const bindings = full
-      ? await loadEngine('full', options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url))
-      : await loadEngine('core', options.coreWasmUrl ?? new URL('./isard_core_bg.wasm', import.meta.url));
+    const kind = full ? 'full' : 'core';
+    const bindings = await loadEngine(kind, engineUrl(kind, options));
     const map = new GeoMap(container, options, bindings.Engine, full ? bindings.module : undefined);
     if (options.tiles3d === 'preload' && !full) map.preloadTiles3d();
     return map;
@@ -464,6 +225,7 @@ export class GeoMap {
     this.tiles3dOptions = { ...options };
     this.glyphsUrl = options.glyphs;
     this.basemapWorkerUrl = options.basemapWorkerUrl;
+    this.basemapTileSize = options.basemapTileSize;
     this.container = container;
     this.canvas = document.createElement('canvas');
     Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
@@ -495,7 +257,7 @@ export class GeoMap {
       globe: (options.projection ?? 'globe') === 'globe',
       sky: options.sky ?? true,
       atmosphere: atmosphereSettings(options.atmosphere),
-      terrain: terrainSettings(options.terrain, options.body, body.radius),
+      terrain: terrainSettings(options.terrain, options.body, body.radius, this.terrainLoader),
       loading: options.loading ?? 'immediate',
       background: rgb(options.background ?? (this.earth ? '#f2f2f0' : '#000000')),
       globeColor: this.earth ? SEA['osm-positron'] : rgb(body.color),
@@ -575,55 +337,36 @@ export class GeoMap {
 
   /** The decoding workers of 3D Tiles, with the engine that has them (they run its module) and unless turned off */
   private startLoader(engine: Engine): TileLoader | undefined {
-    const { workers: count, workerUrl, decoders } = this.tiles3dOptions;
-    const workers = count ?? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
-    if (!this.tiles3dModule || workers === false || workers <= 0 || typeof Worker === 'undefined') return undefined;
-    return new TileLoader(
-      this.tiles3dModule,
-      workerUrl ?? new URL('./decoder.worker.js', import.meta.url),
-      workers,
-      { ...DEFAULT_DECODERS, ...decoders },
-      engine.textureFormats(),
-    );
+    return this.tiles3dModule && startTileLoader(this.tiles3dModule, this.tiles3dOptions, engine);
   }
 
   /** A 3D Tiles layer on the core engine: loads the engine with 3D Tiles, then rebuilds the map on it (camera,
    * settings and layers kept, as after a context loss); the layer is created then */
   private upgrade(): void {
-    const url = this.tiles3dOptions.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url);
-    this.upgrading ??= loadEngine('full', url)
-      // The map is rebuilt in a task of its own, not in the one that instantiated the engine: two shorter tasks
-      .then((bindings) => new Promise<Bindings>((resolve) => setTimeout(() => resolve(bindings), 0)))
-      .then(
-        ({ module, Engine }) => {
-          this.upgrading = undefined;
-          if (this.gone) return;
-          this.engineClass = Engine;
-          this.tiles3dModule = module;
-          // A lost context: the engine is rebuilt on it once restored
-          if (!this.lost) this.restore();
-        },
-        (error: unknown) => {
-          // The 3D Tiles layers stay empty; the next one added tries again
-          this.upgrading = undefined;
-          if (this.gone) return;
-          report(error);
-          this.requestRender();
-        },
-      );
+    this.upgrading ??= loadFullEngineLater(engineUrl('full', this.tiles3dOptions)).then(
+      ({ module, Engine }) => {
+        this.upgrading = undefined;
+        if (this.gone) return;
+        this.engineClass = Engine;
+        this.tiles3dModule = module;
+        // A lost context: the engine is rebuilt on it once restored
+        if (!this.lost) this.restore();
+      },
+      (error: unknown) => {
+        // The 3D Tiles layers stay empty; the next one added tries again
+        this.upgrading = undefined;
+        if (this.gone) return;
+        report(error);
+        this.requestRender();
+      },
+    );
   }
 
   /** Downloads and compiles the engine with 3D Tiles once the map is idle (`tiles3d: 'preload'`), without running
    * it: the first 3D Tiles layer then only instantiates it */
   private preloadTiles3d(): void {
-    const url = this.tiles3dOptions.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url);
-    const start = () => {
-      if (!this.gone && !this.tiles3dModule) compileEngine('full', url).catch(() => undefined);
-    };
-    const later = () => {
-      if (typeof requestIdleCallback === 'function') requestIdleCallback(start, { timeout: 2000 });
-      else setTimeout(start, 0);
-    };
+    const url = engineUrl('full', this.tiles3dOptions);
+    const later = () => preloadFullEngine(url, () => !this.gone && !this.tiles3dModule);
     if (this.settled) later();
     else {
       const off = this.on('idle', () => {
@@ -770,27 +513,9 @@ export class GeoMap {
 
   /** Animated move to a camera: over `duration` milliseconds (or the options), ease-out by default */
   easeTo(camera: Partial<Camera>, options: number | AnimationOptions = 600): void {
-    const { duration = 600, easing = (t: number) => 1 - (1 - t) ** 3 } =
-      typeof options === 'number' ? { duration: options } : options;
     const from = this.getCamera();
     const to = { ...from, ...camera };
-    // Shortest way round
-    const turn = ((to.bearing - from.bearing + 540) % 360) - 180;
-    const start = performance.now();
-    this.animate((now) => {
-      if (now - start >= duration) this.engine.clearPreload();
-      const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
-      const k = easing(t);
-      const mix = (a: number, b: number) => a + (b - a) * k;
-      this.engine.setCamera(
-        mix(from.center[0], to.center[0]),
-        mix(from.center[1], to.center[1]),
-        mix(from.zoom, to.zoom),
-        mix(from.pitch, to.pitch),
-        from.bearing + turn * k,
-      );
-      return t < 1;
-    });
+    this.animate(easeTo(() => this.engine, from, to, options));
     // The destination's tiles load during the flight (as Cesium does)
     this.engine.preload(to.center[0], to.center[1], to.zoom, to.pitch, to.bearing);
   }
@@ -802,44 +527,8 @@ export class GeoMap {
   flyTo(camera: Partial<Camera>, options: FlyToOptions = {}): void {
     const from = this.getCamera();
     const to = { ...from, ...camera };
-    const { curve: rho = 1.42, speed = 1.2, easing = defaultEasing } = options;
-    const [x0, y0] = toMercator(from.center);
-    const [x1, y1] = toMercator(to.center);
-    // Across the antimeridian, the short way
-    const dx = x1 - x0 - Math.round(x1 - x0);
-    const dy = y1 - y0;
-    // In pixels at the start zoom (512 px world at zoom 0)
-    const world = 512 * 2 ** from.zoom;
-    const u1 = Math.hypot(dx, dy) * world;
-    const w0 = Math.max(this.canvas.clientWidth, this.canvas.clientHeight, 1);
-    const w1 = w0 / 2 ** (to.zoom - from.zoom);
-    const rho2 = rho * rho;
-    const r = (i: 0 | 1) => {
-      const b = (w1 * w1 - w0 * w0 + (i ? -1 : 1) * rho2 * rho2 * u1 * u1) / (2 * (i ? w1 : w0) * rho2 * u1);
-      return Math.log(Math.sqrt(b * b + 1) - b);
-    };
-    // No move on the ground (or nearly): a plain zoom
-    const still = u1 < 1e-6 || !Number.isFinite(r(0)) || !Number.isFinite(r(1));
-    const r0 = still ? 0 : r(0);
-    const length = still ? Math.abs(Math.log(w1 / w0)) / rho : (r(1) - r0) / rho;
-    const width = (s: number) =>
-      still ? Math.exp((w1 < w0 ? -1 : 1) * rho * s) : Math.cosh(r0) / Math.cosh(r0 + rho * s);
-    const along = (s: number) =>
-      still ? 0 : (w0 * ((Math.cosh(r0) * Math.tanh(r0 + rho * s) - Math.sinh(r0)) / rho2)) / u1;
-    const duration = options.duration ?? (1000 * length) / speed;
-    const turn = ((to.bearing - from.bearing + 540) % 360) - 180;
-    const start = performance.now();
-    this.animate((now) => {
-      if (now - start >= duration) this.engine.clearPreload();
-      const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
-      const k = easing(t);
-      const s = k * length;
-      const u = t >= 1 ? 1 : along(s);
-      const zoom = t >= 1 ? to.zoom : from.zoom + Math.log2(1 / width(s));
-      const [lon, lat] = fromMercator([x0 + dx * u, y0 + dy * u]);
-      this.engine.setCamera(lon, lat, zoom, from.pitch + (to.pitch - from.pitch) * k, from.bearing + turn * k);
-      return t < 1;
-    });
+    const viewport = Math.max(this.canvas.clientWidth, this.canvas.clientHeight);
+    this.animate(flyTo(() => this.engine, from, to, viewport, options));
     this.engine.preload(to.center[0], to.center[1], to.zoom, to.pitch, to.bearing);
   }
 
@@ -900,7 +589,7 @@ export class GeoMap {
    * on the Moon and Mars), one of the Earth's models by name (`'ign'`), its options, or false; on another body, its
    * options with a `url` */
   setTerrain(terrain: boolean | TerrainModel | TerrainOptions): void {
-    this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius);
+    this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius, this.terrainLoader);
     const t = this.settings.terrain;
     this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid, t?.loader);
     this.attributionChanged();
@@ -1071,7 +760,7 @@ export class GeoMap {
         style: vector,
         ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
       });
-      this.basemap = tiles.raster();
+      this.basemap = tiles.raster(this.basemapTileSize ? { size: this.basemapTileSize } : {});
       this.vector = { tiles, labels: tiles.labels() as SymbolLayer<unknown> };
     } else {
       this.basemap = name === 'none' ? undefined : this.addRaster(BASEMAPS[name as keyof typeof BASEMAPS]);
@@ -1085,19 +774,32 @@ export class GeoMap {
     this.attributionChanged();
   }
 
-  /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from an equirectangular `grid`), over the layers
-   * already added */
+  /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from another `grid`: longitudes and latitudes,
+   * Lambert-93, UTM…), over the layers already added */
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
-    const { url, grid = 'mercator', minZoom = 0, maxZoom = 19, opacity = 1, saturation = 1, size, before } = options;
-    let layer: RasterLayer;
-    if (grid === 'equirectangular' && !options.loader) {
-      // The source's level n has the pixel size of Mercator level n + 1 at the equator
-      const loader = equirectangularLoader(url, maxZoom, size ?? 256, minZoom);
-      const levels = { minZoom: minZoom + 1, maxZoom: maxZoom + 1 };
-      layer = new RasterLayer(this, { url, ...levels, opacity, saturation, size, loader });
-    } else {
-      layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader: options.loader });
+    const { url, grid = 'mercator', opacity = 1, saturation = 1, size, before } = options;
+    let { minZoom = 0, maxZoom = 19 } = options;
+    let loader = options.loader;
+    if (grid !== 'mercator' && !loader) {
+      if (grid === 'equirectangular') {
+        // `minZoom` and `maxZoom` are levels of the source: its level n has the pixel size of Mercator level n + 1 at
+        // the equator
+        loader = gridLoader(
+          url,
+          resolveGrid(equirectangularGrid(minZoom, maxZoom)),
+          size ?? 256,
+          this.remoteReprojection,
+        );
+        [minZoom, maxZoom] = [minZoom + 1, maxZoom + 1];
+      } else {
+        const resolved = resolveGrid(grid);
+        const zooms = gridZooms(resolved);
+        minZoom = options.minZoom ?? zooms.minZoom;
+        maxZoom = options.maxZoom ?? zooms.maxZoom;
+        loader = gridLoader(url, resolved, size ?? 256, this.remoteReprojection);
+      }
     }
+    const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader });
     this.place(layer, before);
     if (options.attribution) {
       this.rasterCredits.set(layer, options.attribution);
@@ -1193,6 +895,34 @@ export class GeoMap {
     return { pool: new BasemapWorkers(workers, workerUrl), own: true };
   }
 
+  /**
+   * The workers decoding the relief and reprojecting rasters: the map's pool, unless the map has no workers
+   * (`workers: false` or 0, or none in this browser): that is done in the page then
+   */
+  private decodingPool(): BasemapWorkers | undefined {
+    const { workers } = this.tiles3dOptions;
+    if (this.gone || workers === false || (workers !== undefined && workers <= 0)) return undefined;
+    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return undefined;
+    return this.basemapWorkers().pool;
+  }
+
+  private readonly remoteHeights: RemoteHeights = (url, encoding, floor, tile, signal) =>
+    this.decodingPool()?.heights(url, encoding, floor, tile, signal, this);
+
+  private readonly remoteReprojection: RemoteReprojection = (job, tile, signal) =>
+    this.decodingPool()?.reproject(job, tile, signal, this);
+
+  /** The loader of the relief tiles of `url` in a PNG encoding (one per URL, encoding and floor) */
+  private readonly terrainLoader = (url: string, encoding: PngEncoding, floor?: number): TerrainLoader => {
+    const key = `${encoding} ${floor ?? ''} ${url}`;
+    let loader = this.terrainLoaders.get(key);
+    if (!loader) {
+      loader = encodedTerrainLoader(url, encoding, floor, this.remoteHeights);
+      this.terrainLoaders.set(key, loader);
+    }
+    return loader;
+  };
+
   /** Adds a layer, under `before` if given */
   private place<L extends Layer>(layer: L, before: Layer | undefined): L {
     this.add(layer);
@@ -1216,7 +946,7 @@ export class GeoMap {
   }
 
   /** @internal Runs `step` every frame until it returns false; replaces the running animation */
-  animate(step: ((now: number) => boolean) | undefined): void {
+  animate(step: Step | undefined): void {
     // A flight cut short no longer needs its destination
     if (this.animation) this.engine.clearPreload();
     this.animation = step;
@@ -1345,7 +1075,7 @@ export class GeoMap {
     this.engine.free();
     // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
     // that does nothing, and nothing is drawn again
-    this.#engine = destroyed(camera);
+    this.#engine = destroyedEngine(camera);
     // Glyph ranges still arriving upload to it, not to the freed engine
     this.#glyphs?.attach(this.#engine);
     this.lost = true;

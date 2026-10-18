@@ -3,6 +3,64 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [0.3.0] - 2026-10-18
+
+### Changed
+
+- Fill layers share their vertices (the caps index the points of the rings, the walls stand on them) and build the
+  prism of the relief only on their first frame in relief: 100,000 pentagons upload 17 MB flat and 49 MB in relief,
+  instead of 123 MB either way, and are triangulated in 37 ms instead of 59.
+- Extrusion layers draw only the blocks in view: a batch is sorted by square of a grid over its blocks, as the
+  lines and fills are (one batch for a whole city drew every building every frame).
+- The style of the features takes the texels its layer reads: 48 bytes a feature for lines, 96 for circles, 80 for
+  extrusions, 16 for fills (128 for all before).
+- The symbol layers keep their tables from one set of labels to the next while they fit (two textures were created
+  and deleted at each update, several times a second while the map moves).
+- 3D Tiles: a mesh used by several nodes of a tile is read once, its texture coordinates and triangles shared by its
+  instances; an image used by several primitives is handed over and decoded once, and uploaded once (on the main
+  thread, or when the decoding workers give the same bitmap); the selection of the tiles reuses its buffers from frame
+  to frame.
+- Fill and extrusion layers: a polygon whose rings start before the previous polygon's end takes only those after it
+  (no ring shared by two polygons): malformed offsets cost no more than the rings there are.
+- Ground layers: `ISARD_CIRCUMFERENCE`, the body's circumference in metres (`ISARD_EARTH` still works).
+- The basemap's labels are shaped once per vector tile while it is kept: as the view moves, only the labels of the
+  tiles coming into view are shaped (an update of 36 tiles of 150 labels after a pan of one column: 55 ms → 11 ms on
+  the main thread), the others reused as they were.
+- The Terrarium and Terrain-RGB relief is decoded and the equirectangular rasters are reprojected by the vector
+  basemap's workers (OffscreenCanvas), off the main thread; in the page with `workers: false`.
+- The glyph atlas sent again (a new engine, more pages) is sent down to the last glyph of each page only.
+- Equirectangular rasters are reprojected as any other grid (each tile planned in the page through a mesh of 17 × 17
+  points, sampled in a worker), their colors interpolated between source rows as along them.
+
+### Added
+
+- `basemapTileSize`: the texture size of the vector basemap's tiles (default 512; 256 for a quarter of the drawing,
+  uploads and GPU memory, lines a little softer).
+- Data in other CRSs, reprojected into the map (no new view projection): built-in EPSG:4326, EPSG:3857, Lambert-93
+  (EPSG:2154), the CC zones (EPSG:3942 to 3950) and the UTM zones of WGS 84 and ETRS89, within 0.1 mm of PROJ; any
+  other through an object with `forward` and `inverse` such as `proj4('EPSG:…')`, directly or named by `registerCrs`;
+  `getCrs`, `lambertConformalConic`, `transverseMercator`.
+- Rasters in another tile grid: `addRaster({ url, grid: { crs, matrices, bounds } })` for the tile matrices of a WMTS
+  in any CRS, or a grid without matrices for a WMS asked for each tile's `{bbox}` in its CRS; reprojected by the map's
+  workers through a mesh of control points, without seams (PLAN IGN from Lambert-93 matches its Web Mercator tiles to
+  within 0.06 pixel). `wmtsGrid` and `parseWmtsGrid` read the grid of a layer from WMTS capabilities.
+- Géoplateforme: `geoplateformeWmts(layer, { matrixSet: '2154_10cm_6_20' })` for its Lambert-93 layers (PLAN IGN,
+  orthophotos, cadastre…), `geoplateformeWms(layers, { crs: 'EPSG:2154' })`, `geoplateformeWfs(…, { srsName })`.
+- GeoJSON in another CRS: the feature layers reproject a collection whose `crs` member names one (a WFS's output in
+  EPSG:2154); `reproject(data, crs)` for the others.
+- `parseKml`, `parseGpx`, `parseTopoJson`: KML (placemarks, MultiGeometry, gx:Track, extended data, style colors), GPX
+  (waypoints, routes, tracks with altitudes and times) and TopoJSON as GeoJSON, with their own XML reader (no
+  `DOMParser`: in workers too), each a module of its own.
+- The Lambert-93 example: PLAN IGN reprojected from Lambert-93, the arrondissements of Paris from a WFS in EPSG:2154, a
+  GPX file.
+
+### Fixed
+
+- Picking in relief: lines, circles and networks hidden by a hill (or by extruded blocks drawn before them) are no
+  longer picked: the ground's depth is drawn into the picking pass and the layers are tested against it as on screen.
+- Each frame starts from the full GL state (depth and stencil writes, scissor, tests, blending), whatever a layer or a
+  picking pass left.
+
 ## [0.2.1] - 2026-10-18
 
 ### Changed

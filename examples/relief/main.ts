@@ -29,7 +29,7 @@ const rings = map.addGround({
     uniform float u_metres;
     vec4 ground(vec2 offset) {
       // Mercator metres from the cursor, then ground metres (Web Mercator stretches by 1 / cos(latitude))
-      float d = length((offset - u_cursor) * ISARD_EARTH) * u_metres;
+      float d = length((offset - u_cursor) * ISARD_CIRCUMFERENCE) * u_metres;
       if (d > 3000.0) return vec4(0.0);
       // Distance to the nearest ring, metres; lines two pixels wide whatever the zoom (fwidth: metres per pixel)
       float ring = abs(fract(d / 500.0 + 0.5) - 0.5) * 500.0;

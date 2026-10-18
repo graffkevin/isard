@@ -1,7 +1,7 @@
 /**
  * Mars: a map of another body with an atmosphere. The globe takes Mars's radius and its thin dusty halo, the Viking
- * colour mosaic (MDIM 2.1) comes from NASA's Mars Trek in longitudes and latitudes, reprojected in the page into Web
- * Mercator tiles; its relief is MOLA's terrain model, from Trek too (`terrain: true` on Mars). Famous sites as circles
+ * colour mosaic (MDIM 2.1) comes from NASA's Mars Trek in longitudes and latitudes, reprojected by the workers into
+ * Web Mercator tiles; its relief is MOLA's terrain model, from Trek too (`terrain: true` on Mars). Famous sites as circles
  * and labels; two pitched views over the relief, Olympus Mons and Valles Marineris (a link opens one: #olympus-mons).
  * A click flies to the point.
  */

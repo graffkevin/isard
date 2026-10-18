@@ -9,10 +9,10 @@
 
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
-use crate::render::drape::{self, Drape, DrapeUniforms};
-use crate::render::features::{FEATURES, FeatureUniforms, Features};
-use crate::render::gl::{self, Objects, Projection, bytes};
-use crate::render::overlay::{self, ANCHOR, Anchor};
+use crate::render::drape::Drape;
+use crate::render::features::{FeatureUniforms, Features, Layout};
+use crate::render::gl::{self, DepthState, Objects, bytes};
+use crate::render::overlay::{self, Overlay};
 use geo::pieces::{self, Grid, Visible};
 use glam::DVec2;
 use glow::HasContext;
@@ -81,7 +81,7 @@ void main() {
   float outside = smoothstep(v_radii.y - w * 0.5, v_radii.y + w * 0.5, d);
   if (outside >= 1.0) discard;
   if (u_pick) {
-    color = vec4(float(v_id & 255u), float((v_id >> 8) & 255u), float((v_id >> 16) & 255u), u_layer) / 255.0;
+    color = pick_color(v_id, u_layer);
     return;
   }
   // Fill inside the radius, stroke beyond (none if the stroke is thin to nothing)
@@ -100,6 +100,9 @@ const PICK_SLOP: f32 = 4.0;
 const CULL_MARGIN: f64 = 128.0;
 /// Bytes per point: offset (2 × f32), feature
 const STRIDE: i32 = 12;
+/// The attributes of a point: offset, feature
+const ATTRIBUTES: [gl::Attribute; 2] = [(0, 2, true, 0), (1, 1, false, 8)];
+const _: () = assert!(STRIDE as usize == size_of::<Point>());
 /// Squares of the culling grid along the longer side of the layer
 const SQUARES_ACROSS: f64 = 32.0;
 /// Smallest square of the culling grid, Mercator (about 100 m at the equator)
@@ -158,11 +161,8 @@ pub struct CircleLayer {
     pub features: Features,
     /// Lying on the ground rather than facing the screen
     pub on_ground: bool,
-    program: glow::Program,
+    overlay: Overlay,
     uniforms: [Option<glow::UniformLocation>; 4],
-    anchor: Anchor,
-    projection: Projection,
-    drape_uniforms: DrapeUniforms,
     feature_uniforms: FeatureUniforms,
     vao: glow::VertexArray,
     buffer: glow::Buffer,
@@ -183,38 +183,28 @@ impl CircleLayer {
         overlay::pick_ids_fit(feature_count, "circle layer");
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
-        let program = objects.program(
-            &format!(
-                "#version 300 es\n{}{}{ANCHOR}{FEATURES}{VERTEX}",
-                gl::PROJECT,
-                drape::ALTITUDE
-            ),
-            &format!("#version 300 es\nprecision highp float;\n{FRAGMENT}"),
-        )?;
+        let overlay = Overlay::new(&mut objects, gl, &[&Layout::CIRCLE.glsl(), VERTEX], &[FRAGMENT])?;
+        let program = overlay.program;
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-            gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, STRIDE, 0);
-            gl.vertex_attrib_divisor(0, 1);
-            gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_i32(1, 1, glow::UNSIGNED_INT, STRIDE, 8);
-            gl.vertex_attrib_divisor(1, 1);
+            // Pointed at the points of each range when drawn (`gl::draw_instances`)
+            for (location, ..) in ATTRIBUTES {
+                gl.enable_vertex_attrib_array(location);
+                gl.vertex_attrib_divisor(location, 1);
+            }
             gl.bind_vertex_array(None);
         }
-        let features = Features::new(gl, feature_count)?;
+        let features = Features::new(gl, feature_count, Layout::CIRCLE)?;
         objects.keep();
         let mut layer = Self {
             features,
             on_ground: false,
-            program,
+            overlay,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
-            anchor: Anchor::new(gl, program),
-            projection: Projection::new(gl, program),
-            drape_uniforms: DrapeUniforms::new(gl, program),
             feature_uniforms: FeatureUniforms::new(gl, program),
             vao,
             buffer,
@@ -267,33 +257,21 @@ impl CircleLayer {
         let &Frame {
             gl,
             camera,
-            view,
             pixel_ratio,
-            relief,
             ..
         } = frame;
         let [on_ground, layer, pick_u, slop] = &self.uniforms;
+        self.overlay.begin(frame, self.origin, DEPTH_BIAS, &self.drape);
         // SAFETY: draw with objects owned by this layer
         unsafe {
-            gl.use_program(Some(self.program));
-            let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
-            self.anchor.set_view(gl, view, viewport, relief.is_some(), DEPTH_BIAS);
-            self.anchor.set_origin(gl, view, self.origin);
             gl.uniform_1_f32(on_ground.as_ref(), if self.on_ground { 1.0 } else { 0.0 });
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
             gl.uniform_1_f32(slop.as_ref(), if pick.is_some() { PICK_SLOP } else { 0.0 });
-            self.projection.set(gl, view);
-            self.drape.bind(gl, &self.drape_uniforms, relief);
             self.features.bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
-            for &(first, end) in ranges {
-                let offset = first as i32 * STRIDE;
-                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, STRIDE, offset);
-                gl.vertex_attrib_pointer_i32(1, 1, glow::UNSIGNED_INT, STRIDE, offset + 8);
-                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, (end - first) as i32);
-            }
+            gl::draw_instances(gl, &ATTRIBUTES, STRIDE, 4, ranges);
             gl.bind_vertex_array(None);
         }
     }
@@ -327,24 +305,9 @@ impl Layer for CircleLayer {
             return false;
         }
         self.update_drape(frame);
-        let gl = frame.gl;
-        // SAFETY: state changes on the live context, set back below
-        unsafe {
-            gl.disable(glow::CULL_FACE);
-            if frame.relief.is_some() {
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LEQUAL);
-                gl.depth_mask(false);
-            }
-        }
+        let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
         self.render(frame, ranges, None);
         self.visible = visible;
-        // SAFETY: state changes on the live context
-        unsafe {
-            gl.enable(glow::CULL_FACE);
-            gl.disable(glow::DEPTH_TEST);
-            gl.depth_mask(true);
-        }
         false
     }
 
@@ -360,14 +323,16 @@ impl Layer for CircleLayer {
         if ranges.is_empty() {
             return;
         }
-        // The page table is the last frame's
+        // The page table is the last frame's; hidden by the hills as on screen (the picking pass drew the ground's
+        // depth)
+        let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
         self.render(frame, &ranges, Some(layer));
     }
 
     fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
-            gl.delete_program(self.program);
+            gl.delete_program(self.overlay.program);
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.buffer);
         }

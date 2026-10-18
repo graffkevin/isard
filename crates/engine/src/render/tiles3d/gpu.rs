@@ -12,12 +12,15 @@ pub struct GpuPrimitive {
     pub vao: glow::VertexArray,
     buffers: [glow::Buffer; 2],
     pub count: i32,
+    /// One of the mesh's `textures`
     pub texture: Option<glow::Texture>,
 }
 
 pub struct GpuMesh {
     pub anchor: glam::DVec3,
     pub primitives: Vec<GpuPrimitive>,
+    /// Its textures, each once however many primitives share it
+    textures: Vec<glow::Texture>,
     bytes: usize,
     used: u64,
 }
@@ -64,7 +67,8 @@ fn primitive_arrays(
     Ok((vao, [vbo, ibo]))
 }
 
-/// Uploads a mesh decoded on this thread; its images are closed, uploaded or not
+/// Uploads a mesh decoded on this thread, with its images decoded (one per `Mesh::images`, a texture each, shared by
+/// the primitives using it); they are closed, uploaded or not
 pub fn upload(
     gl: &glow::Context,
     mesh: &Mesh,
@@ -74,18 +78,33 @@ pub fn upload(
     let mut gpu = GpuMesh {
         anchor: mesh.anchor,
         primitives: Vec::new(),
+        textures: Vec::new(),
         bytes: 0,
         used: frame,
     };
+    let mut textures = Vec::with_capacity(images.len());
     let mut images = images.into_iter();
-    for p in &mesh.primitives {
-        let image = images.next().flatten();
-        let made = upload_primitive(gl, p, image.as_ref(), &mut gpu);
-        if let Err(e) = made {
-            if let Some(image) = image {
-                image.close();
+    while let Some(image) = images.next() {
+        let Some(bitmap) = image else {
+            textures.push(None);
+            continue;
+        };
+        match texture(gl, &bitmap) {
+            Ok((texture, size)) => {
+                gpu.textures.push(texture);
+                gpu.bytes += size;
+                textures.push(Some(texture));
             }
-            images.flatten().for_each(|i| i.close());
+            Err(e) => {
+                images.flatten().for_each(|i| i.close());
+                delete_mesh(gl, &gpu);
+                return Err(e);
+            }
+        }
+    }
+    for p in &mesh.primitives {
+        let texture = p.image.and_then(|i| textures.get(i).copied().flatten());
+        if let Err(e) = upload_primitive(gl, p, texture, &mut gpu) {
             delete_mesh(gl, &gpu);
             return Err(e);
         }
@@ -96,7 +115,7 @@ pub fn upload(
 fn upload_primitive(
     gl: &glow::Context,
     p: &tiles3d::decode::Primitive,
-    image: Option<&web_sys::ImageBitmap>,
+    texture: Option<glow::Texture>,
     gpu: &mut GpuMesh,
 ) -> Result<(), String> {
     let vertices: Vec<f32> = p
@@ -121,26 +140,13 @@ fn upload_primitive(
         },
     )
     .map_err(|e| format!("{e:?}"))?;
-    let mut primitive = GpuPrimitive {
+    gpu.primitives.push(GpuPrimitive {
         vao,
         buffers,
         count: p.indices.len() as i32,
-        texture: None,
-    };
+        texture,
+    });
     gpu.bytes += vertices.len() * 4 + p.indices.len() * 4;
-    if let Some(bitmap) = image {
-        match texture(gl, bitmap) {
-            Ok((texture, size)) => {
-                primitive.texture = Some(texture);
-                gpu.bytes += size;
-            }
-            Err(e) => {
-                delete_primitive(gl, &primitive);
-                return Err(e);
-            }
-        }
-    }
-    gpu.primitives.push(primitive);
     Ok(())
 }
 
@@ -160,11 +166,14 @@ pub fn upload_decoded(
     let mut gpu = GpuMesh {
         anchor,
         primitives: Vec::new(),
+        textures: Vec::new(),
         bytes: 0,
         used: frame,
     };
+    // The bitmaps and transcoded textures met so far and their GPU textures: the same object, the same texture
+    let mut shared: Vec<(JsValue, Option<glow::Texture>)> = Vec::new();
     for p in get_array(tile, "primitives").iter() {
-        if let Err(e) = upload_decoded_primitive(gl, raw, &p, &mut gpu) {
+        if let Err(e) = upload_decoded_primitive(gl, raw, &p, &mut gpu, &mut shared) {
             delete_mesh(gl, &gpu);
             return Err(e);
         }
@@ -177,6 +186,7 @@ fn upload_decoded_primitive(
     raw: &web_sys::WebGl2RenderingContext,
     p: &JsValue,
     gpu: &mut GpuMesh,
+    shared: &mut Vec<(JsValue, Option<glow::Texture>)>,
 ) -> Result<(), JsValue> {
     let vertices: js_sys::Float32Array = js_get(p, "vertices").dyn_into()?;
     let indices: js_sys::Uint32Array = js_get(p, "indices").dyn_into()?;
@@ -192,27 +202,39 @@ fn upload_decoded_primitive(
             Ok(())
         },
     )?;
-    let mut primitive = GpuPrimitive {
+    let primitive = GpuPrimitive {
         vao,
         buffers,
         count: indices.length() as i32,
         texture: None,
     };
     gpu.bytes += (vertices.byte_length() + indices.byte_length()) as usize;
-    let made = if let Ok(bitmap) = js_get(p, "bitmap").dyn_into::<web_sys::ImageBitmap>() {
-        texture(gl, &bitmap).map(Some).map_err(JsValue::from)
-    } else if js_get(p, "texture").is_object() {
-        compressed_texture(gl, raw, &js_get(p, "texture"))
-    } else {
-        Ok(None)
+    let (bitmap, compressed) = (js_get(p, "bitmap"), js_get(p, "texture"));
+    let source = if bitmap.is_object() { bitmap } else { compressed };
+    if !source.is_object() {
+        gpu.primitives.push(primitive);
+        return Ok(());
+    }
+    if let Some((_, texture)) = shared.iter().find(|(s, _)| js_sys::Object::is(s, &source)) {
+        gpu.primitives.push(GpuPrimitive {
+            texture: *texture,
+            ..primitive
+        });
+        return Ok(());
+    }
+    let made = match source.clone().dyn_into::<web_sys::ImageBitmap>() {
+        Ok(bitmap) => texture(gl, &bitmap).map(Some).map_err(JsValue::from),
+        Err(_) => compressed_texture(gl, raw, &source),
     };
     match made {
-        Ok(texture) => {
-            if let Some((texture, size)) = texture {
-                primitive.texture = Some(texture);
+        Ok(made) => {
+            let texture = made.map(|(texture, size)| {
+                gpu.textures.push(texture);
                 gpu.bytes += size;
-            }
-            gpu.primitives.push(primitive);
+                texture
+            });
+            shared.push((source, texture));
+            gpu.primitives.push(GpuPrimitive { texture, ..primitive });
             Ok(())
         }
         Err(e) => {
@@ -353,6 +375,7 @@ fn texture(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) -> Result<(glow::T
     Ok((texture, bytes))
 }
 
+/// Deletes the arrays of a primitive (its texture is the mesh's)
 fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
     // SAFETY: objects owned by the primitive, not used afterwards
     unsafe {
@@ -360,15 +383,16 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
         for b in p.buffers {
             gl.delete_buffer(b);
         }
-        if let Some(t) = p.texture {
-            gl.delete_texture(t);
-        }
     }
 }
 
 pub fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
     for p in &mesh.primitives {
         delete_primitive(gl, p);
+    }
+    for &t in &mesh.textures {
+        // SAFETY: textures owned by the mesh, not used afterwards
+        unsafe { gl.delete_texture(t) };
     }
 }
 

@@ -14,7 +14,7 @@ const water = map.addGround({
     uniform float u_level;
     uniform float u_cell;
     vec4 ground(vec2 offset) {
-      ivec2 cell = ivec2(floor(offset * ISARD_EARTH / u_cell));
+      ivec2 cell = ivec2(floor(offset * ISARD_CIRCUMFERENCE / u_cell));
       float depth = u_level - float(texelFetch(u_terrain, cell, 0).r) / 100.0;
       if (depth <= 0.0) return vec4(0.0);
       float a = mix(0.6, 0.9, clamp(depth / 3.0, 0.0, 1.0));
@@ -28,7 +28,7 @@ water.updateTexture('u_levels', levels, { width: 1024, height: rows }); // a reg
 ```
 
 - `offset` is the Mercator offset of the pixel from `anchor`, exact to the millimetre at any zoom (worked out from the
-  position relative to the camera, never from absolute f32 coordinates). Times `ISARD_EARTH`: metres of EPSG:3857.
+  position relative to the camera, never from absolute f32 coordinates). Times `ISARD_CIRCUMFERENCE`: metres of EPSG:3857.
 - Textures in any format: `r8`, `r8ui`, `r16ui`, `r16i`, `r32ui`, `r32f`, `rg16ui`, `rg32f`, `rgba8`, `rgba8ui`,
   `rgba16ui`, `rgba32f`; 2D or 2D arrays (`depth`). Integer ones are read with `texelFetch`.
 - Uniforms by name: numbers for any type. Also available: `u_zoom`, `u_pixel_ratio`, `fwidth` for pixel-wide lines.

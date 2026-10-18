@@ -125,4 +125,30 @@ describe('glyph atlas', () => {
       globalThis.fetch = original;
     }
   });
+
+  test('the pages sent again (a new engine, more pages) are sent down to their last glyph only', async () => {
+    const updates: [number, number, number, number][] = [];
+    const engine = {
+      setGlyphPages: () => undefined,
+      updateGlyphPage: (page: number, _x: number, y: number, _w: number, h: number, data: Uint8Array) =>
+        updates.push([page, y, h, data.length]),
+    };
+    const original = globalThis.fetch;
+    // Three 100 px glyphs: one shelf of 106 rows
+    globalThis.fetch = (async () => new Response(rangeFile(0, 3, 100))) as unknown as typeof fetch;
+    try {
+      const atlas = new Glyphs('{fontstack}/{range}', 512);
+      atlas.attach(engine as unknown as Engine);
+      // An empty atlas: nothing to send
+      expect(updates).toEqual([]);
+      await atlas.load('f', [0]);
+      expect(updates).toEqual([[0, 0, 106, 106 * 512]]);
+      updates.length = 0;
+      // After a context loss
+      atlas.attach(engine as unknown as Engine);
+      expect(updates).toEqual([[0, 0, 106, 106 * 512]]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
 });
