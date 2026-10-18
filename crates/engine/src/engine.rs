@@ -9,7 +9,7 @@ use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::Grid;
 use crate::render::globe::GlobeBase;
 use crate::render::raster::{DrawContext, RasterOptions, RasterPass, RasterSource, STACK};
-use crate::render::sky::{Atmosphere, Sky};
+use crate::render::sky::{self, Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
 use glow::HasContext;
@@ -241,15 +241,17 @@ impl Engine {
         self.loading = if immediate { Loading::IMMEDIATE } else { Loading::SMOOTH };
     }
 
-    /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), and whether it
-    /// has an atmosphere (its halo around the globe). WGS 84 and an atmosphere by default; set before the layers,
-    /// whose shaders may take its size (`ISARD_EARTH` of the ground layers)
+    /// The body the map is drawn on: its equatorial radius (metres) and flattening (0 for a sphere), and the halo of
+    /// its atmosphere around the globe (RGB 0-1 and its strength, 4 numbers; `undefined` for an airless body). WGS 84
+    /// and the Earth's blue halo by default; set before the layers, whose shaders may take its size (`ISARD_EARTH` of
+    /// the ground layers)
     #[wasm_bindgen(js_name = setBody)]
-    pub fn set_body(&mut self, radius: f64, flattening: f64, atmosphere: bool) {
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>) {
         if radius.is_finite() && radius > 0.0 && (0.0..1.0).contains(&flattening) {
             self.camera.body = geo::geodesy::Body { radius, flattening };
         }
-        self.sky.halo = atmosphere;
+        self.sky.halo = sky::halo(halo.as_deref());
     }
 
     /// Space behind the globe (stars, atmosphere halo), in the globe projection

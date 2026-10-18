@@ -28,8 +28,8 @@ uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
 uniform float u_factor;
-// 1 with an atmosphere, 0 without
-uniform float u_halo;
+// The atmosphere's halo: its color and strength (0 around an airless body)
+uniform vec4 u_halo;
 in vec2 v_ndc;
 out vec4 color;
 
@@ -68,7 +68,7 @@ void main() {
   float miss = length(toCenter - dir * along) / u_radius;
   // Thin and bright at the limb, fading fast into space
   float glow = step(1.0, miss) * exp(-(miss - 1.0) * 28.0);
-  space = mix(space, vec3(0.42, 0.66, 1.0), glow * 0.9 * u_halo);
+  space = mix(space, u_halo.rgb, glow * 0.9 * u_halo.a);
 
   color = vec4(space, u_factor);
 }";
@@ -120,13 +120,25 @@ impl Atmosphere {
     }
 }
 
+/// The Earth's halo, a light blue at full strength
+const HALO: [f32; 4] = [0.42, 0.66, 1.0, 1.0];
+
+/// A halo from the page (RGB 0-1 and its strength), clamped; none without its 4 numbers
+#[must_use]
+pub fn halo(settings: Option<&[f32]>) -> [f32; 4] {
+    match settings {
+        Some(&[r, g, b, a]) => [r, g, b, a].map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }),
+        _ => [0.0; 4],
+    }
+}
+
 pub struct Sky {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 8],
     vao: glow::VertexArray,
     pub enabled: bool,
-    /// The atmosphere halo around the globe (none around an airless body)
-    pub halo: bool,
+    /// The atmosphere halo around the globe: RGB 0-1 and its strength, 0 for none (an airless body)
+    pub halo: [f32; 4],
     atmosphere_program: glow::Program,
     atmosphere_uniforms: [Option<glow::UniformLocation>; 6],
     pub atmosphere: Option<Atmosphere>,
@@ -164,7 +176,7 @@ impl Sky {
             uniforms,
             vao,
             enabled: true,
-            halo: true,
+            halo: HALO,
             atmosphere_program,
             atmosphere_uniforms,
             atmosphere: None,
@@ -188,7 +200,7 @@ impl Sky {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
-            gl.uniform_1_f32(halo.as_ref(), if self.halo { 1.0 } else { 0.0 });
+            gl.uniform_4_f32_slice(halo.as_ref(), &self.halo);
             // The screen triangle turns the other way round than the globe's front faces
             gl.disable(glow::CULL_FACE);
             gl.bind_vertex_array(Some(self.vao));
@@ -232,5 +244,23 @@ impl Sky {
             gl.bind_vertex_array(None);
             gl.enable(glow::CULL_FACE);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn halo_of_the_body() {
+        // The Earth's by default, as it always was
+        assert_eq!(HALO, [0.42, 0.66, 1.0, 1.0]);
+        assert_eq!(halo(Some(&HALO)), HALO);
+        // Another color and strength, clamped
+        assert_eq!(halo(Some(&[0.8, 0.6, 0.4, 0.5])), [0.8, 0.6, 0.4, 0.5]);
+        assert_eq!(halo(Some(&[1.5, -1.0, f32::NAN, 2.0])), [1.0, 0.0, 0.0, 1.0]);
+        // None around an airless body, or without its 4 numbers
+        assert_eq!(halo(None), [0.0; 4]);
+        assert_eq!(halo(Some(&[0.5, 0.5, 0.5])), [0.0; 4]);
     }
 }

@@ -23,6 +23,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   ellipsoid (`BodyOptions`: radius, flattening, atmosphere, color); the metres of the camera, relief, buildings and
   3D Tiles follow it. Off the Earth, none of the Géoplateforme defaults (basemap, hillshade, relief, geoid, credits)
   and a black background; `AttributionControl` without the IGN credits. A `moon` example (NASA's LRO mosaic).
+- Mars: `body: 'mars'` (a sphere of its equatorial radius, 3 396 190 m, for the planetocentric latitudes of its data)
+  with a thin dusty halo. The halo is the body's: `BodyOptions.atmosphere` takes a CSS color (its alpha the strength)
+  besides true (the Earth's blue) and false. A `mars` example (the Viking colour mosaic of NASA's Mars Trek).
 - Raster tiles in longitudes and latitudes (`grid: 'equirectangular'`, the grid of NASA's Trek and of WorldCRS84Quad),
   reprojected in the page into Web Mercator tiles.
 
@@ -35,6 +38,7 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Negative integer properties of vector tiles; vector tiles spread evenly over the workers.
 - Destroying a map stops its downloads and workers and frees its GPU memory; the device pixel ratio is followed.
 - Lines, circles, labels and networks no longer jitter at high zoom over large layers.
+- Circles and labels past the horizon of the globe are hidden instead of showing through it.
 
 ### Changed
 

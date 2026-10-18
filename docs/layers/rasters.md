@@ -35,4 +35,5 @@ map.addRaster({ url: 'https://trek.nasa.gov/tiles/Moon/EQ/…/default028mm/{z}/{
 Tiles in longitudes and latitudes (Plate Carrée, EPSG:4326-like): two 256 px tiles side by side at level 0, rows from
 the north, as NASA's Trek WMTS and the WorldCRS84Quad grid. They are reprojected in the page into the Web Mercator
 tiles the engine draws, one row of pixels at a time; `minZoom` and `maxZoom` are levels of the source grid, drawn one
-Mercator level finer. The source tiles are fetched with CORS and kept for the neighbouring tiles.
+Mercator level finer (the last level of the service: 8 for the Moon's LRO mosaic, 7 for the Viking mosaic of Mars,
+from the `TileMatrix` list of its `WMTSCapabilities.xml`). The source tiles are fetched with CORS and kept for the neighbouring tiles.

@@ -1,8 +1,8 @@
 # Examples
 
 Each folder is a page: `index.html` and its `main.ts`, importing `@ign-junn/isard` as an application does. The data
-comes from the Géoplateforme (WFS of BD TOPO and ADMIN EXPRESS, vector tiles, WMS of the relief), the Moon's from NASA's
-Moon Trek, no key needed.
+comes from the Géoplateforme (WFS of BD TOPO and ADMIN EXPRESS, vector tiles, WMS of the relief), the Moon's and
+Mars's from NASA's Trek, no key needed.
 
 | Example | Shows |
 |---|---|
@@ -15,6 +15,7 @@ Moon Trek, no key needed.
 | [`tiles3d`](tiles3d/main.ts) | a photomesh streamed as 3D Tiles |
 | [`vector`](vector/main.ts) | the PLAN.IGN vector styles, a restyled subset on its own layer |
 | [`moon`](moon/main.ts) | a map of the Moon: NASA's LRO mosaic reprojected from longitudes and latitudes, the Apollo sites |
+| [`mars`](mars/main.ts) | a map of Mars in its dusty halo: the Viking colour mosaic, Olympus Mons, Valles Marineris, the rovers |
 
 `bun run dev` at the root builds them and serves them on http://127.0.0.1:5180/examples/. They are also live in the
 documentation, next to their code.

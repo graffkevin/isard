@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn ecef_points_land_where_the_basemap_puts_them() {
         // A ground point 300 m east of the center, through the ECEF map, lands where the Mercator plane has it
-        for body in [Body::EARTH, Body::MOON] {
+        for body in [Body::EARTH, Body::MOON, Body::MARS] {
             for globe_zoom in [None, Some(3.0), Some(6.0)] {
                 let mut c = camera();
                 c.body = body;

@@ -27,8 +27,12 @@ uniform vec2 u_camera_lo;
 uniform vec2 u_viewport;
 // Pulls what is drawn towards the camera in relief (clip space), so that it wins over the ground it lies on
 uniform float u_depth_bias;
+// The eye from the sphere's center (local frame) and the horizon's bound, as `View::faces_camera`; w < 0 off the globe
+uniform vec4 u_horizon;
 
 vec2 plane_of(vec2 offset) { return ((offset - u_camera_hi) - u_camera_lo) * u_world; }
+// A ground position (`project`) past the horizon of the globe, hidden by the body
+bool behind_globe(vec3 ground) { return dot(ground - vec3(0.0, 0.0, -u_radius), u_horizon.xyz) <= u_horizon.w; }
 ";
 
 /// GLSL after `ANCHOR` and `drape::ALTITUDE`: a piece of line (`geo::pieces::Piece`, attributes 0 and 1) drawn as a
@@ -177,7 +181,7 @@ pub fn split(x: f64) -> (f32, f32) {
 }
 
 /// Uniforms of `ANCHOR`
-pub struct Anchor([Option<glow::UniformLocation>; 6]);
+pub struct Anchor([Option<glow::UniformLocation>; 7]);
 
 impl Anchor {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
@@ -191,15 +195,17 @@ impl Anchor {
                 "u_camera_lo",
                 "u_viewport",
                 "u_depth_bias",
+                "u_horizon",
             ],
         ))
     }
 
-    /// The view: its matrix, half the viewport (device pixels) and, in relief, the depth bias (a fraction of the
-    /// distance: 2 × near × fraction in clip space). Program in use
+    /// The view: its matrix, half the viewport (device pixels), the horizon of the globe and, in relief, the depth
+    /// bias (a fraction of the distance: 2 × near × fraction in clip space). Program in use
     pub fn set_view(&self, gl: &glow::Context, view: &View, viewport: (f64, f64), relief: bool, depth_bias: f64) {
-        let [matrix, _, _, _, viewport_u, bias_u] = &self.0;
+        let [matrix, _, _, _, viewport_u, bias_u, horizon_u] = &self.0;
         let bias = if relief { 2.0 * view.near * depth_bias } else { 0.0 };
+        let horizon = horizon(view);
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
@@ -209,12 +215,13 @@ impl Anchor {
                 (viewport.1 / 2.0) as f32,
             );
             gl.uniform_1_f32(bias_u.as_ref(), bias as f32);
+            gl.uniform_4_f32_slice(horizon_u.as_ref(), &horizon);
         }
     }
 
     /// The origin of the offsets drawn next, and the camera relative to it. Program in use
     pub fn set_origin(&self, gl: &glow::Context, view: &View, origin: DVec2) {
-        let [_, origin_u, hi_u, lo_u, _, _] = &self.0;
+        let [_, origin_u, hi_u, lo_u, _, _, _] = &self.0;
         let camera = camera_offset(view, origin);
         let ((xh, xl), (yh, yl)) = (split(camera.x), split(camera.y));
         // SAFETY: uniform uploads on the program in use
@@ -224,6 +231,18 @@ impl Anchor {
             gl.uniform_2_f32(lo_u.as_ref(), xl, yl);
         }
     }
+}
+
+/// `u_horizon` of a view: the eye from the sphere's center and `View::faces_camera`'s bound, nothing hidden off the
+/// globe
+#[must_use]
+pub fn horizon(view: &View) -> [f32; 4] {
+    if view.globe.factor <= 0.0 {
+        return [0.0, 0.0, 0.0, -1.0];
+    }
+    let eye = view.eye - view.sphere_center();
+    let r = view.globe.radius;
+    [eye.x as f32, eye.y as f32, eye.z as f32, (0.98 * r * r) as f32]
 }
 
 /// The camera center's offset from a layer's origin, on the copy of the world nearest to the center (Mercator)
@@ -259,6 +278,38 @@ mod tests {
         camera.height = 600.0;
         camera.pitch = pitch;
         camera.view()
+    }
+
+    #[test]
+    fn the_horizon_hides_the_far_side_of_the_globe() {
+        // The shader's test in f32, against View::faces_camera
+        let behind = |v: &View, p: glam::DVec3| {
+            let [x, y, z, w] = horizon(v);
+            let q = (p - v.sphere_center()).as_vec3();
+            q.dot(glam::Vec3::new(x, y, z)) <= w
+        };
+        let mut camera = Camera::new(-80.0, 0.0, 1.2);
+        camera.globe = true;
+        camera.width = 640.0;
+        camera.height = 400.0;
+        let v = camera.view();
+        for lon in (-180..180).step_by(5) {
+            for lat in (-80..=80).step_by(10) {
+                let m = mercator(f64::from(lon), f64::from(lat));
+                let p = v.position(m, -(m.x - v.center.x).round());
+                assert_eq!(behind(&v, p), !v.faces_camera(p), "{lon} {lat}");
+            }
+        }
+        // Gale crater, on the far side of Tharsis; Valles Marineris in front
+        let at = |lon: f64, lat: f64| {
+            let m = mercator(lon, lat);
+            v.position(m, -(m.x - v.center.x).round())
+        };
+        assert!(behind(&v, at(137.44, -4.59)));
+        assert!(!behind(&v, at(-59.2, -13.9)));
+        // On the plane, nothing hidden
+        let flat = view(-80.0, 0.0, 12.0, 60.0);
+        assert!(!behind(&flat, flat.position(mercator(-79.0, 0.5), 0.0)));
     }
 
     #[test]

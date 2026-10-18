@@ -2,7 +2,8 @@
 //! format of `MapLibre`'s glyph ranges), with a halo. The page shapes the text (`glyphs.ts`: lines, wrapping, anchors)
 //! and keeps the glyph atlas; the engine places the labels each frame, every symbol layer sharing one collision grid
 //! from the top layer down (a label showing only where no label placed before it does), and draws each glyph as an
-//! instanced quad facing the screen. In relief a label stands on the ground, and the hills hide it.
+//! instanced quad facing the screen. In relief a label stands on the ground, and the hills hide it; on the globe, a
+//! label past its horizon is not placed.
 //!
 //! The atlas has pages of one size (the layers of a texture array), so it never runs out: the atlas coordinates of a
 //! glyph count its page's rows first (`v + page × height`, as if the pages were stacked), and the shader takes the
@@ -408,10 +409,15 @@ impl Layer for SymbolLayer {
         boxes.clear();
         let (camera, view) = (frame.camera, frame.view);
         let layer_scale = stops(&self.style.size, camera.zoom);
-        // Screen point and distance to the eye (pixels of the local frame)
+        // Screen point and distance to the eye (pixels of the local frame); none past the horizon of the globe, hidden
+        // by the body (as `Engine::project`)
         let screen = |m: DVec2, altitude: f64| -> Option<(DVec2, f64)> {
             let shift = -(m.x - camera.center.x).round();
-            let p = view.position(m, shift) + glam::DVec3::Z * altitude * view.vertical;
+            let ground = view.position(m, shift);
+            if view.globe.factor > 0.0 && !view.faces_camera(ground) {
+                return None;
+            }
+            let p = ground + glam::DVec3::Z * altitude * view.vertical;
             let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
             (clip.w > 0.0).then(|| {
                 let at = DVec2::new(

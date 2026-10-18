@@ -24,6 +24,13 @@ impl Body {
         radius: 1_737_400.0,
         flattening: 0.0,
     };
+    /// Mars: the sphere of its IAU 2000 equatorial radius. Its data (Viking and MOLA mosaics, the landing sites) take
+    /// planetocentric latitudes, which an ellipsoid here would read as geodetic (up to 0.33°, 20 km, apart); on the
+    /// sphere both agree, and the globe is drawn as one anyway
+    pub const MARS: Self = Self {
+        radius: 3_396_190.0,
+        flattening: 0.0,
+    };
 
     /// Square of the first eccentricity
     fn e2(&self) -> f64 {
@@ -170,5 +177,19 @@ mod tests {
             }
         }
         assert!((moon.circumference() - 10_916_406.152).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mars_latitudes_are_planetocentric() {
+        let mars = Body::MARS;
+        assert_eq!(mars.radius, 3_396_190.0);
+        assert!((mars.circumference() - 21_338_891.108).abs() < 1e-3);
+        // Gale crater: on the sphere, the latitude is the angle from the equatorial plane seen from the center
+        let (lon, lat) = (137.44_f64, -4.59_f64);
+        let p = mars.to_ecef(lon, lat, -4500.0);
+        assert!((p.z.atan2(p.x.hypot(p.y)).to_degrees() - lat).abs() < 1e-12, "{p}");
+        assert!((p.length() - (3_396_190.0 - 4500.0)).abs() < 1e-6, "{p}");
+        let back = mars.from_ecef(p);
+        assert!((back.x - lon).abs() < 1e-9 && (back.y - lat).abs() < 1e-9 && (back.z + 4500.0).abs() < 1e-6);
     }
 }

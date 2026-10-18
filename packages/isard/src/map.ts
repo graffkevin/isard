@@ -138,16 +138,28 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
   }
 }
 
-/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap) */
+/** The named bodies; a body's `color` is that of its globe under the tiles (the Earth's follows its basemap). Mars:
+ * the sphere of its equatorial radius (its data take planetocentric latitudes), a faint butterscotch halo of dust */
 const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>> = {
   earth: { radius: 6378137, flattening: 1 / 298.257223563, atmosphere: true, color: '#cacaca' },
   moon: { radius: 1737400, flattening: 0, atmosphere: false, color: '#77756f' },
+  mars: { radius: 3396190, flattening: 0, atmosphere: 'rgba(232, 168, 120, 0.6)', color: '#b5714a' },
 };
+
+/** The Earth's halo, RGB 0-1 and its strength: what `atmosphere: true` draws */
+const EARTH_HALO = Float32Array.of(0.42, 0.66, 1, 1);
 
 /** A body from the option, its defaults filled in */
 function bodySettings(body: CelestialBody | undefined): Required<BodyOptions> {
   if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
   return { flattening: 0, atmosphere: false, color: '#808080', ...body };
+}
+
+/** The halo of an atmosphere for the engine (RGB 0-1 and its strength, the color's alpha): undefined for none */
+function haloSettings(atmosphere: boolean | string): Float32Array | undefined {
+  if (atmosphere === true) return EARTH_HALO;
+  const color = atmosphere === false ? undefined : parseCssColor(atmosphere);
+  return color && Float32Array.from(color);
 }
 
 /** Relief settings from the option: undefined when off. The IGN terrain model by default, on the Earth only */
@@ -407,7 +419,7 @@ export class GeoMap {
     const engine = new this.engineClass(this.canvas, () => this.requestRender());
     // The body first: the layers' shaders may take its size
     const { radius, flattening, atmosphere: air } = this.settings.body;
-    engine.setBody(radius, flattening, air);
+    engine.setBody(radius, flattening, haloSettings(air));
     const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setMaxPitch(maxPitch);

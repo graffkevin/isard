@@ -108,7 +108,7 @@ describe('options', () => {
   test('defaults reach the engine', async () => {
     const { engine, map } = await create();
     // The Earth, WGS 84, first: the layers' shaders may take its size
-    expect(engine.calls[0]).toEqual(['setBody', [6378137, 1 / 298.257223563, true]]);
+    expect(engine.calls[0]).toEqual(['setBody', [6378137, 1 / 298.257223563, Float32Array.of(0.42, 0.66, 1, 1)]]);
     expect(engine.last('setZoomRange')).toEqual([0, 22]);
     expect(engine.last('setMaxPitch')).toEqual([70]);
     expect(engine.last('setGlobe')).toEqual([true]);
@@ -183,7 +183,7 @@ describe('options', () => {
     });
     maps.push(map);
     const engine = map.engine as unknown as FakeEngine;
-    expect(engine.last('setBody')).toEqual([1737400, 0, false]);
+    expect(engine.last('setBody')).toEqual([1737400, 0, undefined]);
     expect(engine.args('addRaster')).toEqual([]);
     expect(engine.last('setBackground')).toEqual([0, 0, 0]);
     expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([0x77, 0x75, 0x6f]);
@@ -202,10 +202,34 @@ describe('options', () => {
     const { engine } = await create({
       body: { radius: 3396190, flattening: 0.00589, atmosphere: true, color: '#c1440e' },
     });
-    expect(engine.last('setBody')).toEqual([3396190, 0.00589, true]);
+    // The Earth's halo
+    expect(engine.last('setBody')).toEqual([3396190, 0.00589, Float32Array.of(0.42, 0.66, 1, 1)]);
     expect(engine.last('setGlobeColor')).toEqual([0xc1 / 255, 0x44 / 255, 0x0e / 255]);
     const { engine: sphere } = await create({ body: { radius: 1000 } });
-    expect(sphere.last('setBody')).toEqual([1000, 0, false]);
+    expect(sphere.last('setBody')).toEqual([1000, 0, undefined]);
+    // A halo of its own color, its alpha the strength; none for what is not a color
+    const { engine: tinted } = await create({ body: { radius: 1000, atmosphere: 'rgb(255 102 0 / 50%)' } });
+    expect(tinted.last('setBody')).toEqual([1000, 0, Float32Array.of(1, 0.4, 0, 0.5)]);
+    const { engine: wrong } = await create({ body: { radius: 1000, atmosphere: 'dusty' } });
+    expect(wrong.last('setBody')).toEqual([1000, 0, undefined]);
+  });
+
+  test('Mars: the sphere of its equatorial radius, a thin dusty halo, none of the Géoplateforme defaults', async () => {
+    const container = new FakeElement('div');
+    const map = await GeoMap.create(container as unknown as HTMLElement, { body: 'mars', workers: false });
+    maps.push(map);
+    const engine = map.engine as unknown as FakeEngine;
+    expect(engine.calls[0]).toEqual(['setBody', [3396190, 0, Float32Array.of(232 / 255, 168 / 255, 120 / 255, 0.6)]]);
+    // Butterscotch, warmer and fainter than the Earth's blue
+    const [r = 0, g = 0, b = 0, strength = 0] = (engine.last('setBody')?.[2] ?? []) as Float32Array;
+    expect(r).toBeGreaterThan(g);
+    expect(g).toBeGreaterThan(b);
+    expect(strength).toBeLessThan(1);
+    expect(engine.args('addRaster')).toEqual([]);
+    expect(engine.last('setBackground')).toEqual([0, 0, 0]);
+    expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([0xb5, 0x71, 0x4a]);
+    expect(map.getCamera()).toEqual({ center: [0, 0], zoom: 2, pitch: 0, bearing: 0 });
+    expect(() => map.setTerrain(true)).toThrow(/needs a url/);
   });
 
   test('an equirectangular raster is reprojected by a loader, one level finer in Web Mercator', async () => {
@@ -634,7 +658,7 @@ describe('context loss', () => {
     const fresh = map.engine as unknown as FakeEngine;
     expect(fresh).not.toBe(engine);
     expect(engine.freed).toBe(true);
-    expect(fresh.calls[0]).toEqual(['setBody', [1737400, 0, false]]);
+    expect(fresh.calls[0]).toEqual(['setBody', [1737400, 0, undefined]]);
     expect(fresh.last('setZoomRange')).toEqual([3, 22]);
     expect(fresh.last('setMaxPitch')).toEqual([50]);
     expect(fresh.last('setGlobe')).toEqual([false]);

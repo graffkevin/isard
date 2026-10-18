@@ -34,6 +34,9 @@ General-purpose map libraries spend their time on things these maps do not need.
   data), orthophotos, hillshade, the IGN relief, on a globe that turns into Web Mercator.
 - ⛰️ **Everything on the relief.** Lines, circles, labels and buildings stand on the ground; fills of any size are
   exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
+- 🪐 **The Moon, Mars, any body.** `body: 'moon'`, `'mars'` or an ellipsoid of your own: the globe at its radius
+  with its own atmosphere halo (or none), its metres in the camera, the relief and 3D Tiles, NASA's planetary mosaics
+  reprojected in the page from longitudes and latitudes.
 - 🏙️ **Buildings and 3D Tiles.** Buildings colored by a value or by a network's travel times, photomeshes and city
   models in 3D Tiles (Draco, meshopt, KTX2).
 - 🦀 **Small and exact.** 220 KB of WebAssembly gzipped (330 KB once a 3D Tiles layer is added), f64 on the CPU and f32 relative to the camera on the GPU
@@ -62,19 +65,24 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 
 <table>
   <tr>
-    <td width="33%"><a href="https://graffkevin.github.io/isard/examples/globe"><img src="docs/public/screenshots/globe.jpg" alt="" /></a><br /><b>The globe</b><br />turning in its atmosphere, a flight to a click</td>
-    <td width="33%"><a href="https://graffkevin.github.io/isard/examples/geojson"><img src="docs/public/screenshots/geojson.jpg" alt="" /></a><br /><b>GeoJSON layers</b><br />fills by value, outlines, labels, picking</td>
-    <td width="33%"><a href="https://graffkevin.github.io/isard/examples/buildings"><img src="docs/public/screenshots/buildings.jpg" alt="" /></a><br /><b>Buildings</b><br />raised to their height, colored by it</td>
+    <td width="50%"><a href="https://graffkevin.github.io/isard/examples/globe"><img src="docs/public/screenshots/globe.jpg" alt="" /></a><br /><b>The globe</b><br />turning in its atmosphere, a flight to a click</td>
+    <td width="50%"><a href="https://graffkevin.github.io/isard/examples/basic"><img src="docs/public/screenshots/basic.jpg" alt="" /></a><br /><b>A map</b><br />the vector basemap, a marker and its popup</td>
+  </tr>
+  <tr>
+    <td><a href="https://graffkevin.github.io/isard/examples/geojson"><img src="docs/public/screenshots/geojson.jpg" alt="" /></a><br /><b>GeoJSON layers</b><br />fills by value, outlines, labels, picking</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/buildings"><img src="docs/public/screenshots/buildings.jpg" alt="" /></a><br /><b>Buildings</b><br />raised to their height, colored by it</td>
   </tr>
   <tr>
     <td><a href="https://graffkevin.github.io/isard/examples/relief"><img src="docs/public/screenshots/relief.jpg" alt="" /></a><br /><b>Relief and a ground shader</b><br />your GLSL over the mountains</td>
     <td><a href="https://graffkevin.github.io/isard/examples/network"><img src="docs/public/screenshots/network.jpg" alt="" /></a><br /><b>Travel times on hover</b><br />a network recolored at every move</td>
-    <td><a href="https://graffkevin.github.io/isard/examples/vector"><img src="docs/public/screenshots/vector.jpg" alt="" /></a><br /><b>Vector basemaps</b><br />the PLAN.IGN styles, a restyled subset</td>
   </tr>
   <tr>
+    <td><a href="https://graffkevin.github.io/isard/examples/vector"><img src="docs/public/screenshots/vector.jpg" alt="" /></a><br /><b>Vector basemaps</b><br />the PLAN.IGN styles, a restyled subset</td>
     <td><a href="https://graffkevin.github.io/isard/examples/tiles3d"><img src="docs/public/screenshots/tiles3d.jpg" alt="" /></a><br /><b>3D Tiles</b><br />the Lille photomesh</td>
-    <td><a href="https://graffkevin.github.io/isard/examples/basic"><img src="docs/public/screenshots/basic.jpg" alt="" /></a><br /><b>A map</b><br />the vector basemap, a marker and its popup</td>
+  </tr>
+  <tr>
     <td><a href="https://graffkevin.github.io/isard/examples/moon"><img src="docs/public/screenshots/moon.jpg" alt="" /></a><br /><b>The Moon</b><br />another body, the LRO mosaic, the Apollo sites</td>
+    <td><a href="https://graffkevin.github.io/isard/examples/mars"><img src="docs/public/screenshots/mars.jpg" alt="" /></a><br /><b>Mars</b><br />its thin dusty halo, the Viking mosaic, famous sites</td>
   </tr>
 </table>
 
@@ -87,7 +95,7 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 | [Labels](https://graffkevin.github.io/isard/layers/labels) | `addSymbols` | Géoplateforme fonts, halos, along lines, collisions shared by all layers |
 | [Buildings](https://graffkevin.github.io/isard/layers/buildings) | `addExtrusions` | tiles or one set, colored by values or by a network's times |
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
-| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS, or tiles drawn by your code |
+| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS, equirectangular tiles reprojected, or tiles drawn by your code |
 | [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, glb, external tilesets, compressed or not |
 
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in

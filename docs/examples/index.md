@@ -2,7 +2,7 @@
 
 Each example is a page of [`examples/`](https://github.com/graffkevin/isard/tree/main/examples) in the repository: an
 `index.html` and its `main.ts`, importing `@ign-junn/isard` as an application does. The data comes from the
-Géoplateforme (the Moon's from NASA), no key needed.
+Géoplateforme (the Moon's and Mars's from NASA), no key needed.
 
 | | |
 |---|---|
@@ -15,3 +15,4 @@ Géoplateforme (the Moon's from NASA), no key needed.
 | [3D Tiles](./tiles3d) | the Lille photomesh |
 | [Vector basemaps](./vector) | the PLAN.IGN styles, a restyled subset |
 | [The Moon](./moon) | another body: the LRO mosaic reprojected, the Apollo sites |
+| [Mars](./mars) | a body with an atmosphere: its dusty halo, the Viking mosaic, famous sites |

@@ -70,7 +70,7 @@ On the globe, stars and an atmosphere halo surround the Earth (`sky: false` to t
 
 <LiveExample slug="relief" height="420px" />
 
-## The Moon and other bodies
+## The Moon, Mars and other bodies
 
 ```ts
 const map = await GeoMap.create(container, { body: 'moon', center: [23.47, 0.67], zoom: 1.2 });
@@ -82,10 +82,11 @@ map.addRaster({
 ```
 
 `body` sets what the map is drawn on, at its creation: `'earth'` (WGS 84, the default), `'moon'` (a sphere of
-1 737 400 m) or any ellipsoid, `{ radius, flattening, atmosphere, color }` (equatorial radius in metres, flattening 0 for
-a sphere, whether it has an atmosphere, the color of the globe past the tiles). Zoom levels keep their meaning on
-screen, the Web Mercator tile pyramid, and longitudes and latitudes are the body's own (on the Moon, the mean Earth
-frame: longitude 0 faces the Earth). What is measured in metres follows the body: the scale between zoom levels and
+1 737 400 m), `'mars'` (a sphere of 3 396 190 m, its equatorial radius) or any ellipsoid,
+`{ radius, flattening, atmosphere, color }` (equatorial radius in metres, flattening 0 for a sphere, its atmosphere,
+the color of the globe past the tiles). Zoom levels keep their meaning on screen, the Web Mercator tile pyramid, and
+longitudes and latitudes are the body's own (on the Moon, the mean Earth frame: longitude 0 faces the Earth; on Mars,
+planetocentric latitudes and longitudes east from -180° to 180°, those of NASA's and the USGS's mosaics). What is measured in metres follows the body: the scale between zoom levels and
 the ground, the relief, buildings, 3D Tiles.
 
 Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no hillshade, no IGN credits (add the
@@ -95,3 +96,20 @@ geoid). The planetary services mostly serve tiles in longitudes and latitudes: `
 them in the page (see [rasters](../layers/rasters#equirectangular-tiles)).
 
 <LiveExample slug="moon" height="460px" />
+
+```ts
+const map = await GeoMap.create(container, { body: 'mars', center: [-80, 0], zoom: 1.2 });
+map.addRaster({
+  url: 'https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/{z}/{y}/{x}.jpg',
+  grid: 'equirectangular',
+  maxZoom: 7,
+});
+```
+
+An atmosphere draws a halo around the globe: `atmosphere: true` is the Earth's light blue, a CSS color another one, its
+alpha the halo's strength (Mars: `'rgba(232, 168, 120, 0.6)'`, a faint butterscotch of dust), false none (the default
+of a body of your own). Mars is a sphere rather than its IAU ellipsoid (flattening 1/170): its mosaics and landing
+sites give planetocentric latitudes, which an ellipsoid would read as geodetic ones, up to 0.33° (20 km) apart; on a
+sphere both agree. A body of your own with its `flattening` takes geodetic latitudes, as WGS 84 does.
+
+<LiveExample slug="mars" height="460px" />

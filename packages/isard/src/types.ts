@@ -28,20 +28,22 @@ export interface BodyOptions {
   radius: number;
   /** Flattening of its ellipsoid, 0 for a sphere (default 0) */
   flattening?: number;
-  /** An atmosphere: its halo around the globe (default false) */
-  atmosphere?: boolean;
+  /** An atmosphere: its halo around the globe, true for the Earth's light blue, or a CSS color (its alpha the
+   * halo's strength) (default false) */
+  atmosphere?: boolean | string;
   /** Color of the globe where no tile covers it (past the Web Mercator latitudes, 85°), a CSS color (default
    * `#808080`) */
   color?: string;
 }
 
 /**
- * The body the map is drawn on: 'earth' (WGS 84, the default), 'moon' (a sphere of 1 737 400 m, no atmosphere) or
- * another one. Zoom levels keep their meaning on screen (the Web Mercator tile pyramid), their metres follow the body:
+ * The body the map is drawn on: 'earth' (WGS 84, the default), 'moon' (a sphere of 1 737 400 m, no atmosphere),
+ * 'mars' (a sphere of 3 396 190 m, its equatorial radius, a thin dusty halo; planetocentric latitudes) or another
+ * one. Zoom levels keep their meaning on screen (the Web Mercator tile pyramid), their metres follow the body:
  * altitudes, relief, buildings, 3D Tiles. Off the Earth, the map has none of the Géoplateforme defaults: no basemap, no
  * hillshade, no default relief or geoid, no IGN credits, and space for its background.
  */
-export type CelestialBody = 'earth' | 'moon' | BodyOptions;
+export type CelestialBody = 'earth' | 'moon' | 'mars' | BodyOptions;
 
 export interface GeoMapOptions extends Partial<Camera> {
   /** The body the map is drawn on (default 'earth'); set at creation */

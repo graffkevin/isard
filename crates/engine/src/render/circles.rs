@@ -1,7 +1,7 @@
 //! Circle layer: points drawn as discs with a stroke, styled per feature (fill and stroke colors, radius and stroke
 //! width as zoom stops, a value through the layer's ramp): gauges, stations, marks. Each point is an instanced quad,
 //! the disc worked out per pixel. Facing the screen (`MapLibre`'s `circle-pitch-alignment: viewport`) or lying on the
-//! ground (`map`); in relief, standing on the ground, the hills hiding them.
+//! ground (`map`); in relief, standing on the ground, the hills hiding them; on the globe, hidden past its horizon.
 //!
 //! The points are sorted by square of a grid over the layer (as the pieces of the line layers), in their order within a
 //! square: only the squares in view are drawn. Circles of different squares overlapping may stack in another order
@@ -46,6 +46,8 @@ void main() {
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   float extent = outer + 1.0;
   vec2 merc = u_origin + a_point;
+  // Past the horizon of the globe, hidden by the body
+  if (behind_globe(project(plane_of(a_point), merc))) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   float h = altitude(merc);
   vec4 c;
   if (u_on_ground > 0.5) {

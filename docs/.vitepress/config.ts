@@ -15,6 +15,7 @@ const examples = [
   ['3D Tiles', 'tiles3d'],
   ['Vector basemaps', 'vector'],
   ['The Moon', 'moon'],
+  ['Mars', 'mars'],
 ];
 
 export default defineConfig({
