@@ -84,6 +84,51 @@
     "status": 200,
     "type": "image/x-bil;bits=32"
   },
+  "c9ad4f896b85d1978caa": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=234814.55089206249,5479006.187481433,313086.06785608083,5557277.704445455&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "effa7ec3d1dbbe2dbeaa": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=273950.30937407166,5518141.945963444,313086.06785608083,5557277.704445455&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "0ac20a801a009647f48a": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=293518.18861507624,5498574.06672244,313086.06785608083,5518141.945963444&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "7fbf4372781135b8a069": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=303302.12823557854,5488790.127101937,313086.06785608083,5498574.06672244&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "c25094db9b9b06a9a5ba": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=310640.0829509571,5491236.112007063,313086.06785608083,5493682.096912188&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "666fb81e0ee88f7c6f30": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=310640.0829509571,5493682.096912188,313086.06785608083,5496128.081817314&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "fd254d70245e2204a39f": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=310640.0829509571,5496128.081817314,313086.06785608083,5498574.06672244&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "30b4c57955e2f95bf684": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=313086.06785608083,5479006.187481433,352221.8263380937,5518141.945963444&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
+  "799a04ba20303df61767": {
+    "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=313086.06785608083,5488790.127101937,322870.0074765831,5498574.06672244&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
+    "status": 200,
+    "type": "image/x-bil;bits=32"
+  },
   "88736b3c3f3350d1b275": {
     "url": "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES&STYLES=&CRS=EPSG:3857&BBOX=626172.1357121654,5009377.085697312,1252344.271424327,5635549.221409475&WIDTH=256&HEIGHT=256&FORMAT=image/x-bil;bits=32",
     "status": 200,
@@ -859,6 +904,11 @@
     "status": 200,
     "type": "image/png"
   },
+  "e580d6705b2b7157fbd2": {
+    "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb",
+    "status": 200,
+    "type": "application/octet-stream"
+  },
   "7a02d966c664e13cc73c": {
     "url": "https://tiles.openfreemap.org/fonts/Noto%20Sans%20Bold/0-255.pbf",
     "status": 200,
@@ -874,6 +924,11 @@
     "status": 200,
     "type": "application/x-protobuf"
   },
+  "2e17817fadf227b747d6": {
+    "url": "https://tiles.openfreemap.org/fonts/Noto%20Sans%20Regular/256-511.pbf",
+    "status": 200,
+    "type": "application/x-protobuf"
+  },
   "d60e59158f9c8de17815": {
     "url": "https://tiles.openfreemap.org/planet",
     "status": 200,
@@ -886,6 +941,11 @@
   },
   "9b3e3c8dc4cd1a851ed1": {
     "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/10/519/352.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "3096479baeef0fcb5e31": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/10/520/371.pbf",
     "status": 200,
     "type": "application/vnd.mapbox-vector-tile"
   },
@@ -921,6 +981,21 @@
   },
   "30ea6e17aa51971537b2": {
     "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/11/1038/705.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "a883cbbd81a3ce9b2cec": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/11/1040/743.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "0f84530c048121ae89c2": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/12/2079/1486.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "a8320c5076373528a6e4": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/12/2080/1486.pbf",
     "status": 200,
     "type": "application/vnd.mapbox-vector-tile"
   },
@@ -979,6 +1054,16 @@
     "status": 200,
     "type": "application/vnd.mapbox-vector-tile"
   },
+  "a12afa0b287f4dfe24eb": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/13/4159/2972.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "5a18032a0c12456df357": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/13/4160/2972.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
   "a585957039f491938db2": {
     "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8302/5637.pbf",
     "status": 200,
@@ -986,6 +1071,31 @@
   },
   "ed558c6c62a46e6764a6": {
     "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8303/5637.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "c737e92e9a6a4ef3cbb7": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8319/5944.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "0e0b8ecd311c5dc7dbbd": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8319/5945.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "b28f8e5eb5f67f8e4e7a": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8319/5946.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "f59080d60992b7a70ab3": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8320/5944.pbf",
+    "status": 200,
+    "type": "application/vnd.mapbox-vector-tile"
+  },
+  "061d47c20ed88a75358c": {
+    "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/14/8320/5945.pbf",
     "status": 200,
     "type": "application/vnd.mapbox-vector-tile"
   },
@@ -998,6 +1108,21 @@
     "url": "https://tiles.openfreemap.org/planet/20261011_080001_pt/9/259/176.pbf",
     "status": 200,
     "type": "application/vnd.mapbox-vector-tile"
+  },
+  "2be5ebbf4830a3515783": {
+    "url": "https://tiles.openfreemap.org/sprites/ofm_f384/ofm.json",
+    "status": 200,
+    "type": "application/json"
+  },
+  "c0146cb8eee21a2d9dc2": {
+    "url": "https://tiles.openfreemap.org/sprites/ofm_f384/ofm.png",
+    "status": 200,
+    "type": "image/png"
+  },
+  "1ccbbe201f3da17e3387": {
+    "url": "https://tiles.openfreemap.org/styles/liberty",
+    "status": 200,
+    "type": "application/json"
   },
   "e313979dcb8dc34d5fa0": {
     "url": "https://tiles.openfreemap.org/styles/positron",

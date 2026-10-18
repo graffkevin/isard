@@ -79,6 +79,8 @@ pub struct Frame<'a> {
     pub fog: Option<([f32; 3], [f32; 2])>,
     /// The glyph atlas of the symbol layers and its size, once the page has made one
     pub glyphs: Option<(glow::Texture, (i32, i32))>,
+    /// The icon atlas of the symbol layers and its size, once the page has made one
+    pub icons: Option<(glow::Texture, (i32, i32))>,
 }
 
 /// A layer drawn over the ground. The frame starts with blending on, back faces culled, no depth test: a layer that

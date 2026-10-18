@@ -124,8 +124,8 @@ export interface GeoMapOptions extends Partial<Camera> {
    * resolve the default URL. Maps load it first, and the engine with 3D Tiles (`wasmUrl`) for their first 3D Tiles
    * layer only */
   coreWasmUrl?: string | URL;
-  /** Load the engine with 3D Tiles from the start (default false: it is loaded when the first 3D Tiles layer is added,
-   * the map then moving its camera and layers onto it, a stall of about a frame or two). For a map that shows 3D Tiles
+  /** Load the engine with 3D Tiles from the start (default false: it is loaded when the first 3D Tiles layer or glTF
+   * model is added, the map then moving its camera and layers onto it, a stall of about a frame or two). For a map that shows 3D Tiles
    * at once: one engine downloaded instead of two. `'preload'`: the map starts on the engine without 3D Tiles and
    * downloads and compiles the other once idle, without running it: its first 3D Tiles layer does not wait for the
    * download (for a map that will show 3D Tiles later, on demand) */

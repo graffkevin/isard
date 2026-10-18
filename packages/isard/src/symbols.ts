@@ -1,7 +1,8 @@
 /**
- * Text labels from GeoJSON: at points, at the middle of lines, at the center of polygons. Shaped on the page, placed by
- * the engine every frame with collisions shared by all symbol layers (the top layer first, each layer in data order),
- * drawn with a halo, standing on the relief.
+ * Text labels and icons from GeoJSON: at points, at the middle of lines, at the center of polygons. Shaped on the page,
+ * placed by the engine every frame with collisions shared by all symbol layers (the top layer first, each layer in
+ * data order), drawn with a halo, standing on the relief. The icons are the map's images (`map.addImage`, a vector
+ * basemap's sprite), beside their text or stretched around it.
  */
 import {
   evaluate,
@@ -19,7 +20,8 @@ import {
   stops,
 } from './features.ts';
 import { toMercator } from './geo.ts';
-import { codes, DEFAULT_FONT, type Glyph, type Glyphs, shape, type TextPart } from './glyphs.ts';
+import { codes, DEFAULT_FONT, type Glyph, type Glyphs, type Shaping, shape, type TextPart } from './glyphs.ts';
+import { type Icons, layoutIcon } from './icons.ts';
 import { Layer } from './layers.ts';
 import type { Anchor } from './overlay.ts';
 import type { LayerHost } from './types.ts';
@@ -33,7 +35,7 @@ export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 
   /** CSS pixels, or zoom stops (default 12) */
   size: Styled<Size, P>;
   /** `'point'` (default): horizontal text; `'line'`: along the line at its middle, kept upright */
-  placement: 'point' | 'line';
+  placement: Styled<'point' | 'line', P>;
   color: Styled<string, P>;
   haloColor: Styled<string, P>;
   /** CSS pixels (default 0) */
@@ -46,10 +48,42 @@ export interface SymbolStyle<P = Properties> extends Omit<FeatureLayerStyle<P>, 
   maxWidth: Styled<number, P>;
   /** Ems (default 1.2) */
   lineHeight: Styled<number, P>;
-  /** Shown even where it overlaps other labels, and hiding none (MapLibre's allow-overlap and ignore-placement)
-   * (default false) */
-  overlap: Styled<boolean, P>;
+  /** Shown even where it overlaps other labels, and hiding none (MapLibre's allow-overlap and ignore-placement);
+   * `'allow'`: shown even where it overlaps, still hiding the labels after it; `'ignore'`: shown only where it fits,
+   * hiding none (default false) */
+  overlap: Styled<Overlap, P>;
+  /** Shown without its icon where the icon does not fit (default false) */
+  textOptional: Styled<boolean, P>;
+  /** An image of the map (`map.addImage`); empty: none (default) */
+  icon: Styled<string, P>;
+  /** Scale of the image, or zoom stops (default 1) */
+  iconSize: Styled<Size, P>;
+  /** Side of the icon at the anchor (default `'center'`) */
+  iconAnchor: Styled<Anchor, P>;
+  /** Shift, CSS pixels at size 1 (default [0, 0]) */
+  iconOffset: Styled<[x: number, y: number], P>;
+  /** Degrees, clockwise (default 0) */
+  iconRotate: Styled<number, P>;
+  /** `'viewport'`: facing the screen; `'map'`: turning with the map, along its line when placed on one; `'auto'`
+   * (default): `'map'` with the `'line'` placement */
+  iconRotationAlignment: Styled<'map' | 'viewport' | 'auto', P>;
+  /** As `overlap`, for the icon (default false) */
+  iconOverlap: Styled<Overlap, P>;
+  /** Shown without its text where the text does not fit (default false) */
+  iconOptional: Styled<boolean, P>;
+  /** Stretched around its text: its width, its height, both (a road shield; `'none'` by default) */
+  iconTextFit: Styled<'none' | 'width' | 'height' | 'both', P>;
+  /** Room around the text of a fitted icon: top, right, bottom, left (CSS pixels, default 0) */
+  iconTextFitPadding: Styled<[top: number, right: number, bottom: number, left: number], P>;
+  /** Color of a signed distance field image (default black) */
+  iconColor: Styled<string, P>;
+  /** 0 to 1 (default 1) */
+  iconOpacity: Styled<number, P>;
 }
+
+/** How a label's text or icon meets the others: `true` shown wherever and hiding none, `'allow'` shown wherever,
+ * `'ignore'` hiding none, `false` neither (MapLibre's allow-overlap and ignore-placement) */
+export type Overlap = boolean | 'allow' | 'ignore';
 
 export interface SymbolOptions<P = Properties> extends Partial<SymbolStyle<P>>, Placement {
   data: FeatureData<P>;
@@ -115,10 +149,36 @@ function points(geometry: Geometry | null): Position[] {
   }
 }
 
-/** The map's glyphs, for a layer */
+/** The map's glyphs and icons, for a layer */
 export interface GlyphHost extends LayerHost {
   readonly glyphs: Glyphs;
+  readonly icons: Icons;
 }
+
+/** Flags of a label for the engine (`flag` in symbols.rs) */
+const FLAG = {
+  textOverlap: 1,
+  textIgnore: 2,
+  iconOverlap: 4,
+  iconIgnore: 8,
+  textOptional: 16,
+  iconOptional: 32,
+  text: 64,
+  icon: 128,
+  textAlong: 256,
+  iconAlong: 512,
+  iconUpright: 1024,
+} as const;
+
+/** Flags of an overlap: allowed to overlap, ignored by the placement */
+function overlapFlags(overlap: Overlap, allow: number, ignore: number): number {
+  if (overlap === true) return allow | ignore;
+  if (overlap === 'allow') return allow;
+  return overlap === 'ignore' ? ignore : 0;
+}
+
+/** Room around an icon's box, CSS pixels (MapLibre's default `icon-padding`) */
+const ICON_PADDING = 2;
 
 /** Labels built for the engine: an anchor (Mercator x, y), a collision box, a style per label; glyph quads whose first
  * number is their label's index */
@@ -129,16 +189,18 @@ interface Labels {
   quads: Float32Array;
 }
 
-/** Numbers per glyph quad: its label's index, its place, its atlas coordinates, its scale */
-const QUAD = 10;
+/** Numbers per quad: its label's index, its place, its atlas coordinates, its scale (a glyph's; -1 or -2: an icon),
+ * its turn */
+const QUAD = 11;
 
 /** The labels of a group of features, kept while they stay valid: same style, the same index of the group's first
- * feature (unless the style reads no index), and their glyphs complete or none loaded since */
+ * feature (unless the style reads no index), and their glyphs and icons complete or none added since */
 interface Chunk extends Labels {
   count: number;
   style: number;
   base: number;
   glyphs: number;
+  icons: number;
   complete: boolean;
 }
 
@@ -271,7 +333,7 @@ export class SymbolLayer<P = Properties> extends Layer {
         c !== undefined &&
         c.style === this.styleGeneration &&
         (c.base === base || this.indexFree) &&
-        (c.complete || c.glyphs === glyphs.version);
+        (c.complete || (c.glyphs === glyphs.version && c.icons === this.host.icons.version));
       if (!valid) todo.push({ group, base, parts: this.parts(group, base) });
       base += group.length;
     }
@@ -298,6 +360,8 @@ export class SymbolLayer<P = Properties> extends Layer {
       if (keep) this.chunks.set(group, chunk);
     }
     this.labels = concat(groups.map((g) => built.get(g) ?? (this.chunks.get(g) as Chunk)));
+    // The icons packed for them
+    this.host.icons.flush();
     this.send(this.map.engine, this.id);
     this.map.requestRender();
   }
@@ -311,67 +375,143 @@ export class SymbolLayer<P = Properties> extends Layer {
   ): Chunk {
     const { font, size, anchor, offset, maxWidth, lineHeight, color, haloColor, haloWidth, overlap, placement } =
       this.style;
+    const st = this.style;
+    const icons = this.host.icons;
     const anchorList: number[] = [];
     const boxes: number[] = [];
     const styles: number[] = [];
-    const quads: number[] = [];
+    const iconQuads: number[] = [];
+    const textQuads: number[] = [];
     let count = 0;
     let complete = true;
     group.forEach((f, k) => {
       const i = base + k;
+      const p = f.properties;
       const text = parts[k];
-      if (!text?.length || text.every((p) => !p.text)) return;
+      const filtered = st.filter !== undefined && !st.filter(p, i);
+      const hasText = !!text?.length && text.some((t) => t.text);
+      const iconName = filtered ? '' : evaluate(st.icon, p, i);
+      const icon = iconName ? icons.get(iconName) : undefined;
+      // An image not added yet: laid out again once more are
+      if (iconName && !icon) complete = false;
+      if (!hasText && !icon) return;
       // Glyphs still missing: shaped again once more glyphs are loaded
-      if (complete && !text.every((p) => present(p, loaded))) complete = false;
+      if (complete && text && !text.every((t) => present(t, loaded))) complete = false;
       // Shaped at its largest size; the engine scales by the zoom stops
-      const s0 = evaluate(size, f.properties, i);
-      const shaped = typeof s0 === 'number' ? s0 : Math.max(...s0.map(([, v]) => v), 1);
-      const scale: Size = typeof s0 === 'number' ? 1 : s0.map(([z, v]): [number, number] => [z, v / shaped]);
-      const s = shape(text, (name) => loaded.get(name), {
-        font: evaluate(font, f.properties, i),
-        size: shaped,
-        maxWidth: evaluate(maxWidth, f.properties, i),
-        lineHeight: evaluate(lineHeight, f.properties, i),
-        anchor: evaluate(anchor, f.properties, i),
-        offset: evaluate(offset, f.properties, i),
-      });
-      if (!s.quads.length) return;
-      const halo = evaluate(haloWidth, f.properties, i);
-      const fill = parseColor(evaluate(color, f.properties, i));
-      const haloRgba = parseColor(evaluate(haloColor, f.properties, i));
-      for (const { at, along } of anchors(f.geometry)) {
+      const shapedAt = (v: Size) => (typeof v === 'number' ? v : Math.max(...v.map(([, x]) => x), 1e-6));
+      const scaleOf = (v: Size, at: number): Size =>
+        typeof v === 'number' ? 1 : v.map(([z, x]): [number, number] => [z, x / at]);
+      const s0 = evaluate(size, p, i);
+      const shaped = shapedAt(s0);
+      const scale = scaleOf(s0, shaped);
+      let s: Shaping | undefined;
+      if (hasText && text) {
+        s = shape(text, (name) => loaded.get(name), {
+          font: evaluate(font, p, i),
+          size: shaped,
+          maxWidth: evaluate(maxWidth, p, i),
+          lineHeight: evaluate(lineHeight, p, i),
+          anchor: evaluate(anchor, p, i),
+          offset: evaluate(offset, p, i),
+        });
+        if (!s.quads.length) s = undefined;
+      }
+      if (!s && !icon) return;
+      const along = evaluate(placement, p, i) === 'line';
+      let flags = overlapFlags(evaluate(overlap, p, i), FLAG.textOverlap, FLAG.textIgnore);
+      if (evaluate(st.textOptional, p, i)) flags |= FLAG.textOptional;
+      if (s) flags |= FLAG.text;
+      // The icon: beside its text, or stretched around it (then scaled and turned with it)
+      let iconScale: Size = 1;
+      let iconBox: [number, number, number, number] = [0, 0, 0, 0];
+      let iconColor: [number, number, number, number] = [0, 0, 0, 0];
+      let quads: number[][] = [];
+      let iconTurns = false;
+      let fitted = false;
+      if (icon) {
+        const fit = evaluate(st.iconTextFit, p, i);
+        fitted = fit !== 'none' && s !== undefined;
+        const i0 = evaluate(st.iconSize, p, i);
+        const iconShaped = fitted ? 1 : shapedAt(i0);
+        iconScale = fitted ? scale : scaleOf(i0, iconShaped);
+        const laid = layoutIcon(icon, {
+          size: iconShaped,
+          anchor: evaluate(st.iconAnchor, p, i),
+          offset: evaluate(st.iconOffset, p, i),
+          rotate: evaluate(st.iconRotate, p, i),
+          fit,
+          padding: evaluate(st.iconTextFitPadding, p, i),
+          text: s?.layout,
+        });
+        quads = laid.quads;
+        if (quads.length) {
+          flags |= FLAG.icon | overlapFlags(evaluate(st.iconOverlap, p, i), FLAG.iconOverlap, FLAG.iconIgnore);
+          if (evaluate(st.iconOptional, p, i)) flags |= FLAG.iconOptional;
+          const alignment = evaluate(st.iconRotationAlignment, p, i);
+          if (fitted) flags |= FLAG.iconUpright;
+          iconTurns = alignment === 'map' || (alignment === 'auto' && along);
+          iconBox = [
+            laid.box[0] - ICON_PADDING,
+            laid.box[1] - ICON_PADDING,
+            laid.box[2] + ICON_PADDING,
+            laid.box[3] + ICON_PADDING,
+          ];
+          const [r, g, b, a] = parseColor(evaluate(st.iconColor, p, i));
+          iconColor = [r, g, b, a * Math.max(0, Math.min(1, evaluate(st.iconOpacity, p, i)))];
+        }
+      }
+      if (!(flags & (FLAG.text | FLAG.icon))) return;
+      const halo = s ? evaluate(haloWidth, p, i) : 0;
+      const fill = parseColor(evaluate(color, p, i));
+      const haloRgba = parseColor(evaluate(haloColor, p, i));
+      // The collision box: the ink, with the halo and a little room
+      const pad = halo + 1;
+      const textBox = s ? [s.box[0] - pad, s.box[1] - pad, s.box[2] + pad, s.box[3] + pad] : [0, 0, 0, 0];
+      for (const { at, along: line } of anchors(f.geometry)) {
         const label = count++;
         const [x, y] = toMercator(at);
         anchorList.push(x, y);
-        // Along the line: its direction in Mercator (y towards the south)
+        // The text along its line, kept upright; the icon turning with the map (along its line, or with the east at a
+        // point), or with its text when fitted to it
+        const textAlong = along && line !== undefined && s !== undefined;
+        const iconAlong = (flags & FLAG.icon) !== 0 && (fitted ? textAlong : iconTurns);
+        let labelFlags = flags | (textAlong ? FLAG.textAlong : 0) | (iconAlong ? FLAG.iconAlong : 0);
+        // The direction of its line in Mercator (y towards the south)
         let direction: [number, number] = [0, 0];
-        if (placement === 'line' && along) {
-          const [x1, y1] = toMercator([at[0] + along[0], at[1] + along[1]]);
+        if (line && (textAlong || iconAlong)) {
+          const [x1, y1] = toMercator([at[0] + line[0], at[1] + line[1]]);
           direction = [x1 - x, y1 - y];
+        } else if (iconAlong) {
+          direction = [1, 0];
         }
-        // The collision box: the ink, with the halo and a little room
-        const pad = halo + 1;
-        boxes.push(s.box[0] - pad, s.box[1] - pad, s.box[2] + pad, s.box[3] + pad);
+        if (direction[0] === 0 && direction[1] === 0) labelFlags &= ~(FLAG.textAlong | FLAG.iconAlong);
+        boxes.push(...textBox);
         styles.push(
           ...fill,
           ...haloRgba,
           halo,
-          evaluate(overlap, f.properties, i) ? 1 : 0,
+          labelFlags,
           ...direction,
           ...stops(scale),
+          ...iconBox,
+          ...iconColor,
+          ...stops(iconScale),
         );
-        for (const q of s.quads) quads.push(label, ...q);
+        for (const q of quads) iconQuads.push(label, ...q);
+        if (s) for (const q of s.quads) textQuads.push(label, ...q, 0);
       }
     });
     return {
       anchors: Float64Array.from(anchorList),
       boxes: Float32Array.from(boxes),
       styles: Float32Array.from(styles),
-      quads: Float32Array.from(quads),
+      // The icons under the texts
+      quads: Float32Array.from([...iconQuads, ...textQuads]),
       count,
       style: this.styleGeneration,
       base,
       glyphs: this.host.glyphs.version,
+      icons: icons.version,
       complete,
     };
   }
@@ -428,6 +568,19 @@ export function symbolStyle<P>(options: SymbolOptions<P>): SymbolStyle<P> {
     maxWidth: 10,
     lineHeight: 1.2,
     overlap: false,
+    textOptional: false,
+    icon: '',
+    iconSize: 1,
+    iconAnchor: 'center',
+    iconOffset: [0, 0],
+    iconRotate: 0,
+    iconRotationAlignment: 'auto',
+    iconOverlap: false,
+    iconOptional: false,
+    iconTextFit: 'none',
+    iconTextFitPadding: [0, 0, 0, 0],
+    iconColor: '#000',
+    iconOpacity: 1,
     ...rest,
   };
 }

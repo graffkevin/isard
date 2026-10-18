@@ -30,11 +30,11 @@ features:
     title: Everything lies on the relief
     details: Lines, circles, labels and buildings stand on the ground; fills of any size are exact to the pixel over hills and valleys; your own GLSL is drawn over the ground like the basemap.
   - icon: 🏙️
-    title: Buildings and 3D Tiles
-    details: Buildings raised to their height, colored by a value or by a network's travel times. Photomeshes and city models in 3D Tiles, compressed or not.
+    title: Buildings, 3D Tiles, your own 3D
+    details: Buildings raised to their height, colored by a value or by a network's travel times. Photomeshes and city models in 3D Tiles, compressed or not. glTF models at positions, instanced and picked; your WebGL code or a three.js scene in the map's frame and depth.
   - icon: 🏷️
     title: Labels and overlays
-    details: Text from signed distance fields with halos and shared collisions, markers, popups, navigation controls.
+    details: Text from signed distance fields with halos and shared collisions, icons and road shields from a style's sprite or your images, markers, popups, navigation controls.
   - icon: 🦀
     title: Small and exact
     details: f64 on the CPU, f32 relative to the camera on the GPU, centimetres at any zoom. Frames on demand only. Strict TypeScript types end to end.

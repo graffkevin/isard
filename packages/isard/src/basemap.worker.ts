@@ -1,8 +1,8 @@
 /**
  * Worker of the vector basemaps: fetches and decodes vector tiles (kept for the tiles that share them), draws their
  * fills, lines and circles with a MapLibre style into images (Canvas 2D, off the main thread) for the raster pool,
- * with the style's raster layers under them, and lists the label candidates of the style's symbol layers for the page
- * to shape and place. Extrusions are drawn flat, as fills. It also decodes the altitudes of PNG relief tiles and
+ * with the style's raster layers under them, and lists the label candidates of the style's symbol layers (their texts
+ * and icons) for the page to shape and place. Extrusions are drawn flat, as fills. It also decodes the altitudes of PNG relief tiles and
  * draws the rasters reprojected from other grids (planned by the page), for the map's other layers.
  *
  * A raster tile of level z covers 256 CSS pixels at map zoom z - 1 (MapLibre's 512 px convention): it is drawn from
@@ -14,6 +14,8 @@ import { decode, type TileFeature, type TileLayer } from './mvt.ts';
 import { type Job, resampler } from './resample.ts';
 import { fetchHeights, type PngEncoding, type Surface } from './terrain.ts';
 import {
+  type CandidateIcon,
+  type CandidateOverlap,
   type Context,
   color,
   context,
@@ -40,7 +42,8 @@ export type Priority = 'high' | 'low' | 'auto';
  * tile, a Mercator tile reprojected from the source images of its plan (keeping `cached` of them) */
 export type BasemapWork =
   | { type: 'render'; key: string; z: number; x: number; y: number; size: number; priority?: Priority }
-  | { type: 'labels'; key: string; z: number; x: number; y: number; priority?: Priority }
+  /** `zoom`: the zoom the style is evaluated at, past the source's deepest level (`z` by default) */
+  | { type: 'labels'; key: string; z: number; x: number; y: number; zoom?: number; priority?: Priority }
   | { type: 'heights'; url: string; encoding: PngEncoding; floor?: number }
   | { type: 'reproject'; job: Job; cached: number };
 
@@ -54,8 +57,8 @@ export type BasemapRequest =
       layers: StyleLayer[];
       /** The style's raster sources, by name, for its raster layers */
       rasters?: Record<string, RasterSource>;
-      /** The style's sprite, for the fill patterns (loaded once by the page) */
-      sprite?: Sprite;
+      /** The style's sprites, for the fill patterns (loaded once by the page) */
+      sprites?: Sprite[];
       /** Workers of the pool: each keeps its share of the decoded tiles */
       workers?: number;
     }
@@ -76,14 +79,24 @@ interface Renderer {
   maxzoom: number;
   layers: StyleLayer[];
   rasters: Record<string, RasterSource>;
-  sprite: Sprite | undefined;
-  /** Fill patterns by icon name, cut from the sprite once */
+  sprites: Sprite[];
+  /** Fill patterns by icon name, cut from the sprites once */
   patterns: Map<string, OffscreenCanvas | undefined>;
 }
 
+/** A sprite of the style: its images by name (`id:name` but in the default sprite) and its sheet */
 export interface Sprite {
   image: ImageBitmap;
   icons: Record<string, { x: number; y: number; width: number; height: number; pixelRatio?: number }>;
+}
+
+/** An image of the sprites and its sheet */
+function spriteIcon(r: Renderer, name: string) {
+  for (const sprite of r.sprites) {
+    const icon = sprite.icons[name];
+    if (icon) return { icon, image: sprite.image };
+  }
+  return undefined;
 }
 
 const renderers = new Map<string, Renderer>();
@@ -193,13 +206,14 @@ function shown(layer: StyleLayer, zoom: number): boolean {
 /** The image of a fill pattern, cut from the sprite on first use */
 function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
   if (r.patterns.has(name)) return r.patterns.get(name);
-  const icon = r.sprite?.icons[name];
+  const found = spriteIcon(r, name);
   let image: OffscreenCanvas | undefined;
-  if (r.sprite && icon && icon.width > 0 && icon.height > 0) {
+  if (found && found.icon.width > 0 && found.icon.height > 0) {
+    const { icon } = found;
     image = new OffscreenCanvas(icon.width, icon.height);
     image
       .getContext('2d')
-      ?.drawImage(r.sprite.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
+      ?.drawImage(found.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
   }
   r.patterns.set(name, image);
   return image;
@@ -267,7 +281,6 @@ async function draw(
   id: number,
   priority?: Priority,
 ) {
-  const sprite = r.sprite;
   const zoom = Math.max(0, z - 1);
   // CSS pixels to canvas pixels: the tile is 256 CSS pixels across at its zoom
   const px = size / 256;
@@ -348,7 +361,7 @@ async function draw(
         const opacity = Number(get('paint', 'fill-opacity', ctx, 1));
         const pattern = get('paint', 'fill-pattern', ctx, undefined);
         path(f, true);
-        const icon = typeof pattern === 'string' ? sprite?.icons[pattern] : undefined;
+        const icon = typeof pattern === 'string' ? spriteIcon(r, pattern)?.icon : undefined;
         const image = icon && patternImage(r, pattern as string);
         if (icon && image) {
           const p = g.createPattern(image, 'repeat');
@@ -410,23 +423,84 @@ async function draw(
   return tileImage(canvas, g, opaque);
 }
 
-/** A text written over its icon (a road shield's number: no halo, centered on it, no offset): icons are not drawn, and
- * without its icon the text would float unreadable; such a layer is left out */
-function onIcon(layer: StyleLayer): boolean {
-  const { layout = {}, paint = {} } = layer;
-  return (
-    layout['icon-image'] !== undefined &&
-    paint['text-halo-width'] === undefined &&
-    paint['text-halo-color'] === undefined &&
-    layout['text-offset'] === undefined &&
-    (layout['text-anchor'] ?? 'center') === 'center'
-  );
+/** How a layer's text or icon (`prefix`) meets the others: allowed to overlap, ignored by the placement */
+function overlapOf(layer: StyleLayer, prefix: 'text' | 'icon', ctx: Context): CandidateOverlap {
+  const allow = Boolean(value(layer, 'layout', `${prefix}-allow-overlap`, ctx, false));
+  const ignore = Boolean(value(layer, 'layout', `${prefix}-ignore-placement`, ctx, false));
+  if (allow && ignore) return true;
+  if (allow) return 'allow';
+  return ignore ? 'ignore' : false;
+}
+
+/** A pair of numbers of a style value, `fallback` if it is not one */
+function pair(v: unknown, fallback: [number, number]): [number, number] {
+  return Array.isArray(v) ? [Number(v[0] ?? fallback[0]), Number(v[1] ?? fallback[1])] : fallback;
+}
+
+/** Top, right, bottom, left of one to four numbers, as CSS's sides */
+function sides(v: unknown): [number, number, number, number] {
+  const n = (Array.isArray(v) ? v : [v]).map((x) => Number(x) || 0);
+  const [top = 0, right = top, bottom = top, left = right] = n;
+  return [top, right, bottom, left];
+}
+
+/** Points every `spacing` along a line (tile units, x and y interleaved), the first half a spacing in (the middle of a
+ * shorter line): each point and the segment it lies on (x, y, x0, y0, x1, y1) */
+export function lineAnchors(line: readonly number[], spacing: number): number[][] {
+  let length = 0;
+  for (let i = 2; i + 1 < line.length; i += 2) {
+    length += Math.hypot((line[i] ?? 0) - (line[i - 2] ?? 0), (line[i + 1] ?? 0) - (line[i - 1] ?? 0));
+  }
+  const out: number[][] = [];
+  if (!(length > 0) || !(spacing > 0)) return out;
+  let next = Math.min(spacing / 2, length / 2);
+  let walked = 0;
+  for (let i = 2; i + 1 < line.length; i += 2) {
+    const [ax, ay, bx, by] = [line[i - 2] ?? 0, line[i - 1] ?? 0, line[i] ?? 0, line[i + 1] ?? 0];
+    const d = Math.hypot(bx - ax, by - ay);
+    while (d > 0 && next <= walked + d) {
+      const t = (next - walked) / d;
+      out.push([ax + (bx - ax) * t, ay + (by - ay) * t, ax, ay, bx, by]);
+      next += spacing;
+    }
+    walked += d;
+  }
+  return out;
 }
 
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */
 function lonLat(z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] {
   const n = 2 ** z;
   return [longitude((x + px / extent) / n), latitude((y + py / extent) / n)];
+}
+
+/** The icon of a label: its layer's icon properties for the feature */
+function iconOf(
+  layer: StyleLayer,
+  image: string,
+  ctx: Context,
+  placement: 'point' | 'line',
+  sizeOf: (layer: StyleLayer) => Json,
+): CandidateIcon {
+  const alignment = value(layer, 'layout', 'icon-rotation-alignment', ctx, 'auto');
+  const fit = String(value(layer, 'layout', 'icon-text-fit', ctx, 'none'));
+  const padding = value(layer, 'layout', 'icon-text-fit-padding', ctx, [0, 0, 0, 0]);
+  return {
+    image,
+    size: isFeatureDependent(layer.layout?.['icon-size'])
+      ? Number(value(layer, 'layout', 'icon-size', ctx, 1))
+      : sizeOf(layer),
+    anchor: String(value(layer, 'layout', 'icon-anchor', ctx, 'center')),
+    offset: pair(value(layer, 'layout', 'icon-offset', ctx, [0, 0]), [0, 0]),
+    rotate: Number(value(layer, 'layout', 'icon-rotate', ctx, 0)) || 0,
+    alignment: alignment === 'map' || (alignment === 'auto' && placement === 'line') ? 'map' : 'viewport',
+    overlap: overlapOf(layer, 'icon', ctx),
+    optional: Boolean(value(layer, 'layout', 'icon-optional', ctx, false)),
+    fit: fit === 'width' || fit === 'height' || fit === 'both' ? fit : 'none',
+    padding: sides(padding),
+    color: String(value(layer, 'paint', 'icon-color', ctx, '#000')),
+    opacity: Number(value(layer, 'paint', 'icon-opacity', ctx, 1)),
+  };
 }
 
 async function labels(
@@ -436,6 +510,7 @@ async function labels(
   y: number,
   id: number,
   priority?: Priority,
+  zoom = z,
 ): Promise<LabelCandidate[]> {
   const url = r.tiles.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
   const layers = await tile(url, priority);
@@ -452,17 +527,33 @@ async function labels(
     }
     return s;
   };
+  // The icon size of a layer when it depends on the zoom only, as the text size
+  const iconSizes = new Map<StyleLayer, Json>();
+  const iconSizeOf = (layer: StyleLayer): Json => {
+    let s = iconSizes.get(layer);
+    if (s === undefined) {
+      const v = layer.layout?.['icon-size'] ?? 1;
+      s = isExpression(v) ? zoomStops(v) : v;
+      iconSizes.set(layer, s);
+    }
+    return s;
+  };
   r.layers.forEach((layer, index) => {
-    if (layer.type !== 'symbol' || !shown(layer, z) || layer.layout?.['text-field'] === undefined) return;
-    if (onIcon(layer)) return;
+    const layout = layer.layout ?? {};
+    if (layer.type !== 'symbol' || !shown(layer, zoom)) return;
+    if (layout['text-field'] === undefined && layout['icon-image'] === undefined) return;
     const data = layers.get(layer['source-layer'] ?? '');
     if (!data) return;
-    const placement = layer.layout?.['symbol-placement'] === 'line' ? 'line' : 'point';
+    const zctx: Context = { zoom, properties: {}, type: 'Unknown' };
+    const placement = value(layer, 'layout', 'symbol-placement', zctx, 'point') === 'line' ? 'line' : 'point';
+    const textAlong =
+      placement === 'line' && value(layer, 'layout', 'text-rotation-alignment', zctx, 'auto') !== 'viewport';
     for (const f of data.features) {
-      const ctx = context(f, z);
+      const ctx = context(f, zoom);
       if (!filter(layer.filter, ctx)) continue;
-      let t = text(layer.layout?.['text-field'], ctx).trim();
-      if (!t) continue;
+      let t = text(layout['text-field'], ctx).trim();
+      const image = text(layout['icon-image'], ctx).trim();
+      if (!t && !image) continue;
       const transform = value(layer, 'layout', 'text-transform', ctx, 'none');
       if (transform === 'uppercase') t = t.toUpperCase();
       else if (transform === 'lowercase') t = t.toLowerCase();
@@ -484,7 +575,10 @@ async function labels(
         offset: (Array.isArray(offset) ? [Number(offset[0] ?? 0), Number(offset[1] ?? 0)] : [0, 0]) as [number, number],
         maxWidth: Number(value(layer, 'layout', 'text-max-width', ctx, 10)),
         lineHeight: Number(value(layer, 'layout', 'text-line-height', ctx, 1.2)),
-        overlap: Boolean(value(layer, 'layout', 'text-allow-overlap', ctx, false)),
+        overlap: overlapOf(layer, 'text', ctx),
+        ...(textAlong ? { textAlong } : {}),
+        ...(value(layer, 'layout', 'text-optional', ctx, false) ? { textOptional: true } : {}),
+        ...(image ? { icon: iconOf(layer, image, ctx, placement, iconSizeOf) } : {}),
       };
       if (f.type === 1) {
         for (const point of f.geometry) {
@@ -494,6 +588,20 @@ async function labels(
             if (px < 0 || py < 0 || px >= data.extent || py >= data.extent) continue;
             const [lon, lat] = lonLat(z, x, y, data.extent, px, py);
             out.push({ ...base, lon, lat });
+          }
+        }
+      } else if (!t && placement === 'line') {
+        // Icons alone along lines (one-way arrows): every `symbol-spacing` CSS pixels (a tile is 512 across at its
+        // level, twice as many at each zoom past it)
+        const spacing =
+          (Number(value(layer, 'layout', 'symbol-spacing', ctx, 250)) * data.extent) / (512 * 2 ** (zoom - z));
+        for (const line of f.geometry) {
+          for (const [px = 0, py = 0, ax = 0, ay = 0, bx = 0, by = 0] of lineAnchors(line, Math.max(spacing, 1))) {
+            if (px < 0 || py < 0 || px >= data.extent || py >= data.extent) continue;
+            const [lon, lat] = lonLat(z, x, y, data.extent, px, py);
+            const [lon1, lat1] = lonLat(z, x, y, data.extent, bx, by);
+            const [lon0, lat0] = lonLat(z, x, y, data.extent, ax, ay);
+            out.push({ ...base, lon, lat, along: [lon1 - lon0, lat1 - lat0] });
           }
         }
       } else {
@@ -543,14 +651,14 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       maxzoom: data.maxzoom,
       layers: data.layers,
       rasters: data.rasters ?? {},
-      sprite: data.sprite,
+      sprites: data.sprites ?? [],
       patterns: new Map(),
     });
     return;
   }
   if (data.type === 'drop') {
-    // Its copy of the sprite
-    renderers.get(data.key)?.sprite?.image.close();
+    // Its copy of the sprites
+    for (const sprite of renderers.get(data.key)?.sprites ?? []) sprite.image.close();
     renderers.delete(data.key);
     return;
   }
@@ -573,7 +681,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       if (image) post({ id: data.id, image }, [image]);
       else post({ id: data.id, missing: true });
     } else {
-      post({ id: data.id, labels: await labels(r, data.z, data.x, data.y, data.id, data.priority) });
+      post({ id: data.id, labels: await labels(r, data.z, data.x, data.y, data.id, data.priority, data.zoom) });
     }
   } catch (error) {
     post({ id: data.id, error: String(error) });

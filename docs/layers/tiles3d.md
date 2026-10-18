@@ -13,10 +13,11 @@ replacing their parent only once all are ready, downloads aborted when they leav
 
 ## The engine with 3D Tiles
 
-The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer loads
-the full one (the layer shows once it is there, `stats()` is undefined until then). The map then moves onto it: a
+The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer (or
+[model](./models), which shares its decoders) loads the full one (the layer shows once it is there, `stats()` is
+undefined until then). The map then moves onto it: a
 new engine on the same canvas, the camera, settings and every layer created again in it, in order, with the same
-handles. That costs a download (some 330 KB gzipped, compiled off the main thread) and, once it is there, a stall
+handles. That costs a download (some 345 KB gzipped, compiled off the main thread) and, once it is there, a stall
 of a frame or two while the map is rebuilt (shaders, the layers' buffers, the raster tiles fetched again): the
 view may hold or flash once. The rebuild runs in a task of its own, after the one that instantiated the engine.
 

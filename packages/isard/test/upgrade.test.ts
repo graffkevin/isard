@@ -87,7 +87,7 @@ const point: Feature = { type: 'Feature', geometry: { type: 'Point', coordinates
 /** The layers created in an engine, in order */
 const created = (engine: FakeEngine) =>
   engine.calls
-    .filter(([name]) => /^add(Lines|Circles|Fills|Tiles3d|Extrusions|Network|Raster)$/.test(name))
+    .filter(([name]) => /^add(Lines|Circles|Fills|Tiles3d|Extrusions|Network|Raster|Models|CustomLayer)$/.test(name))
     .map(([n]) => n);
 
 describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => {
@@ -359,5 +359,183 @@ describe('hover', () => {
     frames.flush(100);
     expect(engine.args('pollPick').length - polls).toBe(30);
     expect(frames.pending).toBe(0);
+  });
+});
+
+describe('models, on the engine with 3D Tiles', () => {
+  test('the first model moves the map onto it; instances set meanwhile are kept', async () => {
+    hold();
+    const map = await create();
+    const below = map.addLines({ data: point });
+    const models = map.addModels({
+      url: 'turbine.glb',
+      instances: [{ lonLat: [3, 44], heading: 90 }],
+      altitudeReference: 'sea',
+    });
+    expect(models.id).toBe(-1);
+    expect(engineOf(map).args('addModels')).toEqual([]);
+    models.setInstances([{ lonLat: [3, 44] }, { lonLat: [3.1, 44.1], altitude: 20, scale: 2 }]);
+    release();
+    await settle();
+    const full = engineOf(map);
+    expect(full).not.toBeInstanceOf(CoreFakeEngine);
+    expect(created(full)).toEqual(['addLines', 'addModels']);
+    expect(below.id).toBeGreaterThanOrEqual(0);
+    const [url, numbers, ground] = full.last('addModels') ?? [];
+    expect(url).toBe('turbine.glb');
+    expect([...(numbers as Float64Array)]).toEqual([3, 44, 0, 0, 0, 0, 1, 3.1, 44.1, 20, 0, 0, 0, 2]);
+    expect(ground).toBe(false);
+    // Changed once there: sent at once, the altitude reference kept
+    models.setInstances([{ lonLat: [1, 2], pitch: 5, roll: 6 }]);
+    expect(full.last('setModelInstances')?.slice(1)).toEqual([Float64Array.of(1, 2, 0, 0, 5, 6, 1), false]);
+    expect(reported).toEqual([]);
+  });
+
+  test("a model's bytes go by a blob URL, revoked once removed; a model needs a url or data", async () => {
+    const revoked: string[] = [];
+    const revoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url: string) => revoked.push(url);
+    try {
+      const map = await create({ tiles3d: true });
+      const models = map.addModels({ data: new Uint8Array([1, 2, 3]), instances: [] });
+      const [url] = engineOf(map).last('addModels') ?? [];
+      expect(String(url)).toStartWith('blob:');
+      // Kept for a context loss
+      canvasOf(map).dispatch('webglcontextlost');
+      canvasOf(map).dispatch('webglcontextrestored');
+      expect(engineOf(map).last('addModels')?.[0]).toBe(url);
+      expect(revoked).toEqual([]);
+      models.remove();
+      expect(revoked).toEqual([String(url)]);
+      expect(() => map.addModels({ instances: [] })).toThrow('a model needs a url or data');
+    } finally {
+      URL.revokeObjectURL = revoke;
+    }
+  });
+
+  test('a model and a context loss: created again in the new engine', async () => {
+    const map = await create({ tiles3d: true });
+    map.addModels({ url: 'a.glb', instances: [{ lonLat: [0, 0] }] });
+    canvasOf(map).dispatch('webglcontextlost');
+    canvasOf(map).dispatch('webglcontextrestored');
+    expect(created(engineOf(map))).toEqual(['addModels']);
+  });
+});
+
+describe('custom layers', () => {
+  /** A custom layer recording its calls */
+  function custom(renderingMode?: '2d' | '3d') {
+    const calls: string[] = [];
+    const frames: { matrix: Float32Array; camera: unknown }[] = [];
+    const layer = {
+      ...(renderingMode ? { renderingMode } : {}),
+      onAdd: mock((_gl: WebGL2RenderingContext, _map: unknown) => calls.push('add')),
+      render: mock(
+        (_gl: WebGL2RenderingContext, frame: { matrixAt(p: [number, number]): Float32Array; camera: unknown }) => {
+          calls.push('render');
+          frames.push({ matrix: frame.matrixAt([2, 48]), camera: frame.camera });
+        },
+      ),
+      onRemove: mock((_gl: WebGL2RenderingContext, _map: unknown) => calls.push('remove')),
+    };
+    return { layer, calls, frames };
+  }
+  /** Draws a frame of the engine, calling the custom layers it holds as the engine does */
+  const draw = (engine: FakeEngine) => {
+    for (const [callback] of engine.args('addCustomLayer')) (callback as () => void)();
+  };
+
+  test('added, drawn with the matrices of the frame, removed', async () => {
+    const map = await create();
+    const { layer, calls, frames } = custom('3d');
+    const handle = map.addCustomLayer(layer);
+    const engine = engineOf(map);
+    expect(layer.onAdd).toHaveBeenCalledTimes(1);
+    expect(layer.onAdd.mock.calls[0]?.[1]).toBe(map);
+    expect(engine.last('addCustomLayer')?.[1]).toBe(true);
+    expect(handle.id).toBeGreaterThanOrEqual(0);
+    expect(handle.implementation).toBe(layer);
+    FakeEngine.matrix = Float32Array.of(1, 2, 3);
+    try {
+      draw(engine);
+    } finally {
+      FakeEngine.matrix = undefined;
+    }
+    expect(frames[0]?.matrix).toEqual(Float32Array.of(1, 2, 3));
+    handle.remove();
+    expect(engine.last('removeLayer')).toEqual([expect.any(Number)]);
+    expect(calls).toEqual(['add', 'render', 'remove']);
+    // Removed twice, or with the map destroyed: onRemove once
+    handle.remove();
+    map.destroy();
+    expect(layer.onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  test("'2d' by default; an error of the page is reported, the frame goes on; matrices only while drawing", async () => {
+    const map = await create();
+    const { layer } = custom();
+    map.addCustomLayer(layer);
+    const failing = map.addCustomLayer({
+      render: () => {
+        throw new Error('page bug');
+      },
+    });
+    const engine = engineOf(map);
+    expect(engine.args('addCustomLayer').map(([, depth]) => depth)).toEqual([false, false]);
+    // Outside the engine's frame: no matrix
+    expect(() => draw(engine)).not.toThrow();
+    expect(String(reported[0])).toContain('only available during render');
+    expect(String(reported[1])).toContain('page bug');
+    expect(failing.id).toBeGreaterThanOrEqual(0);
+  });
+
+  test('the camera of the frame while the engine draws, without asking the busy engine', async () => {
+    const map = await create();
+    map.setCamera({ center: [5, 45], zoom: 12 });
+    const { layer, frames: seen } = custom();
+    map.addCustomLayer(layer);
+    const engine = engineOf(map);
+    let asked = 0;
+    engine.onRender = () => {
+      const before = engine.args('camera').length;
+      FakeEngine.matrix = new Float32Array(16);
+      draw(engine);
+      FakeEngine.matrix = undefined;
+      asked += engine.args('camera').length - before;
+    };
+    map.requestRender();
+    frames.flush();
+    engine.onRender = undefined;
+    expect(seen.at(-1)?.camera).toMatchObject({ center: [5, 45], zoom: 12 });
+    expect(asked).toBe(0);
+    // Outside the frame, the engine's
+    expect(map.getCamera()).toMatchObject({ center: [5, 45], zoom: 12 });
+  });
+
+  test('a context lost and restored: onAdd again in the new engine, in its place', async () => {
+    const map = await create();
+    const below = map.addLines({ data: point });
+    const { layer, calls } = custom('3d');
+    map.addCustomLayer(layer, { before: below });
+    canvasOf(map).dispatch('webglcontextlost');
+    canvasOf(map).dispatch('webglcontextrestored');
+    // In its place, under the lines
+    expect(created(engineOf(map))).toEqual(['addCustomLayer', 'addLines']);
+    // Its objects were lost with the context: made again, not freed
+    expect(calls).toEqual(['add', 'add']);
+  });
+
+  test('the map moving onto the engine with 3D Tiles keeps its objects (the same context)', async () => {
+    hold();
+    const map = await create();
+    const { layer, calls } = custom('3d');
+    map.addCustomLayer(layer);
+    map.addTiles3d({ url: 'city/tileset.json' });
+    release();
+    await settle();
+    const full = engineOf(map);
+    expect(full).not.toBeInstanceOf(CoreFakeEngine);
+    expect(full.args('addCustomLayer').length).toBe(1);
+    expect(calls).toEqual(['add']);
   });
 });

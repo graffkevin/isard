@@ -111,6 +111,8 @@ pub struct Engine {
     grab: Option<(DVec2, f64)>,
     /// Glyphs of the symbol layers
     pub(crate) glyphs: Option<crate::render::symbols::GlyphAtlas>,
+    /// Icons of the symbol layers (RGBA, premultiplied)
+    pub(crate) icons: Option<crate::render::symbols::IconAtlas>,
     /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
     /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
     handled: bool,
@@ -184,6 +186,7 @@ impl Engine {
             drawn: None,
             grab: None,
             glyphs: None,
+            icons: None,
             handled: false,
             label_grid: None,
         })
@@ -776,6 +779,7 @@ impl Engine {
             ground: &self.raster_pass,
             fog: self.sky.atmosphere.map(|a| a.fog(view)),
             glyphs: self.glyphs.as_ref().map(|g| (g.texture, g.size)),
+            icons: self.icons.as_ref().map(|i| (i.texture, i.size)),
         }
     }
 
@@ -840,6 +844,9 @@ impl Drop for Engine {
                 pick.delete(gl);
             }
             if let Some(atlas) = self.glyphs.take() {
+                gl.delete_texture(atlas.texture);
+            }
+            if let Some(atlas) = self.icons.take() {
                 gl.delete_texture(atlas.texture);
             }
         }

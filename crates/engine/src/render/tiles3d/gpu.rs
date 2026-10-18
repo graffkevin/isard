@@ -14,6 +14,8 @@ pub struct GpuPrimitive {
     pub count: i32,
     /// One of the mesh's `textures`
     pub texture: Option<glow::Texture>,
+    /// Base color factor of its material (the models multiply their color by it; the 3D Tiles leave it)
+    pub color: [f32; 4],
 }
 
 pub struct GpuMesh {
@@ -145,6 +147,7 @@ fn upload_primitive(
         buffers,
         count: p.indices.len() as i32,
         texture,
+        color: p.color,
     });
     gpu.bytes += vertices.len() * 4 + p.indices.len() * 4;
     Ok(())
@@ -207,6 +210,7 @@ fn upload_decoded_primitive(
         buffers,
         count: indices.length() as i32,
         texture: None,
+        color: color_of(p),
     };
     gpu.bytes += (vertices.byte_length() + indices.byte_length()) as usize;
     let (bitmap, compressed) = (js_get(p, "bitmap"), js_get(p, "texture"));
@@ -242,6 +246,17 @@ fn upload_decoded_primitive(
             Err(e)
         }
     }
+}
+
+/// The base color of a primitive a worker decoded: white when it has none
+fn color_of(p: &JsValue) -> [f32; 4] {
+    let mut color = [1.0; 4];
+    if let Ok(given) = js_get(p, "color").dyn_into::<js_sys::Float32Array>()
+        && given.length() == 4
+    {
+        given.copy_to(&mut color);
+    }
+    color
 }
 
 /// Bytes of a mip level of `width` × `height` in `format` (RGBA8 or the block formats the workers transcode to), None

@@ -42,7 +42,9 @@ General-purpose map libraries spend their time on things these maps do not need.
   digs Valles Marineris and the lunar craters from NASA's LOLA and MOLA models.
 - 🏙️ **Buildings and 3D Tiles.** Buildings colored by a value or by a network's travel times, photomeshes and city
   models in 3D Tiles (Draco, meshopt, KTX2).
-- 🦀 **Small and exact.** 220 KB of WebAssembly gzipped (330 KB once a 3D Tiles layer is added), f64 on the CPU and f32 relative to the camera on the GPU
+- 🧊 **Your own 3D.** glTF models at positions, instanced and picked; custom layers for your WebGL code or a three.js
+  scene, in the map's frame and depth, with camera-relative matrices exact at any zoom.
+- 🦀 **Small and exact.** 225 KB of WebAssembly gzipped (345 KB once a 3D Tiles layer or a model is added), f64 on the CPU and f32 relative to the camera on the GPU
   (centimetres at any zoom), frames on demand only, strict TypeScript types end to end.
 
 ## Quick start
@@ -100,6 +102,8 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
 | [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS; in Web Mercator, or reprojected from another grid (longitudes and latitudes, Lambert-93, UTM, any CRS through proj4); or tiles drawn by your code |
 | [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, glb, external tilesets, compressed or not |
+| [glTF models](https://graffkevin.github.io/isard/layers/models) | `addModels` | a glTF model at many positions, instanced, on the relief, picked |
+| [Custom layers](https://graffkevin.github.io/isard/layers/custom) | `addCustomLayer` | your WebGL code or a three.js scene in the map's frame, sharing its depth |
 
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in
 the [API reference](https://graffkevin.github.io/isard/api).
@@ -142,7 +146,7 @@ More in [Develop and release](https://graffkevin.github.io/isard/guide/develop).
 ## Roadmap
 
 - Flood maps over the relief (water depth as a ground shader) as a full example.
-- Icons of the basemaps' symbol layers (sprites), text along curved lines.
+- Text along curved lines, and repeated along long ones.
 - Labels fading in and out instead of popping.
 
 ## Licence

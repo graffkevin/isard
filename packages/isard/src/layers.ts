@@ -1,9 +1,11 @@
 /**
  * Handles of the layers added to a map. Each one keeps what it needs to be created again: after a WebGL context loss,
- * the map recreates its engine and every layer in order, with the same handle (its id is updated).
+ * the map recreates its engine and every layer in order, with the same handle (its id is updated). Also the page's
+ * own 3D content: custom layers (its WebGL code called in every frame) and glTF models drawn at positions.
  */
 import { parseColor, rampTexels, stops } from './features.ts';
 import { mercatorX, mercatorY, toMercator } from './geo.ts';
+import type { GeoMap } from './map.ts';
 import type {
   LayerHost,
   LonLat,
@@ -13,7 +15,7 @@ import type {
   RasterStyle,
   Tiles3dStyle,
 } from './types.ts';
-import type { Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
+import type { Camera, Engine, NetworkStats, Tiles3dStats } from './wasm/isard.js';
 
 export abstract class Layer {
   #id = -1;
@@ -45,11 +47,19 @@ export abstract class Layer {
   /** @internal Sends what refers to other layers, once every layer of a new engine has its id */
   relink(_engine: Engine): void {}
 
+  /** @internal Drawn by the engine with 3D Tiles only (3D Tiles, models): on the core engine, it waits for that one */
+  get needsFullEngine(): boolean {
+    return false;
+  }
+
+  /** @internal The layer is removed or its map destroyed: frees what it holds outside the engine */
+  dispose(): void {}
+
   /** @internal */
   protected abstract create(engine: Engine): number;
 
   remove(): void {
-    // Not created yet: a 3D Tiles layer waiting for the engine with 3D Tiles
+    // Not created yet: a 3D Tiles layer or a model waiting for the engine with 3D Tiles
     if (this.#id >= 0) this.map.engine.removeLayer(this.#id);
     this.#id = -1;
     this.map.detach(this);
@@ -248,6 +258,11 @@ export class Tiles3dLayer extends Layer {
     this.map.requestRender();
   }
 
+  /** @internal */
+  override get needsFullEngine(): boolean {
+    return true;
+  }
+
   /** Loading counters; undefined once the layer is removed, and while the engine with 3D Tiles loads (see
    * `GeoMapOptions.tiles3d`) */
   stats(): Tiles3dStats | undefined {
@@ -378,4 +393,222 @@ function mercatorBox([west, south, east, north]: [number, number, number, number
   const [x0, y1] = toMercator([west, south]);
   const [x1, y0] = toMercator([east, north]);
   return [x0, y0, x1, y1];
+}
+
+// ── The page's own 3D content: custom layers, glTF models ──
+
+/** Reports an error of the page without throwing it here: the console shows it, as an uncaught one */
+function report(error: unknown): void {
+  if (typeof reportError === 'function') reportError(error);
+  else
+    queueMicrotask(() => {
+      throw error;
+    });
+}
+
+/** What a custom layer gets to draw a frame (`CustomLayerInterface.render`) */
+export interface CustomFrame {
+  /**
+   * The model-view-projection matrix of a local frame at a position and altitude (metres above the ellipsoid, as the
+   * relief is drawn: times its exaggeration), column-major for `uniformMatrix4fv` or a three.js camera: x east, y
+   * north, z up, in metres. Made in double precision relative to the camera, so that what is drawn stays exact at
+   * any zoom; draw within a few kilometres of the position (or take one matrix per object far apart). Only during
+   * `render`.
+   */
+  matrixAt(lonLat: LonLat, altitude?: number): Float32Array;
+  /** The camera of the frame */
+  readonly camera: Camera;
+}
+
+/**
+ * A layer drawn by the page with its own WebGL code, as MapLibre's `CustomLayerInterface`: `render` is called at the
+ * layer's place in every frame drawn. It starts with the canvas bound, its viewport set, blending on (`SRC_ALPHA`,
+ * `ONE_MINUS_SRC_ALPHA`), no culling, and in `'3d'` mode the depth test on (`LEQUAL`, depth written): the relief, the
+ * buildings and the 3D Tiles hide what it draws and what it draws hides them. Whatever WebGL state it changes is set
+ * back afterwards; a library that caches the WebGL state (three.js) must forget it first (`renderer.resetState()`).
+ *
+ * The map is busy drawing meanwhile: `render` reads the frame, not the map (`getCamera` excepted); it may call
+ * `requestRender` for an animation.
+ */
+export interface CustomLayerInterface {
+  /** A name for the application (the map numbers its layers) */
+  id?: string;
+  /** `'2d'` (the default): drawn over what is under it; `'3d'`: with the depth buffer of the 3D layers */
+  renderingMode?: '2d' | '3d';
+  /** Creates the WebGL objects: once added, and again after the WebGL context was lost and restored */
+  onAdd?(gl: WebGL2RenderingContext, map: GeoMap): void;
+  render(gl: WebGL2RenderingContext, frame: CustomFrame): void;
+  /** Frees the WebGL objects: the layer is removed, or the map destroyed */
+  onRemove?(gl: WebGL2RenderingContext, map: GeoMap): void;
+}
+
+/** The model-view-projection of a local frame in the engine running the map (`Engine.customMatrix`) */
+/** @internal */
+export type CustomMatrix = (lon: number, lat: number, altitude: number) => Float32Array | undefined;
+
+/** A layer drawn by the page's WebGL code (see `CustomLayerInterface`) */
+export class CustomLayer extends Layer {
+  /** The map's WebGL context, and whether `onAdd` made the layer's objects there (until `onRemove`) */
+  private readonly gl: WebGL2RenderingContext;
+  private added = false;
+  /** The context was lost since `onAdd`: its objects are gone */
+  private stale = false;
+  private readonly lost = () => {
+    this.stale = true;
+  };
+  private readonly frame: CustomFrame;
+
+  /** @internal */
+  constructor(
+    map: LayerHost,
+    /** The application's object */
+    readonly implementation: CustomLayerInterface,
+    private readonly canvas: HTMLCanvasElement,
+    private readonly owner: GeoMap,
+    matrix: CustomMatrix,
+    camera: () => Camera,
+  ) {
+    super(map);
+    // The context the engine made on the canvas
+    this.gl = canvas.getContext('webgl2') as WebGL2RenderingContext;
+    this.frame = {
+      matrixAt: ([lon, lat], altitude = 0) => {
+        const m = matrix(lon, lat, altitude);
+        if (!m) throw new Error('isard: frame.matrixAt is only available during render');
+        return m;
+      },
+      get camera() {
+        return camera();
+      },
+    };
+  }
+
+  /** @internal */
+  protected create(engine: Engine): number {
+    // Once, and again on a context restored (not when the map moves onto another engine: the same context)
+    if (!this.added || this.stale) {
+      if (!this.added) this.canvas.addEventListener('webglcontextlost', this.lost);
+      this.added = true;
+      this.stale = false;
+      this.implementation.onAdd?.(this.gl, this.owner);
+    }
+    return engine.addCustomLayer(this.draw, this.implementation.renderingMode === '3d');
+  }
+
+  /** Called by the engine at the layer's place in the frame; the page's errors are reported, the frame goes on */
+  private readonly draw = (): void => {
+    try {
+      this.implementation.render(this.gl, this.frame);
+    } catch (error) {
+      report(error);
+    }
+  };
+
+  override remove(): void {
+    super.remove();
+    this.dispose();
+  }
+
+  /** @internal The layer is removed or the map destroyed: `onRemove`, unless the context is lost */
+  override dispose(): void {
+    if (!this.added) return;
+    this.added = false;
+    this.canvas.removeEventListener('webglcontextlost', this.lost);
+    if (this.stale) return;
+    try {
+      this.implementation.onRemove?.(this.gl, this.owner);
+    } catch (error) {
+      report(error);
+    }
+  }
+}
+
+/** Where and how a model stands */
+export interface ModelInstance {
+  lonLat: LonLat;
+  /** Metres above the ground (or above the ellipsoid, `altitudeReference: 'sea'`); 0 by default */
+  altitude?: number;
+  /** Degrees clockwise from the north of the model's front (glTF +Z); 0 by default */
+  heading?: number;
+  /** Degrees, nose up */
+  pitch?: number;
+  /** Degrees, right side down */
+  roll?: number;
+  /** 1 by default: the model's metres */
+  scale?: number;
+}
+
+export interface ModelOptions {
+  /** URL of a glTF binary (`.glb`): meshes, textures, Draco, meshopt, KTX2, as in 3D Tiles; or its bytes (`data`) */
+  url?: string;
+  data?: ArrayBuffer | ArrayBufferView<ArrayBuffer>;
+  instances: readonly ModelInstance[];
+  /** What the altitudes are above: `'ground'` (the relief, the default) or `'sea'` (the ellipsoid) */
+  altitudeReference?: 'ground' | 'sea';
+}
+
+/** The numbers of instances for the engine: longitude, latitude, altitude, heading, pitch, roll, scale */
+export function instanceNumbers(instances: readonly ModelInstance[]): Float64Array {
+  const out = new Float64Array(instances.length * 7);
+  instances.forEach(({ lonLat, altitude = 0, heading = 0, pitch = 0, roll = 0, scale = 1 }, i) => {
+    out.set([lonLat[0], lonLat[1], altitude, heading, pitch, roll, scale], i * 7);
+  });
+  return out;
+}
+
+/** A glTF model drawn at positions, in one instanced draw; `pickFeature` gives the instance's index */
+export class ModelLayer extends Layer {
+  private readonly url: string;
+  /** The `blob:` URL of the page's bytes, revoked once the layer is gone */
+  private readonly blob: string | undefined;
+  private instances: Float64Array;
+  private ground: boolean;
+
+  /** @internal */
+  constructor(map: LayerHost, options: ModelOptions) {
+    super(map);
+    const { url, data } = options;
+    if (data) {
+      this.blob = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
+      this.url = this.blob;
+    } else if (url) {
+      // Against the page: the decoding workers fetch it, and a relative URL would be theirs
+      const base = typeof document === 'undefined' ? undefined : document.baseURI;
+      this.url = base ? new URL(url, base).href : url;
+    } else {
+      throw new Error('isard: a model needs a url or data');
+    }
+    this.instances = instanceNumbers(options.instances);
+    this.ground = options.altitudeReference !== 'sea';
+  }
+
+  /** @internal The engine with 3D Tiles decodes and draws the models */
+  override get needsFullEngine(): boolean {
+    return true;
+  }
+
+  /** Replaces the instances (and what their altitudes are above, kept if not given) */
+  setInstances(instances: readonly ModelInstance[], altitudeReference?: 'ground' | 'sea'): void {
+    this.instances = instanceNumbers(instances);
+    if (altitudeReference) this.ground = altitudeReference === 'ground';
+    // Kept for its creation while the engine with 3D Tiles loads
+    if (this.id < 0) return;
+    this.map.engine.setModelInstances(this.id, this.instances, this.ground);
+    this.map.requestRender();
+  }
+
+  override remove(): void {
+    super.remove();
+    this.dispose();
+  }
+
+  /** @internal */
+  override dispose(): void {
+    if (this.blob) URL.revokeObjectURL(this.blob);
+  }
+
+  /** @internal */
+  protected create(engine: Engine): number {
+    return engine.addModels(this.url, this.instances, this.ground);
+  }
 }

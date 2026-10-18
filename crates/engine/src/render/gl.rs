@@ -497,6 +497,49 @@ pub fn reset_state(gl: &glow::Context) {
     }
 }
 
+/// Sets back what the page's own drawing (custom layers) may have changed besides `reset_state`'s state: the canvas
+/// bound with its viewport, no program, vertex array nor buffers bound, texture unit 0, the default blending equation,
+/// culling and stencil operations, no polygon offset nor coverage, the full depth range, the default pixel storage of
+/// uploads; then `reset_state`. The engine binds its own programs, arrays and textures before each draw
+pub fn reset_after_page(gl: &glow::Context, width: i32, height: i32) {
+    // SAFETY: state changes on a live context
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.viewport(0, 0, width, height);
+        gl.use_program(None);
+        gl.bind_vertex_array(None);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
+        gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+        gl.active_texture(glow::TEXTURE0);
+        gl.blend_equation(glow::FUNC_ADD);
+        gl.cull_face(glow::BACK);
+        gl.stencil_func(glow::ALWAYS, 0, 0xff);
+        gl.stencil_op(glow::KEEP, glow::KEEP, glow::KEEP);
+        for capability in [
+            glow::POLYGON_OFFSET_FILL,
+            glow::SAMPLE_ALPHA_TO_COVERAGE,
+            glow::RASTERIZER_DISCARD,
+        ] {
+            gl.disable(capability);
+        }
+        gl.depth_range(0.0, 1.0);
+        for (parameter, value) in [
+            (glow::UNPACK_ALIGNMENT, 4),
+            (glow::PACK_ALIGNMENT, 4),
+            // UNPACK_FLIP_Y_WEBGL, UNPACK_PREMULTIPLY_ALPHA_WEBGL (WebGL's own, not in glow)
+            (0x9240, 0),
+            (0x9241, 0),
+            (glow::UNPACK_ROW_LENGTH, 0),
+            (glow::UNPACK_SKIP_ROWS, 0),
+            (glow::UNPACK_SKIP_PIXELS, 0),
+        ] {
+            gl.pixel_store_i32(parameter, value);
+        }
+    }
+    reset_state(gl);
+}
+
 /// The depth state of a layer while it draws, set back to `reset_state`'s when dropped (culling on, no depth test,
 /// depth written). Culling is off but for the flat ground: quads built on screen face either way, and blocks are seen
 /// from inside

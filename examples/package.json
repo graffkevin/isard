@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "isard": "workspace:*"
+    "isard": "workspace:*",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0"
   }
 }

@@ -325,8 +325,13 @@ impl<'a> Gltf<'a> {
             .iter()
             .map(|&[x, y, z]| world.transform_point3(DVec3::new(f64::from(x), f64::from(y), f64::from(z))))
             .collect();
-        let base_color = &material(self.json, primitive)["pbrMetallicRoughness"]["baseColorTexture"];
+        let pbr = &material(self.json, primitive)["pbrMetallicRoughness"];
+        let base_color = &pbr["baseColorTexture"];
         let texture = index(&base_color["index"]);
+        // Out-of-range or missing factors fall back to white
+        let color = numbers(&pbr["baseColorFactor"], [1.0; 4])
+            .unwrap_or([1.0; 4])
+            .map(|c| c.clamp(0.0, 1.0) as f32);
         // KHR_texture_transform (gltfpack uses it for quantized uv): uv' = offset + rotation · (scale · uv)
         let transform = &base_color["extensions"]["KHR_texture_transform"];
         let uvs = if transform.is_object() {
@@ -360,6 +365,7 @@ impl<'a> Gltf<'a> {
                 uvs,
                 indices,
                 image,
+                color,
             },
             world_positions,
         )))
@@ -480,6 +486,29 @@ mod tests {
             *triangle(&json, &bin).unwrap().primitives[0].uvs,
             [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn the_base_color_factor_of_the_material_is_kept() {
+        let bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let mut json = json!({
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": 36}],
+            "bufferViews": [{"buffer": 0, "byteLength": 36}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [0.8, 0.1, 0.2, 0.5]}}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+            "nodes": [{"mesh": 0}]
+        });
+        assert_eq!(triangle(&json, &bin).unwrap().primitives[0].color, [0.8, 0.1, 0.2, 0.5]);
+        // Without material, or a factor of the wrong size: white; out of range: clamped
+        json["meshes"][0]["primitives"][0]["material"] = Value::Null;
+        assert_eq!(triangle(&json, &bin).unwrap().primitives[0].color, [1.0; 4]);
+        json["meshes"][0]["primitives"][0]["material"] = json!(0);
+        json["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"] = json!([0.5, 0.5]);
+        assert_eq!(triangle(&json, &bin).unwrap().primitives[0].color, [1.0; 4]);
+        json["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"] = json!([2.0, -1.0, 0.5, 1.0]);
+        assert_eq!(triangle(&json, &bin).unwrap().primitives[0].color, [1.0, 0.0, 0.5, 1.0]);
     }
 
     /// The one-triangle tile of the tests below, with `nodes` and `scenes` given

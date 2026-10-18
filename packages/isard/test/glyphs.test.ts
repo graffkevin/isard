@@ -37,7 +37,25 @@ describe('glyphs', () => {
   test('shape: anchors and missing glyphs', () => {
     const left = shape([{ text: 'a' }], () => glyphs, { ...options, anchor: 'left' });
     expect(left.box[0]).toBeCloseTo(0, 6);
-    expect(shape([{ text: 'zz' }], () => glyphs, options)).toEqual({ quads: [], box: [0, 0, 0, 0] });
+    expect(shape([{ text: 'zz' }], () => glyphs, options)).toEqual({
+      quads: [],
+      box: [0, 0, 0, 0],
+      layout: [0, 0, 0, 0],
+    });
+  });
+
+  test('shape: the layout box spans the advances and the line height, centered on the ink', () => {
+    // Two glyphs of 12 px advance at 24 px: 24 px across; one line of 1.2 em: 28.8 px down
+    const { box, layout } = shape([{ text: 'ab' }], () => glyphs, options);
+    expect(layout[2] - layout[0]).toBeCloseTo(24, 6);
+    expect(layout[3] - layout[1]).toBeCloseTo(28.8, 6);
+    expect((layout[1] + layout[3]) / 2).toBeCloseTo((box[1] + box[3]) / 2, 6);
+    expect((layout[0] + layout[2]) / 2).toBeCloseTo(0, 6);
+    // Two lines: twice as tall; at half the size, half as large
+    const two = shape([{ text: 'a\nb' }], () => glyphs, options);
+    expect(two.layout[3] - two.layout[1]).toBeCloseTo(57.6, 6);
+    const small = shape([{ text: 'ab' }], () => glyphs, { ...options, size: 12 });
+    expect(small.layout[2] - small.layout[0]).toBeCloseTo(12, 6);
   });
 });
 

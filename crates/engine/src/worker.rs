@@ -19,6 +19,8 @@ export interface EncodedPrimitive {
   indices: Uint32Array<ArrayBuffer>;
   image?: Uint8Array<ArrayBuffer>;
   mime?: string;
+  /** Base color factor of its material (RGBA 0-1), when not white */
+  color?: Float32Array<ArrayBuffer>;
 }
 
 /** A tile decoded by `decodeTile` */
@@ -44,6 +46,8 @@ export interface DecodedPrimitive {
   indices: Uint32Array<ArrayBuffer>;
   bitmap: ImageBitmap | null;
   texture?: CompressedTexture;
+  /** Base color factor of its material (RGBA 0-1), when not white */
+  color?: Float32Array<ArrayBuffer>;
 }
 
 /** A Draco-compressed primitive of a tile (`KHR_draco_mesh_compression`), to decode with the Draco module */
@@ -149,7 +153,8 @@ fn draco_geometries(value: &JsValue) -> Result<Vec<decode::DracoGeometry>, JsVal
 }
 
 /// Decodes a `.b3dm` / `.glb` tile: `{ anchor: Float64Array(3), primitives: [{ vertices: Float32Array (x, y, z, u,
-/// v per vertex, relative to the anchor), indices: Uint32Array, image?: Uint8Array, mime?: string }] }`.
+/// v per vertex, relative to the anchor), indices: Uint32Array, image?: Uint8Array, mime?: string, color?:
+/// Float32Array (the material's base color, when not white) }] }`.
 /// `transform`: the tile's world transform (16 numbers, column-major).
 /// `draco`: the decoded geometries of its Draco primitives (`dracoRequests`), if any.
 #[wasm_bindgen(js_name = decodeTile, unchecked_return_type = "EncodedTile")]
@@ -186,6 +191,9 @@ pub fn decode_tile(
         if let (Some(image), Some((_, mime))) = (p.image.and_then(|i| images.get(i)), mesh.image(p)) {
             set(&primitive, "image", image)?;
             set(&primitive, "mime", &JsValue::from_str(mime))?;
+        }
+        if p.color.iter().any(|&c| c < 1.0) {
+            set(&primitive, "color", &Float32Array::from(&p.color[..]))?;
         }
         primitives.push(&primitive);
     }

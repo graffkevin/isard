@@ -13,6 +13,7 @@ import { OPENFREEMAP_ATTRIBUTION } from './basemaps.ts';
 import type { Feature, Size } from './features.ts';
 import { mercatorX, mercatorY } from './geo.ts';
 import { IGN_ATTRIBUTION } from './geoplateforme.ts';
+import { type LoadedSprite, loadSprites, readPixels } from './icons.ts';
 import type { Layer, RasterLayer } from './layers.ts';
 import { Lru } from './lru.ts';
 import type { GeoMap } from './map.ts';
@@ -74,9 +75,9 @@ export function styleAttribution(style: string | Style): string | undefined {
   return undefined;
 }
 
-/** Text size of a style (a number, legacy stops, or the stops of a zoom expression made by the worker) as a size for
- * the symbol layer */
-function size(value: Json): Size {
+/** Text or icon size of a style (a number, legacy stops, or the stops of a zoom expression made by the worker) as a
+ * size for the symbol layer */
+export function size(value: Json, fallback = 16): Size {
   if (typeof value === 'number') return value;
   if (Array.isArray(value) && value.length > 0 && value.every(Array.isArray)) {
     return value.map((s) => [Number((s as Json[])[0]), Number((s as Json[])[1])] as [number, number]);
@@ -87,7 +88,7 @@ function size(value: Json): Size {
       return [Number(z), Number(v)] as [number, number];
     });
   }
-  return 16;
+  return fallback;
 }
 
 /** Fetches a JSON document (a style, a TileJSON) */
@@ -396,20 +397,17 @@ export class VectorTiles {
     return [...fonts];
   }
 
-  /** The style's sprite (its JSON and its image), loaded once, for the renderers that draw fill patterns */
-  private sprite: Promise<Sprite | undefined> | undefined;
+  /** The style's sprites (their JSON and their images), loaded once, for the fill patterns and the icons */
+  private sprites: Promise<LoadedSprite[]> | undefined;
 
-  private loadSprite(url: string): Promise<Sprite | undefined> {
-    this.sprite ??= (async () => {
-      try {
-        const [json, png] = await Promise.all([fetch(`${url}.json`), fetch(`${url}.png`)]);
-        if (!json.ok || !png.ok) return undefined;
-        return { icons: await json.json(), image: await createImageBitmap(await png.blob()) };
-      } catch {
-        return undefined;
-      }
-    })();
-    return this.sprite;
+  private loadSprites(sprite: Style['sprite']): Promise<LoadedSprite[]> {
+    this.sprites ??= loadSprites(sprite).catch(() => []);
+    return this.sprites;
+  }
+
+  /** Prefix of the names of its sprites' images among the map's icons */
+  private get iconPrefix(): string {
+    return `${this.namespace}/`;
   }
 
   private request(vz: number, vx: number, vy: number, work: BasemapWork, signal?: AbortSignal) {
@@ -423,10 +421,10 @@ export class VectorTiles {
     const key = rendererKey(this.namespace, this.keys++);
     const layers = [...style.layers.filter(select), ...extra];
     const patterns = layers.some((l) => l.paint?.['fill-pattern'] !== undefined);
-    // The image is downloaded once, copied to each worker
-    const sprite = patterns && style.sprite ? await this.loadSprite(style.sprite) : undefined;
+    // The images are downloaded once, copied to each worker
+    const sprites: Sprite[] = patterns && style.sprite ? await this.loadSprites(style.sprite) : [];
     if (this.destroyed) throw new DOMException('isard: vector tiles destroyed', 'AbortError');
-    this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, rasters, ...(sprite ? { sprite } : {}) });
+    this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, rasters, ...(sprites.length ? { sprites } : {}) });
     this.renderers.push(key);
     return { key, maxzoom };
   }
@@ -500,13 +498,33 @@ export class VectorTiles {
       maxWidth: (p) => p.maxWidth,
       lineHeight: (p) => p.lineHeight,
       overlap: (p) => p.overlap,
-      placement: 'line',
+      placement: (p) => (p.textAlong ? 'line' : 'point'),
+      textOptional: (p) => p.textOptional === true,
+      icon: (p) => (p.icon ? this.iconPrefix + p.icon.image : ''),
+      iconSize: (p) => size(p.icon?.size ?? 1, 1),
+      iconAnchor: (p) => (p.icon?.anchor ?? 'center') as Anchor,
+      iconOffset: (p) => p.icon?.offset ?? [0, 0],
+      iconRotate: (p) => p.icon?.rotate ?? 0,
+      iconRotationAlignment: (p) => p.icon?.alignment ?? 'viewport',
+      iconOverlap: (p) => p.icon?.overlap ?? false,
+      iconOptional: (p) => p.icon?.optional ?? false,
+      iconTextFit: (p) => p.icon?.fit ?? 'none',
+      iconTextFitPadding: (p) => p.icon?.padding ?? [0, 0, 0, 0],
+      iconColor: (p) => p.icon?.color ?? '#000',
+      iconOpacity: (p) => p.icon?.opacity ?? 1,
     });
     this.map.keepOnTop(symbol);
     this.layers.push(symbol);
-    const renderer = this.ready.then(({ style }) => {
+    const renderer = this.ready.then(async ({ style }) => {
       // The style's fonts from its own glyphs
       if (style.glyphs) this.map.glyphs.register(style.glyphs, VectorTiles.fonts(style));
+      // Its icons from its sprites, before the first labels
+      const icons = style.layers.some((l) => l.type === 'symbol' && l.layout?.['icon-image'] !== undefined);
+      if (icons && style.sprite) {
+        for (const sprite of await this.loadSprites(style.sprite)) {
+          if (!this.destroyed) this.map.icons.addSprite(this.iconPrefix, sprite.icons, () => readPixels(sprite.image));
+        }
+      }
       return this.renderer((l) => l.type === 'symbol' && layers(l), []);
     });
     renderer.catch(() => undefined);
@@ -544,7 +562,9 @@ export class VectorTiles {
       wanted.sort(
         (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
       );
-      const keys = wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}`);
+      // Past the source's deepest level, its tiles' labels at the zoom of the view (the layers of the deeper zooms)
+      const zoom = Math.max(z, Math.min(Math.floor(camera.zoom), 24));
+      const keys = wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`);
       // The same tiles as the labels shown: nothing to do
       const set = keys.join(' ');
       if (set === shown) return;
@@ -552,10 +572,11 @@ export class VectorTiles {
         keys.map((k, index) => {
           let p = tiles.get(k);
           if (p) return p;
-          const [tz, x, y] = k.split('/').map(Number) as [number, number, number];
+          const [tz, x, y] = (k.split('@')[0] ?? '').split('/').map(Number) as [number, number, number];
           // The nearest tiles first: the others wait for the raster tiles
           const priority: Priority = index < 4 ? 'auto' : 'low';
-          p = this.request(tz, x, y, { type: 'labels', key, z: tz, x, y, priority }).then(
+          const work: BasemapWork = { type: 'labels', key, z: tz, x, y, priority, ...(zoom > tz ? { zoom } : {}) };
+          p = this.request(tz, x, y, work).then(
             (r) => tileLabels('labels' in r ? r.labels : []),
             () => {
               // A network error is not kept: the tile is asked for again on the next update
@@ -609,8 +630,13 @@ export class VectorTiles {
     for (const layer of this.layers) if (this.map.hasLayer(layer)) layer.remove();
     this.layers.length = 0;
     this.map.dropVectorTiles(this);
-    // The page's copy of the sprite (the workers have theirs)
-    this.sprite?.then((sprite) => sprite?.image.close()).catch(() => undefined);
+    // The page's copy of the sprites (the workers have theirs), and their icons
+    this.sprites
+      ?.then((sprites) => {
+        for (const sprite of sprites) sprite.image.close();
+        this.map.icons.remove(this.iconPrefix, true);
+      })
+      .catch(() => undefined);
     if (this.ownPool) {
       this.pool.terminate();
     } else {

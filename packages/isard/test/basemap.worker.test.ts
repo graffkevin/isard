@@ -215,7 +215,7 @@ describe('render', () => {
 });
 
 describe('labels', () => {
-  test('a text over its icon (a road shield) is left out; other labels are listed', async () => {
+  test('a text over its icon (a road shield) is listed with its icon; other labels without', async () => {
     tiles.set(
       'https://t/6/1/1.pbf',
       Uint8Array.from([...layer('places', 1, [[100, 200]], 'Paris'), ...layer('shields', 1, [[300, 300]], 'A6')]),
@@ -234,13 +234,113 @@ describe('labels', () => {
         type: 'symbol',
         source: 'osm',
         'source-layer': 'shields',
-        layout: { 'text-field': '{name}', 'icon-image': 'shield' },
+        layout: {
+          'text-field': '{name}',
+          'icon-image': 'road_{name}',
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 1, 7, 2],
+          'icon-text-fit': 'both',
+          'icon-text-fit-padding': [2, 4],
+          'icon-allow-overlap': true,
+          'text-optional': true,
+        },
+        paint: { 'icon-opacity': 0.5 },
       },
     ]);
     const answer = await ask({ type: 'labels', key, z: 6, x: 1, y: 1 });
     const labels = 'labels' in answer ? answer.labels : [];
-    expect(labels.map((l) => l.text)).toEqual(['Paris']);
+    expect(labels.map((l) => l.text)).toEqual(['Paris', 'A6']);
     expect(labels[0]?.haloWidth).toBe(1);
+    expect(labels[0]?.icon).toBeUndefined();
+    expect(labels[1]?.textOptional).toBe(true);
+    expect(labels[1]?.icon).toEqual({
+      image: 'road_A6',
+      // Zoom stops for the engine
+      size: [
+        [5, 1],
+        [6, 1.5],
+        [7, 2],
+      ],
+      anchor: 'center',
+      offset: [0, 0],
+      rotate: 0,
+      alignment: 'viewport',
+      overlap: 'allow',
+      optional: false,
+      fit: 'both',
+      padding: [2, 4, 2, 4],
+      color: '#000',
+      opacity: 0.5,
+    });
+  });
+
+  test('icons alone along lines every symbol-spacing, with the direction of the line; placements by zoom', async () => {
+    // A line across the tile, left to right, 4096 units long: a tile is 512 CSS pixels across
+    tiles.set(
+      'https://t/6/2/2.pbf',
+      Uint8Array.from([
+        ...layer('roads', 2, [
+          [0, 2048],
+          [4095, 2048],
+        ]),
+        ...layer(
+          'names',
+          2,
+          [
+            [0, 1000],
+            [4000, 1000],
+          ],
+          'N7',
+        ),
+      ]),
+    );
+    const key = await renderer([
+      {
+        id: 'oneway',
+        type: 'symbol',
+        source: 'osm',
+        'source-layer': 'roads',
+        layout: { 'icon-image': 'arrow', 'symbol-placement': 'line', 'symbol-spacing': 128 },
+      },
+      {
+        id: 'number',
+        type: 'symbol',
+        source: 'osm',
+        'source-layer': 'names',
+        layout: {
+          'text-field': '{name}',
+          'icon-image': 'shield',
+          'symbol-placement': ['step', ['zoom'], 'point', 6, 'line'],
+          'text-rotation-alignment': 'viewport',
+          'icon-rotation-alignment': 'viewport',
+        },
+      },
+    ]);
+    const answer = await ask({ type: 'labels', key, z: 6, x: 2, y: 2 });
+    const labels = 'labels' in answer ? answer.labels : [];
+    const arrows = labels.filter((l) => l.icon?.image === 'arrow');
+    // Every 128 px of a 512 px line, the first 64 px in
+    expect(arrows.length).toBe(4);
+    expect(arrows.every((a) => a.text === '' && a.icon?.alignment === 'map' && (a.along?.[0] ?? 0) > 0)).toBe(true);
+    const [l0 = 0, l1 = 0, l2 = 0] = arrows.map((a) => a.lon);
+    expect(l1 - l0).toBeCloseTo(l2 - l1, 9);
+    // The number at the middle of its line, horizontal: a direction for its icon only
+    const number = labels.find((l) => l.text === 'N7');
+    expect(number?.along).toBeDefined();
+    expect(number?.textAlong).toBeUndefined();
+    expect(number?.icon?.alignment).toBe('viewport');
+  });
+
+  test('lineAnchors: half a spacing in, then every spacing; the middle of a shorter line', () => {
+    const anchors = worker.lineAnchors([0, 0, 100, 0, 100, 100], 50);
+    expect(anchors.map(([x, y]) => [x, y])).toEqual([
+      [25, 0],
+      [75, 0],
+      [100, 25],
+      [100, 75],
+    ]);
+    expect(anchors[2]?.slice(2)).toEqual([100, 0, 100, 100]);
+    expect(worker.lineAnchors([0, 0, 10, 0], 50).map(([x]) => x)).toEqual([5]);
+    expect(worker.lineAnchors([0, 0], 50)).toEqual([]);
   });
 });
 

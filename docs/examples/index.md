@@ -14,6 +14,8 @@ Mars's come from NASA, no key needed.
 | [Buildings](./buildings) | raised to their height, colored by it |
 | [Relief and a ground shader](./relief) | your GLSL over the mountains |
 | [3D Tiles](./tiles3d) | the Lille photomesh |
+| [glTF models](./models) | wind turbines on the relief, textured trucks, picked |
+| [three.js in the map](./threejs) | a custom layer sharing the depth of the buildings |
 | [Vector basemaps](./vector) | OpenFreeMap's styles, a restyled subset |
 | [Lambert-93 data](./lambert93) | PLAN IGN reprojected from Lambert-93, a WFS in EPSG:2154, a GPX file |
 | [The Moon](./moon) | another body: the LRO mosaic reprojected over LOLA's relief, the Apollo sites, its craters in 3D |

@@ -22,9 +22,9 @@ Isard is built for maps where everything changes at every mouse move. What makes
   page, 289 points projected, then sampled in a worker from the source tiles each worker keeps); with `workers:
   false`, both run in the page. The basemap's labels are shaped in the page, each vector tile's once
   while it is kept: as the view moves, only the labels of the tiles that come into view are shaped.
-- **Less WebAssembly for most maps.** The engine comes in two builds: without 3D Tiles (`isard_core_bg.wasm`, 220 KB
-  gzipped), loaded by every map, and with them (`isard_bg.wasm`, 330 KB), loaded for the first 3D Tiles layer. That
-  move costs a download and a stall of a frame or two, the map being rebuilt on the new engine; `tiles3d: true`
+- **Less WebAssembly for most maps.** The engine comes in two builds: without 3D Tiles (`isard_core_bg.wasm`, 225 KB
+  gzipped), loaded by every map, and with them (`isard_bg.wasm`, 345 KB), loaded for the first 3D Tiles layer or
+  model. That move costs a download and a stall of a frame or two, the map being rebuilt on the new engine; `tiles3d: true`
   avoids it for a map that shows 3D Tiles at once, `tiles3d: 'preload'` downloads and compiles the full engine once
   the map is idle (see [3D Tiles](../layers/tiles3d#the-engine-with-3d-tiles)).
 - **No holes, no backlog.** Missing tiles covered by their nearest ancestor or descendants, coarse tiles first, stale

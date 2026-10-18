@@ -50,6 +50,12 @@ const TIMEOUT_MS = 90_000;
 const FROZEN = new Set(['globe']);
 
 /**
+ * Examples opened with `?still`: their animation drawn at a fixed time and no frame asked for it (the three.js scene,
+ * examples/threejs/main.ts), so they are done once idle like the others, their labels placed
+ */
+const STILL = new Set(['threejs']);
+
+/**
  * Views of an example opened at another camera (the `#view` of its URL), run with it: the pitched views over the relief
  * of the Moon and Mars
  */
@@ -63,6 +69,7 @@ const VIEWS: Record<string, [example: string, view: string]> = {
 const VIEWPORTS: Record<string, [number, number]> = {
   relief: [320, 200],
   tiles3d: [320, 200],
+  models: [480, 300],
   'moon-tycho': [240, 150],
   'mars-olympus-mons': [240, 150],
   'mars-valles-marineris': [320, 200],
@@ -238,7 +245,8 @@ for (const name of examples) {
   served.bytes = 0;
   const start = Date.now();
   const [example, view] = VIEWS[name] ?? [name, ''];
-  await page.goto(`${origin}/examples/${example}/${view ? `#${view}` : ''}`, { waitUntil: 'load' });
+  const query = STILL.has(example) ? '?still' : '';
+  await page.goto(`${origin}/examples/${example}/${query}${view ? `#${view}` : ''}`, { waitUntil: 'load' });
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second
   let frames = -1;

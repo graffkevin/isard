@@ -11,6 +11,11 @@ type Call = [name: string, args: unknown[]];
 /** A stand-in for the engine: records every call; methods not defined here return a new id (`add…`) or undefined */
 export class FakeEngine {
   static instances: FakeEngine[] = [];
+  /** What `Engine.customMatrix` answers (the engine draws a custom layer meanwhile, else undefined) */
+  static matrix: Float32Array | undefined;
+  static customMatrix(_lon: number, _lat: number, _altitude: number): Float32Array | undefined {
+    return FakeEngine.matrix;
+  }
   /** Methods that throw in the next engine created */
   static failNext = new Set<string>();
   calls: Call[] = [];
@@ -27,6 +32,8 @@ export class FakeEngine {
   hidden = new Set<string>();
   /** Methods that throw, to test failures */
   failing = new Set<string>();
+  /** Runs while a frame is drawn (the custom layers' callbacks) */
+  onRender: (() => void) | undefined;
   private nextId = 1;
 
   constructor(
@@ -45,7 +52,10 @@ export class FakeEngine {
         this.cam = { center: [wrap(lon), lat], zoom, pitch, bearing: wrap(bearing) };
       },
       bounds: () => this.boundsValue,
-      render: () => this.loading,
+      render: () => {
+        this.onRender?.();
+        return this.loading;
+      },
       requestPick: () => this.canPick,
       pollPick: () => this.polls.shift(),
       ground: (x: number, y: number) => [x / 10, y / 10],
@@ -83,7 +93,7 @@ export class FakeEngine {
 
 /** The engine without 3D Tiles (`isard_core.js`): the same, without its 3D Tiles methods */
 export class CoreFakeEngine extends FakeEngine {
-  static readonly TILES3D = ['addTiles3d', 'setTiles3dStyle', 'tiles3dStats'];
+  static readonly TILES3D = ['addTiles3d', 'setTiles3dStyle', 'tiles3dStats', 'addModels', 'setModelInstances'];
   constructor(canvas: unknown, onRequest: () => void) {
     super(canvas, onRequest);
     for (const name of CoreFakeEngine.TILES3D) this.hidden.add(name);

@@ -9,7 +9,7 @@ npm install isard
 ```
 
 The package is ES modules with their types (your bundler keeps what you use), the engine in two builds
-(`isard_core_bg.wasm`, 220 KB gzipped, and `isard_bg.wasm`, 330 KB with 3D Tiles) and two workers:
+(`isard_core_bg.wasm`, 225 KB gzipped, and `isard_bg.wasm`, 345 KB with 3D Tiles) and two workers:
 `decoder.worker.js` decodes 3D Tiles, `basemap.worker.js` draws vector basemaps. It needs WebGL2, and runs in every
 current browser.
 

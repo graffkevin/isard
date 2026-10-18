@@ -37,9 +37,13 @@ the worldwide relief; your own data's credits go in `attributionControl: { custo
 A vector basemap is two layers: the areas, roads and circles of the style (and its raster layers, extrusions drawn
 flat), drawn tile by tile in workers into the raster pool (so they lie on the relief and composite with the hillshade),
 and its labels in a symbol layer, from the glyphs of the style. Any MapLibre style works: its legacy filters and
-functions and the common expressions are evaluated, a TileJSON `url` source is resolved. Icons are not drawn: a text
-written over its icon (a road shield's number) is left out. `vectorTiles()` takes OpenFreeMap's Positron by default
-(`OPENFREEMAP_STYLES`, `PLAN_STYLES` for the Géoplateforme's).
+functions and the common expressions are evaluated, a TileJSON `url` source is resolved. The icons of its symbol layers
+come from the style's `sprite` (one sprite or several with their ids, `@2x` on high-density screens): points of
+interest, road shields with their numbers, one-way arrows along the roads, an icon stretched around its text
+(`icon-text-fit`); their size, anchor, offset, rotation, overlaps and optional parts follow the style. Symbols along
+lines are placed at the middle of the line for a text (kept straight), every `symbol-spacing` for an icon alone; and
+past the source's deepest level, a style's layers of the deeper zooms show (points of interest at 17).
+`vectorTiles()` takes OpenFreeMap's Positron by default (`OPENFREEMAP_STYLES`, `PLAN_STYLES` for the Géoplateforme's).
 
 ```ts
 const tiles = map.vectorTiles({ style: 'https://…/style.json' });

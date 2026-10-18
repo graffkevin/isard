@@ -59,9 +59,25 @@ export type { TextPart } from './glyphs.ts';
 export { DEFAULT_FONT, GLYPHS_URL } from './glyphs.ts';
 export { parseGpx } from './gpx.ts';
 export type { TileGrid, TileMatrix } from './grid.ts';
+export type { ImageOptions, Pixels, SpriteIcon } from './icons.ts';
 export { parseKml } from './kml.ts';
-export type { GroundOptions, GroundTexture } from './layers.ts';
-export { GroundLayer, Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+export type {
+  CustomFrame,
+  CustomLayerInterface,
+  GroundOptions,
+  GroundTexture,
+  ModelInstance,
+  ModelOptions,
+} from './layers.ts';
+export {
+  CustomLayer,
+  GroundLayer,
+  Layer,
+  ModelLayer,
+  NetworkLayer,
+  RasterLayer,
+  Tiles3dLayer,
+} from './layers.ts';
 export { GeoMap } from './map.ts';
 export {
   type Anchor,
@@ -73,7 +89,7 @@ export {
   type PopupEvents,
   type PopupOptions,
 } from './overlay.ts';
-export type { SymbolOptions, SymbolStyle } from './symbols.ts';
+export type { Overlap, SymbolOptions, SymbolStyle } from './symbols.ts';
 export { SymbolLayer } from './symbols.ts';
 export { parseTopoJson, type TopoGeometry, type Topology } from './topojson.ts';
 export type {
@@ -105,7 +121,15 @@ export type {
   Tiles3dOptions,
   Tiles3dStyle,
 } from './types.ts';
-export type { Json, LabelCandidate, RasterSource, Style, StyleLayer } from './vectorstyle.ts';
+export type {
+  CandidateIcon,
+  CandidateOverlap,
+  Json,
+  LabelCandidate,
+  RasterSource,
+  Style,
+  StyleLayer,
+} from './vectorstyle.ts';
 export type { VectorTilesOptions } from './vectortiles.ts';
 export { OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
 export type { Camera, NetworkStats, PickHit, PickResult, RasterLayerStats, Tiles3dStats } from './wasm/isard.js';

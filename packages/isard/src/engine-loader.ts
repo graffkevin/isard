@@ -8,7 +8,12 @@ import type { GeoMapOptions } from './types.ts';
 import { defaultWorkerCount } from './vectortiles.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
-export type EngineClass = new (canvas: HTMLCanvasElement, redraw: () => void) => Engine;
+/** The class of an engine build: its constructor and its static `customMatrix` (custom layers) */
+export type EngineClass = (new (
+  canvas: HTMLCanvasElement,
+  redraw: () => void,
+) => Engine) &
+  Pick<typeof Engine, 'customMatrix'>;
 
 /** An engine loaded: its compiled module and its class */
 export interface Bindings {

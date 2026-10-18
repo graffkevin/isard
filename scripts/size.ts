@@ -13,9 +13,14 @@ import { join } from 'node:path';
 /** Budgets: gzipped KB (1024 bytes, gzip level 9), set on 2026-10-17 */
 const BUDGETS = {
   /** The engine maps load first, without 3D Tiles */
-  'isard_core_bg.wasm': 225,
+  // 225 until the icons of the symbol layers (their atlas, their quads beside the glyphs, the placement of a text and
+  // its icon), about 1.9 KB, in both engines; 228 until the custom layers (the page's WebGL called within the frame,
+  // the matrices of its local frames, the WebGL state set back after it), about 1.9 KB, in both engines
+  'isard_core_bg.wasm': 230,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
-  'isard_bg.wasm': 341,
+  // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
+  // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB
+  'isard_bg.wasm': 356,
   /** The package's modules (dist/*.js but the workers), all together */
   // 61 until the equirectangular grid (the Moon), about 2 KB; 64 until the OpenFreeMap basemaps, the Terrarium decoding
   // of the worldwide relief, the credits by source, the glyphs of a style and the Géoplateforme helpers, about 5.5 KB;
@@ -25,14 +30,18 @@ const BUDGETS = {
   // until the data in other CRSs and the vector formats, about 16.5 KB here: the CRSs (Lambert-93, CC zones, UTM) and
   // the reprojection of rasters in any tile grid in place of the equirectangular one, about 8 KB (3.7 KB minified in a
   // bundle, the GeoJSON of the feature layers reprojected included); the WMTS capabilities, the XML reader, KML, GPX
-  // and TopoJSON, about 8.5 KB, each a module of its own, in a bundle only when imported
-  modules: 97,
+  // and TopoJSON, about 8.5 KB, each a module of its own, in a bundle only when imported; 97 until the icons of the
+  // symbol layers (the sprites, the icon atlas, the layout of an icon and its fit to the text, the icons of the
+  // labels), about 7 KB here (3.3 KB minified in a bundle)
+  modules: 104,
   /** The engines' JavaScript bindings (wasm-bindgen) */
-  bindings: 38,
+  // 38 until the icon atlas, about 0.2 KB
+  bindings: 39,
   'decoder.worker.js': 13,
   // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes; 9.2 until
-  // the PNG relief decoded and the equirectangular rasters reprojected in the workers, about 1.3 KB
-  'basemap.worker.js': 11,
+  // the PNG relief decoded and the equirectangular rasters reprojected in the workers, about 1.3 KB; 11 until the icons
+  // of the labels (their properties, icons alone along lines, the layers past the source's deepest level), 0.7 KB
+  'basemap.worker.js': 11.8,
 } as const;
 
 const root = join(import.meta.dir, '..');

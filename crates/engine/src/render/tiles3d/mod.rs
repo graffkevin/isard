@@ -12,8 +12,8 @@
 //! A root tileset that cannot be loaded is retried a few times, with a growing pause; meanwhile the layer does not
 //! count as loading (the map can go idle), and an error goes to the console.
 
-mod fetch;
-mod gpu;
+pub(crate) mod fetch;
+pub(crate) mod gpu;
 mod state;
 
 use crate::engine::Engine;
@@ -81,7 +81,7 @@ thread_local! {
     static NEXT_REQUEST: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
 }
 
-fn next_request() -> u32 {
+pub(crate) fn next_request() -> u32 {
     NEXT_REQUEST.with(|n| {
         let id = n.get();
         n.set(id.wrapping_add(1).max(1));

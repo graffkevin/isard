@@ -12,7 +12,7 @@
 //! center, its own center at (0, 0, -radius).
 
 use crate::geodesy::{self, Body};
-use glam::{DMat4, DVec2, DVec3, DVec4};
+use glam::{DMat3, DMat4, DVec2, DVec3, DVec4};
 use std::f64::consts::PI;
 
 /// Size of the world in CSS pixels at zoom 0 (`MapLibre` convention)
@@ -172,14 +172,25 @@ impl View {
     #[must_use]
     pub fn ecef_matrix(&self, anchor: DVec3) -> DMat4 {
         let g = self.body.from_ecef(anchor);
-        let m = mercator(g.x, g.y);
+        // ECEF offsets to east, north, up (rows), then `enu_matrix`
         let [east, north, up] = geodesy::enu(g.x, g.y);
+        self.enu_matrix(g) * DMat4::from_mat3(DMat3::from_cols(east, north, up).transpose())
+    }
+
+    /// Affine map from a local east-north-up frame in metres at a longitude, latitude (degrees) and height (metres)
+    /// to the local frame (pixels): the origin placed like a ground point at its height, its axes blended between the
+    /// plane's and the sphere's like `position`. The frame of the models and of the page's own drawings (custom
+    /// layers): exact at the origin, a few kilometres around it stay well under a pixel.
+    #[must_use]
+    pub fn enu_matrix(&self, g: DVec3) -> DMat4 {
+        let m = mercator(g.x, g.y);
         let k = self.pixels_per_metre(g.y);
         let shift = -(m.x - self.center.x).round();
-        // Where the anchor goes, and where its east, north and up axes point, blended like `position`
+        // Where the origin goes, and where its east, north and up axes point
         let mut origin = self.position(m, shift);
         let (mut e, mut n, mut u) = (DVec3::X, DVec3::NEG_Y, DVec3::Z);
         if self.globe.factor > 0.0 {
+            let [east, north, up] = geodesy::enu(g.x, g.y);
             let local = |v: DVec3| DVec3::new(v.dot(self.globe.east), -v.dot(self.globe.north), v.dot(self.globe.up));
             let f = self.globe.factor;
             e = e.lerp(local(east), f);
@@ -187,12 +198,10 @@ impl View {
             u = u.lerp(local(up), f);
         }
         origin += u * (g.z * k);
-        // Columns: images of the ECEF axes (through east, north, up)
-        let to_local = |axis: DVec3| (e * axis.dot(east) + n * axis.dot(north) + u * axis.dot(up)) * k;
         DMat4::from_cols(
-            to_local(DVec3::X).extend(0.0),
-            to_local(DVec3::Y).extend(0.0),
-            to_local(DVec3::Z).extend(0.0),
+            (e * k).extend(0.0),
+            (n * k).extend(0.0),
+            (u * k).extend(0.0),
             origin.extend(1.0),
         )
     }
@@ -881,6 +890,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn enu_frames_on_the_plane() {
+        // At the center, on the ground: the origin of the local frame, east right, north up the screen (y south), the
+        // scale of Web Mercator at that latitude
+        let v = camera().view();
+        let (lon, lat) = (2.424_573, 48.845_726);
+        let m = v.enu_matrix(DVec3::new(lon, lat, 0.0));
+        let k = 512.0 * 2f64.powi(14) / (2.0 * PI * 6_378_137.0 * lat.to_radians().cos());
+        let expected = DMat4::from_cols(
+            DVec4::new(k, 0.0, 0.0, 0.0),
+            DVec4::new(0.0, -k, 0.0, 0.0),
+            DVec4::new(0.0, 0.0, k, 0.0),
+            DVec4::W,
+        );
+        assert!(m.abs_diff_eq(expected, 1e-9), "{m}");
+        assert!((k - 0.317_9).abs() < 1e-3, "{k}");
+        // 1 km north and 50 m up: where the Mercator plane puts that point, within the change of scale over 1 km
+        let north = lat + 1000.0 / 111_210.0;
+        let through = v
+            .enu_matrix(DVec3::new(lon, lat, 50.0))
+            .transform_point3(DVec3::new(0.0, 1000.0, 0.0));
+        let direct = v.position(mercator(lon, north), 0.0) + DVec3::Z * 50.0 * k;
+        assert!(
+            (through - direct).length() < 0.002 * 1000.0 * k,
+            "{through} vs {direct}"
+        );
+        // A point of another copy of the world is drawn on the one nearest to the center
+        let wrapped = v.enu_matrix(DVec3::new(lon + 360.0, lat, 0.0));
+        assert!(wrapped.w_axis.truncate().length() < 1e-6);
+    }
+
+    #[test]
+    fn enu_frames_on_the_globe() {
+        let v = globe(3.0).view();
+        let k = v.globe.radius / v.body.radius;
+        for (lon, lat) in [(2.424_573, 48.845_726), (30.0, 10.0), (-20.0, 60.0)] {
+            let m = v.enu_matrix(DVec3::new(lon, lat, 500.0));
+            let (e, n, u) = (m.x_axis.truncate(), m.y_axis.truncate(), m.z_axis.truncate());
+            // A rigid frame scaled to the sphere: orthogonal axes of k pixels per metre, east × north = up once the local
+            // frame's y (south) is flipped back, as the view does
+            for axis in [e, n, u] {
+                assert!((axis.length() / k - 1.0).abs() < 1e-9);
+            }
+            assert!(e.dot(n).abs() < 1e-9 * k * k && e.dot(u).abs() < 1e-9 * k * k);
+            assert!((e.cross(n) / k + u).length() < 1e-9 * k);
+            // Up is the sphere's radius there, the origin 500 m above the ground point
+            let ground = v.sphere(mercator(lon, lat));
+            let radial = (ground - v.sphere_center()).normalize();
+            assert!((u / k - radial).length() < 1e-9, "{lon} {lat}");
+            assert!((m.w_axis.truncate() - (ground + radial * 500.0 * k)).length() < 1e-6);
+            // North points to the pole: towards +z of the body
+            let pole = v.sphere(mercator(lon, 85.0));
+            assert!(n.dot(pole - ground) > 0.0);
+            // The origin is `geodetic`'s
+            assert!((m.w_axis.truncate() - v.geodetic(DVec3::new(lon, lat, 500.0))).length() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn enu_frames_stay_exact_in_f32() {
+        // At zoom 22, the model-view-projection of a point 10 m east of the center, made in f64 and handed over in
+        // f32 (as the custom layers get it), puts the point where f64 does, to a hundredth of a pixel
+        let mut c = camera();
+        c.zoom = 22.0;
+        c.pitch = 60.0;
+        let v = c.view();
+        let at = DVec3::new(2.424_573 + 0.000_1, 48.845_726, 2.0);
+        let mvp = v.view_proj * v.enu_matrix(at);
+        let f32_mvp = mvp.as_mat4();
+        let local = DVec3::new(3.0, -2.0, 1.5);
+        let exact = mvp.project_point3(local);
+        let rounded = f32_mvp.project_point3(local.as_vec3()).as_dvec3();
+        let pixels = (exact - rounded).truncate() * DVec2::new(c.width, c.height) / 2.0;
+        assert!(pixels.length() < 0.01, "{pixels}");
     }
 
     #[test]

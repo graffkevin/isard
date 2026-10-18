@@ -341,6 +341,9 @@ export interface Shaping {
   quads: number[][];
   /** Ink box from the anchor: min x, min y, max x, max y */
   box: [number, number, number, number];
+  /** Layout box from the anchor, what an icon fitted to the text frames: the advances of its widest line across, its
+   * lines' height (`lineHeight` each) down, centered on the ink */
+  layout: [number, number, number, number];
 }
 
 /** Code points of a text, for loading */
@@ -412,10 +415,14 @@ export function shape(
     Number.NEGATIVE_INFINITY,
   ];
   let baseline = 0;
+  let widest = 0;
+  let height = 0;
   wrapped.forEach((line, i) => {
     const scale = Math.max(1, ...line.map((c) => c.scale));
     if (i > 0) baseline += lineHeight * EM * scale;
+    height += lineHeight * EM * scale;
     const width = line.reduce((s, c) => s + advance(c), 0);
+    widest = Math.max(widest, width);
     let pen = -width / 2;
     for (const c of line) {
       const g = c.glyph;
@@ -433,7 +440,7 @@ export function shape(
       pen += advance(c);
     }
   });
-  if (!quads.length) return { quads, box: [0, 0, 0, 0] };
+  if (!quads.length) return { quads, box: [0, 0, 0, 0], layout: [0, 0, 0, 0] };
   // The block placed around the anchor by its ink box
   // The side of the box at the anchor: its start, its end, or its middle
   const side = (start: boolean, end: boolean, lo: number, hi: number) => {
@@ -452,5 +459,11 @@ export function shape(
     q[3] = (q[3] ?? 0) * k;
     q[8] = (q[8] ?? 1) * k;
   }
-  return { quads, box: [(x0 + dx) * k, (y0 + dy) * k, (x1 + dx) * k, (y1 + dy) * k] };
+  const middle = (y0 + y1) / 2 + dy;
+  height = Math.max(height, y1 - y0);
+  return {
+    quads,
+    box: [(x0 + dx) * k, (y0 + dy) * k, (x1 + dx) * k, (y1 + dy) * k],
+    layout: [(dx - widest / 2) * k, (middle - height / 2) * k, (dx + widest / 2) * k, (middle + height / 2) * k],
+  };
 }

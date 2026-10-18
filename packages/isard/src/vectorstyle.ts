@@ -31,7 +31,8 @@ export interface Style {
   >;
   layers: StyleLayer[];
   glyphs?: string;
-  sprite?: string;
+  /** One sprite's URL (without extension), or several with their ids (`id:name` names their images) */
+  sprite?: string | { id: string; url: string }[];
 }
 
 /** A raster source of a style: its tile URL, its deepest level and the CSS pixels of its tiles (MapLibre's
@@ -42,15 +43,42 @@ export interface RasterSource {
   tileSize: number;
 }
 
+/** How a label's text or icon meets the others (`*-allow-overlap` and `*-ignore-placement`, see `Overlap`) */
+export type CandidateOverlap = boolean | 'allow' | 'ignore';
+
+/** The icon of a label, in style terms evaluated at the tile's zoom */
+export interface CandidateIcon {
+  /** Its image in the style's sprite */
+  image: string;
+  /** A number, or zoom stops */
+  size: Json;
+  anchor: string;
+  offset: [number, number];
+  rotate: number;
+  /** `map` or `viewport` (`auto` resolved) */
+  alignment: 'map' | 'viewport';
+  overlap: CandidateOverlap;
+  optional: boolean;
+  fit: 'none' | 'width' | 'height' | 'both';
+  padding: [number, number, number, number];
+  color: string;
+  opacity: number;
+}
+
 /** A label to shape and place, in style terms evaluated at the tile's zoom */
 export interface LabelCandidate {
   /** Index of its style layer: higher ones are placed first */
   layer: number;
+  /** Its text, empty for an icon alone */
   text: string;
   lon: number;
   lat: number;
-  /** Along a line: the direction there (degrees of longitude and latitude) */
+  /** On a line: the direction there (degrees of longitude and latitude) */
   along?: [number, number];
+  /** Its text runs along the line (`symbol-placement: line`, `text-rotation-alignment` not `viewport`) */
+  textAlong?: boolean;
+  textOptional?: boolean;
+  icon?: CandidateIcon;
   font: string;
   size: Json;
   color: string;
@@ -60,7 +88,7 @@ export interface LabelCandidate {
   offset: [number, number];
   maxWidth: number;
   lineHeight: number;
-  overlap: boolean;
+  overlap: CandidateOverlap;
 }
 
 /** What expressions see of a feature */

@@ -32,6 +32,8 @@ pub struct Primitive {
     pub indices: Rc<[u32]>,
     /// Its image in `Mesh::images`
     pub image: Option<usize>,
+    /// Base color factor of its material (linear RGBA, white by default), which multiplies the image
+    pub color: [f32; 4],
 }
 
 pub struct Mesh {

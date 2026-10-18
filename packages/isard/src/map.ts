@@ -31,8 +31,20 @@ import {
 } from './features.ts';
 import { Glyphs } from './glyphs.ts';
 import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './grid.ts';
+import { Icons, type ImageOptions, type Pixels, readPixels } from './icons.ts';
 import { Interaction } from './interaction.ts';
-import { GroundLayer, type GroundOptions, type Layer, NetworkLayer, RasterLayer, Tiles3dLayer } from './layers.ts';
+import {
+  CustomLayer,
+  type CustomLayerInterface,
+  GroundLayer,
+  type GroundOptions,
+  type Layer,
+  ModelLayer,
+  type ModelOptions,
+  NetworkLayer,
+  RasterLayer,
+  Tiles3dLayer,
+} from './layers.ts';
 import type { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
 import {
@@ -117,6 +129,7 @@ function checkBasemap(basemap: Basemap): BasemapName {
 export class GeoMap {
   readonly canvas: HTMLCanvasElement;
   #glyphs: Glyphs | undefined;
+  #icons: Icons | undefined;
   /** Layers new layers go under */
   private readonly onTop = new Set<Layer>();
   /** The vector basemap, if any: its tiles' workers and its labels */
@@ -188,6 +201,8 @@ export class GeoMap {
   /** The last frame found everything loaded ('idle' sent) */
   private settled = false;
   private inFrame = false;
+  /** The camera of the frame being drawn: what `getCamera` gives the custom layers while the engine is busy */
+  private frameCamera: Camera | undefined;
   /** Vector tiles made by `vectorTiles()`, destroyed with the map */
   private readonly vectorSets = new Set<VectorTiles>();
   /** The workers drawing vector tiles, shared by every `VectorTiles` of the map; created on first use */
@@ -340,8 +355,8 @@ export class GeoMap {
     return this.tiles3dModule && startTileLoader(this.tiles3dModule, this.tiles3dOptions, engine);
   }
 
-  /** A 3D Tiles layer on the core engine: loads the engine with 3D Tiles, then rebuilds the map on it (camera,
-   * settings and layers kept, as after a context loss); the layer is created then */
+  /** A 3D Tiles layer or a model on the core engine: loads the engine with 3D Tiles, then rebuilds the map on it
+   * (camera, settings and layers kept, as after a context loss); the layer is created then */
   private upgrade(): void {
     this.upgrading ??= loadFullEngineLater(engineUrl('full', this.tiles3dOptions)).then(
       ({ module, Engine }) => {
@@ -386,12 +401,13 @@ export class GeoMap {
     this.lost = false;
     this.setCamera(camera);
     this.#glyphs?.attach(this.#engine);
+    this.#icons?.attach(this.#engine);
     const engine = this.#engine;
     // No layer refers to an id of the old engine while the others are created
     for (const layer of this.layers) layer.forgetEngine();
     for (const layer of this.layers) {
       // Still waiting for the engine with 3D Tiles (loading, or failed): created with it
-      if (layer instanceof Tiles3dLayer && !this.tiles3dModule) continue;
+      if (layer.needsFullEngine && !this.tiles3dModule) continue;
       // A layer that fails is reported and left out; the others are created
       try {
         layer.attach(engine);
@@ -430,8 +446,9 @@ export class GeoMap {
   }
 
   private add<L extends Layer>(layer: L): L {
-    // On the core engine, a 3D Tiles layer waits for the engine with 3D Tiles: it is created with the others on it
-    if (layer instanceof Tiles3dLayer && !this.tiles3dModule) this.upgrade();
+    // On the core engine, a 3D Tiles layer or a model waits for the engine with 3D Tiles: it is created with the
+    // others on it
+    if (layer.needsFullEngine && !this.tiles3dModule) this.upgrade();
     else layer.attach(this.engine);
     this.layers.push(layer);
     // Under the layers kept on top (the basemap's labels)
@@ -502,7 +519,7 @@ export class GeoMap {
   // ── Camera ──
 
   getCamera(): Camera {
-    return this.engine.camera();
+    return this.frameCamera ?? this.engine.camera();
   }
 
   setCamera(camera: Partial<Camera>): void {
@@ -859,6 +876,41 @@ export class GeoMap {
     return this.#glyphs;
   }
 
+  /** @internal The icons of the symbol layers: the application's images and the vector basemaps' sprites */
+  get icons(): Icons {
+    if (!this.#icons) {
+      const gl = this.canvas.getContext('webgl2');
+      const max = gl?.getParameter(gl.MAX_TEXTURE_SIZE);
+      this.#icons = new Icons(typeof max === 'number' ? max : undefined);
+      this.#icons.attach(this.engine);
+    }
+    return this.#icons;
+  }
+
+  /**
+   * An image for the symbol layers' icons (`icon: name`), as MapLibre's `addImage`: its pixels (an image, a canvas,
+   * `ImageData`, or RGBA bytes with their size), `pixelRatio` 2 for an image drawn at twice its CSS size; `sdf` for a
+   * signed distance field drawn in the `iconColor`; `stretchX`, `stretchY` and `content` for an icon stretched around its
+   * text. An image of the same name is replaced
+   */
+  addImage(
+    name: string,
+    image: Pixels | (CanvasImageSource & { width: number; height: number }),
+    options: ImageOptions = {},
+  ): void {
+    const pixels = 'data' in image ? image : readPixels(image);
+    if (!pixels) throw new Error(`isard: the image ${name} has no pixels`);
+    this.icons.add(name, pixels, options);
+  }
+
+  hasImage(name: string): boolean {
+    return this.#icons?.has(name) ?? false;
+  }
+
+  removeImage(name: string): void {
+    this.#icons?.remove(name);
+  }
+
   /**
    * Vector tiles with a MapLibre style (OpenFreeMap's Positron by default): `tiles.raster(…)` draws its fills and lines
    * (or a subset) as a raster layer, `tiles.labels(…)` its labels. `setBasemap('osm-positron')` does both for the
@@ -936,6 +988,27 @@ export class GeoMap {
     return this.add(new Tiles3dLayer(this, url, { maxScreenSpaceError, opacity }));
   }
 
+  /** A glTF model drawn at positions (see `ModelOptions`), with depth; on the engine with 3D Tiles, as they are */
+  addModels(options: ModelOptions & { before?: Layer }): ModelLayer {
+    return this.place(new ModelLayer(this, options), options.before);
+  }
+
+  /**
+   * The page's own WebGL drawing at its place among the layers, in every frame (see `CustomLayerInterface`): raw
+   * WebGL, three.js… with the matrices of the frame (`frame.matrixAt`); under `before` if given
+   */
+  addCustomLayer(layer: CustomLayerInterface, options: { before?: Layer } = {}): CustomLayer {
+    const custom = new CustomLayer(
+      this,
+      layer,
+      this.canvas,
+      this,
+      (lon, lat, altitude) => this.engineClass.customMatrix(lon, lat, altitude),
+      () => this.getCamera(),
+    );
+    return this.place(custom, options.before);
+  }
+
   // ── Frames ──
 
   /** Asks for a frame; several calls before the next frame draw it once */
@@ -1006,7 +1079,14 @@ export class GeoMap {
     const t0 = performance.now();
     // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
     this.inFrame = false;
-    const loading = this.engine.render();
+    // As the engine has it now (a listener may have moved it), for the custom layers drawn in the frame
+    this.frameCamera = this.layers.some((layer) => layer instanceof CustomLayer) ? this.engine.camera() : undefined;
+    let loading: boolean;
+    try {
+      loading = this.engine.render();
+    } finally {
+      this.frameCamera = undefined;
+    }
     this.inFrame = true;
     // The picking pass sees the frame just drawn; its answer comes on a later frame
     if (hovered && this.listeners.hoverfeature.size > 0) this.requestHoverPick(hovered);
@@ -1072,12 +1152,15 @@ export class GeoMap {
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
     this.loader?.destroy();
+    // Custom layers free their WebGL objects, models their data, while the context is there
+    for (const layer of this.layers) layer.dispose();
     this.engine.free();
     // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
     // that does nothing, and nothing is drawn again
     this.#engine = destroyedEngine(camera);
     // Glyph ranges still arriving upload to it, not to the freed engine
     this.#glyphs?.attach(this.#engine);
+    this.#icons?.attach(this.#engine);
     this.lost = true;
     for (const control of [...this.controls.keys()]) this.removeControl(control);
     this.positioned.clear();

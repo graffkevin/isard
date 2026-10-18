@@ -76,8 +76,12 @@ async function load(
     };
     const primitives = await Promise.all(
       tile.primitives.map(
-        async ({ vertices, indices, image, mime }): Promise<DecodedPrimitive> =>
-          image ? { vertices, indices, ...(await decode(image, mime)) } : { vertices, indices, bitmap: null },
+        async ({ vertices, indices, image, mime, color }): Promise<DecodedPrimitive> => ({
+          vertices,
+          indices,
+          ...(color ? { color } : {}),
+          ...(image ? await decode(image, mime) : { bitmap: null }),
+        }),
       ),
     );
     // Each object once: a buffer or bitmap listed twice makes the transfer throw
@@ -85,6 +89,7 @@ async function load(
     for (const p of primitives) {
       transfer.add(p.vertices.buffer);
       transfer.add(p.indices.buffer);
+      if (p.color) transfer.add(p.color.buffer);
       if (p.bitmap) transfer.add(p.bitmap);
       for (const level of p.texture?.levels ?? []) transfer.add(level.data.buffer);
     }

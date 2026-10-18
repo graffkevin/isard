@@ -3,6 +3,41 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [0.4.0] - 2026-10-18
+
+### Added
+
+- Icons in the symbol layers: a vector basemap's icons from the `sprite` of its style (one sprite or several with
+  their ids, `@2x` on high-density screens), points of interest, road shields with their numbers centred, one-way
+  arrows every `symbol-spacing` along the roads; `icon-image` (tokens and expressions), `icon-size`, `icon-anchor`,
+  `icon-offset`, `icon-rotate`, `icon-rotation-alignment`, `icon-allow-overlap`, `icon-ignore-placement`,
+  `icon-optional`, `text-optional`, `text-ignore-placement`, `icon-text-fit` with its padding (an image's `stretchX`,
+  `stretchY` and `content` kept), `icon-color` of signed distance field images, `icon-opacity`. The text and the icon
+  of a label have their own boxes in the collision grid. The images used are packed into one RGBA atlas.
+- `map.addImage(name, image, { pixelRatio, sdf, stretchX, stretchY, content })`, `hasImage`, `removeImage`, and the
+  symbol layers' `icon`, `iconSize`, `iconAnchor`, `iconOffset`, `iconRotate`, `iconRotationAlignment`, `iconOverlap`,
+  `iconOptional`, `iconTextFit`, `iconTextFitPadding`, `iconColor`, `iconOpacity` and `textOptional`; `overlap` also
+  takes `'allow'` and `'ignore'`; `placement` may be a function of the feature.
+- Custom layers: `map.addCustomLayer({ renderingMode, onAdd, render, onRemove })`, the page's own WebGL drawing (raw,
+  or a three.js scene) called at its place among the layers in every frame, as MapLibre's; `frame.matrixAt(lonLat,
+  altitude)` gives the model-view-projection of a local east-north-up frame in metres there, made in f64 relative to
+  the camera (exact at any zoom, on the plane and the globe); `'3d'` shares the depth buffer of the relief, the
+  buildings and the 3D Tiles; the WebGL state the page changes is set back after it; `onAdd` again after a context
+  loss. The `threejs` example.
+- glTF models: `map.addModels({ url | data, instances: [{ lonLat, altitude, heading, pitch, roll, scale }],
+  altitudeReference })`, a glTF binary drawn at positions in one instanced draw per primitive, decoded as 3D Tiles
+  content is (meshopt, quantization, Draco and KTX2 in the workers), standing on the relief by default, with depth;
+  `setInstances`; `pickFeature` gives the instance's index. Textured surfaces unlit as the 3D Tiles, the others in
+  their material's base color, lit from above. The first model loads the engine with 3D Tiles, as a 3D Tiles layer
+  does. The `models` example.
+
+### Changed
+
+- A vector basemap's text written over its icon (a road shield's number) is drawn with it, no longer left out;
+  `text-rotation-alignment: viewport` keeps a text along a line horizontal; `symbol-placement` may be an expression;
+  past the source's deepest level, the labels take the style's layers of the view's zoom (points of interest at 17).
+- The decoder keeps the base color factor of a glTF material (`color` of the decoded primitives, when not white).
+
 ## [0.3.0] - 2026-10-18
 
 ### Changed
