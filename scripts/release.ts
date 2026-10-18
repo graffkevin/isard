@@ -20,7 +20,10 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const { version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')) as { version: string };
+const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')) as {
+  name: string;
+  version: string;
+};
 if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`)) {
   fail(`CHANGELOG.md does not describe ${version}: add its "## [${version}] - <date>" section first`);
 }
@@ -34,6 +37,11 @@ if (publish) {
   // In the workflow, on the tag's commit (the checks ran before tagging)
   const tag = process.env.GITHUB_REF_NAME;
   if (tag !== `v${version}`) fail(`tag ${tag} for a package at ${version}`);
+  // A version published by hand (the first one of a package: trusted publishing needs the package to exist)
+  if ((await $`npm view ${name}@${version} version`.nothrow().quiet().text()).trim() === version) {
+    console.log(`${name}@${version} is on npm already: nothing to publish`);
+    process.exit(0);
+  }
   await $`bun run build`;
   for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
   $.cwd(pkg);

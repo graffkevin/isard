@@ -1,6 +1,6 @@
 [package]
 name = "isard-tiles3d"
-version = "0.1.1"
+version = "0.2.0"
 publish = false
 edition = "2024"
 license = "MIT"
