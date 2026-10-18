@@ -1,13 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
-  <title id="title">Isard</title>
+  <title id="title">isard</title>
   <defs>
-    <linearGradient id="g" x1="0" y1="1" x2="1" y2="0">
+    <radialGradient id="sphere" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#34507d" />
+      <stop offset="1" stop-color="#172238" />
+    </radialGradient>
+    <!-- Data colors: the relief recolored by value -->
+    <linearGradient id="data" x1="0" y1="1" x2="1" y2="0">
       <stop offset="0" stop-color="#1a9850" />
       <stop offset="0.5" stop-color="#fdae61" />
       <stop offset="1" stop-color="#6a1b9a" />
     </linearGradient>
+    <clipPath id="globe">
+      <circle cx="32" cy="32" r="23" />
+    </clipPath>
   </defs>
-  <rect width="64" height="64" rx="14" fill="#1d2433" />
-  <path d="M8 48 L22 26 L30 36 L40 16 L56 48 Z" fill="url(#g)" />
-  <path d="M40 16 L35 26 L40 23 L45 26 Z" fill="#fff" opacity="0.85" />
+  <rect width="64" height="64" rx="14" fill="#0f1524" />
+  <!-- The globe in its halo, its graticule -->
+  <circle cx="32" cy="32" r="25.5" fill="none" stroke="#6aa8ff" stroke-opacity="0.3" stroke-width="2" />
+  <circle cx="32" cy="32" r="23" fill="url(#sphere)" />
+  <g clip-path="url(#globe)" fill="none" stroke="#a9c2e8" stroke-opacity="0.3" stroke-width="1.2">
+    <ellipse cx="32" cy="32" rx="11" ry="23" />
+    <path d="M32 9 V55 M9 32 H55 M11.5 21 H52.5" />
+  </g>
+  <!-- The isard's mountains on it -->
+  <g clip-path="url(#globe)">
+    <path d="M6 58 L6 46 L21 30 L29 39 L40 21 L58 46 L58 58 Z" fill="url(#data)" />
+    <path d="M40 21 L35.5 28.5 L40 26 L44.5 28.5 Z" fill="#fff" opacity="0.9" />
+  </g>
 </svg>
