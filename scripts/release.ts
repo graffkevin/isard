@@ -1,9 +1,10 @@
 /**
- * Releases `isard`. On a machine, `bun run release` checks the release (clean tree on main, version
- * described in the changelog, same version in the crates, not yet tagged), runs lint, types, tests and build, then
- * tags `v<version>` and pushes the tag: the Release workflow publishes it on npm, with provenance, through npm's
- * trusted publishing (no token on any machine). `--dry-run` checks and packs without tagging. `--publish` is the
- * workflow's step: the package built, the README, changelog and licence of the repository copied into it, published.
+ * Releases `isard`: raising the version (packages/isard/package.json and the crates, a changelog section) and pushing it
+ * to main is the release. Once the checks pass on main, the Release workflow runs `--publish`: if the version is not on
+ * npm yet, the package is built and published with provenance through npm's trusted publishing (no token anywhere),
+ * then the commit is tagged `v<version>` with a GitHub release of its changelog section. On a machine,
+ * `bun run release:dry` checks a release before pushing it (version described in the changelog, same version in the
+ * crates, not yet on npm; build, lint, types, tests) and packs it without publishing: its file list.
  */
 import { copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,7 +12,6 @@ import { $ } from 'bun';
 
 const root = join(import.meta.dir, '..');
 const pkg = join(root, 'packages/isard');
-const dry = process.argv.includes('--dry-run');
 const publish = process.argv.includes('--publish');
 $.cwd(root);
 
@@ -33,12 +33,11 @@ for (const crate of ['engine', 'geo', 'tiles3d']) {
   if (crateVersion !== version) fail(`crates/${crate} is at ${crateVersion}, the package at ${version}: align them`);
 }
 
+const published = (await $`npm view ${name}@${version} version`.nothrow().quiet().text()).trim() === version;
+
 if (publish) {
-  // In the workflow, on the tag's commit (the checks ran before tagging)
-  const tag = process.env.GITHUB_REF_NAME;
-  if (tag !== `v${version}`) fail(`tag ${tag} for a package at ${version}`);
-  // A version published by hand (the first one of a package: trusted publishing needs the package to exist)
-  if ((await $`npm view ${name}@${version} version`.nothrow().quiet().text()).trim() === version) {
+  // In the workflow, on the commit the checks passed on
+  if (published) {
     console.log(`${name}@${version} is on npm already: nothing to publish`);
     process.exit(0);
   }
@@ -47,25 +46,24 @@ if (publish) {
   $.cwd(pkg);
   // npm ≥ 11.5: trusted publishing (OpenID Connect from the workflow), provenance attached
   await $`npx --yes npm@11 publish --access public --provenance`;
+  $.cwd(root);
+  // The tag and the GitHub release, its notes the changelog section of the version
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const start = changelog.indexOf(`## [${version}]`);
+  const next = changelog.indexOf('\n## [', start + 1);
+  const notes = changelog.slice(changelog.indexOf('\n', start) + 1, next < 0 ? undefined : next).trim();
+  const sha = process.env.RELEASE_SHA ?? (await $`git rev-parse HEAD`.text()).trim();
+  await $`gh release create v${version} --target ${sha} --title ${`isard ${version}`} --notes ${notes}`;
   process.exit(0);
 }
 
-if (!dry) {
-  if ((await $`git status --porcelain`.text()).trim()) fail('uncommitted changes: commit them first');
-  const branch = (await $`git branch --show-current`.text()).trim();
-  if (branch !== 'main') fail(`on ${branch}: releases are made from main`);
-  if ((await $`git tag --list v${version}`.text()).trim()) fail(`v${version} is already tagged: raise the version`);
-}
+if (published) fail(`${name}@${version} is on npm already: raise the version`);
+// The build first: the types need the engine's bindings it generates
+await $`bun run build`;
 await $`bun run lint`;
 await $`bun run typecheck`;
 await $`bun run test`;
-await $`bun run build`;
-if (dry) {
-  for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
-  $.cwd(pkg);
-  await $`npx --yes npm@11 pack --dry-run`;
-} else {
-  await $`git tag -a v${version} -m ${`isard ${version}`}`;
-  await $`git push origin v${version}`;
-  console.log(`tagged and pushed v${version}: the Release workflow publishes it on npm`);
-}
+for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
+$.cwd(pkg);
+await $`npx --yes npm@11 pack --dry-run`;
+console.log(`${name}@${version} is ready: push it to main, the Release workflow publishes it once the checks pass`);

@@ -50,15 +50,16 @@ checks the last build again).
 
 ## Release
 
-Set the version in `packages/isard/package.json` and in the three `crates/*/Cargo.toml`, and describe it in
-`CHANGELOG.md` first.
+Raising the version is the release: set it in `packages/isard/package.json` and in the three `crates/*/Cargo.toml`,
+describe it in `CHANGELOG.md`, check it, then push it to `main`.
 
 ```sh
-bun run release:dry   # the release checked, lint, types, tests, build, the package packed: its file list
-bun run release       # the same on a clean main, then the v<version> tag pushed: the Release workflow publishes it
+bun run release:dry   # build, lint, types, tests, the package packed: its file list (nothing published)
 ```
 
-The release stops before anything is tagged if the tree is not clean, the branch is not `main`, the changelog does
-not describe the version, a crate has another version, or the version is already tagged. The Release workflow
-publishes on npm with provenance through npm's trusted publishing: no token on any machine. It is set up once on
-npmjs.com, in the package's settings (publisher: GitHub Actions, this repository, workflow `release.yml`).
+Once the checks pass on that push, the Release workflow sees a version that is not on npm yet: it builds the package,
+publishes it with provenance through npm's trusted publishing (no token on any machine), then tags the commit
+`v<version>` with a GitHub release of its changelog section. The pushes that leave the version alone publish nothing.
+`release:dry` stops if the changelog does not describe the version, a crate has another version, or the version is on
+npm already. Trusted publishing is set up once on npmjs.com, in the package's settings (publisher: GitHub Actions, this
+repository, workflow `release.yml`).

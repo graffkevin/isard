@@ -18,8 +18,7 @@
     "format": "biome check --write . && cargo fmt",
     "test": "cargo test && cargo test -p isard --no-default-features && bun test packages/isard",
     "test:visual": "bun scripts/visual.ts",
-    "release": "bun scripts/release.ts",
-    "release:dry": "bun scripts/release.ts --dry-run",
+    "release:dry": "bun scripts/release.ts",
     "docs:dev": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs dev",
     "docs:build": "bun run build && bun scripts/docs.ts && bun --filter @isard/docs build",
     "docs:check": "bun --filter @isard/docs check"
