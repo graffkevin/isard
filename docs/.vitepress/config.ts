@@ -15,6 +15,7 @@ const examples = [
   ['3D Tiles', 'tiles3d'],
   ['glTF models', 'models'],
   ['Point clouds', 'pointcloud'],
+  ['Viewshed', 'viewshed'],
   ['three.js in the map', 'threejs'],
   ['Vector basemaps', 'vector'],
   ['Lambert-93 data', 'lambert93'],
