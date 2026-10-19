@@ -86,9 +86,10 @@ const VIEWPORTS: Record<string, [number, number]> = {
  * Examples run only when named (`bun run test:visual tiles3d`, after `--record tiles3d`): the Lille photomesh refines
  * down to 5 cm tiles under its pitched camera whatever the viewport, ~110 b3dm (~12 MB even gzipped), too heavy for the
  * fixtures in the repository. Its fixtures and baseline are not committed. Valles Marineris likewise (~4 MB more of Mars
- * tiles): the relief of Mars is tested over Olympus Mons.
+ * tiles): the relief of Mars is tested over Olympus Mons. The viewshed too while it is a prototype (the relief and the
+ * BD TOPO buildings of Montmartre).
  */
-const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris']);
+const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris', 'viewshed']);
 
 const built = readdirSync(join(root, 'examples'), { withFileTypes: true })
   .filter((e) => e.isDirectory() && existsSync(join(root, 'examples/dist', e.name, 'main.js')))

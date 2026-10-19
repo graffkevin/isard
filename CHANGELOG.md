@@ -3,6 +3,15 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- `GeoMap.setViewshed` (a prototype): what can be seen from a point within a range, tinted over the map, and what is
+  hidden. The relief, extrusions, 3D Tiles and models are drawn from the observer into a depth cube, as for the
+  shadows of a point light, and each pixel on screen compares its distance to the observer with it. Only what the map
+  loaded for its view hides anything. The viewshed example: from the Sacré-Cœur over Montmartre's buildings.
+
 ## [0.5.1] - 2026-10-19
 
 ### Fixed

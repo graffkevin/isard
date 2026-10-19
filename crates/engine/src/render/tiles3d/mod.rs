@@ -601,6 +601,11 @@ impl Layer for Tiles3dLayer {
         )
     }
 
+    fn draw_depth(&self, frame: &Frame) {
+        // The finest tiles of the frame, without their stand-ins (no stencil to sort them out)
+        self.render(frame.gl, frame.view, &self.selection.draw, &[]);
+    }
+
     fn delete(&mut self, gl: &glow::Context) {
         for state in self.states.drain() {
             match state {

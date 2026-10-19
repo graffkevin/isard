@@ -15,8 +15,9 @@ const BUDGETS = {
   /** The engine maps load first, without 3D Tiles */
   // 225 until the icons of the symbol layers (their atlas, their quads beside the glyphs, the placement of a text and
   // its icon), about 1.9 KB, in both engines; 228 until the custom layers (the page's WebGL called within the frame,
-  // the matrices of its local frames, the WebGL state set back after it), about 1.9 KB, in both engines
-  'isard_core_bg.wasm': 230,
+  // the matrices of its local frames, the WebGL state set back after it), about 1.9 KB, in both engines; 230 until
+  // the viewshed (its depth cube, the screen's depth, the pass comparing them), about 2.4 KB, in both engines
+  'isard_core_bg.wasm': 234,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
   // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB; 356 until

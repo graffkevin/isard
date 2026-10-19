@@ -99,6 +99,11 @@ pub trait Layer: Any {
     /// (24 bits, little end in red) and `layer` in alpha
     fn draw_pick(&self, _frame: &Frame, _layer: u8) {}
 
+    /// Its solid surfaces (blocks, meshes) into the bound depth target, color writes off and depth test on: what may
+    /// hide the ground or other surfaces from a point (the viewshed's depth passes). `frame.view` may be another
+    /// viewpoint than the frame's; what is drawn is what the frame selected
+    fn draw_depth(&self, _frame: &Frame) {}
+
     /// Feature at a ground position (Mercator), for the layers picked on the CPU (fills), at the camera's zoom
     fn pick_ground(&self, _m: glam::DVec2, _zoom: f64) -> Option<u32> {
         None

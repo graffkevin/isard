@@ -196,6 +196,22 @@ export interface AtmosphereOptions {
   fogGroundBlend?: number;
 }
 
+/** What can be seen from a point (`GeoMap.setViewshed`) */
+export interface ViewshedOptions {
+  /** The observer */
+  position: LonLat;
+  /** Metres above the ground (default 1.7, eye level) */
+  height?: number;
+  /** Metres around the observer that are tinted (default 1000) */
+  range?: number;
+  /** A CSS color for what is seen (default `#2f9e44`) */
+  visibleColor?: string;
+  /** A CSS color for what is hidden (default `#e03131`) */
+  hiddenColor?: string;
+  /** 0-1 (default 0.55) */
+  opacity?: number;
+}
+
 /** Animation of a camera move */
 export interface AnimationOptions {
   /** Milliseconds */

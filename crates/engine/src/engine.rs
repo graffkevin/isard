@@ -3,6 +3,7 @@
 //! is in `pick`.
 
 mod pick;
+mod viewshed;
 
 use crate::js;
 use crate::layer::{Frame, Layer, Loading};
@@ -118,6 +119,8 @@ pub struct Engine {
     handled: bool,
     /// The collision grid of the labels, kept from frame to frame
     label_grid: Option<geo::collision::Grid>,
+    /// What can be seen from a point, drawn over the frame
+    viewshed: Option<viewshed::Viewshed>,
 }
 
 /// The camera counts as moving until this long after its last change (ms)
@@ -181,6 +184,7 @@ impl Engine {
             preload: None,
             preload_generation: 0,
             pick_target: None,
+            viewshed: None,
             async_pick: None,
             loading: Loading::IMMEDIATE,
             drawn: None,
@@ -705,6 +709,7 @@ impl Engine {
         if let Some((terrain, _)) = &self.terrain {
             terrain.finish(&self.redraw);
         }
+        self.draw_viewshed(&view);
         loading
     }
 }
@@ -846,6 +851,9 @@ impl Drop for Engine {
         unsafe {
             if let Some(target) = self.pick_target.take() {
                 target.delete(gl);
+            }
+            if let Some(mut viewshed) = self.viewshed.take() {
+                viewshed.delete(gl);
             }
             if let Some(mut pick) = self.async_pick.take() {
                 pick.delete(gl);

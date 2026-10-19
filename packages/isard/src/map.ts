@@ -79,6 +79,7 @@ import type {
   TerrainModel,
   TerrainOptions,
   Tiles3dOptions,
+  ViewshedOptions,
 } from './types.ts';
 import {
   BasemapWorkers,
@@ -603,6 +604,26 @@ export class GeoMap {
   setSky(enabled: boolean): void {
     this.settings.sky = enabled;
     this.engine.setSky(enabled);
+    this.requestRender();
+  }
+
+  /** Tints what can be seen from a point and what is hidden from it, within a range: the relief, extrusions, 3D Tiles
+   * and models hide what lies behind them (only what the map has loaded for its view). Undefined removes it */
+  setViewshed(options: ViewshedOptions | undefined): void {
+    if (!options) {
+      this.engine.clearViewshed();
+      return;
+    }
+    const [lon, lat] = options.position;
+    this.engine.setViewshed(
+      lon,
+      lat,
+      options.height ?? 1.7,
+      options.range ?? 1000,
+      new Float32Array(rgb(options.visibleColor ?? '#2f9e44')),
+      new Float32Array(rgb(options.hiddenColor ?? '#e03131')),
+      options.opacity ?? 0.55,
+    );
     this.requestRender();
   }
 

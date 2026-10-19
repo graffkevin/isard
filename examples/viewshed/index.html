@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Viewshed · Isard</title>
+    <link rel="stylesheet" href="../shared/page.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="panel">
+      <h1>Viewshed</h1>
+      <p>What can be seen from the observer, in green, and what the hill and the BD TOPO buildings hide, in red. Click
+        to move the observer.</p>
+      <p><label>Height <input id="height" type="range" min="1" max="60" step="1" value="2" /> <span id="height-value"></span></label></p>
+      <p><label>Range <input id="range" type="range" min="200" max="2000" step="50" value="900" /> <span id="range-value"></span></label></p>
+    </div>
+    <script type="module" src="../dist/viewshed/main.js"></script>
+  </body>
+</html>

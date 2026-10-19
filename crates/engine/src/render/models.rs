@@ -391,6 +391,10 @@ impl Layer for ModelLayer {
         matches!(self.model, Model::Ready(_)) && !self.instances.is_empty()
     }
 
+    fn draw_depth(&self, frame: &Frame) {
+        self.draw_pick(frame, 0);
+    }
+
     fn draw_pick(&self, frame: &Frame, layer: u8) {
         if let Model::Ready(mesh) = &self.model {
             // The picking pass's view may not be the last frame's

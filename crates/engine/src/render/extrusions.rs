@@ -439,6 +439,11 @@ impl Layer for ExtrusionLayer {
         true
     }
 
+    fn draw_depth(&self, frame: &Frame) {
+        // The picking pass's geometry: its colors are not written
+        self.draw_pick(frame, 0);
+    }
+
     fn draw_pick(&self, frame: &Frame, layer: u8) {
         if !self.shows(frame.camera.zoom) {
             return;

@@ -122,6 +122,7 @@ export type {
   TerrainOptions,
   Tiles3dOptions,
   Tiles3dStyle,
+  ViewshedOptions,
 } from './types.ts';
 export type {
   CandidateIcon,
