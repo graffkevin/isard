@@ -124,6 +124,32 @@ pub struct View {
     pub body: Body,
 }
 
+/// Root of `f` (3 unknowns, 3 equations in pixels) from `start` by Newton's method, the Jacobian by finite steps of
+/// `step` (about a pixel's worth of each unknown); None if it does not come within a thousandth of a pixel
+fn newton(start: DVec3, step: DVec3, f: impl Fn(DVec3) -> DVec3) -> Option<DVec3> {
+    let mut u = start;
+    for _ in 0..8 {
+        let e = f(u);
+        if e.length() < 1e-3 {
+            return Some(u);
+        }
+        let column = |axis: DVec3| (f(u + axis) - e) / axis.length();
+        let jacobian = DMat3::from_cols(
+            column(DVec3::X * step.x),
+            column(DVec3::Y * step.y),
+            column(DVec3::Z * step.z),
+        );
+        if jacobian.determinant().abs() < 1e-300 {
+            return None;
+        }
+        u -= jacobian.inverse() * e;
+        if !u.is_finite() {
+            return None;
+        }
+    }
+    (f(u).length() < 1e-3).then_some(u)
+}
+
 impl View {
     /// Position in the local frame of a Mercator point. `shift`: whole worlds added to x on the plane, to draw a
     /// tile on the copy of the world nearest to the center.
@@ -138,6 +164,24 @@ impl View {
             return plane;
         }
         plane.lerp(self.sphere(m), self.globe.factor)
+    }
+
+    /// Position in the local frame of a Mercator point `h` pixels above the ground, on the world's copy nearest to
+    /// the center: up the plane's vertical and the sphere's normal, blended as the layers draw it (`PROJECT`)
+    #[must_use]
+    pub fn surface(&self, m: DVec2, h: f64) -> DVec3 {
+        let shift = -(m.x - self.center.x).round();
+        let flat = DVec3::new(
+            (m.x + shift - self.center.x) * self.world_size,
+            (m.y - self.center.y) * self.world_size,
+            h,
+        );
+        if self.globe.factor <= 0.0 {
+            return flat;
+        }
+        let sphere = self.sphere(m);
+        let normal = sphere / self.globe.radius + DVec3::Z;
+        flat.lerp(sphere + normal * h, self.globe.factor)
     }
 
     #[must_use]
@@ -470,8 +514,8 @@ impl Camera {
     pub fn ground_at(&self, view: &View, x: f64, y: f64, altitude: f64) -> Option<DVec2> {
         let (a, b) = self.ray(view, x, y);
         let h = altitude * view.vertical;
-        // While blending, the surface is closer to the sphere or to the plane
-        if view.globe.factor >= 0.5 {
+        let f = view.globe.factor;
+        let sphere = || {
             let (d, c, r) = (b - a, view.sphere_center(), view.globe.radius + h);
             let (qa, qb, qc) = (d.dot(d), 2.0 * d.dot(a - c), (a - c).length_squared() - r * r);
             let disc = qb * qb - 4.0 * qa * qc;
@@ -479,24 +523,93 @@ impl Camera {
                 return None;
             }
             let t = (-qb - disc.sqrt()) / (2.0 * qa);
-            return (t >= 0.0).then(|| view.sphere_to_mercator(a + d * t));
+            (t >= 0.0).then(|| view.sphere_to_mercator(a + d * t))
+        };
+        let plane = || {
+            let t = (a.z - h) / (a.z - b.z);
+            if !(0.0..=1.0).contains(&t) || b.z >= a.z {
+                return None;
+            }
+            let p = a + (b - a) * t;
+            Some(self.center + DVec2::new(p.x, p.y) / view.world_size)
+        };
+        if f >= 1.0 {
+            return sphere();
         }
-        let t = (a.z - h) / (a.z - b.z);
-        if !(0.0..=1.0).contains(&t) || b.z >= a.z {
-            return None;
+        if f <= 0.0 {
+            return plane();
         }
-        let p = a + (b - a) * t;
-        Some(self.center + DVec2::new(p.x, p.y) / view.world_size)
+        // While blending, the surface drawn lies between the two: from the hit on the nearer one, the point of the
+        // blended surface on the ray (unknowns: the point and how far along the ray)
+        let start = if f >= 0.5 {
+            sphere().or_else(plane)
+        } else {
+            plane().or_else(sphere)
+        }?;
+        let d = b - a;
+        let t = (view.surface(start, h) - a).dot(d) / d.length_squared();
+        let scale = DVec3::new(1.0 / view.world_size, 1.0 / view.world_size, 1.0 / d.length());
+        let solved = newton(DVec3::new(start.x, start.y, t), scale, |u| {
+            view.surface(DVec2::new(u.x, u.y), h) - (a + d * u.z)
+        });
+        if let Some(u) = solved.filter(|u| u.z >= 0.0) {
+            return Some(DVec2::new(u.x, u.y));
+        }
+        // Not converged (the ray grazing the surface, or passing over it): the first point of the ray under it,
+        // found by steps and halved, None if the ray never goes under
+        let under = |t: f64| Self::stand(view, a + d * t).1 <= altitude;
+        // Closer together near the eye, where the ground is seen
+        let steps = 64;
+        let mut far = (1..=steps)
+            .map(|k| (f64::from(k) / f64::from(steps)).powi(2))
+            .find(|&t| under(t))?;
+        let mut near = far - (2.0 * far.sqrt() - 1.0 / f64::from(steps)) / f64::from(steps);
+        for _ in 0..50 {
+            let mid = f64::midpoint(near, far);
+            if under(mid) {
+                far = mid;
+            } else {
+                near = mid;
+            }
+        }
+        Some(Self::stand(view, a + d * far).0)
     }
 
     /// Altitude (metres, exaggeration included) of a point of the local frame
     #[must_use]
     pub fn altitude_of(view: &View, p: DVec3) -> f64 {
-        if view.globe.factor >= 0.5 {
-            (p.distance(view.sphere_center()) - view.globe.radius) / view.vertical
-        } else {
-            p.z / view.vertical
+        Self::stand(view, p).1
+    }
+
+    /// The ground point (Mercator) a point of the local frame stands over, and its altitude above it (metres,
+    /// exaggeration included): up the sphere's normal, the plane's vertical, or while blending their blend
+    fn stand(view: &View, p: DVec3) -> (DVec2, f64) {
+        let f = view.globe.factor;
+        let sphere = || {
+            (
+                view.sphere_to_mercator(p),
+                (p.distance(view.sphere_center()) - view.globe.radius) / view.vertical,
+            )
+        };
+        let plane = || {
+            (
+                view.center + DVec2::new(p.x, p.y) / view.world_size,
+                p.z / view.vertical,
+            )
+        };
+        if f >= 1.0 {
+            return sphere();
         }
+        if f <= 0.0 {
+            return plane();
+        }
+        // While blending, from the nearer one (unknowns: the ground point and the height in pixels)
+        let (start, h) = if f >= 0.5 { sphere() } else { plane() };
+        let scale = DVec3::new(1.0 / view.world_size, 1.0 / view.world_size, 1.0);
+        newton(DVec3::new(start.x, start.y, h * view.vertical), scale, |u| {
+            view.surface(DVec2::new(u.x, u.y), u.z) - p
+        })
+        .map_or((start, h), |u| (DVec2::new(u.x, u.y), u.z / view.vertical))
     }
 
     /// Moves the center so that the ground under `from` comes under `to` (screen points, CSS pixels)
@@ -805,6 +918,55 @@ mod tests {
         let b = screen(&c, &after);
         assert!((a - b).length() * c.width < 0.05, "{a} {b}");
         assert!((c.elevation - 950.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn picking_meets_the_blended_globe_as_drawn() {
+        // Halfway between the sphere and the plane, looking down or tilted: a screen point, the ground found under
+        // it, and where that ground is drawn again; the altitude of a point above it found back
+        for (zoom, pitch) in [(6.0, 0.0), (7.5, 55.0), (8.0, 64.0), (9.0, 70.0)] {
+            let mut c = globe(zoom);
+            c.max_pitch = PITCH_LIMIT;
+            c.width = 1600.0;
+            c.height = 900.0;
+            c.center = mercator(2.0, 45.0);
+            c.pitch = pitch;
+            c.bearing = 30.0;
+            let view = c.view();
+            let f = view.globe.factor;
+            assert!(f > 0.05 && f < 0.95, "zoom {zoom} pitch {pitch}: {f}");
+            for altitude in [0.0, 2000.0] {
+                let h = altitude * view.vertical;
+                for (x, y) in [
+                    (800.0, 450.0),
+                    (20.0, 880.0),
+                    (1580.0, 20.0),
+                    (800.0, 60.0),
+                    (300.0, 300.0),
+                ] {
+                    let Some(m) = c.ground_at(&view, x, y, altitude) else {
+                        // Over the horizon: the ray stays above the surface
+                        let (a, b) = c.ray(&view, x, y);
+                        let lowest = (0..=1000)
+                            .map(|k| Camera::altitude_of(&view, a + (b - a) * f64::from(k) / 1000.0))
+                            .fold(f64::INFINITY, f64::min);
+                        assert!(lowest > altitude, "zoom {zoom} pitch {pitch} at ({x}, {y}): missed");
+                        continue;
+                    };
+                    let p = view.surface(m, h);
+                    let clip = view.view_proj * p.extend(1.0);
+                    let screen = DVec2::new(
+                        (clip.x / clip.w + 1.0) * c.width / 2.0,
+                        (1.0 - clip.y / clip.w) * c.height / 2.0,
+                    );
+                    let error = (screen - DVec2::new(x, y)).length();
+                    assert!(error < 0.05, "zoom {zoom} pitch {pitch} at ({x}, {y}): {error} px");
+                    let found = Camera::altitude_of(&view, view.surface(m, h + 500.0 * view.vertical));
+                    // Within a hundredth of a pixel
+                    assert!((found - altitude - 500.0).abs() * view.vertical < 0.01, "{found} m");
+                }
+            }
+        }
     }
 
     #[test]

@@ -16,6 +16,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   frustum or of the cap the camera sees), and a tile's point nearest to the one under the camera is tested too.
 - Finer relief arriving under a tilted globe no longer shakes the view (zooms 8 to 10, pitched): the eye stays still
   as on the plane, where it was only kept off the globe.
+- While the globe blends into the plane, the ground under the cursor is the one drawn there (clicks, `ground`,
+  dragging and zooming around the cursor): it was taken on the sphere or on the plane, whichever was nearer, tens of
+  pixels off towards the edges of a pitched view.
 - Under relief, a canyon or a basin at the horizon of the globe shows the halo beyond instead of the globe's base
   colour (Valles Marineris seen along its length): the base and the sky's sphere lie as deep as the body's lowest
   ground.
