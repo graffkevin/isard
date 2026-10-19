@@ -11,3 +11,32 @@
   --vp-c-brand-1: #6ea0f0;
   --vp-c-brand-2: #5a8fe6;
 }
+
+/* The home page's hero kept short, so that the live globe under it shows at once */
+.VPHome .VPHero.VPHomeHero {
+  padding-top: calc(var(--vp-nav-height) + var(--vp-layout-top-height, 0px) + 24px);
+  padding-bottom: 28px;
+}
+@media (min-width: 960px) {
+  .VPHome .VPHero.VPHomeHero {
+    padding-top: calc(var(--vp-nav-height) + var(--vp-layout-top-height, 0px) + 32px);
+  }
+  .VPHome .VPHero .main {
+    max-width: 960px;
+  }
+  .VPHome .VPHero .name,
+  .VPHome .VPHero .text {
+    font-size: 44px;
+    line-height: 1.15;
+    max-width: none;
+  }
+  .VPHome .VPHero .tagline {
+    font-size: 19px;
+    line-height: 1.5;
+    max-width: 760px;
+    padding-top: 8px;
+  }
+  .VPHome .VPHero .actions {
+    padding-top: 20px;
+  }
+}

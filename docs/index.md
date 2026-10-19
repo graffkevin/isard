@@ -5,9 +5,6 @@ hero:
   name: Isard
   text: Maps that recolor at every mouse move
   tagline: A WebGL2 map engine for large, interactive data layers, labels and 3D Tiles. Rust core in WebAssembly, a small TypeScript API.
-  image:
-    src: /logo.svg
-    alt: Isard
   actions:
     - theme: brand
       text: Get started
@@ -53,8 +50,6 @@ map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))
 ```
 
 The map fills its container, follows its size, handles mouse and touch, loads the basemap. The values computed in a
-`hover` listener are drawn by the very frame of the move. Below, the globe: click anywhere to fly there, or take the arrows to the Moon and Mars.
-
-<LiveExample slug="globe" height="460px" />
+`hover` listener are drawn by the very frame of the move. The globe at the top: click anywhere to fly there, or take the arrows to the Moon and Mars.
 
 </div>
