@@ -26,14 +26,37 @@ let observer: LonLat = [2.34305, 48.88615];
 const pin = new Marker({ draggable: true }).setLonLat(observer).addTo(map);
 const height = element<HTMLInputElement>('height');
 const range = element<HTMLInputElement>('range');
+const oneWay = element<HTMLInputElement>('one-way');
+const direction = element<HTMLInputElement>('direction');
+const fov = element<HTMLInputElement>('fov');
+
+// The edges of the cone on the ground, from the observer to the range
+const edges = map.addLines({ data: [], color: '#1c7ed6', width: 2.5 });
+const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
+  const b = (heading * Math.PI) / 180;
+  const k = metres / 6378137;
+  return [
+    lon + ((k * Math.sin(b)) / Math.cos((lat * Math.PI) / 180)) * (180 / Math.PI),
+    lat + k * Math.cos(b) * (180 / Math.PI),
+  ];
+};
 
 const show = () => {
   element('height-value').textContent = `${height.value} m`;
   element('range-value').textContent = `${range.value} m`;
-  map.setViewshed({ position: observer, height: Number(height.value), range: Number(range.value) });
+  element('direction-value').textContent = `${direction.value}°`;
+  element('fov-value').textContent = `${fov.value}°`;
+  const cone = oneWay.checked ? { direction: Number(direction.value), fov: Number(fov.value) } : {};
+  map.setViewshed({ position: observer, height: Number(height.value), range: Number(range.value), ...cone });
+  const d = Number(range.value);
+  const [a, b] = [-1, 1].map((side) => along(observer, Number(direction.value) + (side * Number(fov.value)) / 2, d));
+  edges.setData(
+    oneWay.checked && a && b
+      ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [a, observer, b] } }]
+      : [],
+  );
 };
-height.addEventListener('input', show);
-range.addEventListener('input', show);
+for (const input of [height, range, oneWay, direction, fov]) input.addEventListener('input', show);
 // The view follows the pin as it is dragged
 pin.on('drag', ({ lonLat }) => {
   observer = lonLat;

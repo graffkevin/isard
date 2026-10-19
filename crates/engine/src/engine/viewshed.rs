@@ -4,6 +4,9 @@
 //! compares its distance to the observer with the cube's: nearer or as near, it is seen; farther, something hides
 //! it. Within the range, seen pixels are tinted with one color, hidden ones with another.
 //!
+//! Looking one way only (a camera, a lookout), the viewshed is a cone: a heading, a tilt and two angles of view; what
+//! lies outside it is left untinted (the whole cube is still drawn).
+//!
 //! The scene drawn from the observer is the one the frame selected: tiles out of the camera's view are not there to
 //! hide anything.
 
@@ -45,6 +48,9 @@ uniform float u_flat;
 uniform vec3 u_visible;
 uniform vec3 u_hidden;
 uniform float u_opacity;
+// The cone: its axes (right, up, forward), the tangents of its half angles across and up, 1 if there is one
+uniform mat3 u_axes;
+uniform vec3 u_cone;
 in vec2 v_ndc;
 out vec4 color;
 
@@ -68,6 +74,10 @@ void main() {
   float distance = length(v);
   float range = u_range.x;
   if (distance > range) discard;
+  if (u_cone.z > 0.5) {
+    vec3 c = v * u_axes;
+    if (c.z <= 0.0 || abs(c.x) > c.z * u_cone.x || abs(c.y) > c.z * u_cone.y) discard;
+  }
   // Depth the cube holds along v, against this point's: its major axis, less a margin. A texel of the cube covers
   // more of a surface seen at a grazing angle (the far ground from an eye a few metres up): the margin grows with
   // the slope, from the surface's normal on screen
@@ -99,13 +109,42 @@ pub(super) struct Settings {
     visible: [f32; 3],
     hidden: [f32; 3],
     opacity: f32,
+    cone: Option<Cone>,
+}
+
+/// One way only: heading (degrees clockwise from north), tilt (degrees above the horizon), angles of view across and
+/// up (degrees)
+#[derive(Clone, Copy, Debug)]
+struct Cone {
+    heading: f64,
+    tilt: f64,
+    across: f64,
+    up: f64,
+}
+
+impl Cone {
+    /// Its axes in the local frame (x east, y south, z up): right, up, forward
+    fn axes(&self) -> [DVec3; 3] {
+        let (b, t) = (self.heading.to_radians(), self.tilt.to_radians());
+        let forward = DVec3::new(b.sin() * t.cos(), -b.cos() * t.cos(), t.sin());
+        let right = DVec3::new(b.cos(), b.sin(), 0.0);
+        [right, forward.cross(right), forward]
+    }
+
+    /// Tangents of its half angles, across and up
+    fn tangents(&self) -> (f64, f64) {
+        (
+            (self.across / 2.0).to_radians().tan(),
+            (self.up / 2.0).to_radians().tan(),
+        )
+    }
 }
 
 /// The GPU side: the cube and the screen's depth, the pass that compares them
 pub(super) struct Viewshed {
     settings: Settings,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 9],
+    uniforms: [Option<glow::UniformLocation>; 11],
     vao: glow::VertexArray,
     cube: glow::Texture,
     cube_target: glow::Framebuffer,
@@ -134,6 +173,8 @@ impl Viewshed {
                 "u_opacity",
                 "u_depth",
                 "u_cube",
+                "u_axes",
+                "u_cone",
             ],
         );
         // SAFETY: storage of a texture just created on the live context
@@ -224,14 +265,7 @@ impl Viewshed {
 /// The view from `eye` along one face of a cube (the faces in the order of `TEXTURE_CUBE_MAP_POSITIVE_X` + i, their
 /// up vectors those of the cube map's layout), sharing the local frame of `view`
 fn face_view(view: &View, eye: DVec3, face: u32, near: f64, far: f64) -> View {
-    let (look, up) = match face {
-        0 => (DVec3::X, DVec3::NEG_Y),
-        1 => (DVec3::NEG_X, DVec3::NEG_Y),
-        2 => (DVec3::Y, DVec3::Z),
-        3 => (DVec3::NEG_Y, DVec3::NEG_Z),
-        4 => (DVec3::Z, DVec3::NEG_Y),
-        _ => (DVec3::NEG_Z, DVec3::NEG_Y),
-    };
+    let (look, up) = face_axes(face);
     let projection = glam::dcamera::rh::proj::opengl::perspective(std::f64::consts::FRAC_PI_2, 1.0, near, far);
     let mut face_view = view.clone();
     face_view.view_proj = projection * glam::dcamera::rh::view::look_to_mat4(eye, look, up);
@@ -240,6 +274,18 @@ fn face_view(view: &View, eye: DVec3, face: u32, near: f64, far: f64) -> View {
     face_view.near = near;
     face_view.far = far;
     face_view
+}
+
+/// The axis a face of the cube looks along and its up vector
+fn face_axes(face: u32) -> (DVec3, DVec3) {
+    match face {
+        0 => (DVec3::X, DVec3::NEG_Y),
+        1 => (DVec3::NEG_X, DVec3::NEG_Y),
+        2 => (DVec3::Y, DVec3::Z),
+        3 => (DVec3::NEG_Y, DVec3::NEG_Z),
+        4 => (DVec3::Z, DVec3::NEG_Y),
+        _ => (DVec3::NEG_Z, DVec3::NEG_Y),
+    }
 }
 
 impl Engine {
@@ -323,7 +369,19 @@ impl Engine {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.viewport(0, 0, size.0, size.1);
 
-            let [inverse, observer, range_u, flat, visible, hidden, opacity, depth, cube] = &viewshed.uniforms;
+            let [
+                inverse,
+                observer,
+                range_u,
+                flat,
+                visible,
+                hidden,
+                opacity,
+                depth,
+                cube,
+                axes_u,
+                cone_u,
+            ] = &viewshed.uniforms;
             gl.use_program(Some(viewshed.program));
             gl.uniform_matrix_4_f32_slice(inverse.as_ref(), false, &gl::mat4(&view.inverse));
             gl.uniform_3_f32(observer.as_ref(), eye.x as f32, eye.y as f32, eye.z as f32);
@@ -335,6 +393,13 @@ impl Engine {
             gl.uniform_1_f32(opacity.as_ref(), s.opacity);
             gl.uniform_1_i32(depth.as_ref(), 0);
             gl.uniform_1_i32(cube.as_ref(), 1);
+            let (axes, cone) = s.cone.map_or(([DVec3::ZERO; 3], [0.0, 0.0, 0.0]), |cone| {
+                let (x, y) = cone.tangents();
+                (cone.axes(), [x as f32, y as f32, 1.0])
+            });
+            let columns = axes.map(|a| [a.x as f32, a.y as f32, a.z as f32]).concat();
+            gl.uniform_matrix_3_f32_slice(axes_u.as_ref(), false, &columns);
+            gl.uniform_3_f32_slice(cone_u.as_ref(), &cone);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(screen_depth));
             gl.active_texture(glow::TEXTURE1);
@@ -354,7 +419,8 @@ impl Engine {
 #[wasm_bindgen]
 impl Engine {
     /// Shows what can be seen from a point within `range` metres around it: `lon`, `lat` (degrees), `height` metres
-    /// above the ground; seen and hidden surfaces tinted with `visible` and `hidden` (RGB 0-1) at `opacity`
+    /// above the ground; seen and hidden surfaces tinted with `visible` and `hidden` (RGB 0-1) at `opacity`. `cone`:
+    /// heading, tilt, angles of view across and up (degrees) to look one way only, empty to look all around
     #[wasm_bindgen(js_name = setViewshed)]
     #[allow(clippy::too_many_arguments)]
     pub fn set_viewshed(
@@ -366,6 +432,7 @@ impl Engine {
         visible: &[f32],
         hidden: &[f32],
         opacity: f32,
+        cone: &[f64],
     ) -> Result<(), JsValue> {
         let rgb = |c: &[f32]| [0, 1, 2].map(|i| c.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0));
         let finite = |v: f64, default: f64| if v.is_finite() { v } else { default };
@@ -379,6 +446,15 @@ impl Engine {
                 opacity.clamp(0.0, 1.0)
             } else {
                 0.5
+            },
+            cone: match *cone {
+                [heading, tilt, across, up] => Some(Cone {
+                    heading: finite(heading, 0.0),
+                    tilt: finite(tilt, 0.0).clamp(-89.0, 89.0),
+                    across: finite(across, 60.0).clamp(1.0, 179.0),
+                    up: finite(up, 40.0).clamp(1.0, 179.0),
+                }),
+                _ => None,
             },
         };
         match &mut self.viewshed {

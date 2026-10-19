@@ -210,6 +210,14 @@ export interface ViewshedOptions {
   hiddenColor?: string;
   /** 0-1 (default 0.55) */
   opacity?: number;
+  /** To look one way only (a camera, a lookout), degrees clockwise from north; all around without it */
+  direction?: number;
+  /** Degrees above the horizon the cone looks, negative below (default 0) */
+  tilt?: number;
+  /** Angle of view across, degrees (default 60) */
+  fov?: number;
+  /** Angle of view up and down, degrees (default 40) */
+  verticalFov?: number;
 }
 
 /** Animation of a camera move */

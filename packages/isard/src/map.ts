@@ -607,8 +607,9 @@ export class GeoMap {
     this.requestRender();
   }
 
-  /** Tints what can be seen from a point and what is hidden from it, within a range: the relief, extrusions, 3D Tiles
-   * and models hide what lies behind them (only what the map has loaded for its view). Undefined removes it */
+  /** Tints what can be seen from a point and what is hidden from it, within a range, all around or within a cone
+   * (`direction`): the relief, extrusions, 3D Tiles and models hide what lies behind them (only what the map has
+   * loaded for its view). Undefined removes it */
   setViewshed(options: ViewshedOptions | undefined): void {
     if (!options) {
       this.engine.clearViewshed();
@@ -623,6 +624,11 @@ export class GeoMap {
       new Float32Array(rgb(options.visibleColor ?? '#2f9e44')),
       new Float32Array(rgb(options.hiddenColor ?? '#e03131')),
       options.opacity ?? 0.55,
+      new Float64Array(
+        options.direction === undefined
+          ? []
+          : [options.direction, options.tilt ?? 0, options.fov ?? 60, options.verticalFov ?? 40],
+      ),
     );
     this.requestRender();
   }
