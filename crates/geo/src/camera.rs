@@ -369,8 +369,9 @@ impl Camera {
     fn globe_tilt(&self) -> f64 {
         let pitch = self.pitch.to_radians();
         let top = pitch + FOV / 2.0;
-        // The top edge at or past the horizon: the camera sees as far as the ground goes
-        if top >= 89f64.to_radians() {
+        // The top edge at or past the horizon: the camera sees as far as the ground goes (the ratio below would grow
+        // without bound, then turn negative and the log NaN)
+        if top.cos() <= 1e-9 {
             return GLOBE_TILT_LEVELS;
         }
         let flat = 1.0 / (FOV / 2.0).cos();
@@ -546,13 +547,14 @@ impl Camera {
 
     /// Sets the altitude of the ground under the center without moving the eye: when finer relief arrives under a
     /// still camera, the point it orbits slides along the view axis to the new ground and the zoom follows the new
-    /// distance, so nothing moves on screen. On the globe (where relief barely shows), or if the new ground would
-    /// come too close to the eye, the altitude is just set.
+    /// distance, so nothing moves on screen. The slide is the plane's: on the globe it holds for the small rises of
+    /// finer relief, the ground under the center being tangent to the sphere (a tilted globe keeps its curve to zoom
+    /// 10, where mountains show). If the new ground would come too close to the eye, the altitude is just set.
     pub fn settle_elevation(&mut self, elevation: f64) {
         let delta = elevation - self.elevation;
         let view = self.view();
         let pitch = self.pitch.to_radians();
-        if delta == 0.0 || view.globe.factor > 0.0 {
+        if delta == 0.0 {
             self.elevation = elevation;
             return;
         }
@@ -806,6 +808,41 @@ mod tests {
     }
 
     #[test]
+    fn finer_relief_does_not_move_a_tilted_globe() {
+        // Over the Alps at zoom 8.5, pitch 70: still partly a sphere, the relief tens of pixels tall
+        for (zoom, pitch) in [(8.5, 70.0), (6.0, 50.0), (4.0, 0.0)] {
+            let mut c = globe(zoom);
+            c.max_pitch = PITCH_LIMIT;
+            c.center = mercator(7.0, 46.0);
+            c.pitch = pitch;
+            c.bearing = 20.0;
+            c.elevation = 1500.0;
+            assert!(c.view().globe.factor > 0.0);
+            // Ground points on the datum, near the center and towards the top of the view
+            let points: Vec<DVec2> = [(0.0, 0.0), (120.0, -60.0), (-80.0, -300.0)]
+                .iter()
+                .map(|&(x, y)| c.center + DVec2::new(x, y) / c.view().world_size)
+                .collect();
+            let screen = |c: &Camera| -> Vec<DVec2> {
+                let view = c.view();
+                points
+                    .iter()
+                    .map(|&m| {
+                        let clip = view.view_proj * view.position(m, 0.0).extend(1.0);
+                        DVec2::new(clip.x / clip.w, clip.y / clip.w) * c.width
+                    })
+                    .collect()
+            };
+            let a = screen(&c);
+            c.settle_elevation(1800.0);
+            let b = screen(&c);
+            let moved = a.iter().zip(&b).map(|(a, b)| (*a - *b).length()).fold(0.0, f64::max);
+            assert!(moved < 0.5, "zoom {zoom} pitch {pitch}: {moved} px");
+            assert!((c.elevation - 1800.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn far_side_of_the_globe_is_hidden() {
         let v = globe(1.0).view();
         let antipode = DVec2::new((v.center.x + 0.5).rem_euclid(1.0), 1.0 - v.center.y);
@@ -868,6 +905,10 @@ mod tests {
         let factors: Vec<f64> = (0..=85).step_by(5).map(|p| tilted(8.0, f64::from(p))).collect();
         assert!(factors.windows(2).all(|w| w[0] <= w[1]), "{factors:?}");
         assert!(tilted(7.0, 30.0) < tilted(7.0, 50.0));
+        // In fine steps, through the top edge reaching the horizon: no jump, no NaN
+        let fine: Vec<f64> = (0..=1700).map(|p| tilted(8.0, f64::from(p) * 0.05)).collect();
+        assert!(fine.iter().all(|f| f.is_finite()));
+        assert!(fine.windows(2).all(|w| w[0] <= w[1] && w[1] - w[0] < 0.05), "{fine:?}");
     }
 
     #[test]

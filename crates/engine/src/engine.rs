@@ -7,7 +7,7 @@ mod pick;
 use crate::js;
 use crate::layer::{Frame, Layer, Loading};
 use crate::render::gl::{self, Grid};
-use crate::render::globe::GlobeBase;
+use crate::render::globe::{self, GlobeBase};
 use crate::render::raster::{
     DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_geoid, terrain_levels,
 };
@@ -591,6 +591,14 @@ impl Engine {
     }
 
     /// Draws a frame; returns true while tiles are still loading (a new frame will be asked through `redraw`)
+    /// The sky and the globe base, under everything; both lie as deep as the lowest ground under relief (a canyon at
+    /// the horizon shows the halo beyond, not the base)
+    fn draw_backdrop(&self, view: &View) {
+        let depth = globe::depth(view, self.terrain.as_ref().map(|(_, e)| *e));
+        self.sky.draw(&self.gl, view, depth);
+        self.globe.draw(&self.gl, view, depth);
+    }
+
     pub fn render(&mut self) -> bool {
         self.frame += 1;
         // The camera turns around the relief under its center (sea level without relief)
@@ -633,8 +641,7 @@ impl Engine {
             (*generation, camera.view())
         });
         self.drawn = Some(view.clone());
-        self.sky.draw(&self.gl, &view);
-        self.globe.draw(&self.gl, &view);
+        self.draw_backdrop(&view);
         let redraw = self.redraw.clone();
         let ctx = DrawContext {
             view: &view,

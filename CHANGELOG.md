@@ -14,7 +14,11 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - A globe seen from close and pitched no longer shows only its base: the tiles of its first two levels are always
   split instead of being culled by their samples (a quarter of the world apart, they could all lie out of the
   frustum or of the cap the camera sees), and a tile's point nearest to the one under the camera is tested too.
-
+- Finer relief arriving under a tilted globe no longer shakes the view (zooms 8 to 10, pitched): the eye stays still
+  as on the plane, where it was only kept off the globe.
+- Under relief, a canyon or a basin at the horizon of the globe shows the halo beyond instead of the globe's base
+  colour (Valles Marineris seen along its length): the base and the sky's sphere lie as deep as the body's lowest
+  ground.
 - The stars behind the globe no longer twinkle as it turns: a star is drawn at least a pixel wide, its light spread
   over it (narrower, it lit only the pixels whose centre it crossed), and a layer of stars too fine for the screen
   fades out.

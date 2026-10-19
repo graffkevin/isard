@@ -24,6 +24,9 @@ precision highp float;
 uniform mat4 u_inverse;
 uniform vec3 u_eye;
 uniform float u_radius;
+// How far under the datum the body's lowest ground lies (pixels): a ray passing over a canyon at the horizon misses
+// the ground and shows the halo
+uniform float u_depth;
 uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
@@ -72,7 +75,7 @@ void main() {
   vec3 center = vec3(0.0, 0.0, -u_radius);
   vec3 toCenter = center - u_eye;
   float along = max(dot(toCenter, dir), 0.0);
-  float miss = length(toCenter - dir * along) / u_radius;
+  float miss = length(toCenter - dir * along) / (u_radius - u_depth);
   // Thin and bright at the limb, fading fast into space
   float glow = step(1.0, miss) * exp(-(miss - 1.0) * 28.0);
   space = mix(space, u_halo.rgb, glow * 0.9 * u_halo.a);
@@ -149,7 +152,7 @@ pub fn halo(settings: Option<&[f32]>) -> [f32; 4] {
 
 pub struct Sky {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 8],
+    uniforms: [Option<glow::UniformLocation>; 9],
     vao: glow::VertexArray,
     pub enabled: bool,
     /// The atmosphere halo around the globe: RGB 0-1 and its strength, 0 for none (an airless body)
@@ -171,6 +174,7 @@ impl Sky {
                 "u_inverse",
                 "u_eye",
                 "u_radius",
+                "u_depth",
                 "u_east",
                 "u_north",
                 "u_up",
@@ -198,19 +202,21 @@ impl Sky {
         })
     }
 
-    pub fn draw(&self, gl: &glow::Context, view: &View) {
+    /// `depth`: how far under the datum the lowest ground lies (pixels, `globe::depth`)
+    pub fn draw(&self, gl: &glow::Context, view: &View, depth: f64) {
         self.draw_atmosphere(gl, view);
         let g = &view.globe;
         if !self.enabled || g.factor <= 0.0 {
             return;
         }
-        let [inverse, eye, radius, east, north, up, factor, halo] = &self.uniforms;
+        let [inverse, eye, radius, depth_at, east, north, up, factor, halo] = &self.uniforms;
         // SAFETY: draw with objects owned by the sky
         unsafe {
             gl.use_program(Some(self.program));
             gl.uniform_matrix_4_f32_slice(inverse.as_ref(), false, &gl::mat4(&view.inverse));
             gl.uniform_3_f32(eye.as_ref(), view.eye.x as f32, view.eye.y as f32, view.eye.z as f32);
             gl.uniform_1_f32(radius.as_ref(), g.radius as f32);
+            gl.uniform_1_f32(depth_at.as_ref(), depth as f32);
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }

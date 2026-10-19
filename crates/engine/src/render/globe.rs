@@ -1,6 +1,7 @@
 //! Globe base: a plain sphere under the tiles, which fills the polar caps that Web Mercator tiles do not cover
 //! (beyond 85°) and gives the globe its outline while tiles load. Drawn only in the globe projection, fading out with
-//! it.
+//! it. Under relief it lies as deep as the body's lowest ground: at the datum, it would show its colour over a
+//! canyon floor or a basin forming the horizon (Valles Marineris seen along its length).
 
 use crate::render::gl::{self, Grid};
 use geo::camera::View;
@@ -13,6 +14,8 @@ const LAT: usize = 4;
 const VERTEX: &str = r"#version 300 es
 uniform mat4 u_matrix;
 uniform float u_radius;
+// How far under the datum the base lies (pixels)
+uniform float u_depth;
 uniform vec3 u_east;
 uniform vec3 u_north;
 uniform vec3 u_up;
@@ -23,7 +26,7 @@ void main() {
   float lon = mix(a_patch.x, a_patch.z, a_grid.x);
   float lat = mix(a_patch.y, a_patch.w, a_grid.y);
   vec3 n = vec3(cos(lat) * cos(lon), cos(lat) * sin(lon), sin(lat));
-  vec3 p = u_radius * vec3(dot(n, u_east), -dot(n, u_north), dot(n, u_up) - 1.0);
+  vec3 p = (u_radius - u_depth) * vec3(dot(n, u_east), -dot(n, u_north), dot(n, u_up)) - vec3(0.0, 0.0, u_radius);
   gl_Position = u_matrix * vec4(p, 1.0);
 }";
 
@@ -33,9 +36,17 @@ uniform vec4 u_color;
 out vec4 color;
 void main() { color = u_color; }";
 
+/// How far under the datum the body's lowest ground lies (pixels), under relief of this exaggeration (None: no
+/// relief, 0)
+pub fn depth(view: &View, exaggeration: Option<f32>) -> f64 {
+    exaggeration.map_or(0.0, |e| {
+        -view.body.relief.0.min(0.0) * f64::from(e.max(0.0)) * view.vertical
+    })
+}
+
 pub struct GlobeBase {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 6],
+    uniforms: [Option<glow::UniformLocation>; 7],
     vao: glow::VertexArray,
     patches: glow::Buffer,
     pub color: [f32; 3],
@@ -49,7 +60,9 @@ impl GlobeBase {
         let uniforms = gl::uniforms(
             gl,
             program,
-            ["u_matrix", "u_radius", "u_east", "u_north", "u_up", "u_color"],
+            [
+                "u_matrix", "u_radius", "u_depth", "u_east", "u_north", "u_up", "u_color",
+            ],
         );
         let pi = std::f32::consts::PI;
         let mut patches = Vec::with_capacity(LON * LAT * 4);
@@ -92,17 +105,19 @@ impl GlobeBase {
         }
     }
 
-    pub fn draw(&self, gl: &glow::Context, view: &View) {
+    /// `depth`: how far under the datum it lies (pixels, `depth`)
+    pub fn draw(&self, gl: &glow::Context, view: &View, depth: f64) {
         let g = &view.globe;
         if g.factor <= 0.0 {
             return;
         }
-        let [matrix, radius, east, north, up, color] = &self.uniforms;
+        let [matrix, radius, depth_at, east, north, up, color] = &self.uniforms;
         // SAFETY: draw with objects owned by this base
         unsafe {
             gl.use_program(Some(self.program));
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
             gl.uniform_1_f32(radius.as_ref(), g.radius as f32);
+            gl.uniform_1_f32(depth_at.as_ref(), depth as f32);
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
