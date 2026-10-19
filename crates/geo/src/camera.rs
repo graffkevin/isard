@@ -2,7 +2,8 @@
 //! from one engine to the other unchanged.
 //!
 //! Two projections: Web Mercator (a plane) and the globe. The globe is a sphere at low zoom that blends into the
-//! Mercator plane between zooms 5 and 7 (`GLOBE_FULL`, `GLOBE_NONE`); above, the globe and Mercator views are the
+//! Mercator plane between zooms 5 and 7 (`GLOBE_FULL`, `GLOBE_NONE`), later under a tilted camera, which sees much
+//! farther than its center (`globe_tilt`, up to `GLOBE_TILT_LEVELS`); above, the globe and Mercator views are the
 //! same. The sphere radius makes one zoom level mean the same scale at the center in both projections.
 //!
 //! Everything is computed in f64. The GPU only receives coordinates relative to the camera center, in pixels at the
@@ -32,6 +33,9 @@ pub const MAX_ZOOM: f64 = 22.0;
 pub const GLOBE_FULL: f64 = 5.0;
 /// …blending into the Mercator plane up to this one
 pub const GLOBE_NONE: f64 = 7.0;
+/// Levels the blend into the plane is put off by, at most, under a tilted camera: the sphere stays up to zoom 10 for a
+/// view along the horizon (the f32 positions of the sphere are still exact to a tenth of a pixel there)
+pub const GLOBE_TILT_LEVELS: f64 = 3.0;
 /// Mercator latitude limit
 const MAX_LAT: f64 = 85.051_128_779_806_59;
 
@@ -358,9 +362,25 @@ impl Camera {
         self.center.y = self.center.y.clamp(lat_limit, 1.0 - lat_limit);
     }
 
+    /// Levels the blend into the plane is put off by under this camera's tilt: how much farther than its center the
+    /// camera sees, the top edge of the view against the center (log2 of their distances on the plane, 0 when looking
+    /// straight down). A view of 1000 km at pitch 66 sees the ground 4,000 km away: on the plane, that far north is
+    /// the Mercator's stretched polar caps, and the horizon a straight line.
+    fn globe_tilt(&self) -> f64 {
+        let pitch = self.pitch.to_radians();
+        let top = pitch + FOV / 2.0;
+        // The top edge at or past the horizon: the camera sees as far as the ground goes
+        if top >= 89f64.to_radians() {
+            return GLOBE_TILT_LEVELS;
+        }
+        let flat = 1.0 / (FOV / 2.0).cos();
+        ((pitch.cos() / top.cos()) / flat).log2().clamp(0.0, GLOBE_TILT_LEVELS)
+    }
+
     fn globe(&self) -> Globe {
         let factor = if self.globe {
-            ((GLOBE_NONE - self.zoom) / (GLOBE_NONE - GLOBE_FULL)).clamp(0.0, 1.0)
+            let zoom = self.zoom - self.globe_tilt();
+            ((GLOBE_NONE - zoom) / (GLOBE_NONE - GLOBE_FULL)).clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -828,6 +848,26 @@ mod tests {
         assert!((globe(4.0).view().globe.factor - 1.0).abs() < 1e-12);
         assert!(globe(7.5).view().globe.factor.abs() < 1e-12);
         assert!(camera().view().globe.factor.abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_tilted_globe_stays_a_sphere_longer() {
+        let tilted = |zoom: f64, pitch: f64| {
+            let mut c = globe(zoom);
+            c.max_pitch = PITCH_LIMIT;
+            c.pitch = pitch;
+            c.view().globe.factor
+        };
+        // Looking down, as before; Olympus Mons from the south at zoom 6.3, pitch 66: a sphere to its horizon
+        assert!((tilted(6.0, 0.0) - 0.5).abs() < 1e-12);
+        assert!((tilted(6.3, 66.0) - 1.0).abs() < 1e-12);
+        // Never past zoom 10, whatever the tilt
+        assert!(tilted(10.0, 85.0).abs() < 1e-12);
+        assert!(tilted(9.5, 85.0) > 0.0);
+        // The blend grows with the tilt
+        let factors: Vec<f64> = (0..=85).step_by(5).map(|p| tilted(8.0, f64::from(p))).collect();
+        assert!(factors.windows(2).all(|w| w[0] <= w[1]), "{factors:?}");
+        assert!(tilted(7.0, 30.0) < tilted(7.0, 50.0));
     }
 
     #[test]

@@ -134,28 +134,17 @@ fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
         }
     }
     // The samples stand at the altitude of the camera's center (`view.lift`, its ground's: 0 without relief or over
-    // the sea), for the size and the distance. Lifted, the tile counts as visible if any of 0 to twice that altitude
-    // is (valleys and peaks around the center); a center at sea level tests sea level only
+    // the sea), for the size and the distance
     let up = DVec3::new(0.0, 0.0, view.lift);
     for p in &mut points[..n * n] {
         *p += up;
     }
     let points = &points[..n * n];
-    let visible = if view.lift == 0.0 {
-        in_frustum(view, points)
-    } else {
-        let mut column = [DVec3::ZERO; 75];
-        for (k, layer) in [-1.0, 0.0, 1.0].into_iter().zip(column.chunks_exact_mut(points.len())) {
-            for (q, p) in layer.iter_mut().zip(points) {
-                *q = *p + up * k;
-            }
-        }
-        in_frustum(view, &column[..points.len() * 3])
-    };
-    if !visible {
-        return None;
-    }
-    if view.globe.factor >= 0.999 && !points.iter().any(|p| view.faces_camera(*p)) {
+    // On the globe, the tiles of the first levels are split whatever they measure: their samples, a quarter of the
+    // world apart, can all lie beyond one plane of the frustum, or out of the cap the camera sees, while the sphere
+    // bulging between them is in view
+    let coarse = view.globe.factor > 0.0 && tile.z < GLOBE_MIN_Z;
+    if !coarse && !visible(view, tile, shift, points, up) {
         return None;
     }
     // Longest side between neighbouring samples, scaled to the whole tile
@@ -189,6 +178,43 @@ fn measure(view: &View, tile: TileId) -> Option<(f64, f64, f64)> {
             .fold(f64::INFINITY, f64::min)
     };
     Some((side * (n - 1) as f64 * view.center_distance / distance, distance, angle))
+}
+
+/// Whether the samples of a tile, and on the globe its point nearest to the one under the camera, are in the frustum
+/// and in front of the horizon. Lifted, the tile counts as visible if any of 0 to twice the altitude of the camera's
+/// center is (valleys and peaks around the center); a center at sea level tests sea level only
+fn visible(view: &View, tile: TileId, shift: f64, points: &[DVec3], up: DVec3) -> bool {
+    let mut samples = [DVec3::ZERO; 26];
+    samples[..points.len()].copy_from_slice(points);
+    let mut count = points.len();
+    if view.globe.factor > 0.0 {
+        samples[count] = nearest_under(view, tile, shift) + up;
+        count += 1;
+    }
+    let samples = &samples[..count];
+    let in_view = if view.lift == 0.0 {
+        in_frustum(view, samples)
+    } else {
+        let mut column = [DVec3::ZERO; 78];
+        for (k, layer) in [-1.0, 0.0, 1.0].into_iter().zip(column.chunks_exact_mut(count)) {
+            for (q, p) in layer.iter_mut().zip(samples) {
+                *q = *p + up * k;
+            }
+        }
+        in_frustum(view, &column[..count * 3])
+    };
+    in_view && (view.globe.factor < 0.999 || samples.iter().any(|p| view.faces_camera(*p)))
+}
+
+/// The tile's point nearest to the one under the camera (local frame). The samples of a coarse tile are far apart
+/// (a quarter of the world for the root): from a camera close to the sphere, the cap it sees may lie between them
+/// all, and the whole quadtree would be culled.
+fn nearest_under(view: &View, tile: TileId, shift: f64) -> DVec3 {
+    let under = view.sphere_to_mercator(view.eye);
+    let (min, max) = tile.bounds();
+    // The copy of the world of the tile
+    let x = under.x + (f64::midpoint(min.x, max.x) - under.x).round();
+    view.position(DVec2::new(x.clamp(min.x, max.x), under.y.clamp(min.y, max.y)), shift)
 }
 
 /// Distance from the camera to the tile's rectangle on the plane (exact for the Mercator plane, a bound otherwise)
@@ -269,6 +295,39 @@ mod tests {
         let mut earth = camera(6.5, 60.0);
         earth.globe = true;
         assert_eq!(select(&earth.view(), 6, 15, 2896.0), Vec::new());
+    }
+
+    #[test]
+    fn a_globe_seen_from_close_and_pitched_has_tiles() {
+        // Olympus Mons from the south at zoom 6.3, pitch 66, a sphere to the horizon: no sample of the coarse tiles
+        // faces the camera, the tiles under it must still be found
+        let mut c = Camera::new(-133.6, 15.6, 6.3);
+        c.globe = true;
+        c.width = 1790.0;
+        c.height = 678.0;
+        c.max_pitch = 85.0;
+        c.pitch = 66.0;
+        let view = c.view();
+        assert!((view.globe.factor - 1.0).abs() < 1e-12);
+        let tiles = select(&view, 0, 7, 362.0);
+        assert!(tiles.iter().any(|&t| contains(t, c.center)), "{tiles:?}");
+        assert!(tiles.len() < MAX_TILES);
+    }
+
+    #[test]
+    fn a_globe_seen_along_its_horizon_has_tiles() {
+        // Down Valles Marineris from the west at zoom 6.6, pitch 70: every sample of the root tile lies beyond one
+        // plane of the frustum
+        let mut c = Camera::new(-80.0, -6.5, 6.6);
+        c.globe = true;
+        c.width = 1790.0;
+        c.height = 678.0;
+        c.max_pitch = 85.0;
+        c.pitch = 70.0;
+        c.bearing = 100.0;
+        let tiles = select(&c.view(), 0, 7, 362.0);
+        assert!(tiles.iter().any(|&t| contains(t, c.center)), "{tiles:?}");
+        assert!(tiles.len() < MAX_TILES);
     }
 
     #[test]

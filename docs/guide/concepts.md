@@ -14,7 +14,8 @@ map.flyTo({ center: [5.72, 45.19], zoom: 13 }, { duration: 2600 }); // zooms out
 map.getBounds(); // [west, south, east, north] of the ground in view
 ```
 
-Two projections: `'globe'` (a sphere up to zoom 5, blending into Web Mercator up to zoom 7) and `'mercator'`.
+Two projections: `'globe'` (a sphere up to zoom 5, blending into Web Mercator up to zoom 7; under a tilted camera, which
+sees much farther than its center, up to three levels later, so that the horizon stays curved) and `'mercator'`.
 
 ## Frames on demand
 

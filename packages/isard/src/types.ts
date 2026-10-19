@@ -54,7 +54,8 @@ export type TerrainEncoding = 'float32' | 'terrarium' | 'mapbox';
  */
 export type LoadingMode = 'immediate' | 'smooth';
 
-/** 'globe': a sphere at low zoom, blending into Web Mercator between zooms 5 and 7 */
+/** 'globe': a sphere at low zoom, blending into Web Mercator between zooms 5 and 7, up to three levels later under a
+ * tilted camera (it sees much farther than its center: the horizon stays curved) */
 export type Projection = 'globe' | 'mercator';
 
 /** A body to draw the map on, other than the named ones (`CelestialBody`) */

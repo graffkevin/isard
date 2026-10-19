@@ -7,6 +7,14 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Fixed
 
+- A tilted globe stays a sphere longer: the blend into the Mercator plane is put off by how much farther than its
+  center the camera sees, up to three levels (zoom 10 for a view along the horizon). Pitched views at zooms 5 to 7
+  showed a flat ground up to a straight horizon, where the Mercator plane stretched the far ground towards the poles
+  (Mars's northern ice cap behind Olympus Mons).
+- A globe seen from close and pitched no longer shows only its base: the tiles of its first two levels are always
+  split instead of being culled by their samples (a quarter of the world apart, they could all lie out of the
+  frustum or of the cap the camera sees), and a tile's point nearest to the one under the camera is tested too.
+
 - The stars behind the globe no longer twinkle as it turns: a star is drawn at least a pixel wide, its light spread
   over it (narrower, it lit only the pixels whose centre it crossed), and a layer of stars too fine for the screen
   fades out.
