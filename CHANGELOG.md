@@ -3,6 +3,18 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Fixed
+
+- The stars behind the globe no longer twinkle as it turns: a star is drawn at least a pixel wide, its light spread
+  over it (narrower, it lit only the pixels whose centre it crossed), and a layer of stars too fine for the screen
+  fades out.
+
+### Added
+
+- The globe example goes to the Moon and Mars with its arrows (a new map for each body).
+
 ## [0.5.0] - 2026-10-19
 
 ### Added

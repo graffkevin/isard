@@ -5,13 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>The globe · Isard</title>
     <link rel="stylesheet" href="../shared/page.css" />
+    <style>
+      body { background: #000; }
+      .arrow {
+        position: absolute;
+        top: 50%;
+        z-index: 3;
+        width: 44px;
+        height: 44px;
+        margin-top: -22px;
+        border: 1px solid rgb(255 255 255 / 0.35);
+        border-radius: 50%;
+        background: rgb(0 0 0 / 0.35);
+        color: #fff;
+        font: 26px / 1 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .arrow:hover { background: rgb(255 255 255 / 0.15); }
+      #previous { left: 12px; }
+      #next { right: 12px; }
+    </style>
   </head>
   <body>
     <div id="map"></div>
     <div class="panel">
-      <h1>The globe</h1>
-      <p>The Earth turning in its atmosphere. Click anywhere to fly there: the globe turns into Web Mercator as you zoom in.</p>
+      <h1 id="name">The Earth</h1>
+      <p id="text"></p>
+      <p>The arrows go to the Earth, the Moon and Mars.</p>
     </div>
+    <button type="button" class="arrow" id="previous" aria-label="Previous body">‹</button>
+    <button type="button" class="arrow" id="next" aria-label="Next body">›</button>
     <script type="module" src="../dist/globe/main.js"></script>
   </body>
 </html>

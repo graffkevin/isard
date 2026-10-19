@@ -42,7 +42,7 @@ features:
 
 <div class="vp-doc" style="max-width: 860px; margin: 48px auto 0; padding: 0 24px">
 
-## Five lines
+## Four lines
 
 ```ts
 import { GeoMap } from 'isard';
@@ -53,7 +53,7 @@ map.on('hover', ({ lonLat }) => lonLat && network.setValues(travelTimes(lonLat))
 ```
 
 The map fills its container, follows its size, handles mouse and touch, loads the basemap. The values computed in a
-`hover` listener are drawn by the very frame of the move. Below, the globe: click anywhere to fly there.
+`hover` listener are drawn by the very frame of the move. Below, the globe: click anywhere to fly there, or take the arrows to the Moon and Mars.
 
 <LiveExample slug="globe" height="460px" />
 

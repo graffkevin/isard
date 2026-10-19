@@ -39,16 +39,20 @@ float hash(vec3 p) {
   return fract((p.x + p.y) * p.z);
 }
 
-// Stars of one layer: at most one per cell of a grid on the direction sphere
-float stars(vec3 dir, float cells, float density, float size) {
+// Stars of one layer: at most one per cell of a grid on the direction sphere. A star is never drawn smaller than a
+// pixel (`px`, cells per pixel), its light spread over the wider disc: a star narrower than a pixel lit only the
+// pixels whose centre it crossed, and twinkled as the globe turned. A layer too fine for the screen fades out.
+float stars(vec3 dir, float cells, float density, float size, float px) {
   vec3 p = dir * cells;
   vec3 cell = floor(p);
   float h = hash(cell);
   if (h > density) return 0.0;
-  vec3 star = cell + 0.5 + 0.35 * vec3(hash(cell + 1.7) - 0.5, hash(cell + 3.1) - 0.5, hash(cell + 5.3) - 0.5);
+  vec3 star = cell + 0.5 + 0.2 * vec3(hash(cell + 1.7) - 0.5, hash(cell + 3.1) - 0.5, hash(cell + 5.3) - 0.5);
   float d = length(p - star);
   float brightness = 0.35 + 0.65 * hash(cell + 9.2);
-  return brightness * smoothstep(size, 0.0, d);
+  float r = max(size, px * cells);
+  float light = min(1.0, 2.0 * (size * size) / (r * r));
+  return brightness * light * (1.0 - smoothstep(0.25, 0.45, px * cells)) * exp(-2.5 * (d * d) / (r * r));
 }
 
 void main() {
@@ -58,7 +62,10 @@ void main() {
   // Local frame (x east, y south, z up) to the body's frame: the sky turns with the globe
   vec3 earth = normalize(u_east * dir.x - u_north * dir.y + u_up * dir.z);
 
-  float s = stars(earth, 140.0, 0.08, 0.10) + stars(earth, 320.0, 0.05, 0.12) * 0.7 + stars(earth, 60.0, 0.03, 0.06);
+  // Radians of the sky per pixel (the grids' cells per pixel are this times their count)
+  float px = length(fwidth(earth));
+  float s = stars(earth, 140.0, 0.08, 0.10, px) + stars(earth, 320.0, 0.05, 0.12, px) * 0.7
+    + stars(earth, 60.0, 0.03, 0.06, px);
   vec3 space = mix(vec3(0.003, 0.006, 0.02), vec3(0.015, 0.03, 0.08), 0.5 + 0.5 * earth.z) + vec3(s);
 
   // Atmosphere: glow where the ray passes close to the sphere without hitting it
