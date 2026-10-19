@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:,">
+    <title>Isard viewer</title>
+    <style>
+      :root {
+        --ink: #1d2433;
+        --muted: #5a6475;
+        --line: #d5dbe4;
+        --panel: rgb(255 255 255 / 0.94);
+        --accent: #2f6fd1;
+        color-scheme: light;
+      }
+      html, body { margin: 0; height: 100%; font: 13px/1.4 system-ui, sans-serif; color: var(--ink); background: #f2f2f0; }
+      #map { position: fixed; inset: 0; }
+      #panel {
+        position: fixed; top: 12px; left: 12px; width: 260px; max-width: calc(100vw - 88px); max-height: calc(100vh - 80px);
+        display: flex; flex-direction: column; border-radius: 10px; background: var(--panel);
+        box-shadow: 0 2px 12px rgb(0 0 0 / 0.15); backdrop-filter: blur(6px); overflow: hidden;
+      }
+      #panel header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+      #panel header h1 { flex: 1; margin: 0; font-size: 14px; }
+      #body { overflow-y: auto; padding: 6px 10px 10px; }
+      #panel.collapsed #body { display: none; }
+      #panel.collapsed header { border-bottom: 0; }
+      #layers { list-style: none; margin: 0; padding: 0; }
+      #layers li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eef1f5; }
+      #layers li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+      #layers li .kind { color: var(--muted); font-size: 11px; }
+      #layers li.error .name { color: #b42318; }
+      #empty { margin: 6px 0; color: var(--muted); }
+      .row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+      button, select, .file {
+        padding: 4px 8px; border: 1px solid #c9cfda; border-radius: 6px; background: #fff; color: inherit; font: inherit;
+        cursor: pointer;
+      }
+      button.icon { padding: 0 6px; border: 0; background: none; font-size: 15px; line-height: 1; color: var(--muted); }
+      button.icon:hover { color: var(--ink); }
+      select { flex: 1; }
+      .file input { display: none; }
+      #drop {
+        position: fixed; inset: 0; display: none; place-items: center; background: rgb(47 111 209 / 0.12);
+        border: 3px dashed var(--accent); font-size: 18px; font-weight: 600; color: var(--accent); pointer-events: none;
+      }
+      body.dragging #drop { display: grid; }
+      #toast {
+        position: fixed; left: 50%; bottom: 36px; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 6px 12px;
+        border-radius: 6px; background: var(--ink); color: #fff; display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <section id="panel" aria-label="Layers">
+      <header>
+        <h1>Isard viewer</h1>
+        <button type="button" class="icon" id="collapse" aria-label="Collapse the panel" aria-expanded="true">–</button>
+      </header>
+      <div id="body">
+        <ul id="layers"></ul>
+        <p id="empty">Drop GeoJSON, KML, GPX, TopoJSON, COPC (.laz), PMTiles or glTF (.glb) files on the map.</p>
+        <div class="row">
+          <select id="basemap" aria-label="Basemap"></select>
+          <label class="file">Open…<input type="file" id="open" multiple /></label>
+        </div>
+      </div>
+    </section>
+    <div id="drop">Drop files to add them</div>
+    <div id="toast" role="status"></div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

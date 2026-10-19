@@ -63,6 +63,8 @@ export default defineConfig({
             { text: 'Events and picking', link: '/guide/events' },
             { text: 'Markers, popups, controls', link: '/guide/overlays' },
             { text: 'Performance', link: '/guide/performance' },
+            { text: 'The viewer', link: '/guide/viewer' },
+            { text: 'QGIS plugin', link: '/guide/qgis' },
             { text: 'Develop and release', link: '/guide/develop' },
           ],
         },

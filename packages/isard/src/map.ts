@@ -85,6 +85,9 @@ import {
   BasemapWorkers,
   defaultWorkerCount,
   defaultWorkerUrl,
+  type PmtilesOptions,
+  pmtilesLayer,
+  pmtilesRasterLoader,
   VECTOR_BASEMAPS,
   VectorTiles,
   type VectorTilesOptions,
@@ -827,7 +830,8 @@ export class GeoMap {
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
     const { url, grid = 'mercator', opacity = 1, saturation = 1, size, before } = options;
     let { minZoom = 0, maxZoom = 19 } = options;
-    let loader = options.loader;
+    // A PMTiles archive (`pmtiles://…`): its tiles read by range requests
+    let loader = options.loader ?? pmtilesRasterLoader(url, size ?? 256);
     if (grid !== 'mercator' && !loader) {
       if (grid === 'equirectangular') {
         // `minZoom` and `maxZoom` are levels of the source: its level n has the pixel size of Mercator level n + 1 at
@@ -854,6 +858,16 @@ export class GeoMap {
       this.attributionChanged();
     }
     return layer;
+  }
+
+  /**
+   * A PMTiles archive (v3) read by range requests: a raster layer of its images, or vector tiles drawn with `style` (by
+   * default a plain style of the archive's layers) with their labels. Its header decides which unless `kind` says;
+   * `url` with or without `pmtiles://`, relative to the page, or a `blob:` URL. `addRaster({ url: 'pmtiles://…' })` and
+   * a style source `pmtiles://…` in `vectorTiles` read archives too
+   */
+  addPmtiles(url: string, options: PmtilesOptions = {}): Promise<RasterLayer | VectorTiles> {
+    return pmtilesLayer(this, url, options);
   }
 
   /** Line network colored by a value per node; `layer.setValues` recolors it in one texture upload */

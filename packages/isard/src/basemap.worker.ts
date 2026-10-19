@@ -11,6 +11,7 @@
 import { latitude, longitude } from './geo.ts';
 import { Lru } from './lru.ts';
 import { decode, type TileFeature, type TileLayer } from './mvt.ts';
+import { pmtilesTile } from './pmtiles.ts';
 import { type Job, resampler } from './resample.ts';
 import { fetchHeights, type PngEncoding, type Surface } from './terrain.ts';
 import {
@@ -136,6 +137,12 @@ function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
   const hit = images.get(url);
   if (hit) return hit;
   const pending = (async () => {
+    // A tile of a PMTiles archive (`pmtiles://…/{z}/{x}/{y}`)
+    const archived = pmtilesTile(url);
+    if (archived) {
+      const bytes = await archived;
+      return bytes && createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]));
+    }
     const init: PriorityInit = { priority };
     const response = await fetch(url, init);
     if (response.status === 404 || response.status === 204) return undefined;
@@ -155,6 +162,12 @@ function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, Til
   const hit = cache.get(url);
   if (hit) return hit;
   const pending = (async () => {
+    // A tile of a PMTiles archive, ungzipped by the reader
+    const archived = pmtilesTile(url);
+    if (archived) {
+      const bytes = await archived;
+      return bytes && decode(bytes);
+    }
     for (let attempt = 0; ; attempt += 1) {
       const init: PriorityInit = { priority };
       const response = await fetch(url, init);

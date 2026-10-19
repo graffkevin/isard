@@ -1,0 +1,10 @@
+# The QGIS plugin's Python (QGIS 3.28 bundles Python 3.9 on some platforms): `uvx ruff check` and `uvx ruff format`
+line-length = 120
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "N"]
+ignore = ["UP015"]
+
+[format]
+quote-style = "single"

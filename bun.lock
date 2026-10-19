@@ -35,6 +35,12 @@
         "isard": "workspace:*",
       },
     },
+    "apps/viewer": {
+      "name": "@isard/viewer",
+      "dependencies": {
+        "isard": "workspace:*",
+      },
+    },
     "docs": {
       "name": "@isard/docs",
       "devDependencies": {
@@ -198,6 +204,8 @@
     "@isard/docs": ["@isard/docs@workspace:docs"],
 
     "@isard/examples": ["@isard/examples@workspace:examples"],
+
+    "@isard/viewer": ["@isard/viewer@workspace:apps/viewer"],
 
     "@itowns/geographic": ["@itowns/geographic@2.46.1-next.74", "", { "peerDependencies": { "proj4": ">=2.20.0", "three": ">=0.182.0" } }, "sha512-dPyNyvFBGH3bs7u5Rujh5KuLG9WIzZ3Wh2rhqDMa34FVHRW6cXA0Ke5RaDJ/RjBZWmGpvTCSlXGzb0zZPwn5kw=="],
 

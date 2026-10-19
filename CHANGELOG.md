@@ -3,7 +3,7 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-19
 
 ### Added
 
@@ -12,6 +12,27 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   shadows of a point light, and each pixel on screen compares its distance to the observer with it. All around, or
   one way only as a camera: a cone given by a direction, a tilt and angles of view. Only what the map loaded for its
   view hides anything. The viewshed example: from the Sacré-Cœur over Montmartre's buildings.
+- The QGIS plugin "isard 3D view" (`integrations/qgis`, QGIS 3.28 to 4, `bun run qgis:package` → an archive for
+  "Install from ZIP"): the viewer in a panel (Qt WebEngine) or the browser, served by a local server; the camera
+  following the map canvas (and the other way round), vector layers sent as styled GeoJSON (extruded by a field),
+  XYZ, WMS, WMTS, MBTiles, vector tiles and COPC point clouds, clicks selecting the features in QGIS.
+- PMTiles (v3) archives read by range requests, without a tile server: `map.addPmtiles(url)` (a raster layer, or
+  vector tiles drawn with a style, by default `basicStyle` of the archive's layers), `addRaster({ url: 'pmtiles://…' })`,
+  and `pmtiles://` sources in a style (as MapLibre's protocol names them), their tiles read in the basemap workers.
+  Directories cached per archive, gzip through `DecompressionStream`, `blob:` URLs; the reader exported (`PMTiles`,
+  `zxyToTileId`, `tileIdToZxy`).
+- The viewer (`apps/viewer`, built into `apps/viewer/dist`, not in the package): a full-window map for local files
+  dropped or opened (GeoJSON, KML, GPX, TopoJSON, COPC, PMTiles, glTF), a list of layers, and a bridge other
+  applications drive with JSON messages (Server-Sent Events and POST, `postMessage`, `window.isardViewer`): camera,
+  basemap, relief, layers, selection to the viewer; ready, moves, clicks with the feature picked, errors back. Its
+  local server, `bun scripts/viewer.ts [files…] [--port] [--open]` (`bun run viewer`): the viewer, the bridge with
+  its state replayed, the files given with HTTP ranges, MBTiles as XYZ tiles (bun:sqlite), the files added as layers
+  on startup; 127.0.0.1 only, other hosts and origins refused. The guide's page "The viewer" describes the protocol.
+
+### Changed
+
+- The package's modules grow by about 5.5 KB gzipped (comments included; in a bundle only when used) and the basemap
+  worker by 1.6 KB, to 12.9 KB: the PMTiles reader.
 
 ## [0.5.1] - 2026-10-19
 

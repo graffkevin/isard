@@ -102,7 +102,7 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 | [Labels](https://graffkevin.github.io/isard/layers/labels) | `addSymbols` | SDF fonts (Noto Sans by default, any glyphs), halos, along lines, collisions shared by all layers |
 | [Buildings](https://graffkevin.github.io/isard/layers/buildings) | `addExtrusions` | tiles or one set, colored by values or by a network's times |
 | [Ground shaders](https://graffkevin.github.io/isard/layers/ground) | `addGround` | your fragment shader over the ground: water depth, heat maps |
-| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster` | XYZ, WMTS, WMS; in Web Mercator, or reprojected from another grid (longitudes and latitudes, Lambert-93, UTM, any CRS through proj4); or tiles drawn by your code |
+| [Rasters](https://graffkevin.github.io/isard/layers/rasters) | `addRaster`, `addPmtiles` | XYZ, WMTS, WMS, PMTiles; in Web Mercator, or reprojected from another grid (longitudes and latitudes, Lambert-93, UTM, any CRS through proj4); or tiles drawn by your code |
 | [3D Tiles](https://graffkevin.github.io/isard/layers/tiles3d) | `addTiles3d` | b3dm, pnts, glb, external tilesets, compressed or not |
 | [glTF models](https://graffkevin.github.io/isard/layers/models) | `addModels` | a glTF model at many positions, instanced, on the relief, picked |
 | [Point clouds](https://graffkevin.github.io/isard/layers/pointclouds) | `addPointCloud` | COPC (LiDAR HD) by range requests, pnts and glTF points; by class, altitude, intensity, EDL |
@@ -110,6 +110,13 @@ Live in the [documentation](https://graffkevin.github.io/isard/examples/), sourc
 
 Plus markers, popups, controls, picking within a radius, `easeTo`, `flyTo`, a sky and fog for tilted views. All in
 the [API reference](https://graffkevin.github.io/isard/api).
+
+Local files on a map: `bun scripts/viewer.ts data.geojson lidar.copc.laz tiles.pmtiles` serves the viewer
+(`apps/viewer`: files dropped or given, a layer list, a bridge any app can drive) on 127.0.0.1
+([The viewer](https://graffkevin.github.io/isard/guide/viewer)).
+
+In QGIS (3.28 and 4): the **isard 3D view** plugin shows the map canvas and its layers in 3D, in a panel or the
+browser, the camera, layers and clicks in sync ([QGIS plugin](https://graffkevin.github.io/isard/guide/qgis)).
 
 ## Fast by design
 
@@ -139,10 +146,11 @@ crates/tiles3d/    3D Tiles tree, traversal and decoding                        
 crates/pointcloud/ COPC point clouds: header, octree hierarchy, traversal, LAZ chunks                    tested natively
 crates/engine/     the WebAssembly core: the engine, the ground, the layers, picking
 packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
-apps/              the demo and the benchmark (Isard, iTowns, 3DTilesRendererJS)
+apps/              the demo, the viewer (local files, a bridge for other apps) and the benchmark
 examples/          one page per example
 docs/              the documentation site (VitePress)
 scripts/           build, dev server, docs, release
+integrations/qgis/ the QGIS plugin (Python), its server tested with python3 -m unittest
 ```
 
 More in [Develop and release](https://graffkevin.github.io/isard/guide/develop).

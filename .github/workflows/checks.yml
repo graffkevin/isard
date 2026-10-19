@@ -34,6 +34,8 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
+      # The QGIS plugin's server and conversions (the runner's python3, no QGIS)
+      - run: bun run test:qgis
       - run: bun run docs:check
 
   # Visual regression tests: the examples rendered by headless Chrome (SwiftShader), the network answered from

@@ -89,6 +89,14 @@ export {
   type PopupEvents,
   type PopupOptions,
 } from './overlay.ts';
+export {
+  PMTiles,
+  type PmtilesEntry,
+  type PmtilesHeader,
+  type PmtilesTileType,
+  tileIdToZxy,
+  zxyToTileId,
+} from './pmtiles.ts';
 export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from './pointclouds.ts';
 export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './pointclouds.ts';
 export type { Overlap, SymbolOptions, SymbolStyle } from './symbols.ts';
@@ -133,8 +141,8 @@ export type {
   Style,
   StyleLayer,
 } from './vectorstyle.ts';
-export type { VectorTilesOptions } from './vectortiles.ts';
-export { OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
+export type { PmtilesOptions, VectorTilesOptions } from './vectortiles.ts';
+export { basicStyle, OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
 export type {
   Camera,
   NetworkStats,

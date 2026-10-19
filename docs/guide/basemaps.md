@@ -59,6 +59,15 @@ tiles.raster({
 });
 ```
 
+A source of a PMTiles archive is named as MapLibre's PMTiles protocol does: `url: 'pmtiles://https://…/a.pmtiles'`
+(or `tiles: ['pmtiles://…/{z}/{x}/{y}']`), its deepest level from the archive's header; its tiles are read by range
+requests in the workers ([PMTiles](../layers/rasters#pmtiles)). `basicStyle(source, layers)` writes a plain style
+for vector tiles known only by their layers' names.
+
+```ts
+map.vectorTiles({ style: { version: 8, sources: { protomaps: { type: 'vector', url: 'pmtiles://https://…/basemap.pmtiles' } }, layers } });
+```
+
 The vector tiles of a map share its workers (cores - 1, 1 to 4, created on first use): a vector tile is downloaded
 and decoded once, whatever the styles or subsets drawn from it, by the vector basemap and by your own `vectorTiles()`.
 Asking for another `workers` count or `workerUrl` than the map's gives those tiles workers of their own. The tiles

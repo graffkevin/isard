@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** Budgets: gzipped KB (1024 bytes, gzip level 9), set on 2026-10-17, the point clouds on 2026-10-19 */
+/** Budgets: gzipped KB (1024 bytes, gzip level 9), set on 2026-10-17, the point clouds and PMTiles on 2026-10-19 */
 const BUDGETS = {
   /** The engine maps load first, without 3D Tiles */
   // 225 until the icons of the symbol layers (their atlas, their quads beside the glyphs, the placement of a text and
@@ -41,7 +41,10 @@ const BUDGETS = {
   // symbol layers (the sprites, the icon atlas, the layout of an icon and its fit to the text, the icons of the
   // labels), about 7 KB here (3.3 KB minified in a bundle)
   // 104 until the point clouds (their handle, the CRS of a WKT, the palette of the classes), about 1.7 KB
-  modules: 111,
+  // 111 until PMTiles (the archive reader: header, directories, Hilbert tile ids, ranges, gzip; `addPmtiles`, the
+  // plain style of vector archives, the raster loader), about 5.5 KB here (its comments included), in a bundle only
+  // when used
+  modules: 118,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   // 38 until the icon atlas, about 0.2 KB
   // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB
@@ -51,7 +54,8 @@ const BUDGETS = {
   // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes; 9.2 until
   // the PNG relief decoded and the equirectangular rasters reprojected in the workers, about 1.3 KB; 11 until the icons
   // of the labels (their properties, icons alone along lines, the layers past the source's deepest level), 0.7 KB
-  'basemap.worker.js': 11.8,
+  // 11.8 until the tiles of PMTiles archives (`pmtiles://` sources: the reader, its directories cached), 1.6 KB
+  'basemap.worker.js': 13.5,
 } as const;
 
 const root = join(import.meta.dir, '..');

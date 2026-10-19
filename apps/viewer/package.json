@@ -1,0 +1,8 @@
+{
+  "name": "@isard/viewer",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "isard": "workspace:*"
+  }
+}

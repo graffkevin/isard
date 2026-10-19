@@ -18,9 +18,11 @@ import type { Layer, RasterLayer } from './layers.ts';
 import { Lru } from './lru.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
+import { pmtiles, pmtilesUrl } from './pmtiles.ts';
 import { type Job, SOURCE_CACHE } from './resample.ts';
 import type { SymbolLayer } from './symbols.ts';
 import type { PngEncoding } from './terrain.ts';
+import type { RasterOptions } from './types.ts';
 import {
   type Json,
   type LabelCandidate,
@@ -96,6 +98,22 @@ async function json<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
   return (await response.json()) as T;
+}
+
+/**
+ * A style source's tiles and deepest level: a `pmtiles://` archive (its `url`, or a `tiles` template) read for its
+ * header, its tiles then named `pmtiles://<absolute archive URL>/{z}/{x}/{y}` for the workers; other sources as they are
+ */
+async function resolveSource(source: Style['sources'][string]): Promise<{ tiles?: string[]; maxzoom?: number }> {
+  const given = source.url ?? source.tiles?.[0] ?? '';
+  const archive = pmtilesUrl(given.replace(/\/\{z\}\/\{x\}\/\{y\}$/, ''));
+  if (!archive)
+    return {
+      ...(source.tiles ? { tiles: source.tiles } : {}),
+      ...(source.maxzoom === undefined ? {} : { maxzoom: source.maxzoom }),
+    };
+  const header = await pmtiles(archive).header();
+  return { tiles: [`pmtiles://${archive}/{z}/{x}/{y}`], maxzoom: source.maxzoom ?? header.maxZoom };
 }
 
 /** Default size of a basemap worker pool: cores - 1, 1 to 4 */
@@ -362,7 +380,7 @@ export class VectorTiles {
     const style = typeof input === 'string' ? await json<Style>(input) : input;
     const [name, source] = Object.entries(style.sources).find(([, s]) => s.type === 'vector') ?? [];
     if (!name || !source) throw new Error('the style has no vector source');
-    let { tiles, maxzoom } = source;
+    let { tiles, maxzoom } = await resolveSource(source);
     if (!tiles && source.url) {
       const tilejson = await json<{ tiles: string[]; maxzoom?: number }>(source.url);
       tiles = tilejson.tiles;
@@ -373,8 +391,10 @@ export class VectorTiles {
     // Its raster sources of tiles, drawn into the same images (the shaded relief of a style at low zoom)
     const rasters: Record<string, RasterSource> = {};
     for (const [key, s] of Object.entries(style.sources)) {
-      const url = s.type === 'raster' ? s.tiles?.[0] : undefined;
-      if (url) rasters[key] = { tiles: url, maxzoom: s.maxzoom ?? 22, tileSize: s.tileSize ?? 512 };
+      if (s.type !== 'raster') continue;
+      const r = await resolveSource(s);
+      const url = r.tiles?.[0];
+      if (url) rasters[key] = { tiles: url, maxzoom: r.maxzoom ?? 22, tileSize: s.tileSize ?? 512 };
     }
     // Only the layers of those sources (and the background); other types (hillshade, heatmap…) are left out. The
     // application's style object stays as it is
@@ -646,4 +666,119 @@ export class VectorTiles {
     }
     this.renderers.length = 0;
   }
+}
+
+/** Colors of the layers of `basicStyle`, in turn */
+const BASIC_COLORS = ['#2f6fd1', '#d1495b', '#2a9d8f', '#e9a03b', '#7b5ea7', '#5c7a29', '#c8553d', '#3d8eb9'];
+
+/**
+ * A plain style for vector tiles known only by their layers' names (a PMTiles archive's `vector_layers`, an MBTiles'
+ * metadata): each layer's polygons filled, its lines and outlines stroked and its points as circles, a color per
+ * layer, the `name` of points as labels. `source` is the style's vector source (`url`: TileJSON or `pmtiles://…`, or
+ * `tiles`)
+ */
+export function basicStyle(
+  source: { url?: string; tiles?: string[]; minzoom?: number; maxzoom?: number },
+  layers: readonly string[],
+): Style {
+  const out: StyleLayer[] = [];
+  layers.forEach((name, i) => {
+    const color = BASIC_COLORS[i % BASIC_COLORS.length] as string;
+    const base = { source: 'data', 'source-layer': name };
+    out.push(
+      { id: `${name}-fill`, type: 'fill', ...base, paint: { 'fill-color': color, 'fill-opacity': 0.18 } },
+      { id: `${name}-line`, type: 'line', ...base, paint: { 'line-color': color, 'line-width': 1.2 } },
+      {
+        id: `${name}-circle`,
+        type: 'circle',
+        ...base,
+        paint: { 'circle-color': color, 'circle-radius': 3.5, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 },
+      },
+    );
+  });
+  layers.forEach((name) => {
+    out.push({
+      id: `${name}-label`,
+      type: 'symbol',
+      source: 'data',
+      'source-layer': name,
+      filter: ['all', ['==', ['geometry-type'], 'Point'], ['has', 'name']],
+      layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 0.9], 'text-anchor': 'top' },
+      paint: { 'text-color': '#1d2433', 'text-halo-color': '#fff', 'text-halo-width': 1.5 },
+    });
+  });
+  return { version: 8, sources: { data: { type: 'vector', ...source } }, layers: out };
+}
+
+/** Options of `GeoMap.addPmtiles` */
+export interface PmtilesOptions {
+  /** What the archive holds (default from its header: raster images or vector tiles) */
+  kind?: 'raster' | 'vector';
+  /** A MapLibre style for vector tiles (its vector source `pmtiles://…`); default `basicStyle` of the archive's layers */
+  style?: Style;
+  opacity?: number;
+  /** Texture size of raster tiles (default 256; 512 for the sharper tiles of a 512 px archive) */
+  size?: number;
+  /** Credits, HTML (default the archive's `attribution` metadata, as text) */
+  attribution?: string;
+  before?: Layer;
+}
+
+/** HTML of a file reduced to its text, escaped: credits from an archive's metadata cannot run in the page */
+function plainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(?!(amp|lt|gt|quot|copy|#\d+);)/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** @internal `GeoMap.addPmtiles`: a raster layer of the archive's images, or vector tiles with their raster layer and
+ * labels */
+export async function pmtilesLayer(
+  map: GeoMap,
+  url: string,
+  options: PmtilesOptions,
+): Promise<RasterLayer | VectorTiles> {
+  const archiveUrl = pmtilesUrl(url.startsWith('pmtiles://') ? url : `pmtiles://${url}`) as string;
+  const archive = pmtiles(archiveUrl);
+  const [header, metadata] = await Promise.all([archive.header(), archive.metadata().catch(() => ({}))]);
+  const credit = (metadata as { attribution?: unknown }).attribution;
+  const attribution = options.attribution ?? (typeof credit === 'string' && credit ? plainText(credit) : undefined);
+  const kind = options.kind ?? (header.tileType === 'mvt' ? 'vector' : 'raster');
+  const credits = attribution ? { attribution } : {};
+  if (kind === 'raster') {
+    return map.addRaster({
+      url: `pmtiles://${archiveUrl}`,
+      minZoom: header.minZoom,
+      maxZoom: Math.max(header.maxZoom, 19),
+      ...(options.opacity === undefined ? {} : { opacity: options.opacity }),
+      ...(options.size === undefined ? {} : { size: options.size }),
+      ...(options.before ? { before: options.before } : {}),
+      ...credits,
+    });
+  }
+  const layers = (metadata as { vector_layers?: { id?: unknown }[] }).vector_layers;
+  const names = Array.isArray(layers) ? layers.map((l) => l?.id).filter((id) => typeof id === 'string') : [];
+  const style = options.style ?? basicStyle({ url: `pmtiles://${archiveUrl}` }, names);
+  const tiles = map.vectorTiles({ style, ...credits });
+  tiles.raster({
+    ...(options.opacity === undefined ? {} : { opacity: options.opacity }),
+    ...(options.before ? { before: options.before } : {}),
+  });
+  tiles.labels();
+  return tiles;
+}
+
+/** A raster loader reading the tiles of a `pmtiles://` archive URL (images of any size, drawn at `size`); undefined
+ * for another URL */
+export function pmtilesRasterLoader(url: string, size: number): RasterOptions['loader'] {
+  const archiveUrl = pmtilesUrl(url);
+  if (!archiveUrl) return undefined;
+  const archive = pmtiles(archiveUrl);
+  return async (z, x, y, signal) => {
+    const bytes = await archive.tile(z, x, y, signal);
+    if (!bytes) return null;
+    return createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), { resizeWidth: size, resizeHeight: size });
+  };
 }

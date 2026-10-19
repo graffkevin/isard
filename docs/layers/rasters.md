@@ -10,6 +10,26 @@ recently used first); consecutive raster layers are composited in one pass. A lo
 loaded ancestor, coarse tiles load first, transient errors are retried past the HTTP cache, missing tiles (404) are
 covered by their ancestor.
 
+## PMTiles
+
+```ts
+map.addRaster({ url: 'pmtiles://https://…/satellite.pmtiles', maxZoom: 19 });
+await map.addPmtiles('https://…/archive.pmtiles');   // raster or vector, as its header says
+```
+
+A [PMTiles](https://docs.protomaps.com/pmtiles/) archive (v3): one file of tiles, read by HTTP range requests, with
+no tile server. Its header and root directory come in one request, the leaf directories as needed (kept: 64 per
+archive), then each tile in its own range; gzipped directories and tiles are decompressed by the browser
+(`DecompressionStream`; brotli and zstd archives are refused). Past the archive's deepest level, its tiles are drawn
+magnified. The server must answer ranges (`206`) and allow them across origins (CORS); a server sending a whole file
+of up to 64 MB instead is read from memory. `blob:` URLs work too: a file dropped on the page.
+
+`map.addPmtiles(url, { kind, style, opacity, size, attribution })` reads the header first: images (PNG, JPEG, WebP,
+AVIF) give a raster layer, vector tiles a [vector source](../guide/basemaps#vector-tiles-of-your-own-style) drawn with
+`style`, or by default `basicStyle` of the archive's layers (`vector_layers` of its metadata): each layer's polygons,
+lines and points in a color, the `name` of points as labels. The archive's `attribution` is credited, as text.
+`PMTiles` (the reader: `header()`, `metadata()`, `tile(z, x, y)`) is exported for other uses.
+
 ## Tiles drawn by your code
 
 ```ts

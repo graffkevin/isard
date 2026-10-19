@@ -13,6 +13,7 @@
     "src/geo.ts",
     "src/lru.ts",
     "src/mvt.ts",
+    "src/pmtiles.ts",
     "src/terrain.ts",
     "src/vectorstyle.ts"
   ]

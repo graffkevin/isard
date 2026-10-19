@@ -1,7 +1,7 @@
 /**
  * Builds everything: the Rust engine to WebAssembly (cargo) and the point cloud module (the LAZ decoder of the
  * workers), their JavaScript bindings (wasm-bindgen), a size and speed pass (wasm-opt), then the `isard` package (packages/isard/dist: module, workers, type declarations), the
- * demo and the examples (bundled together from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
+ * demo, the viewer and the examples (bundled together from the package sources). `--bench` also bundles the benchmark (iTowns, three.js).
  */
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -115,9 +115,17 @@ async function buildPackage(): Promise<void> {
   await bundle([], `${pkg}/dist`, { empty: false });
 }
 
+/** The viewer (apps/viewer): a folder that stands alone, its page, module, workers and engines side by side, every URL
+ * relative (served under any path: the local server, the QGIS plugin, a webview); not in the npm package */
+async function buildViewer(): Promise<void> {
+  await bundle(['apps/viewer/src/main.ts'], 'apps/viewer/dist');
+  copyFileSync(join(root, 'apps/viewer/index.html'), join(root, 'apps/viewer/dist/index.html'));
+}
+
 const bundles: Promise<void>[] = [
   buildPackage(),
   bundle(['apps/demo/src/main.ts'], 'apps/demo/dist'),
+  buildViewer(),
   // The examples together: each page loads its own entry, the package's code and the engine once for all of them
   bundle([...new Bun.Glob('examples/*/main.ts').scanSync(root)], 'examples/dist', { split: true }),
 ];

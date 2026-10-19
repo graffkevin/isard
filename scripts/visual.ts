@@ -1,5 +1,5 @@
 /**
- * Visual regression tests of the examples: each built example (`bun run build` first) is opened in headless Chrome
+ * Visual regression tests of the examples and the viewer: each built example (`bun run build` first) is opened in headless Chrome
  * (SwiftShader, 640×400), every network request answered from recorded fixtures (tests/visual/fixtures), and the map
  * canvas compared with tests/visual/baseline/<name>.png (pixelmatch). Diffs go to tests/visual/out. A request without
  * fixture is answered 404 and reported, without failing: how many tiles past the screen edge a map asks for depends on
@@ -91,9 +91,17 @@ const VIEWPORTS: Record<string, [number, number]> = {
  */
 const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris', 'viewshed']);
 
+/**
+ * The viewer (apps/viewer/dist), tested as an example: a committed GeoJSON (tests/visual/data) added by its `?data=`
+ * query, on no basemap (nothing to record)
+ */
+const VIEWER = 'viewer';
+const VIEWER_URL = '/viewer/?basemap=none&data=../data/viewer.geojson';
+
 const built = readdirSync(join(root, 'examples'), { withFileTypes: true })
   .filter((e) => e.isDirectory() && existsSync(join(root, 'examples/dist', e.name, 'main.js')))
   .map((e) => e.name);
+if (existsSync(join(root, 'apps/viewer/dist/main.js'))) built.push(VIEWER);
 const views = Object.entries(VIEWS)
   .filter(([, [example]]) => built.includes(example))
   .map(([name]) => name);
@@ -127,8 +135,16 @@ const server = Bun.serve({
   port: 0,
   async fetch(request) {
     const path = normalize(new URL(request.url).pathname).replace(/^(\.\.[/\\])+/, '');
-    if (!path.startsWith('/examples/')) return new Response('Not found', { status: 404 });
-    const file = Bun.file(join(root, path.endsWith('/') ? `${path}index.html` : path));
+    // The examples, the viewer's build and the data it is given
+    const mounts: [string, string][] = [
+      ['/examples/', 'examples/'],
+      ['/viewer/', 'apps/viewer/dist/'],
+      ['/data/', 'tests/visual/data/'],
+    ];
+    const mount = mounts.find(([prefix]) => path.startsWith(prefix));
+    if (!mount) return new Response('Not found', { status: 404 });
+    const local = mount[1] + path.slice(mount[0].length);
+    const file = Bun.file(join(root, local.endsWith('/') ? `${local}index.html` : local));
     return (await file.exists()) ? new Response(file) : new Response('Not found', { status: 404 });
   },
 });
@@ -269,7 +285,8 @@ for (const name of examples) {
   const start = Date.now();
   const [example, view] = VIEWS[name] ?? [name, ''];
   const query = STILL.has(example) ? '?still' : (QUERIES[example] ?? '');
-  await page.goto(`${origin}/examples/${example}/${query}${view ? `#${view}` : ''}`, { waitUntil: 'load' });
+  const url = example === VIEWER ? VIEWER_URL : `/examples/${example}/${query}${view ? `#${view}` : ''}`;
+  await page.goto(`${origin}${url}`, { waitUntil: 'load' });
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second
   let frames = -1;

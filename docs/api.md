@@ -64,6 +64,7 @@ styles the basemaps use, for `vectorTiles({ style })`.
 | `addExtrusions(options)` | `ExtrusionLayer` | `setData`, `setTile`, `removeTile`, `setValues`, `linkNetwork`, `setAnchors` |
 | `addNetwork(options)` | `NetworkLayer` | `setValues`, `setCosts`, `setEdgeWidths`, `setStyle`, `stats` |
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
+| `addPmtiles(url, { kind, style, opacity, size, attribution })` | `Promise<RasterLayer \| VectorTiles>` | a PMTiles archive read by range requests: raster, or vector with `style` (default `basicStyle` of its layers); `addRaster({ url: 'pmtiles://…' })` and `pmtiles://` style sources too ([PMTiles](./layers/rasters#pmtiles)) |
 | `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, `'equirectangular'`, or a `TileGrid` in another CRS: tile matrices or a WMS's `{bbox}`, reprojected by the map's workers, see [projections](./guide/projections)), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
 | `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
 | `addPointCloud({ url, format, colorBy, pointSize, pointBudget, edl, classifications, crs })` | `PointCloudLayer` | `setStyle`, `stats`, `info`; a COPC file (range requests) or 3D Tiles points, points picked with their attributes ([point clouds](./layers/pointclouds)) |
@@ -111,4 +112,6 @@ Grouped by theme in entry points of their own (each also exported by `isard` its
 | `parseKml(text)`, `parseGpx(text)`, `parseTopoJson(topology, name)` | other formats as GeoJSON ([formats](./layers/features#other-crss-and-formats)) |
 | `IGN_ATTRIBUTION`, `OPENFREEMAP_ATTRIBUTION`, `TERRAIN_TILES_ATTRIBUTION` | credits of the sources, for `customAttribution` or `attribution` |
 | `GLYPHS_URL`, `DEFAULT_FONT` | the default glyphs (OpenFreeMap's fonts) and font of labels |
+| `new PMTiles(url \| blob)`, `zxyToTileId`, `tileIdToZxy` | a PMTiles archive's `header()`, `metadata()`, `tile(z, x, y)` |
+| `basicStyle(source, layers)` | a plain MapLibre style for vector tiles known by their layers' names |
 | `parseColor(color)`, `interpolate(stops, zoom)` | a CSS color as RGBA 0-1; the value of zoom stops at a zoom |

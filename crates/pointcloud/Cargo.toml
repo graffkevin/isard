@@ -1,6 +1,6 @@
 [package]
 name = "isard-pointcloud"
-version = "0.5.1"
+version = "0.6.0"
 publish = false
 edition = "2024"
 license = "MIT"

@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Bois de Vincennes" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[2.4105, 48.8372], [2.4705, 48.8365], [2.4718, 48.8215], [2.4352, 48.8188], [2.4105, 48.8372]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Promenade" },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[2.3499, 48.853], [2.3765, 48.8482], [2.3958, 48.8471], [2.4358, 48.8427]]
+      }
+    },
+    { "type": "Feature", "properties": { "name": "Notre-Dame" }, "geometry": { "type": "Point", "coordinates": [2.3499, 48.853] } },
+    { "type": "Feature", "properties": { "name": "Nation" }, "geometry": { "type": "Point", "coordinates": [2.3958, 48.8471] } },
+    { "type": "Feature", "properties": { "name": "Vincennes" }, "geometry": { "type": "Point", "coordinates": [2.4358, 48.8427] } }
+  ]
+}
