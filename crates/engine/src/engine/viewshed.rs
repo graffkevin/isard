@@ -4,6 +4,10 @@
 //! compares its distance to the observer with the cube's: nearer or as near, it is seen; farther, something hides
 //! it. Within the range, seen pixels are tinted with one color, hidden ones with another.
 //!
+//! Several observers share the cube in turn: each one's comparison goes into an accumulation target (how much of a
+//! pixel lies within one's reach, how much is seen by one), and one last pass tints the screen from it. A pixel seen
+//! by any observer is seen; hidden from all that reach it, it is hidden.
+//!
 //! Looking one way only (a camera, a lookout), the viewshed is a cone: a heading, a tilt and two angles of view; what
 //! lies outside it is left untinted (the whole cube is still drawn).
 //!
@@ -29,6 +33,9 @@ void main() {
   gl_Position = vec4(p, 0.0, 1.0);
 }";
 
+/// Observers at most
+const OBSERVERS: usize = 16;
+
 /// The comparing pass, after the cube's size
 fn fragment() -> String {
     format!("#version 300 es\nprecision highp float;\nconst float CUBE = {CUBE:?}.0;\n{FRAGMENT}")
@@ -45,9 +52,6 @@ uniform vec3 u_observer;
 uniform vec4 u_range;
 // The ground taken as the plane z = 0 where nothing was drawn (no relief)
 uniform float u_flat;
-uniform vec3 u_visible;
-uniform vec3 u_hidden;
-uniform float u_opacity;
 // The cone: its axes (right, up, forward), the tangents of its half angles across and up, 1 if there is one
 uniform mat3 u_axes;
 uniform vec3 u_cone;
@@ -92,23 +96,46 @@ void main() {
   major = max(major - (0.5 * u_range.w + texel * (1.5 + slope) + 0.002 * distance), n);
   float reference = 0.5 * ((f + n) / (f - n) - 2.0 * f * n / ((f - n) * major)) + 0.5;
   float seen = texture(u_cube, vec4(v, reference));
-  // Fading out at the edge of the range
+  // Fading out at the edge of the range; blended by maximum with the other observers'
   float edge = 1.0 - smoothstep(0.92 * range, range, distance);
-  color = vec4(mix(u_hidden, u_visible, seen), u_opacity * edge);
+  color = vec4(seen * edge, edge, 0.0, 0.0);
 }";
 
-/// What the page set: the observer and the look of the result
-#[derive(Clone, Copy, Debug)]
+/// The tint over the screen, from the accumulation (its red channel: seen by some observer; green: within the reach
+/// of one)
+const TINT: &str = r"#version 300 es
+precision highp float;
+uniform sampler2D u_accumulation;
+uniform vec3 u_visible;
+uniform vec3 u_hidden;
+uniform float u_opacity;
+in vec2 v_ndc;
+out vec4 color;
+
+void main() {
+  vec2 a = texture(u_accumulation, v_ndc * 0.5 + 0.5).rg;
+  if (a.g <= 0.0) discard;
+  color = vec4(mix(u_hidden, u_visible, clamp(a.r / a.g, 0.0, 1.0)), u_opacity * a.g);
+}";
+
+/// What the page set: the observers and the look of the result
+#[derive(Clone, Debug)]
 pub(super) struct Settings {
+    observers: Vec<Observer>,
+    visible: [f32; 3],
+    hidden: [f32; 3],
+    opacity: f32,
+}
+
+/// A point the view is taken from
+#[derive(Clone, Copy, Debug)]
+struct Observer {
     /// Longitude, latitude (degrees)
     position: DVec2,
     /// Metres above the ground
     height: f64,
     /// Metres around the observer
     range: f64,
-    visible: [f32; 3],
-    hidden: [f32; 3],
-    opacity: f32,
     cone: Option<Cone>,
 }
 
@@ -140,22 +167,34 @@ impl Cone {
     }
 }
 
-/// The GPU side: the cube and the screen's depth, the pass that compares them
+/// The screen-sized targets: the scene's depth from the camera, the observers' accumulation
+#[derive(Clone, Copy)]
+struct Screen {
+    depth: glow::Texture,
+    depth_target: glow::Framebuffer,
+    accumulation: glow::Texture,
+    accumulation_target: glow::Framebuffer,
+    size: (i32, i32),
+}
+
+/// The GPU side: the cube and the screen's targets, the pass that compares them and the one that tints
 pub(super) struct Viewshed {
     settings: Settings,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 11],
+    uniforms: [Option<glow::UniformLocation>; 8],
+    tint: glow::Program,
+    tint_uniforms: [Option<glow::UniformLocation>; 4],
     vao: glow::VertexArray,
     cube: glow::Texture,
     cube_target: glow::Framebuffer,
-    /// Depth of the scene from the camera, and its size
-    screen: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
+    screen: Option<Screen>,
 }
 
 impl Viewshed {
     fn new(gl: &glow::Context, settings: Settings) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
         let program = objects.program(VERTEX, &fragment())?;
+        let tint = objects.program(VERTEX, TINT)?;
         let vao = objects.vertex_array()?;
         let cube = objects.texture()?;
         let cube_target = objects.framebuffer()?;
@@ -168,15 +207,13 @@ impl Viewshed {
                 "u_observer",
                 "u_range",
                 "u_flat",
-                "u_visible",
-                "u_hidden",
-                "u_opacity",
                 "u_depth",
                 "u_cube",
                 "u_axes",
                 "u_cone",
             ],
         );
+        let tint_uniforms = gl::uniforms(gl, tint, ["u_accumulation", "u_visible", "u_hidden", "u_opacity"]);
         // SAFETY: storage of a texture just created on the live context
         unsafe {
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, Some(cube));
@@ -197,6 +234,8 @@ impl Viewshed {
             settings,
             program,
             uniforms,
+            tint,
+            tint_uniforms,
             vao,
             cube,
             cube_target,
@@ -208,57 +247,65 @@ impl Viewshed {
         // SAFETY: objects owned by the viewshed, not used afterwards
         unsafe {
             gl.delete_program(self.program);
+            gl.delete_program(self.tint);
             gl.delete_vertex_array(self.vao);
             gl.delete_texture(self.cube);
             gl.delete_framebuffer(self.cube_target);
-            if let Some((texture, framebuffer, _)) = self.screen.take() {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
+        }
+        self.delete_screen(gl);
+    }
+
+    fn delete_screen(&mut self, gl: &glow::Context) {
+        if let Some(screen) = self.screen.take() {
+            // SAFETY: the screen's targets, not used afterwards
+            unsafe {
+                gl.delete_texture(screen.depth);
+                gl.delete_framebuffer(screen.depth_target);
+                gl.delete_texture(screen.accumulation);
+                gl.delete_framebuffer(screen.accumulation_target);
             }
         }
     }
 
-    /// The screen's depth target and its texture, (re)created at the canvas size
-    fn screen_target(
-        &mut self,
-        gl: &glow::Context,
-        size: (i32, i32),
-    ) -> Result<(glow::Framebuffer, glow::Texture), String> {
-        if let Some((texture, framebuffer, at)) = self.screen
-            && at == size
+    /// The screen's targets, (re)created at the canvas size
+    fn screen_target(&mut self, gl: &glow::Context, size: (i32, i32)) -> Result<Screen, String> {
+        if let Some(screen) = self.screen
+            && screen.size == size
         {
-            return Ok((framebuffer, texture));
+            return Ok(screen);
         }
-        if let Some((texture, framebuffer, _)) = self.screen.take() {
-            // SAFETY: the previous target, replaced
-            unsafe {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
-            }
-        }
+        self.delete_screen(gl);
         let mut objects = Objects::new(gl);
-        let texture = objects.texture()?;
-        let framebuffer = objects.framebuffer()?;
+        let depth = objects.texture()?;
+        let depth_target = objects.framebuffer()?;
+        let accumulation = objects.texture()?;
+        let accumulation_target = objects.framebuffer()?;
         objects.keep();
         // SAFETY: storage and attachment of objects just created on the live context
         unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH_COMPONENT24, size.0, size.1);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            for (texture, target, format, attachment) in [
+                (depth, depth_target, glow::DEPTH_COMPONENT24, glow::DEPTH_ATTACHMENT),
+                (accumulation, accumulation_target, glow::RGBA8, glow::COLOR_ATTACHMENT0),
+            ] {
+                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                gl.tex_storage_2d(glow::TEXTURE_2D, 1, format, size.0, size.1);
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
+                gl.framebuffer_texture_2d(glow::FRAMEBUFFER, attachment, glow::TEXTURE_2D, Some(texture), 0);
+            }
             gl.bind_texture(glow::TEXTURE_2D, None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::DEPTH_ATTACHMENT,
-                glow::TEXTURE_2D,
-                Some(texture),
-                0,
-            );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
-        self.screen = Some((texture, framebuffer, size));
-        Ok((framebuffer, texture))
+        let screen = Screen {
+            depth,
+            depth_target,
+            accumulation,
+            accumulation_target,
+            size,
+        };
+        self.screen = Some(screen);
+        Ok(screen)
     }
 }
 
@@ -317,8 +364,8 @@ impl Engine {
         gl::reset_state(gl);
     }
 
-    /// Draws the viewshed over the frame, if one is set: the cube from the observer, the depth from the camera, then
-    /// the tint
+    /// Draws the viewshed over the frame, if one is set: the depth from the camera, then for each observer the cube
+    /// and its comparison, then the tint
     pub(super) fn draw_viewshed(&mut self, view: &View) {
         let Some(mut viewshed) = self.viewshed.take() else {
             return;
@@ -327,20 +374,53 @@ impl Engine {
             (self.camera.width * self.pixel_ratio).round() as i32,
             (self.camera.height * self.pixel_ratio).round() as i32,
         );
-        if let Ok(screen) = viewshed.screen_target(&self.gl, size) {
-            self.draw_viewshed_passes(&viewshed, view, screen, size);
+        if !viewshed.settings.observers.is_empty()
+            && let Ok(screen) = viewshed.screen_target(&self.gl, size)
+        {
+            self.draw_viewshed_passes(&viewshed, view, screen);
         }
         self.viewshed = Some(viewshed);
     }
 
-    fn draw_viewshed_passes(
-        &self,
-        viewshed: &Viewshed,
-        view: &View,
-        (screen, screen_depth): (glow::Framebuffer, glow::Texture),
-        size: (i32, i32),
-    ) {
+    fn draw_viewshed_passes(&self, viewshed: &Viewshed, view: &View, screen: Screen) {
+        let gl = &self.gl;
+        let size = screen.size;
+        // SAFETY: offscreen passes on the live context, the accumulation cleared for the observers
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(screen.depth_target));
+            gl.viewport(0, 0, size.0, size.1);
+            self.draw_solid_depth(view);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(screen.accumulation_target));
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+        }
+        for observer in &viewshed.settings.observers {
+            self.draw_observer(viewshed, view, observer, screen);
+        }
         let s = &viewshed.settings;
+        let [accumulation, visible, hidden, opacity] = &viewshed.tint_uniforms;
+        // SAFETY: the tint over the default framebuffer, the state set back after
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.viewport(0, 0, size.0, size.1);
+            gl.use_program(Some(viewshed.tint));
+            gl.uniform_1_i32(accumulation.as_ref(), 0);
+            gl.uniform_3_f32_slice(visible.as_ref(), &s.visible);
+            gl.uniform_3_f32_slice(hidden.as_ref(), &s.hidden);
+            gl.uniform_1_f32(opacity.as_ref(), s.opacity);
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(screen.accumulation));
+            gl.bind_vertex_array(Some(viewshed.vao));
+            gl.disable(glow::CULL_FACE);
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.bind_vertex_array(None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+        gl::reset_state(gl);
+    }
+
+    /// One observer: its cube, then its comparison into the accumulation, by maximum with the other observers'
+    fn draw_observer(&self, viewshed: &Viewshed, view: &View, s: &Observer, screen: Screen) {
         let m = geo::camera::mercator(s.position.x, s.position.y);
         let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
         let eye = view.geodetic(DVec3::new(s.position.x, s.position.y, ground + s.height));
@@ -349,7 +429,7 @@ impl Engine {
         let near = (0.2 * k).max(range / 20_000.0);
         let far = range * 1.05;
         let gl = &self.gl;
-        // SAFETY: offscreen passes on the live context, the default framebuffer bound again after
+        // SAFETY: offscreen passes on the live context, the state set back after
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(viewshed.cube_target));
             gl.viewport(0, 0, CUBE, CUBE);
@@ -363,34 +443,16 @@ impl Engine {
                 );
                 self.draw_solid_depth(&face_view(view, eye, face, near, far));
             }
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(screen));
-            gl.viewport(0, 0, size.0, size.1);
-            self.draw_solid_depth(view);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            gl.viewport(0, 0, size.0, size.1);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(screen.accumulation_target));
+            gl.viewport(0, 0, screen.size.0, screen.size.1);
 
-            let [
-                inverse,
-                observer,
-                range_u,
-                flat,
-                visible,
-                hidden,
-                opacity,
-                depth,
-                cube,
-                axes_u,
-                cone_u,
-            ] = &viewshed.uniforms;
+            let [inverse, observer, range_u, flat, depth, cube, axes_u, cone_u] = &viewshed.uniforms;
             gl.use_program(Some(viewshed.program));
             gl.uniform_matrix_4_f32_slice(inverse.as_ref(), false, &gl::mat4(&view.inverse));
             gl.uniform_3_f32(observer.as_ref(), eye.x as f32, eye.y as f32, eye.z as f32);
             gl.uniform_4_f32(range_u.as_ref(), range as f32, near as f32, far as f32, k as f32);
             let flat_ground = self.terrain.is_none() && view.globe.factor <= 0.0;
             gl.uniform_1_f32(flat.as_ref(), if flat_ground { 1.0 } else { 0.0 });
-            gl.uniform_3_f32_slice(visible.as_ref(), &s.visible);
-            gl.uniform_3_f32_slice(hidden.as_ref(), &s.hidden);
-            gl.uniform_1_f32(opacity.as_ref(), s.opacity);
             gl.uniform_1_i32(depth.as_ref(), 0);
             gl.uniform_1_i32(cube.as_ref(), 1);
             let (axes, cone) = s.cone.map_or(([DVec3::ZERO; 3], [0.0, 0.0, 0.0]), |cone| {
@@ -401,12 +463,15 @@ impl Engine {
             gl.uniform_matrix_3_f32_slice(axes_u.as_ref(), false, &columns);
             gl.uniform_3_f32_slice(cone_u.as_ref(), &cone);
             gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(screen_depth));
+            gl.bind_texture(glow::TEXTURE_2D, Some(screen.depth));
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, Some(viewshed.cube));
             gl.bind_vertex_array(Some(viewshed.vao));
             gl.disable(glow::CULL_FACE);
+            gl.enable(glow::BLEND);
+            gl.blend_equation(glow::MAX);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.blend_equation(glow::FUNC_ADD);
             gl.bind_vertex_array(None);
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, None);
             gl.active_texture(glow::TEXTURE0);
@@ -418,43 +483,46 @@ impl Engine {
 
 #[wasm_bindgen]
 impl Engine {
-    /// Shows what can be seen from a point within `range` metres around it: `lon`, `lat` (degrees), `height` metres
-    /// above the ground; seen and hidden surfaces tinted with `visible` and `hidden` (RGB 0-1) at `opacity`. `cone`:
-    /// heading, tilt, angles of view across and up (degrees) to look one way only, empty to look all around
+    /// Shows what can be seen from points, each within its range: `observers` holds 8 numbers per observer
+    /// (16 at most): longitude, latitude (degrees), metres above the ground, range (metres), then to look one way
+    /// only heading, tilt, angles of view across and up (degrees), the heading NaN to look all around. What some
+    /// observer sees is tinted with `visible`, what is hidden from all those that reach it with `hidden` (RGB 0-1),
+    /// at `opacity`
     #[wasm_bindgen(js_name = setViewshed)]
-    #[allow(clippy::too_many_arguments)]
     pub fn set_viewshed(
         &mut self,
-        lon: f64,
-        lat: f64,
-        height: f64,
-        range: f64,
+        observers: &[f64],
         visible: &[f32],
         hidden: &[f32],
         opacity: f32,
-        cone: &[f64],
     ) -> Result<(), JsValue> {
         let rgb = |c: &[f32]| [0, 1, 2].map(|i| c.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0));
         let finite = |v: f64, default: f64| if v.is_finite() { v } else { default };
+        let observers = observers
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .take(OBSERVERS)
+            .map(|o| Observer {
+                position: DVec2::new(finite(o[0], 0.0), finite(o[1], 0.0).clamp(-85.0, 85.0)),
+                height: finite(o[2], 1.7).clamp(0.0, 10_000.0),
+                range: finite(o[3], 1000.0).clamp(1.0, 100_000.0),
+                cone: o[4].is_finite().then(|| Cone {
+                    heading: o[4],
+                    tilt: finite(o[5], 0.0).clamp(-89.0, 89.0),
+                    across: finite(o[6], 60.0).clamp(1.0, 179.0),
+                    up: finite(o[7], 40.0).clamp(1.0, 179.0),
+                }),
+            })
+            .collect();
         let settings = Settings {
-            position: DVec2::new(finite(lon, 0.0), finite(lat, 0.0).clamp(-85.0, 85.0)),
-            height: finite(height, 1.7).clamp(0.0, 10_000.0),
-            range: finite(range, 1000.0).clamp(1.0, 100_000.0),
+            observers,
             visible: rgb(visible),
             hidden: rgb(hidden),
             opacity: if opacity.is_finite() {
                 opacity.clamp(0.0, 1.0)
             } else {
                 0.5
-            },
-            cone: match *cone {
-                [heading, tilt, across, up] => Some(Cone {
-                    heading: finite(heading, 0.0),
-                    tilt: finite(tilt, 0.0).clamp(-89.0, 89.0),
-                    across: finite(across, 60.0).clamp(1.0, 179.0),
-                    up: finite(up, 40.0).clamp(1.0, 179.0),
-                }),
-                _ => None,
             },
         };
         match &mut self.viewshed {

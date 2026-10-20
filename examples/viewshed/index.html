@@ -15,14 +15,35 @@
       .panel p {
         margin: 2px 0;
       }
-      .panel label:has(input[type="range"]) {
+      .panel button {
+        padding: 1px 8px;
+        font-size: 12px;
+      }
+      /* An observer's settings, in its pin's popup */
+      .observer {
+        width: 180px;
+        font-size: 12px;
+      }
+      .observer p {
+        margin: 3px 0;
+      }
+      .observer label:has(input[type="range"]) {
         display: grid;
         grid-template-columns: 1fr auto;
       }
-      .panel label:has(input[type="range"]) input {
+      .observer label:has(input[type="range"]) input {
         grid-column: 1 / -1;
         grid-row: 2;
+        width: 100%;
         margin: 0;
+      }
+      .observer button {
+        font: inherit;
+        padding: 2px 8px;
+        border: 1px solid #ccd;
+        border-radius: 6px;
+        background: #fff;
+        cursor: pointer;
       }
     </style>
   </head>
@@ -30,13 +51,20 @@
     <div id="map"></div>
     <div class="panel">
       <h1>Viewshed</h1>
-      <p>Seen in green, hidden in red. Drag the pin, or click.</p>
-      <p><label>Height <input id="height" type="range" min="1" max="60" step="1" value="2" /> <span id="height-value"></span></label></p>
-      <p><label><input id="one-way" type="checkbox" checked /> One way, as a camera</label></p>
-      <p><label>Direction <input id="direction" type="range" min="0" max="359" step="1" value="170" /> <span id="direction-value"></span></label></p>
-      <p><label>Angle of view <input id="fov" type="range" min="10" max="170" step="5" value="60" /> <span id="fov-value"></span></label></p>
-      <p><label>Range <input id="range" type="range" min="200" max="2000" step="50" value="900" /> <span id="range-value"></span></label></p>
+      <p>Seen in green, hidden in red. Click the map to add an observer, a pin to set its view; drag it to move it.</p>
+      <p><span id="count"></span> <button id="clear" type="button">Remove all</button></p>
     </div>
+    <template id="observer">
+      <div class="observer">
+        <p><strong class="name"></strong></p>
+        <p><label>Height <span class="height-value"></span><input class="height" type="range" min="1" max="60" step="1" /></label></p>
+        <p><label><input class="one-way" type="checkbox" /> One way, as a camera</label></p>
+        <p><label>Direction <span class="direction-value"></span><input class="direction" type="range" min="0" max="359" step="1" /></label></p>
+        <p><label>Angle of view <span class="fov-value"></span><input class="fov" type="range" min="10" max="170" step="5" /></label></p>
+        <p><label>Range <span class="range-value"></span><input class="range" type="range" min="200" max="2000" step="50" /></label></p>
+        <p><button class="remove" type="button">Remove</button></p>
+      </div>
+    </template>
     <script type="module" src="../dist/viewshed/main.js"></script>
   </body>
 </html>

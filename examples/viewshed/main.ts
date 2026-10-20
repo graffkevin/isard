@@ -1,10 +1,11 @@
 /**
- * Viewshed: what can be seen from a point. From the forecourt of the Sacré-Cœur on the hill of Montmartre, over the
- * IGN's relief (RGE ALTI) and the BD TOPO buildings raised to their height: the scene is drawn from the observer into
- * a depth cube, and each pixel on screen tinted by whether something stands between it and the observer. The pin is
- * the observer: drag it, or click elsewhere; its height above the ground and the range follow the sliders.
+ * Viewshed: what can be seen from points. From the forecourt of the Sacré-Cœur on the hill of Montmartre, over the
+ * IGN's relief (RGE ALTI) and the BD TOPO buildings raised to their height: the scene is drawn from each observer
+ * into a depth cube, and each pixel on screen tinted by whether something stands between it and every observer that
+ * reaches it. A click on the map adds an observer; a click on its pin opens its settings (one popup open at a time),
+ * and the pin drags.
  */
-import { GeoMap, geoplateformeWfs, type LonLat, Marker } from 'isard';
+import { GeoMap, geoplateformeWfs, type LonLat, Marker, Popup, type ViewshedOptions } from 'isard';
 import { element } from '../shared/page.ts';
 
 type Building = { hauteur: number | null };
@@ -22,15 +23,20 @@ const map = await GeoMap.create(element('map'), {
 const buildings = await geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.332, 48.877, 2.356, 48.893]);
 map.addExtrusions({ data: buildings, height: (p) => p.hauteur ?? 6, color: '#e4e1d8' });
 
-let observer: LonLat = [2.34305, 48.88615];
-const pin = new Marker({ draggable: true }).setLonLat(observer).addTo(map);
-const height = element<HTMLInputElement>('height');
-const range = element<HTMLInputElement>('range');
-const oneWay = element<HTMLInputElement>('one-way');
-const direction = element<HTMLInputElement>('direction');
-const fov = element<HTMLInputElement>('fov');
+/** An observer's settings, as its popup's inputs give them */
+interface Observer {
+  pin: Marker;
+  popup: Popup;
+  height: number;
+  range: number;
+  oneWay: boolean;
+  direction: number;
+  fov: number;
+}
+const observers: Observer[] = [];
+let named = 0;
 
-// The edges of the cone on the ground, from the observer to the range
+// The edges of the cones on the ground, from each observer to its range
 const edges = map.addLines({ data: [], color: '#1c7ed6', width: 2.5 });
 const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
   const b = (heading * Math.PI) / 180;
@@ -42,30 +48,83 @@ const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
 };
 
 const show = () => {
-  element('height-value').textContent = `${height.value} m`;
-  element('range-value').textContent = `${range.value} m`;
-  element('direction-value').textContent = `${direction.value}°`;
-  element('fov-value').textContent = `${fov.value}°`;
-  const cone = oneWay.checked ? { direction: Number(direction.value), fov: Number(fov.value) } : {};
-  map.setViewshed({ position: observer, height: Number(height.value), range: Number(range.value), ...cone });
-  const d = Number(range.value);
-  const [a, b] = [-1, 1].map((side) => along(observer, Number(direction.value) + (side * Number(fov.value)) / 2, d));
-  edges.setData(
-    oneWay.checked && a && b
-      ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [a, observer, b] } }]
-      : [],
+  map.setViewshed(
+    observers.map(
+      (o): ViewshedOptions => ({
+        position: o.pin.getLonLat(),
+        height: o.height,
+        range: o.range,
+        ...(o.oneWay ? { direction: o.direction, fov: o.fov } : {}),
+      }),
+    ),
   );
+  edges.setData(
+    observers
+      .filter((o) => o.oneWay)
+      .map((o) => {
+        const at = o.pin.getLonLat();
+        const [a, b] = [-1, 1].map((side) => along(at, o.direction + (side * o.fov) / 2, o.range));
+        return {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: { type: 'LineString' as const, coordinates: [a ?? at, at, b ?? at] },
+        };
+      }),
+  );
+  element('count').textContent = `${observers.length} observer${observers.length > 1 ? 's' : ''}`;
+  element<HTMLButtonElement>('clear').disabled = observers.length === 0;
 };
-for (const input of [height, range, oneWay, direction, fov]) input.addEventListener('input', show);
-// The view follows the pin as it is dragged
-pin.on('drag', ({ lonLat }) => {
-  observer = lonLat;
+
+const add = (lonLat: LonLat, settings: Partial<Observer> = {}) => {
+  const form = element<HTMLTemplateElement>('observer').content.firstElementChild?.cloneNode(true) as HTMLElement;
+  const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
+  const pin = new Marker({ draggable: true }).setLonLat(lonLat).setPopup(popup).addTo(map);
+  const observer: Observer = { pin, popup, height: 2, range: 900, oneWay: true, direction: 170, fov: 60, ...settings };
+  observers.push(observer);
+  named += 1;
+  const part = <T extends HTMLElement>(name: string) => form.querySelector(`.${name}`) as T;
+  part('name').textContent = `Observer ${named}`;
+  const sliders = { height: 'm', direction: '°', fov: '°', range: 'm' } as const;
+  for (const [name, unit] of Object.entries(sliders) as [keyof typeof sliders, string][]) {
+    const input = part<HTMLInputElement>(name);
+    const value = part(`${name}-value`);
+    input.value = String(observer[name]);
+    const read = () => {
+      observer[name] = Number(input.value);
+      value.textContent = `${input.value}${unit === 'm' ? ' m' : unit}`;
+    };
+    read();
+    input.addEventListener('input', () => {
+      read();
+      show();
+    });
+  }
+  const oneWay = part<HTMLInputElement>('one-way');
+  oneWay.checked = observer.oneWay;
+  oneWay.addEventListener('input', () => {
+    observer.oneWay = oneWay.checked;
+    show();
+  });
+  part('remove').addEventListener('click', () => {
+    pin.remove();
+    observers.splice(observers.indexOf(observer), 1);
+    show();
+  });
+  // One popup open at a time
+  popup.on('open', () => {
+    for (const other of observers) if (other !== observer) other.popup.remove();
+  });
+  // The view follows the pin as it is dragged
+  pin.on('drag', show);
+  pin.togglePopup();
   show();
-});
+};
+
 map.on('click', ({ lonLat }) => {
-  if (!lonLat) return;
-  observer = lonLat;
-  pin.setLonLat(lonLat);
+  if (lonLat) add(lonLat);
+});
+element('clear').addEventListener('click', () => {
+  for (const o of observers.splice(0)) o.pin.remove();
   show();
 });
-show();
+add([2.34305, 48.88615]);

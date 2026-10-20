@@ -612,26 +612,31 @@ export class GeoMap {
 
   /** Tints what can be seen from a point and what is hidden from it, within a range, all around or within a cone
    * (`direction`): the relief, extrusions, 3D Tiles and models hide what lies behind them (only what the map has
-   * loaded for its view). Undefined removes it */
-  setViewshed(options: ViewshedOptions | undefined): void {
-    if (!options) {
+   * loaded for its view). Several observers (16 at most): what any of them sees is seen, what is hidden from all those
+   * that reach it is hidden, in the colors and opacity of the first. Undefined or none removes it */
+  setViewshed(options: ViewshedOptions | readonly ViewshedOptions[] | undefined): void {
+    let observers: readonly ViewshedOptions[] = [];
+    if (options) observers = 'position' in options ? [options] : options;
+    const [first] = observers;
+    if (!first) {
       this.engine.clearViewshed();
       return;
     }
-    const [lon, lat] = options.position;
     this.engine.setViewshed(
-      lon,
-      lat,
-      options.height ?? 1.7,
-      options.range ?? 1000,
-      new Float32Array(rgb(options.visibleColor ?? '#2f9e44')),
-      new Float32Array(rgb(options.hiddenColor ?? '#e03131')),
-      options.opacity ?? 0.55,
       new Float64Array(
-        options.direction === undefined
-          ? []
-          : [options.direction, options.tilt ?? 0, options.fov ?? 60, options.verticalFov ?? 40],
+        observers.flatMap((o) => [
+          o.position[0],
+          o.position[1],
+          o.height ?? 1.7,
+          o.range ?? 1000,
+          ...(o.direction === undefined
+            ? [Number.NaN, 0, 0, 0]
+            : [o.direction, o.tilt ?? 0, o.fov ?? 60, o.verticalFov ?? 40]),
+        ]),
       ),
+      new Float32Array(rgb(first.visibleColor ?? '#2f9e44')),
+      new Float32Array(rgb(first.hiddenColor ?? '#e03131')),
+      first.opacity ?? 0.55,
     );
     this.requestRender();
   }

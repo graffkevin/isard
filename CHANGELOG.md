@@ -3,6 +3,14 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- `GeoMap.setViewshed` takes several observers (16 at most): what any of them sees is seen, what is hidden from all
+  those that reach it is hidden. The viewshed example: a click on the map adds an observer, a click on its pin opens
+  its settings in a popup (one open at a time), a button removes it or all of them.
+
 ## [0.6.0] - 2026-10-19
 
 ### Added

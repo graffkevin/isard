@@ -196,7 +196,8 @@ export interface AtmosphereOptions {
   fogGroundBlend?: number;
 }
 
-/** What can be seen from a point (`GeoMap.setViewshed`) */
+/** What can be seen from a point (`GeoMap.setViewshed`); with several observers, the colors and opacity are the
+ * first one's */
 export interface ViewshedOptions {
   /** The observer */
   position: LonLat;
