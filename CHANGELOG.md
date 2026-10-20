@@ -12,6 +12,12 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   its observer's eye, the cone's tilt and vertical field of view in its popup (120° by default, as an eye rather
   than a camera: the ground in front of a raised observer is in view).
 
+### Fixed
+
+- `geoplateformeWfs` past 5000 features: the WFS returns 5000 per request, the rest of the box was missing (holes
+  among the buildings of the viewshed example, 7015 of them). The pages are asked together after the first, which
+  tells how many there are; `count` (default 50 000) caps the whole.
+
 ## [0.6.1] - 2026-10-20
 
 ### Added

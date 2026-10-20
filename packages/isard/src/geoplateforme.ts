@@ -85,31 +85,52 @@ export function geoplateformeWms(
   };
 }
 
+/** Features the Géoplateforme's WFS returns per request at most */
+const WFS_PAGE = 5000;
+
 /**
  * Features of the Géoplateforme's WFS in a box (west, south, east, north, degrees), as GeoJSON in longitudes and
  * latitudes: `await geoplateformeWfs('BDTOPO_V3:batiment', [2.41, 48.84, 2.43, 48.85])`. At most `count` features
- * (default 5000). The type names are those of its capabilities (BD TOPO, ADMIN EXPRESS…). With `srsName`
- * (`'EPSG:2154'`), the features come in that CRS (the box stays in degrees), the collection naming it in its `crs`
- * member: the feature layers reproject it by themselves
+ * (default 50 000), asked by pages of 5000: the first one tells how many there are, the others are asked together.
+ * The type names are those of its capabilities (BD TOPO, ADMIN EXPRESS…). With `srsName` (`'EPSG:2154'`), the
+ * features come in that CRS (the box stays in degrees), the collection naming it in its `crs` member: the feature
+ * layers reproject it by themselves
  */
 export async function geoplateformeWfs<P = Properties>(
   typeName: string,
   [west, south, east, north]: [number, number, number, number],
   options: { count?: number; signal?: AbortSignal; srsName?: string } = {},
 ): Promise<FeatureCollection<P>> {
-  const url = new URL('https://data.geopf.fr/wfs/ows');
-  url.search = new URLSearchParams({
-    SERVICE: 'WFS',
-    VERSION: '2.0.0',
-    REQUEST: 'GetFeature',
-    TYPENAMES: typeName,
-    OUTPUTFORMAT: 'application/json',
-    SRSNAME: options.srsName ?? 'EPSG:4326',
-    // WFS 2.0 in EPSG:4326: latitude first
-    BBOX: `${south},${west},${north},${east},urn:ogc:def:crs:EPSG::4326`,
-    COUNT: String(options.count ?? 5000),
-  }).toString();
-  const response = await fetch(url, options.signal ? { signal: options.signal } : {});
-  if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);
-  return response.json() as Promise<FeatureCollection<P>>;
+  const limit = Math.max(1, options.count ?? 50_000);
+  const page = async (start: number, count: number) => {
+    const url = new URL('https://data.geopf.fr/wfs/ows');
+    url.search = new URLSearchParams({
+      SERVICE: 'WFS',
+      VERSION: '2.0.0',
+      REQUEST: 'GetFeature',
+      TYPENAMES: typeName,
+      OUTPUTFORMAT: 'application/json',
+      SRSNAME: options.srsName ?? 'EPSG:4326',
+      // WFS 2.0 in EPSG:4326: latitude first
+      BBOX: `${south},${west},${north},${east},urn:ogc:def:crs:EPSG::4326`,
+      COUNT: String(count),
+      STARTINDEX: String(start),
+    }).toString();
+    const response = await fetch(url, options.signal ? { signal: options.signal } : {});
+    if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);
+    return response.json() as Promise<FeatureCollection<P> & { numberMatched?: number | string }>;
+  };
+  const first = await page(0, Math.min(WFS_PAGE, limit));
+  const matched = Number(first.numberMatched);
+  const total = Math.min(Number.isFinite(matched) ? matched : 0, limit);
+  if (first.features.length < WFS_PAGE || total <= first.features.length) return first;
+  const starts: number[] = [];
+  for (let start = first.features.length; start < total; start += WFS_PAGE) starts.push(start);
+  const rest = await Promise.all(starts.map((start) => page(start, Math.min(WFS_PAGE, total - start))));
+  // Pages may overlap where the server's order shifts: each feature once, by its id
+  const seen = new Set<unknown>();
+  const features = [first, ...rest]
+    .flatMap((r) => r.features)
+    .filter((f) => f.id === undefined || (!seen.has(f.id) && seen.add(f.id) !== undefined));
+  return { ...first, features };
 }
