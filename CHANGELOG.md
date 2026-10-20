@@ -16,6 +16,14 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Fixed
 
+- A view tilted to the horizon over 512 px tiles (the vector basemaps) no longer flickers without end: it wanted
+  more tiles than the pool holds (105 at 63°, 193 at 70°, for 96 slots), each upload evicting a tile still drawn
+  (the coarsest first, the far ones and their stand-ins), asked again, and so on: blank rectangles, tiles of the
+  wrong level, a map never idle. The tiles a frame draws and their stand-ins are now held before its uploads, and
+  only as many tiles are asked for as there is room left (the farthest wait, drawn with their stand-ins).
+- The labels of a tilted vector basemap follow the levels of its ground tiles: far away, those of lower zooms
+  (fewer, bigger names) instead of the near ones piled up at the horizon; label tiles that failed are asked again
+  after 3 s.
 - `geoplateformeWfs` past 5000 features: the WFS returns 5000 per request, the rest of the box was missing (holes
   among the buildings of the viewshed example, 7015 of them). The pages are asked together after the first, which
   tells how many there are; `count` (default 50 000) caps the whole.

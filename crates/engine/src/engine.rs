@@ -404,6 +404,17 @@ impl Engine {
             .collect()
     }
 
+    /// Tiles a raster layer wants for the view of the last frame, three numbers per tile (z, x, y), the nearest to
+    /// the eye first: the level each area of the ground is drawn at, for the labels of a vector style to follow it
+    #[must_use]
+    #[wasm_bindgen(js_name = wantedTiles)]
+    pub fn wanted_tiles(&self, id: u32) -> Vec<u32> {
+        match self.layers.iter().find(|(i, _)| *i == id) {
+            Some((_, Slot::Raster(layer))) => layer.wanted().flat_map(|t| [u32::from(t.z), t.x, t.y]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Loads in advance the tiles of a camera flight's destination; `clearPreload` when the flight ends
     pub fn preload(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
         let mut camera = self.camera.clone();

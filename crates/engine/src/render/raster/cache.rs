@@ -66,7 +66,7 @@ pub enum Install {
     Slot(u16),
     /// Already in the pool (a duplicate arrival): installing it again would leak a slot
     Duplicate,
-    /// Every slot is on screen this frame
+    /// Every slot is held by this frame (drawn, or standing in)
     Full,
 }
 
@@ -106,6 +106,8 @@ impl Plan {
 pub struct Cache {
     pub min_z: u8,
     pub max_z: u8,
+    /// Slots of the pool
+    capacity: usize,
     slots: HashMap<TileId, Loaded>,
     free: Vec<u16>,
     /// The tiles of the pool by the last frame they were drawn: least recently used first
@@ -124,6 +126,7 @@ impl Cache {
         Self {
             min_z,
             max_z,
+            capacity: usize::from(slots),
             slots: HashMap::new(),
             free: (0..slots).rev().collect(),
             lru: BTreeSet::new(),
@@ -266,8 +269,19 @@ impl Cache {
         }
     }
 
+    /// Marks a tile of the pool as held by `frame` (drawn, or standing in): it is not evicted by this frame's
+    /// uploads. Whether the tile is in the pool and was not held yet
+    fn hold(&mut self, tile: TileId, frame: u64) -> bool {
+        let held = self.slots.get(&tile).is_some_and(|l| l.used != frame);
+        self.touch(tile, frame);
+        held
+    }
+
     /// Chooses what to draw and what to load for the tiles `wanted` (by priority) and a flight destination
-    /// (`preload`), into `plan`
+    /// (`preload`), into `plan`. The tiles the frame relies on (those drawn, their stand-ins) are held in the pool
+    /// before the frame's uploads, and only as many tiles are asked for as the pool has room left: a view wanting
+    /// more tiles than the pool holds (a tilted view to the horizon over large tiles) keeps its nearest ones and
+    /// draws the farthest with their stand-ins for good, instead of evicting and reloading them without end
     pub fn plan(
         &mut self,
         plan: &mut Plan,
@@ -282,20 +296,28 @@ impl Cache {
         plan.urgent.clear();
         plan.cover.clear();
         plan.deferred = false;
+        // Slots held by this frame
+        let mut held = 0;
         for selected in wanted {
             let tile = selected.tile;
-            if self.slots.contains_key(&tile) {
+            if self.hold(tile, frame) {
+                held += 1;
                 plan.tiles.push(tile);
                 continue;
             }
             // Stand-in: nearest loaded ancestor (cropped to this tile by `sample`), or its loaded descendants
             // (zooming out)
-            let covered = self.loaded_ancestor(tile).is_some();
-            if covered {
+            let ancestor = self.loaded_ancestor(tile);
+            let covered = ancestor.is_some();
+            if let Some(ancestor) = ancestor {
+                held += usize::from(self.hold(ancestor, frame));
                 plan.tiles.push(tile);
             } else {
                 let before = plan.tiles.len();
                 self.push_descendants(tile, DESCENDANT_LEVELS, &mut plan.tiles);
+                for k in before..plan.tiles.len() {
+                    held += usize::from(self.hold(plan.tiles[k], frame));
+                }
                 if plan.tiles.len() == before {
                     // Nothing yet: drawn anyway, the other layers of the pass may cover it
                     plan.tiles.push(tile);
@@ -346,13 +368,19 @@ impl Cache {
         }
         // Destination of a camera flight: loaded after the current view, kept in the pool
         for &tile in preload {
-            if self.touch(tile, frame).is_none() && !self.is_failed(tile, now) {
+            if self.hold(tile, frame) {
+                held += 1;
+            } else if !self.slots.contains_key(&tile) && !self.is_failed(tile, now) {
                 plan.want(tile, false);
             }
         }
-        // Coverage first (urgent: holes), then the tiles by priority, then the flight destination
+        // Coverage first (urgent: holes), then the tiles by priority, then the flight destination; past the room
+        // left in the pool, the last ones wait (the farthest tiles, then the destination)
         plan.urgent.splice(0..0, plan.cover.iter().map(|_| true));
         plan.missing.splice(0..0, plan.cover.drain(..));
+        let room = self.capacity.saturating_sub(held);
+        plan.missing.truncate(room);
+        plan.urgent.truncate(room);
     }
 
     /// What this source draws on the area of `tile`: its texture (or the deepest level it has, enlarged), with the
@@ -580,6 +608,34 @@ mod tests {
         cache.plan(&mut plan, &[off], &[far], 4, 0.0, Motion::default());
         assert_eq!(plan.missing, [tile, far]);
         assert_eq!(plan.urgent, [false, false]);
+    }
+
+    #[test]
+    fn a_view_wanting_more_tiles_than_the_pool_holds_keeps_its_nearest_ones() {
+        let mut cache = Cache::new(0, 20, 4);
+        let mut plan = Plan::default();
+        let root = TileId::new(0, 0, 0);
+        let [p, q, r, s, t] = [0, 1, 2, 3, 4].map(|x| TileId::new(3, x, 0));
+        for tile in [root, p, q, r] {
+            cache.install(tile, None, 1, 0.0);
+        }
+        // Five tiles wanted, by priority: three loaded, two standing in with the root; the pool is full of them, so
+        // nothing more is asked for, and an arrival finds no slot
+        let wanted: Vec<Selected> = [p, q, r, s, t].into_iter().map(selected).collect();
+        cache.plan(&mut plan, &wanted, &[], 2, 0.0, Motion::default());
+        assert_eq!(plan.tiles, [p, q, r, s, t]);
+        assert_eq!(plan.missing, []);
+        assert_eq!(cache.install(s, None, 2, 0.0), Install::Full);
+        // Fewer wanted: two slots are held (p and the root), the others are free for the two tiles asked for
+        let wanted: Vec<Selected> = [p, s, t].into_iter().map(selected).collect();
+        cache.plan(&mut plan, &wanted, &[], 3, 0.0, Motion::default());
+        assert_eq!(plan.missing, [s, t]);
+        assert_eq!(cache.install(s, None, 3, 0.0), Install::Slot(2));
+        assert!(cache.contains(p) && cache.contains(root) && !cache.contains(q));
+        // Now three are held: room for one, the nearest of the rest
+        let wanted: Vec<Selected> = [p, s, t, TileId::new(3, 5, 0)].into_iter().map(selected).collect();
+        cache.plan(&mut plan, &wanted, &[], 4, 0.0, Motion::default());
+        assert_eq!(plan.missing, [t]);
     }
 
     #[test]

@@ -116,6 +116,9 @@ async function resolveSource(source: Style['sources'][string]): Promise<{ tiles?
   return { tiles: [`pmtiles://${archive}/{z}/{x}/{y}`], maxzoom: source.maxzoom ?? header.maxZoom };
 }
 
+/** Pause before the labels of tiles that failed are asked for again, when no move brings an update (ms) */
+const RETRY_LABELS_MS = 3000;
+
 /** Default size of a basemap worker pool: cores - 1, 1 to 4 */
 export function defaultWorkerCount(): number {
   return Math.min(4, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2) - 1));
@@ -352,6 +355,8 @@ export class VectorTiles {
   private readonly attribution: string | undefined;
   /** Its raster and label layers, removed with it */
   private readonly layers: Layer[] = [];
+  /** Its first raster layer: the ground its labels follow */
+  private ground: RasterLayer | undefined;
   /** The style once loaded, with its source resolved */
   readonly ready: Promise<{ style: Style; tiles: string; maxzoom: number; rasters: Record<string, RasterSource> }>;
 
@@ -495,13 +500,16 @@ export class VectorTiles {
       ...(before ? { before } : {}),
     });
     this.layers.push(layer);
+    this.ground ??= layer;
     return layer;
   }
 
   /**
    * A symbol layer with the labels of the style's symbol layers (or those `layers` keeps), updated as the view
-   * moves: the labels of the vector tiles in view, the higher style layers placed first. It stays above the layers
-   * added after it unless one is moved over it.
+   * moves: the labels of the vector tiles in view, the higher style layers placed first. With a raster layer of
+   * the style (`raster`), the tiles follow the levels the ground is drawn at: a tilted view takes coarser tiles far
+   * away, with the few labels of a lower zoom, as near the camera it takes the fine ones. Without, the tiles around
+   * the center at the zoom of the view. It stays above the layers added after it unless one is moved over it.
    */
   labels(options: { layers?: (layer: StyleLayer) => boolean; maxTiles?: number } = {}): SymbolLayer<LabelCandidate> {
     const { layers = () => true, maxTiles = 36 } = options;
@@ -554,37 +562,56 @@ export class VectorTiles {
     let generation = 0;
     /** The tiles whose labels are shown */
     let shown = '';
+    /** The update asked again after tiles failed */
+    let retry = 0;
     const update = async () => {
       if (this.destroyed) return;
       const { key, maxzoom } = await renderer;
       const run = ++generation;
       const camera = this.map.getCamera();
-      const z = Math.max(0, Math.min(Math.floor(camera.zoom), maxzoom));
-      const n = 2 ** z;
-      const [west, south, east, north] = this.map.getBounds();
-      const tx = (lon: number) => Math.floor(mercatorX(lon) * n);
-      const ty = (lat: number) => Math.floor(mercatorY(lat) * n);
-      const [cx, cy] = [mercatorX(camera.center[0]) * n, ty(camera.center[1])];
-      // The tiles of the bounds, within a window around the center: a tilted view's bounds reach far, and only the
-      // nearest `maxTiles` are kept anyway
-      const reach = Math.ceil(Math.sqrt(maxTiles)) + 2;
-      const [x0, x1] = [
-        Math.max(0, tx(west), Math.floor(cx) - reach),
-        Math.min(n - 1, tx(east), Math.floor(cx) + reach),
-      ];
-      const [y0, y1] = [
-        Math.max(0, ty(north), Math.floor(cy) - reach),
-        Math.min(n - 1, ty(south), Math.floor(cy) + reach),
-      ];
-      const wanted: [number, number][] = [];
-      for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) wanted.push([x, y]);
-      // Nearest to the center first, at most `maxTiles` (tilted views reach far)
-      wanted.sort(
-        (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
-      );
-      // Past the source's deepest level, its tiles' labels at the zoom of the view (the layers of the deeper zooms)
-      const zoom = Math.max(z, Math.min(Math.floor(camera.zoom), 24));
-      const keys = wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`);
+      const zoom = Math.max(0, Math.min(Math.floor(camera.zoom), 24));
+      const ground = this.ground && this.map.hasLayer(this.ground) ? this.map.engine.wantedTiles(this.ground.id) : [];
+      const keys: string[] = [];
+      if (ground.length > 0) {
+        // The ground's tiles, the nearest first: a tile so many levels coarser than the finest in view has its
+        // labels of a zoom as many under the view's, past the source's deepest level those of that level at the zoom
+        let top = 0;
+        for (let i = 0; i < ground.length; i += 3) top = Math.max(top, ground[i] as number);
+        for (let i = 0; i < ground.length && keys.length < maxTiles; i += 3) {
+          const [z, x, y] = [ground[i], ground[i + 1], ground[i + 2]] as [number, number, number];
+          const at = Math.max(0, zoom - (top - z));
+          const tz = Math.min(at, maxzoom, z);
+          const shift = 2 ** (z - tz);
+          const key = `${tz}/${Math.floor(x / shift)}/${Math.floor(y / shift)}${at > tz ? `@${at}` : ''}`;
+          if (!keys.includes(key)) keys.push(key);
+        }
+      } else {
+        const z = Math.min(zoom, maxzoom);
+        const n = 2 ** z;
+        const [west, south, east, north] = this.map.getBounds();
+        const tx = (lon: number) => Math.floor(mercatorX(lon) * n);
+        const ty = (lat: number) => Math.floor(mercatorY(lat) * n);
+        const [cx, cy] = [mercatorX(camera.center[0]) * n, ty(camera.center[1])];
+        // The tiles of the bounds, within a window around the center: a tilted view's bounds reach far, and only
+        // the nearest `maxTiles` are kept anyway
+        const reach = Math.ceil(Math.sqrt(maxTiles)) + 2;
+        const [x0, x1] = [
+          Math.max(0, tx(west), Math.floor(cx) - reach),
+          Math.min(n - 1, tx(east), Math.floor(cx) + reach),
+        ];
+        const [y0, y1] = [
+          Math.max(0, ty(north), Math.floor(cy) - reach),
+          Math.min(n - 1, ty(south), Math.floor(cy) + reach),
+        ];
+        const wanted: [number, number][] = [];
+        for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) wanted.push([x, y]);
+        // Nearest to the center first, at most `maxTiles` (tilted views reach far)
+        wanted.sort(
+          (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
+        );
+        // Past the source's deepest level, its tiles' labels at the zoom of the view (the layers of the deeper zooms)
+        for (const [x, y] of wanted.slice(0, maxTiles)) keys.push(`${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`);
+      }
       // The same tiles as the labels shown: nothing to do
       const set = keys.join(' ');
       if (set === shown) return;
@@ -592,10 +619,19 @@ export class VectorTiles {
         keys.map((k, index) => {
           let p = tiles.get(k);
           if (p) return p;
-          const [tz, x, y] = (k.split('@')[0] ?? '').split('/').map(Number) as [number, number, number];
+          const [tile, deeper] = k.split('@');
+          const [tz, x, y] = (tile ?? '').split('/').map(Number) as [number, number, number];
           // The nearest tiles first: the others wait for the raster tiles
           const priority: Priority = index < 4 ? 'auto' : 'low';
-          const work: BasemapWork = { type: 'labels', key, z: tz, x, y, priority, ...(zoom > tz ? { zoom } : {}) };
+          const work: BasemapWork = {
+            type: 'labels',
+            key,
+            z: tz,
+            x,
+            y,
+            priority,
+            ...(deeper === undefined ? {} : { zoom: Number(deeper) }),
+          };
           p = this.request(tz, x, y, work).then(
             (r) => tileLabels('labels' in r ? r.labels : []),
             () => {
@@ -610,8 +646,14 @@ export class VectorTiles {
         }),
       );
       if (run !== generation || this.destroyed) return;
-      // A tile that failed is missing: the next update asks for it again
+      // A tile that failed is missing: the next update asks for it again, after a pause if no move brings one
       shown = keys.every((k) => tiles.has(k)) ? set : '';
+      if (shown === '' && !retry) {
+        retry = window.setTimeout(() => {
+          retry = 0;
+          refresh();
+        }, RETRY_LABELS_MS);
+      }
       // The labels of the higher style layers first: they win the collisions; for each style layer, the tiles nearest
       // to the center first
       const layerIds = [...new Set(lists.flatMap((list) => list.map(([layer]) => layer)))].sort((a, b) => b - a);
@@ -636,7 +678,10 @@ export class VectorTiles {
         refresh();
       }, 250);
     };
-    this.cleanup.push(this.map.on('move', schedule), this.map.on('moveend', refresh), () => clearTimeout(timer));
+    this.cleanup.push(this.map.on('move', schedule), this.map.on('moveend', refresh), () => {
+      clearTimeout(timer);
+      clearTimeout(retry);
+    });
     refresh();
     return symbol;
   }

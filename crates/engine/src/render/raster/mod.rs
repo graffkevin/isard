@@ -290,9 +290,11 @@ impl RasterSource {
                     continue;
                 }
                 Install::Full => {
-                    // Every slot is on screen: the tile waits for one (the next frame is asked by `finish`)
-                    self.queue.push_front((tile, pixels));
-                    break;
+                    // Every slot is held by this frame: the tile is let go (the plan asks for it again once the
+                    // pool has room; kept waiting, it would ask for a frame after another)
+                    self.queued.remove(&tile);
+                    pixels.close();
+                    continue;
                 }
             };
             self.queued.remove(&tile);
@@ -335,6 +337,11 @@ impl RasterSource {
     /// Tiles in the pool and their slots
     pub fn loaded(&self) -> impl Iterator<Item = (TileId, u16)> + '_ {
         self.cache.loaded()
+    }
+
+    /// Tiles the last frame's view wanted, by priority (the nearest to the eye first)
+    pub fn wanted(&self) -> impl Iterator<Item = TileId> + '_ {
+        self.wanted.iter().map(|s| s.tile)
     }
 
     /// Tiles of the flight destination, computed once per destination
@@ -464,14 +471,15 @@ impl RasterSource {
         self.wanted_set.extend(self.preload.1.iter().copied());
         // The tiles kept first (`keep`), which the arrivals not needed any more are checked against
         self.abort_stale(now);
-        self.receive(gl, frame, now, ctx.loading.upload_budget_ms);
         self.fading = false;
         let motion = Motion {
             flying: ctx.loading.skip_levels_in_flight && ctx.moving && ctx.preload.is_some(),
             defer_off_center: ctx.loading.defer_off_center && ctx.moving,
         };
+        // The plan before the uploads: the tiles it relies on are held, the uploads take the other slots
         self.cache
             .plan(&mut self.plan, &self.wanted, &self.preload.1, frame, now, motion);
+        self.receive(gl, frame, now, ctx.loading.upload_budget_ms);
         // The deferred tiles load once the camera rests
         if self.plan.deferred && !self.wake.get() {
             self.wake.set(true);
@@ -532,8 +540,8 @@ impl RasterSource {
             if self.in_flight.len() >= max_requests {
                 break;
             }
-            // Neither loading nor arrived and waiting for its upload
-            if !self.in_flight.contains_key(&tile) && !self.queued.contains(&tile) {
+            // Neither loading, nor arrived and waiting for its upload, nor uploaded since the plan
+            if !self.in_flight.contains_key(&tile) && !self.queued.contains(&tile) && !self.cache.contains(tile) {
                 self.request(tile, urgent.get(k).copied().unwrap_or(false), redraw, now);
             }
         }
