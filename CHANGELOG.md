@@ -29,6 +29,10 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Fixed
 
+- 3D Tiles past their GPU memory budget no longer load without end: the tiles of the view that were not drawn yet
+  (loaded, waiting for their siblings, or parents of drawn tiles) were unloaded first, then asked again, and so on
+  (about 400 requests and 180 frames every 10 s over the Strasbourg mesh at zoom 18, pitch 70). The tiles of the view
+  are now kept, and nothing more is asked past the budget: the view settles (in 20 s there), parents standing in.
 - The viewshed over 3D Tiles still loading: its depth passes drew the finest tiles only, not the coarser ones standing
   in for those missing, and saw the relief under the mesh there (a tint floating beside the mesh). Its depth targets
   now have a stencil, and the meshes are drawn into them as the frame draws them.

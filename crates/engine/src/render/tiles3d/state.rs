@@ -176,7 +176,9 @@ impl<M: Resident> States<M> {
 
     /// The tiles to request this frame, in order, into `out`: those of `request` while fewer than `max_requests`
     /// load, then, once every tile in view is asked, a few siblings out of view (`prefetch`) while the GPU memory is
-    /// well under `budget` (`PREFETCH_TENTHS`)
+    /// well under `budget` (`PREFETCH_TENTHS`). Nothing past the budget: the tiles of the view are kept (`touch`), so
+    /// a view wanting more than the budget stays with what it has, its parents standing in, instead of unloading
+    /// and loading again without end
     pub fn plan_requests(
         &self,
         request: &[usize],
@@ -186,6 +188,9 @@ impl<M: Resident> States<M> {
         out: &mut Vec<usize>,
     ) {
         out.clear();
+        if self.gpu_bytes >= budget {
+            return;
+        }
         let mut in_flight = self.loading.len();
         for &i in request {
             if in_flight >= max_requests {
@@ -371,6 +376,17 @@ mod tests {
         assert_eq!(root_retry_delay(2), Some(4_000.0));
         assert_eq!(root_retry_delay(3), Some(8_000.0));
         assert_eq!(root_retry_delay(ROOT_ATTEMPTS), None);
+    }
+
+    #[test]
+    fn nothing_is_asked_past_the_budget() {
+        let mut s = states(10);
+        s.replace(0, State::Ready(Mesh { bytes: 100, used: 0 }));
+        let mut out = Vec::new();
+        s.plan_requests(&[1, 2], &[7], 4, 100, &mut out);
+        assert_eq!(out, [] as [usize; 0]);
+        s.plan_requests(&[1, 2], &[7], 4, 101, &mut out);
+        assert_eq!(out, [1, 2]);
     }
 
     #[test]

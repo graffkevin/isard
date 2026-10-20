@@ -464,6 +464,9 @@ impl Tiles3dLayer {
             self.request(i, urgent);
         }
         self.requests = requests;
+        // Every tile of the view is kept, those loaded and waiting for their siblings too (a parent stands in until all
+        // its children are ready): unloaded past the budget, they would be asked again, and so on
+        self.states.touch(&selection.visible, frame);
         self.states.touch(&selection.draw, frame);
         self.states.touch(&selection.backfill, frame);
         self.evict(gl, frame);
