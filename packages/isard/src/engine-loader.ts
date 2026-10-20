@@ -13,7 +13,7 @@ export type EngineClass = (new (
   canvas: HTMLCanvasElement,
   redraw: () => void,
 ) => Engine) &
-  Pick<typeof Engine, 'customMatrix'>;
+  Pick<typeof Engine, 'customMatrix' | 'geoidHeight'>;
 
 /** An engine loaded: its compiled module and its class */
 export interface Bindings {

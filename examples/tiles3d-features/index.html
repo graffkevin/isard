@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3D Tiles features · Isard</title>
+    <link rel="stylesheet" href="../shared/page.css" />
+    <style>
+      .panel {
+        max-width: 240px;
+        font-size: 12px;
+      }
+      .isard-popup-content table {
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .isard-popup-content td {
+        padding: 1px 6px 1px 0;
+        vertical-align: top;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="panel">
+      <h1>3D Tiles features</h1>
+      <p>Click a building: its properties, from the tile's batch table. The color tints the whole layer.</p>
+      <p><label>Color <input id="color" type="color" value="#9ec5fe" /></label></p>
+    </div>
+    <script type="module" src="../dist/tiles3d-features/main.js"></script>
+  </body>
+</html>

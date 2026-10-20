@@ -91,6 +91,7 @@ export {
   type PopupEvents,
   type PopupOptions,
 } from './overlay.ts';
+export { type Panorama, type PanoramaOptions, Panoramas } from './panoramas.ts';
 export {
   PMTiles,
   type PmtilesEntry,
@@ -113,6 +114,7 @@ export type {
   BodyOptions,
   CelestialBody,
   FeatureHit,
+  FirstPersonView,
   FlyToOptions,
   GeoMapOptions,
   LegacyBasemap,

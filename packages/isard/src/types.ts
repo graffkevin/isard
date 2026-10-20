@@ -225,6 +225,20 @@ export interface ViewshedOptions {
   verticalFov?: number;
 }
 
+/** An eye at street level (`GeoMap.setFirstPerson`) */
+export interface FirstPersonView {
+  /** Where it stands */
+  lonLat: LonLat;
+  /** Metres above the ground (default 1.7) */
+  height?: number;
+  /** Degrees clockwise from north it looks to */
+  bearing: number;
+  /** Degrees from straight down: 90 level (the default), 180 straight up */
+  pitch?: number;
+  /** Vertical field of view, degrees (default 75) */
+  fov?: number;
+}
+
 /** Layers shown on one side of a vertical line only (`GeoMap.setSwipe`) */
 export interface SwipeOptions {
   /** CSS pixels from the left of the map */

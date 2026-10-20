@@ -47,6 +47,7 @@ import {
 } from './layers.ts';
 import type { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
+import { loadPanoramas, type PanoramaHost, type PanoramaOptions, type Panoramas } from './panoramas.ts';
 import { PointCloudLayer, type PointCloudOptions } from './pointclouds.ts';
 import { type HeaderRules, headerRules, onHeaderRules } from './requests.ts';
 import {
@@ -68,6 +69,7 @@ import type {
   BasemapName,
   CelestialBody,
   FeatureHit,
+  FirstPersonView,
   FlyToOptions,
   GeoMapOptions,
   LoadingMode,
@@ -441,6 +443,41 @@ export class GeoMap {
     this.resize();
   }
 
+  /** The street-level eye, while there is one (`setFirstPerson`) */
+  #firstPerson: Required<FirstPersonView> | undefined;
+
+  /** The street-level eye, if the camera is one */
+  get firstPerson(): Readonly<Required<FirstPersonView>> | undefined {
+    return this.#firstPerson;
+  }
+
+  /**
+   * Puts the camera at street level: an eye `height` metres above the ground, looking `bearing` and `pitch`, the
+   * drag turning it around (the wheel narrows or widens its field of view); undefined gives back the camera turning
+   * around a point, above where the eye stood, facing the same way
+   */
+  setFirstPerson(view: FirstPersonView | undefined): void {
+    if (!view) {
+      const was = this.#firstPerson;
+      this.#firstPerson = undefined;
+      if (was) this.setCamera({ center: was.lonLat, zoom: 18, pitch: 60, bearing: was.bearing });
+      return;
+    }
+    const eye = {
+      height: 1.7,
+      pitch: 90,
+      fov: 75,
+      ...view,
+      lonLat: [view.lonLat[0], view.lonLat[1]] as LonLat,
+    };
+    eye.pitch = Math.max(1, Math.min(179, eye.pitch));
+    eye.fov = Math.max(10, Math.min(140, eye.fov));
+    eye.bearing = ((eye.bearing % 360) + 360) % 360;
+    this.#firstPerson = eye;
+    this.engine.setFirstPerson(eye.lonLat[0], eye.lonLat[1], eye.height, eye.bearing, eye.pitch, eye.fov);
+    this.requestRender();
+  }
+
   /** The swipe set (`setSwipe`), applied again with the layers' ids of a new engine */
   private swipe: SwipeOptions | undefined;
 
@@ -787,6 +824,35 @@ export class GeoMap {
   /** Position under a screen point (CSS pixels), undefined above the horizon */
   unproject(point: Point): LonLat | undefined {
     return this.engine.ground(point[0], point[1]);
+  }
+
+  /**
+   * Street-level panoramas (oriented images of a vehicle's cameras, the iTowns immersive format): their positions
+   * and calibrations loaded, none shown until `show`, which projects one onto the scene around it
+   */
+  async addPanoramas(options: PanoramaOptions): Promise<Panoramas> {
+    const host: PanoramaHost = {
+      setPanorama: (...args) => {
+        this.engine.setPanorama(...args);
+        this.requestRender();
+      },
+      setPanoramaImage: (index, image) => this.engine.setPanoramaImage(index, image),
+      clearPanorama: () => this.engine.clearPanorama(),
+      geoidHeight: (lon, lat) => this.engineClass.geoidHeight(lon, lat),
+      firstPerson: () => this.firstPerson,
+      setFirstPerson: (view) => this.setFirstPerson(view),
+      elevationAt: (lonLat) => this.elevationAt(lonLat),
+      listen: (click, key) => {
+        const off = this.on('click', ({ lonLat }) => click(lonLat));
+        const container = this.getContainer();
+        container.addEventListener('keydown', key);
+        return () => {
+          off();
+          container.removeEventListener('keydown', key);
+        };
+      },
+    };
+    return loadPanoramas(host, options);
   }
 
   /** Altitude of the relief at a position, in metres (exaggeration included): from the copy of its tiles the map

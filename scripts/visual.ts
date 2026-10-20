@@ -87,9 +87,19 @@ const VIEWPORTS: Record<string, [number, number]> = {
  * down to 5 cm tiles under its pitched camera whatever the viewport, ~110 b3dm (~12 MB even gzipped), too heavy for the
  * fixtures in the repository. Its fixtures and baseline are not committed. Valles Marineris likewise (~4 MB more of Mars
  * tiles): the relief of Mars is tested over Olympus Mons. The viewshed too while it is a prototype (the relief and the
- * BD TOPO buildings of Montmartre).
+ * BD TOPO buildings of Montmartre), and the examples of external data heavy to record: the panoramas (iTowns' sample
+ * images), the swipe (two orthophotos), the 3D Tiles features (Cesium's samples), the 3D panels.
  */
-const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris', 'viewshed', 'viewshed-mesh']);
+const OPT_IN = new Set([
+  'tiles3d',
+  'mars-valles-marineris',
+  'viewshed',
+  'viewshed-mesh',
+  'panoramas',
+  'swipe',
+  'tiles3d-features',
+  'panels',
+]);
 
 /**
  * The viewer (apps/viewer/dist), tested as an example: a committed GeoJSON (tests/visual/data) added by its `?data=`

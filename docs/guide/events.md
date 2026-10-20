@@ -45,6 +45,20 @@ map.project([2.35, 48.85]);   // [x, y] CSS pixels, undefined behind the camera 
 map.unproject([400, 300]);    // [lon, lat] on the relief, undefined above the horizon
 ```
 
+## Surfaces
+
+```ts
+map.pickSurface([400, 300]); // { lonLat, height }: what is drawn under the point, on a roof as on the ground
+map.surfaceAt([2.35, 48.85]); // metres above the relief of the top of what stands there (a roof, a mesh), 0 on it
+map.elevationAt([2.35, 48.85]); // the relief's altitude there, metres
+map.metersPerPixel(); // metres per CSS pixel at the center (a scale bar), or at a point
+```
+
+`pickSurface` draws the scene of the last frame again from the camera and reads its depth at the point: the
+position the pointer meets, on a building or a 3D Tiles mesh as well as on the relief. `surfaceAt` draws it from
+straight above into one pixel: the top of what stands at a position, whatever the camera sees in front of it (a
+marker dragged over roofs). Both wait for the GPU; `elevationAt` reads the copy of the relief's tiles the map keeps.
+
 ## Picking features
 
 ```ts

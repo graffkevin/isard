@@ -21,8 +21,9 @@ const BUDGETS = {
   // until the surface under a point (the solid scene's depth read back, map.pickSurface), about 0.7 KB; 238 until the
   // viewshed's cones drawn in 3D (their edges widened on screen), about 1.3 KB; 240 until the request headers by URL
   // prefix (setRequestHeaders) and the vertical surface query, about 1.2 KB; 242 until the swipe (its columns of the
-  // canvas per layer) and the relief at a position, about 0.4 KB
-  'isard_core_bg.wasm': 244,
+  // canvas per layer) and the relief at a position, about 0.4 KB; 244 until the panoramas (their images projected
+  // onto the scene from the screen's depth, a backdrop sphere), about 3.2 KB
+  'isard_core_bg.wasm': 250,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
   // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB; 356 until
@@ -49,8 +50,9 @@ const BUDGETS = {
   // 104 until the point clouds (their handle, the CRS of a WKT, the palette of the classes), about 1.7 KB
   // 111 until PMTiles (the archive reader: header, directories, Hilbert tile ids, ranges, gzip; `addPmtiles`, the
   // plain style of vector archives, the raster loader), about 5.5 KB here (its comments included), in a bundle only
-  // when used; 118 until the request headers, the swipe, the 3D panels (Panel) and the surface queries, about 1 KB
-  modules: 120,
+  // when used; 118 until the request headers, the swipe, the 3D panels (Panel) and the surface queries, about 1 KB;
+  // 120 until the panoramas (their positions, attitudes and calibrations read), about 1.3 KB
+  modules: 124,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   // 38 until the icon atlas, about 0.2 KB
   // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB; 44 until the

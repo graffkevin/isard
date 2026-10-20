@@ -18,6 +18,9 @@ marker.on('drag', ({ lonLat }) => console.log(lonLat));
 Without `element`, a round pin anchored at its tip. `anchor` (`'center'`, `'top'`, `'bottom-left'`…) and `offset`
 place the element; a dragged marker stays on the relief.
 
+`height` (or `setHeight(height, base)`) raises a marker `height` metres above the ground, with a stem down to `base`
+metres, what it stands on (a roof, a mesh: `map.surfaceAt`; the ground by default); its popup is raised with it.
+
 ## Popups
 
 ```ts
@@ -26,6 +29,24 @@ new Popup({ closeButton: true, closeOnClick: true, maxWidth: '280px', anchor: 'b
   .setHTML('<p>…</p>') // or setText, setDOMContent
   .addTo(map);
 ```
+
+## Panels
+
+An element of the page standing in 3D at a position, `width` metres wide: a video, a web page, a sign, as the CSS3D
+objects of three.js. It faces `heading` (degrees clockwise from north), leans back by `pitch`, its bottom edge
+`height` metres above the ground:
+
+```ts
+import { Panel } from 'isard';
+
+const video = document.createElement('video');
+video.src = 'camera.webm';
+new Panel({ element: video, width: 40, heading: 180, height: 4 }).setLonLat([2.3431, 48.8861]).addTo(map);
+```
+
+It is placed after each frame by a CSS 3D transform from the camera: the element is not drawn by WebGL, so the scene
+does not hide it; it is hidden when its position is behind the camera, and seen mirrored from behind. Its CSS size
+is read once it is on the page (`resize()` reads it again). See [3D panels](../examples/panels).
 
 ## Controls
 

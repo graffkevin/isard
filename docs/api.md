@@ -38,7 +38,10 @@ declarations.
 | `flyTo(camera, { duration, curve, speed, easing })` | van Wijk and Nuij's path, as MapLibre |
 | `getBounds()` | `[west, south, east, north]` of the ground in view |
 | `setMinZoom(z)`, `setMaxZoom(z)`, `setMaxPitch(p)` | |
-| `project(lonLat)`, `unproject(point)` | CSS pixels ↔ degrees, on the relief |
+| `project(lonLat, height)`, `unproject(point)` | CSS pixels ↔ degrees, on the relief (or `height` metres above it) |
+| `setFirstPerson({ lonLat, height, bearing, pitch, fov })`, `firstPerson` | an eye at street level, the drag turning it; undefined to turn around a point again ([street level](./guide/streetview#the-street-level-view)) |
+| `metersPerPixel(point)`, `elevationAt(lonLat)` | metres per CSS pixel at a screen point (a scale bar); the relief's altitude at a position |
+| `setDoubleClickZoom(enabled)` | a double click zooms or not (off while a drawing takes double clicks) |
 | `setProjection(p)`, `setLoading(mode)`, `setBackground(color)`, `setSky(b)` | |
 
 ## Basemap and relief
@@ -66,12 +69,18 @@ styles the basemaps use, for `vectorTiles({ style })`.
 | `addGround(options)` | `GroundLayer` | `setTexture`, `updateTexture`, `setUniform`, `setBounds` |
 | `addPmtiles(url, { kind, style, opacity, size, attribution })` | `Promise<RasterLayer \| VectorTiles>` | a PMTiles archive read by range requests: raster, or vector with `style` (default `basicStyle` of its layers); `addRaster({ url: 'pmtiles://…' })` and `pmtiles://` style sources too ([PMTiles](./layers/rasters#pmtiles)) |
 | `addRaster(options)` | `RasterLayer` | `setStyle({ opacity, saturation })` (the positional `setStyle(opacity, saturation)` is deprecated); options `url`, `grid` (`'mercator'`, `'equirectangular'`, or a `TileGrid` in another CRS: tile matrices or a WMS's `{bbox}`, reprojected by the map's workers, see [projections](./guide/projections)), `minZoom`, `maxZoom`, `size`, `loader` (the page draws each tile), `attribution` (credited while shown); `geoplateformeWmts`, `geoplateformeWms` give the options of the Géoplateforme's layers ([IGN data](./guide/geoplateforme)) |
-| `addTiles3d(options)` | `Tiles3dLayer` | `setStyle`, `stats` |
+| `addTiles3d({ url, maxScreenSpaceError, opacity, color, geoid })` | `Tiles3dLayer` | `setStyle`, `stats`; features picked with their properties, `color` tinting the layer, `geoid` for altitudes ([3D Tiles](./layers/tiles3d)) |
+| `addPanoramas({ url, orientationsUrl, calibrationUrl, crs, geoid, backgroundDistance })` | `Promise<Panoramas>` | `show`, `hide`, `nearest`, `enter`, `go`, `exit`: oriented street-level images projected onto the scene, a walk from one to the next ([panoramas](./guide/streetview)) |
 | `addPointCloud({ url, format, colorBy, pointSize, pointBudget, edl, classifications, crs })` | `PointCloudLayer` | `setStyle`, `stats`, `info`; a COPC file (range requests) or 3D Tiles points, points picked with their attributes ([point clouds](./layers/pointclouds)) |
 | `addModels({ url \| data, instances, altitudeReference })` | `ModelLayer` | `setInstances`; instances `{ lonLat, altitude, heading, pitch, roll, scale }`, picked by index ([models](./layers/models)) |
 | `addCustomLayer({ renderingMode, onAdd, render, onRemove }, { before })` | `CustomLayer` | your WebGL drawing in every frame, `frame.matrixAt(lonLat, altitude)` its matrices ([custom layers](./layers/custom)) |
 
 Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`. Every `add…` takes `before`.
+
+| | |
+|---|---|
+| `setSwipe({ position, layers, side })` | `layers` shown on one side of a vertical line only, the layers beneath on the other ([swipe](./layers/#comparing-two-layers-swipe)) |
+| `setViewshed(options \| options[])` | what can be seen from observers, tinted ([viewshed](./examples/viewshed)) |
 
 ## Events and picking
 
@@ -80,6 +89,7 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 | `on(type, listener)` | returns the function that stops listening; see [Events](./guide/events) |
 | `pickFeature(point, { radius, layers })` | `{ layer, index, feature }`; waits for the GPU (a stall): for clicks |
 | `pick(point, radius, layers)` | `{ layer: id, index }`, the same way |
+| `pickSurface(point)`, `surfaceAt(lonLat)` | what is drawn under a point, or the top of what stands at a position (a roof, a mesh), and its height above the relief ([surfaces](./guide/events#surfaces)) |
 | `hoverPicking = { radius, layers }` | what the `hoverfeature` event looks for under the pointer, picked without waiting for the GPU |
 | `stats()` | tile counters of the raster layers |
 
@@ -87,7 +97,8 @@ Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`.
 
 | | |
 |---|---|
-| `new Marker({ element, anchor, offset, draggable, className })` | `setLonLat`, `addTo`, `remove`, `setPopup`, `on('drag')` |
+| `new Marker({ element, anchor, offset, draggable, height, className })` | `setLonLat`, `setHeight(height, base)`, `addTo`, `remove`, `setPopup`, `on('drag')`; a raised marker has a stem down to what it stands on |
+| `new Panel({ element, width, heading, pitch, height })` | an element standing in 3D at a position (a video, a page), metres wide: `setLonLat`, `setPlacement`, `addTo`, `remove` ([3D panels](./guide/overlays#panels)) |
 | `new Popup({ closeButton, closeOnClick, maxWidth, anchor, offset })` | `setLonLat`, `setHTML`, `setText`, `setDOMContent`, `addTo` |
 | `addControl(control, position)`, `removeControl(control)` | `NavigationControl`, `AttributionControl`, or yours |
 | `getContainer()`, `getCanvas()`, `destroy()` | |
@@ -111,6 +122,7 @@ Grouped by theme in entry points of their own (each also exported by `isard` its
 | `reproject(data, crs)` | GeoJSON in a CRS (default the one its `crs` member names) to longitudes and latitudes |
 | `parseKml(text)`, `parseGpx(text)`, `parseTopoJson(topology, name)` | other formats as GeoJSON ([formats](./layers/features#other-crss-and-formats)) |
 | `IGN_ATTRIBUTION`, `OPENFREEMAP_ATTRIBUTION`, `TERRAIN_TILES_ATTRIBUTION` | credits of the sources, for `customAttribution` or `attribution` |
+| `setRequestHeaders(prefix, headers)` | headers added to every request isard makes to URLs starting with `prefix`, from the page, its workers and its engine: an access token for private sources ([private sources](./guide/geoplateforme#private-sources)) |
 | `GLYPHS_URL`, `DEFAULT_FONT` | the default glyphs (OpenFreeMap's fonts) and font of labels |
 | `new PMTiles(url \| blob)`, `zxyToTileId`, `tileIdToZxy` | a PMTiles archive's `header()`, `metadata()`, `tile(z, x, y)` |
 | `basicStyle(source, layers)` | a plain MapLibre style for vector tiles known by their layers' names |

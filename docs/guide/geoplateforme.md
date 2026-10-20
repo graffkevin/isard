@@ -86,6 +86,21 @@ by the RAF20 geoid. The URL of each tile is the `url_npl` of the WFS type `IGNF_
 footprint the feature's geometry). The Géoplateforme allows 10 requests a second: the layer asks 8 at most
 (`requestsPerSecond`). Licence Ouverte (Etalab 2.0): credit the IGN.
 
+## Private sources
+
+A private stream of the Géoplateforme (or a server behind single sign-on) wants an access token on every request:
+
+```ts
+import { setRequestHeaders } from 'isard';
+
+setRequestHeaders('https://data.geopf.fr/private/', { Authorization: `Bearer ${token}` });
+```
+
+Every request isard makes to a URL starting with the prefix gets the headers: from the page (styles, sprites,
+glyphs, WFS, capabilities), its workers (vector tiles, 3D Tiles, point clouds) and its engine (raster tiles, relief,
+tilesets). For the whole page, the maps to come too; called again with a renewed token, without headers to stop. The
+server must allow these headers (CORS).
+
 ## Examples
 
 The [network](../examples/network), [buildings](../examples/buildings), [GeoJSON](../examples/geojson),

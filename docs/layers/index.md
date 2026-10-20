@@ -16,3 +16,15 @@
 Every `add…` returns a handle: `layer.setStyle(…)`, `layer.setVisible(b)`, `layer.moveBefore(other)`,
 `layer.remove()`, and what is specific to the layer (`setValues`, `setData`…). Each takes `before` to go under
 another layer.
+
+## Comparing two layers: swipe
+
+```ts
+map.setSwipe({ position: 400, layers: [old] }); // `old` left of x = 400 CSS pixels only
+map.setSwipe({ position: 400, layers: [buildings], side: 'right' });
+map.setSwipe(undefined);
+```
+
+The layers given show on one side of a vertical line only, the layers beneath them on the other side: two states of
+a place, two basemaps. Rasters are cut in the ground's pass, the other layers by a scissor; set it again as the line
+moves (a slider, a drag). See [Swipe](../examples/swipe).

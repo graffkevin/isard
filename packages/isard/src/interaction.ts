@@ -142,7 +142,7 @@ export class Interaction {
     container.addEventListener('wheel', wheel, { passive: false });
     this.cleanup.push(() => container.removeEventListener('wheel', wheel));
     listen('dblclick', (e) => {
-      if (this.doubleClickZoom) this.zoomBy(e.shiftKey ? -1 : 1, this.local(e));
+      if (this.doubleClickZoom && !this.map.firstPerson) this.zoomBy(e.shiftKey ? -1 : 1, this.local(e));
     });
     listen('contextmenu', (e) => e.preventDefault());
     if (options.keyboard ?? true) {
@@ -188,6 +188,14 @@ export class Interaction {
     }
     const [dx, dy] = [point[0] - p.point[0], point[1] - p.point[1]];
     if (Math.hypot(point[0] - p.start[0], point[1] - p.start[1]) > CLICK_TOLERANCE) this.moved = true;
+    const eye = this.map.firstPerson;
+    if (eye) {
+      // At street level the drag turns the eye, the scene following the pointer as if grabbed
+      const degrees = eye.fov / Math.max(1, this.map.canvas.clientHeight);
+      this.map.setFirstPerson({ ...eye, bearing: eye.bearing - dx * degrees, pitch: eye.pitch + dy * degrees });
+      p.point = point;
+      return;
+    }
     const engine = this.map.engine;
     const other = [...this.pointers.values()].find((q) => q !== p);
     if (this.pointers.size === 2 && other) {
@@ -219,7 +227,7 @@ export class Interaction {
       this.map.emit('click', { point: p.point, lonLat: this.map.unproject(p.point) });
       return;
     }
-    if (!p.rotate && this.pointers.size === 0) this.inertia(e.timeStamp, p.point);
+    if (!p.rotate && this.pointers.size === 0 && !this.map.firstPerson) this.inertia(e.timeStamp, p.point);
   }
 
   /** Keeps panning at the release speed (last 50 ms), decaying exponentially */
@@ -250,6 +258,12 @@ export class Interaction {
     e.preventDefault();
     // Lines (Firefox mouse wheels) are about 33 px
     const pixels = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+    const eye = this.map.firstPerson;
+    if (eye) {
+      // At street level: a narrower or wider field of view
+      this.map.setFirstPerson({ ...eye, fov: eye.fov * Math.exp(pixels * 0.001) });
+      return;
+    }
     this.zoomBy(
       Math.max(-1, Math.min(1, -pixels * WHEEL_RATE)),
       this.local(e),
@@ -262,6 +276,14 @@ export class Interaction {
     const action = keyAction(e.key, e.shiftKey);
     if (!action) return;
     e.preventDefault();
+    const eye = this.map.firstPerson;
+    if (eye) {
+      // At street level the arrows turn the eye
+      const turn = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, 10], ArrowDown: [0, -10] }[e.key];
+      if (turn)
+        this.map.setFirstPerson({ ...eye, bearing: eye.bearing + (turn[0] ?? 0), pitch: eye.pitch + (turn[1] ?? 0) });
+      return;
+    }
     this.wheel.pending = 0;
     const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.map.easeTo(keyCamera(action, this.map.getCamera()), reduced ? 0 : KEY_DURATION);

@@ -2,6 +2,7 @@
 //! and the frame loop. The layers drawn over the ground (`Layer`) export their own methods, next to them; the picking
 //! is in `pick`.
 
+mod panorama;
 mod pick;
 mod surface;
 mod viewshed;
@@ -126,6 +127,8 @@ pub struct Engine {
     surface: Option<surface::Probe>,
     /// Layers shown on one side of a vertical line only (`setSwipe`)
     swipe: Option<Swipe>,
+    /// The panorama projected onto the scene (`setPanorama`)
+    panorama: Option<panorama::Panorama>,
 }
 
 /// A swipe: `layers` shown left of `x` (CSS pixels from the left of the canvas), or right of it
@@ -199,6 +202,7 @@ impl Engine {
             viewshed: None,
             surface: None,
             swipe: None,
+            panorama: None,
             async_pick: None,
             loading: Loading::IMMEDIATE,
             drawn: None,
@@ -224,8 +228,29 @@ impl Engine {
 
     #[wasm_bindgen(js_name = setCamera)]
     pub fn set_camera(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
+        self.camera.first_person = None;
         self.camera.set_view(lon, lat, zoom, pitch, bearing);
         self.handled = false;
+    }
+
+    /// A street-level view: the eye `height` metres above the ground at `lon`, `lat` (degrees), looking `bearing`
+    /// (degrees clockwise from north) and `pitch` (0 straight down, 90 level, 180 straight up), with a vertical field
+    /// of view of `fov` degrees. A camera set with `setCamera` turns around a point again
+    #[wasm_bindgen(js_name = setFirstPerson)]
+    pub fn set_first_person(&mut self, lon: f64, lat: f64, height: f64, bearing: f64, pitch: f64, fov: f64) {
+        let finite = |v: f64, default: f64| if v.is_finite() { v } else { default };
+        self.camera.center = camera::mercator(finite(lon, 0.0), finite(lat, 0.0).clamp(-85.0, 85.0));
+        // Fine enough a local frame for an eye a few metres up
+        self.camera.zoom = 20.0_f64.min(self.camera.max_zoom);
+        self.camera.bearing = finite(bearing, 0.0).rem_euclid(360.0);
+        self.camera.pitch = finite(pitch, 90.0).clamp(1.0, 179.0);
+        self.camera.elevation = ground_elevation(self.terrain.as_ref(), self.camera.center).unwrap_or(0.0);
+        self.camera.first_person = Some(camera::FirstPerson {
+            height: finite(height, 1.7).max(0.0),
+            fov: finite(fov, 75.0).clamp(10.0, 140.0).to_radians(),
+        });
+        self.handled = false;
+        (self.redraw)();
     }
 
     #[must_use]
@@ -440,6 +465,14 @@ impl Engine {
             .to_cols_array()
             .map(|v| v as f32)
             .to_vec()
+    }
+
+    /// Height of the RAF20 geoid above the ellipsoid at a position (metres; 0 away from mainland France): what raises
+    /// the altitudes (NGF-IGN69) of a source onto the IGN relief
+    #[must_use]
+    #[wasm_bindgen(js_name = geoidHeight)]
+    pub fn geoid_height(lon: f64, lat: f64) -> f64 {
+        geo::geoid::height(lon, lat)
     }
 
     /// Altitude of the relief at a position (metres, exaggeration included), from the copy of its tiles kept on the
@@ -787,6 +820,7 @@ impl Engine {
         if let Some((terrain, _)) = &self.terrain {
             terrain.finish(&self.redraw);
         }
+        self.draw_panorama(&view);
         self.draw_viewshed(&view);
         loading
     }
@@ -964,6 +998,9 @@ impl Drop for Engine {
             }
             if let Some(mut probe) = self.surface.take() {
                 probe.delete(gl);
+            }
+            if let Some(mut panorama) = self.panorama.take() {
+                panorama.delete(gl);
             }
             if let Some(mut pick) = self.async_pick.take() {
                 pick.delete(gl);

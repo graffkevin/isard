@@ -11,6 +11,34 @@ Draco geometry and KTX2 (Basis Universal) textures decoded in workers by the off
 KTX2 textures stay compressed on the GPU (ASTC, BC7, ETC2 or S3TC). Traversal by screen-space error, children
 replacing their parent only once all are ready, downloads aborted when they leave the view, a GPU memory budget.
 
+## Picking and properties
+
+A 3D Tiles layer is picked like the others: `pickFeature` (or the `hoverfeature` event) gives the feature under the
+point and its properties, from its tile's `EXT_mesh_features` feature IDs and `EXT_structural_metadata` property
+table (3D Tiles 1.1: scalars, booleans, strings, enums), or a b3dm's `_BATCHID` and batch table (3D Tiles 1.0, its
+JSON arrays). The IGN's Bâtiments 3D answer with their BD TOPO attributes:
+
+```ts
+const buildings = map.addTiles3d({ url: 'https://…/tileset.json', geoid: true });
+map.on('click', ({ point }) => {
+  const hit = map.pickFeature(point, { layers: [buildings] });
+  console.log(hit?.feature?.properties); // { cleabs, hauteur, nature, usage_1, nombre_d_etages, … }
+});
+```
+
+`hit.feature.id` is the feature's index in its tile; a mesh without features (a photomesh) gives its tile, without
+properties. See [3D Tiles features](../examples/tiles3d-features).
+
+## Color and heights
+
+`color` (in `addTiles3d` and `setStyle`) tints the textures of the meshes and colors the untextured ones (light grey
+without it); untextured meshes are shaded by the slope of their faces to a light from the north-west, textured ones
+keep the light of their photos.
+
+3D Tiles are specified in heights above the ellipsoid, as the photomeshes are (over France, `terrain: 'ign'` raises
+the IGN relief by the RAF20 geoid so that they sit on it). A tileset in altitudes (NGF-IGN69), as the IGN's
+Bâtiments 3D, takes `geoid: true`: each tile raised by the geoid onto the relief (44 m under it in Paris without).
+
 ## The engine with 3D Tiles
 
 The 3D Tiles code is a third of the engine: maps load the engine without it, and the first 3D Tiles layer (or
