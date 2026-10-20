@@ -6,6 +6,7 @@
  */
 import { DEFAULT_DECODERS, type DecoderUrls, decodeDraco, transcodeKtx2 } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
+import { setHeaderRules, withHeaders } from './requests.ts';
 import type { DecodedPrimitive, TextureFormats } from './wasm/isard.js';
 import init, { decodeTile, dracoRequests } from './wasm/isard.js';
 import initPoints, { decodeCopc } from './wasm/isard_points.js';
@@ -23,6 +24,9 @@ const reply = (message: WorkerReply, transfer: Transferable[] = []): void => pos
 addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   const message = event.data;
   switch (message.type) {
+    case 'headers':
+      setHeaderRules(message.rules);
+      break;
     case 'init':
       ready = init({ module_or_path: message.module });
       decoders = message.decoders;
@@ -60,7 +64,7 @@ async function load(
       cache: reload ? 'reload' : 'default',
       ...(priority ? { priority } : {}),
     };
-    const response = await fetch(url, init);
+    const response = await fetch(url, withHeaders(url, init));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     // Draco geometry first (its module loads on first use), then the tile itself
@@ -140,7 +144,7 @@ async function fetchRange(
       headers: { Range: `bytes=${offset}-${offset + Math.max(size, 1) - 1}` },
       ...(priority ? { priority } : {}),
     };
-    const response = await fetch(url, init);
+    const response = await fetch(url, withHeaders(url, init));
     if (response.status === 429 && attempt < BUSY_ATTEMPTS) {
       const after = Number(response.headers.get('Retry-After'));
       await sleep(after > 0 ? after * 1000 : BUSY_PAUSE_MS * 2 ** (attempt - 1), signal);

@@ -19,6 +19,7 @@ import { Lru } from './lru.ts';
 import type { GeoMap } from './map.ts';
 import type { Anchor } from './overlay.ts';
 import { pmtiles, pmtilesUrl } from './pmtiles.ts';
+import { headerRules, onHeaderRules, withHeaders } from './requests.ts';
 import { type Job, SOURCE_CACHE } from './resample.ts';
 import type { SymbolLayer } from './symbols.ts';
 import type { PngEncoding } from './terrain.ts';
@@ -95,7 +96,7 @@ export function size(value: Json, fallback = 16): Size {
 
 /** Fetches a JSON document (a style, a TileJSON) */
 async function json<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(url, withHeaders(url));
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
   return (await response.json()) as T;
 }
@@ -174,6 +175,8 @@ export class BasemapWorkers {
   private next = 1;
   private namespaces = 0;
   private terminated = false;
+  /** Stops following the page's request headers */
+  private readonly unfollow: () => void;
 
   constructor(
     readonly count: number,
@@ -195,7 +198,12 @@ export class BasemapWorkers {
         this.fail(worker, `the vector basemap worker ${url} failed${event.message ? `: ${event.message}` : ''}`);
       };
       worker.onmessageerror = () => this.fail(worker, `the vector basemap worker ${url} sent an unreadable message`);
+      const rules = headerRules();
+      if (rules.length > 0) worker.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
       return worker;
+    });
+    this.unfollow = onHeaderRules((rules) => {
+      for (const w of this.workers) w.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
     });
   }
 
@@ -306,6 +314,7 @@ export class BasemapWorkers {
   terminate(): void {
     if (this.terminated) return;
     this.terminated = true;
+    this.unfollow();
     for (const w of this.workers) w.terminate();
     const pending = [...this.pending.values()];
     this.pending.clear();

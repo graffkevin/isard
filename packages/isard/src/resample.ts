@@ -8,6 +8,7 @@
  * premultiplied). This code knows no projection.
  */
 import { Lru } from './lru.ts';
+import { withHeaders } from './requests.ts';
 
 /** Source images kept decoded (by the page, or shared by the workers of a pool): the neighbours of a tile share them */
 export const SOURCE_CACHE = 96;
@@ -147,7 +148,7 @@ export function resampler(cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
     let image = cache.get(url);
     if (!image) {
       image = (async () => {
-        const response = await fetch(url);
+        const response = await fetch(url, withHeaders(url));
         if (response.status === 404 || response.status === 204 || response.status === 410) return null;
         if (!response.ok) throw new Error(`isard: ${response.status} for a raster to reproject`);
         return createImageBitmap(await response.blob());

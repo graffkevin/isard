@@ -76,6 +76,7 @@ pub async fn fetch_bytes(
     let init = web_sys::RequestInit::new();
     init.set_signal(signal);
     crate::js::fetch_priority(&init, priority);
+    crate::js::request_headers(&init, url, &[])?;
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }
@@ -98,10 +99,8 @@ pub async fn fetch_range(url: &str, start: u64, length: u64, priority: &str) -> 
     let init = web_sys::RequestInit::new();
     init.set_signal(Some(&controller.signal()));
     crate::js::fetch_priority(&init, priority);
-    let headers = web_sys::Headers::new().map_err(error)?;
     let end = start.saturating_add(length.max(1) - 1);
-    headers.set("Range", &format!("bytes={start}-{end}")).map_err(error)?;
-    init.set_headers(&headers);
+    crate::js::request_headers(&init, url, &[("Range", &format!("bytes={start}-{end}"))]).map_err(error)?;
     let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await
         .map_err(error)?

@@ -5,6 +5,7 @@
  */
 import type { FeatureCollection, Properties } from './features.ts';
 import type { TileGrid, TileMatrix } from './grid.ts';
+import { withHeaders } from './requests.ts';
 import type { RasterOptions } from './types.ts';
 
 /** Credits of the Géoplateforme's data: its basemaps, hillshade, terrain model, rasters and features */
@@ -117,7 +118,7 @@ export async function geoplateformeWfs<P = Properties>(
       // The first page as a single request always was
       ...(start > 0 ? { STARTINDEX: String(start) } : {}),
     }).toString();
-    const response = await fetch(url, options.signal ? { signal: options.signal } : {});
+    const response = await fetch(url, withHeaders(url, options.signal ? { signal: options.signal } : {}));
     if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);
     return response.json() as Promise<FeatureCollection<P> & { numberMatched?: number | string }>;
   };

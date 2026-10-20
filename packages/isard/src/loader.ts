@@ -4,6 +4,7 @@
  */
 import type { DecoderUrls } from './decoders.ts';
 import type { WorkerReply, WorkerRequest } from './protocol.ts';
+import { headerRules, onHeaderRules } from './requests.ts';
 import type { DecodedTile, TextureFormats, TileLoaderLike } from './wasm/isard.js';
 
 interface Pending {
@@ -19,6 +20,10 @@ export class TileLoader implements TileLoaderLike {
   private readonly pending = new Map<number, Pending>();
   /** Every worker failed: why */
   private failed: Error | undefined;
+  /** The page's request headers, sent to the workers as they change */
+  private readonly unfollow = onHeaderRules((rules) => {
+    for (const worker of this.workers) this.send(worker, { type: 'headers', rules });
+  });
 
   constructor(
     private readonly module: WebAssembly.Module,
@@ -76,6 +81,7 @@ export class TileLoader implements TileLoaderLike {
   }
 
   destroy(): void {
+    this.unfollow();
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.busy.clear();
@@ -98,6 +104,8 @@ export class TileLoader implements TileLoaderLike {
           this.fail(worker, `the decoding worker ${this.workerUrl} sent an unreadable message`);
         const { module, decoders, formats, points } = this;
         this.send(worker, { type: 'init', module, decoders, formats, points });
+        const rules = headerRules();
+        if (rules.length > 0) this.send(worker, { type: 'headers', rules });
         this.workers.push(worker);
         this.busy.set(worker, 0);
       }

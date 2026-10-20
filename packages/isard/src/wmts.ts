@@ -4,6 +4,7 @@
  */
 import { epsgCode, isGeographic } from './crs.ts';
 import type { TileGrid, TileMatrix } from './grid.ts';
+import { withHeaders } from './requests.ts';
 import { child, children, childText, parseXml } from './xml.ts';
 
 /** Metres per degree, as WMTS counts the scale of a grid in degrees (OGC 07-057r7, 6.1) */
@@ -78,7 +79,10 @@ export async function wmtsGrid(
   matrixSet?: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<TileGrid> {
-  const response = await fetch(capabilities, options.signal ? { signal: options.signal } : {});
+  const response = await fetch(
+    capabilities,
+    withHeaders(capabilities, options.signal ? { signal: options.signal } : {}),
+  );
   if (!response.ok) throw new Error(`isard: ${response.status} for the WMTS capabilities`);
   return parseWmtsGrid(await response.text(), layer, matrixSet);
 }

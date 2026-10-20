@@ -6,6 +6,7 @@
  * the stretchable zones and the content box of its image when it has them (`stretchX`, `stretchY`, `content`).
  */
 import type { Anchor } from './overlay.ts';
+import { withHeaders } from './requests.ts';
 import type { Engine } from './wasm/isard.js';
 
 /** An image of a sprite's index: its place in the sheet (pixels) and how it is drawn */
@@ -89,7 +90,10 @@ export async function loadSprites(
   ratio = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1,
 ): Promise<LoadedSprite[]> {
   const one = async ({ id, url }: SpriteSource, r: number): Promise<LoadedSprite | undefined> => {
-    const [json, png] = await Promise.all([fetch(spriteFile(url, 'json', r)), fetch(spriteFile(url, 'png', r))]);
+    const [json, png] = await Promise.all([
+      fetch(spriteFile(url, 'json', r), withHeaders(spriteFile(url, 'json', r))),
+      fetch(spriteFile(url, 'png', r), withHeaders(spriteFile(url, 'png', r))),
+    ]);
     if (!json.ok || !png.ok) return r > 1 ? one({ id, url }, 1) : undefined;
     const index = (await json.json()) as SpriteIndex;
     const icons: SpriteIndex = {};

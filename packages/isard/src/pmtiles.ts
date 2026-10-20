@@ -5,6 +5,7 @@
  * workers (vector tiles of a style source `pmtiles://…`, as MapLibre's protocol names them).
  */
 import { Lru } from './lru.ts';
+import { withHeaders } from './requests.ts';
 
 /** What a PMTiles archive's tiles are */
 export type PmtilesTileType = 'unknown' | 'mvt' | 'png' | 'jpeg' | 'webp' | 'avif';
@@ -200,10 +201,13 @@ export class PMTiles {
       return new Uint8Array(await this.source.slice(offset, offset + length).arrayBuffer());
     }
     if (this.whole) return (await this.whole).subarray(offset, offset + length);
-    const response = await fetch(this.source, {
-      headers: { Range: `bytes=${offset}-${offset + Math.max(length, 1) - 1}` },
-      ...(signal ? { signal } : {}),
-    });
+    const response = await fetch(
+      this.source,
+      withHeaders(this.source, {
+        headers: { Range: `bytes=${offset}-${offset + Math.max(length, 1) - 1}` },
+        ...(signal ? { signal } : {}),
+      }),
+    );
     if (!response.ok) throw new Error(`${this.source}: HTTP ${response.status}`);
     if (response.status === 206) return new Uint8Array(await response.arrayBuffer());
     // The whole file: kept, when small enough, for the next ranges

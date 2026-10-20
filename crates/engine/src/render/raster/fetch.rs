@@ -197,6 +197,7 @@ async fn fetch_response(
     init.set_signal(Some(signal));
     // The tiles at the screen center first; always explicit (see `fetch_priority`)
     crate::js::fetch_priority(&init, priority);
+    crate::js::request_headers(&init, url, &[])?;
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }

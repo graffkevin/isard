@@ -419,6 +419,24 @@ impl Engine {
         }
     }
 
+    /// The headers added to the engine's requests by URL prefix (`setRequestHeaders`, the same for every map of the
+    /// page): `prefixes[i]` with `counts[i]` name and value pairs, in order, flattened into `pairs`
+    #[wasm_bindgen(js_name = setRequestHeaders)]
+    pub fn set_request_headers(&self, prefixes: Vec<String>, counts: Vec<u32>, pairs: Vec<String>) {
+        let mut pairs = pairs.into_iter();
+        let rules = prefixes
+            .into_iter()
+            .zip(counts)
+            .map(|(prefix, count)| {
+                let headers = (0..count)
+                    .filter_map(|_| Some((pairs.next()?, pairs.next()?)))
+                    .collect();
+                (prefix, headers)
+            })
+            .collect();
+        js::set_request_headers(rules);
+    }
+
     /// Loads in advance the tiles of a camera flight's destination; `clearPreload` when the flight ends
     pub fn preload(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
         let mut camera = self.camera.clone();

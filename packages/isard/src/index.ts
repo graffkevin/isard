@@ -99,6 +99,7 @@ export {
 } from './pmtiles.ts';
 export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from './pointclouds.ts';
 export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './pointclouds.ts';
+export { setRequestHeaders } from './requests.ts';
 export type { Overlap, SymbolOptions, SymbolStyle } from './symbols.ts';
 export { SymbolLayer } from './symbols.ts';
 export { parseTopoJson, type TopoGeometry, type Topology } from './topojson.ts';

@@ -3,6 +3,7 @@
  * Terrain-RGB (Mapbox, MapTiler). The engine reads raw floats only; a loader gives it the altitudes of each tile,
  * decoded in a worker of the map's pool (OffscreenCanvas), or in the page when the map has no workers.
  */
+import { withHeaders } from './requests.ts';
 
 /** The encodings of altitudes in the colors of PNG tiles */
 export type PngEncoding = 'terrarium' | 'mapbox';
@@ -48,7 +49,7 @@ export async function fetchHeights(
   signal: AbortSignal,
   surface: Surface,
 ): Promise<Float32Array | null> {
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, withHeaders(url, { signal }));
   if (response.status === 404 || response.status === 204 || response.status === 410) return null;
   if (!response.ok) throw new Error(`${response.url}: ${response.status}`);
   // The colors as stored: no color management, no premultiplied alpha

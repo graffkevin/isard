@@ -48,6 +48,7 @@ import {
 import type { TileLoader } from './loader.ts';
 import type { Positioned } from './overlay.ts';
 import { PointCloudLayer, type PointCloudOptions } from './pointclouds.ts';
+import { type HeaderRules, headerRules, onHeaderRules } from './requests.ts';
 import {
   atmosphereSettings,
   bodySettings,
@@ -217,6 +218,8 @@ export class GeoMap {
   private basemapPool: BasemapWorkers | undefined;
   /** Stops watching the device pixel ratio */
   private unwatchRatio: (() => void) | undefined;
+  /** Stops following the page's request headers (`setRequestHeaders`) */
+  private readonly unwatchHeaders = onHeaderRules((rules) => sendHeaders(this.engine, rules));
   /** Stops listening to the canvas's context loss and restoration */
   private readonly unwatchContext: () => void;
 
@@ -343,6 +346,7 @@ export class GeoMap {
     // The body first: the layers' shaders may take its size
     const { radius, flattening, atmosphere: air, relief } = this.settings.body;
     engine.setBody(radius, flattening, haloSettings(air), ...relief);
+    sendHeaders(engine, headerRules());
     const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
     engine.setZoomRange(...zoomRange);
     engine.setMaxPitch(maxPitch);
@@ -1226,6 +1230,7 @@ export class GeoMap {
     this.basemapPool = undefined;
     this.unwatchRatio?.();
     this.unwatchRatio = undefined;
+    this.unwatchHeaders();
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
     this.loader?.destroy();
@@ -1247,4 +1252,13 @@ export class GeoMap {
     this.container.classList.remove('isard-map');
     for (const listeners of Object.values(this.listeners)) listeners.clear();
   }
+}
+
+/** The page's request headers to an engine (its own requests: raster tiles, tilesets, point clouds) */
+function sendHeaders(engine: Engine, rules: HeaderRules): void {
+  engine.setRequestHeaders(
+    rules.map(([prefix]) => prefix),
+    Uint32Array.from(rules, ([, headers]) => Object.keys(headers).length),
+    rules.flatMap(([, headers]) => Object.entries(headers).flat()),
+  );
 }

@@ -24,6 +24,43 @@ pub fn triple(a: f64, b: f64, c: f64) -> JsValue {
     Array::of3(&a.into(), &b.into(), &c.into()).into()
 }
 
+/// Headers added to the requests whose URL starts with a prefix: the prefix and its name and value pairs
+pub type HeaderRule = (String, Vec<(String, String)>);
+
+thread_local! {
+    /// Headers added to the requests by URL prefix (`setRequestHeaders`), the shortest prefix first
+    static REQUEST_HEADERS: std::cell::RefCell<Vec<HeaderRule>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Replaces the headers added to the requests by URL prefix
+pub fn set_request_headers(rules: Vec<HeaderRule>) {
+    REQUEST_HEADERS.with(|r| *r.borrow_mut() = rules);
+}
+
+/// Sets on `init` the headers of the rules matching `url`, with `extra` (a range); nothing when none applies
+pub fn request_headers(init: &web_sys::RequestInit, url: &str, extra: &[(&str, &str)]) -> Result<(), JsValue> {
+    let matching: Vec<(String, String)> = REQUEST_HEADERS.with(|r| {
+        r.borrow()
+            .iter()
+            .filter(|(prefix, _)| url.starts_with(prefix.as_str()))
+            .flat_map(|(_, headers)| headers.iter().cloned())
+            .collect()
+    });
+    if matching.is_empty() && extra.is_empty() {
+        return Ok(());
+    }
+    let headers = web_sys::Headers::new()?;
+    for (name, value) in &matching {
+        headers.set(name, value)?;
+    }
+    for (name, value) in extra {
+        headers.set(name, value)?;
+    }
+    init.set_headers(&headers);
+    Ok(())
+}
+
 /// Sets the Fetch Priority of a request (`"high"`, `"low"`, `"auto"`). Besides ordering, an explicit priority keeps
 /// Firefox from holding the request back: by default it throttles plain fetches for as long as another request of the
 /// page is pending, ~10 s per slow server response (`network.http.throttle.enable`)

@@ -1,8 +1,11 @@
 /** Messages between the main thread and the decoding workers */
 import type { DecoderUrls } from './decoders.ts';
+import type { HeaderRules } from './requests.ts';
 import type { DecodedTile, TextureFormats } from './wasm/isard.js';
 
 export type WorkerRequest =
+  /** The page's request headers (`setRequestHeaders`) */
+  | { type: 'headers'; rules: HeaderRules }
   | {
       type: 'init';
       module: WebAssembly.Module;

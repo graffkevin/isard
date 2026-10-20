@@ -3,6 +3,15 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- `setRequestHeaders(prefix, headers)`: headers added to every request isard makes to the URLs starting with a prefix
+  (an access token for a private Géoplateforme stream, a server behind single sign-on), from the page, its workers
+  (vector tiles, 3D Tiles, point clouds) and its engine (raster tiles, tilesets): for the whole page, again with a
+  new token when it is renewed, without headers to stop.
+
 ## [0.7.0] - 2026-10-20
 
 ### Added

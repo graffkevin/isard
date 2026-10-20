@@ -9,6 +9,7 @@
  * the coordinates of the glyphs placed so far stay valid as the atlas grows.
  */
 import type { Anchor } from './overlay.ts';
+import { withHeaders } from './requests.ts';
 import type { Engine } from './wasm/isard.js';
 
 /** OpenFreeMap's fonts, those of its styles (Noto Sans Regular, Bold, Italic) */
@@ -210,7 +211,7 @@ export class Glyphs {
       const url = (this.sources.get(font) ?? this.url)
         .replace('{fontstack}', encodeURIComponent(font))
         .replace('{range}', `${start}-${start + 255}`);
-      pending = fetch(url)
+      pending = fetch(url, withHeaders(url))
         .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${url}: ${r.status}`))))
         .then((buffer) => {
           for (const [id, { glyph, bitmap }] of parse(buffer)) {

@@ -12,6 +12,7 @@ import { latitude, longitude } from './geo.ts';
 import { Lru } from './lru.ts';
 import { decode, type TileFeature, type TileLayer } from './mvt.ts';
 import { pmtilesTile } from './pmtiles.ts';
+import { type HeaderRules, setHeaderRules, withHeaders } from './requests.ts';
 import { type Job, resampler } from './resample.ts';
 import { fetchHeights, type PngEncoding, type Surface } from './terrain.ts';
 import {
@@ -49,6 +50,8 @@ export type BasemapWork =
   | { type: 'reproject'; job: Job; cached: number };
 
 export type BasemapRequest =
+  /** The page's request headers (`setRequestHeaders`) */
+  | { type: 'headers'; rules: HeaderRules }
   | {
       type: 'init';
       /** Renderers by key: each draws its own layers of the same source */
@@ -144,7 +147,7 @@ function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
       return bytes && createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]));
     }
     const init: PriorityInit = { priority };
-    const response = await fetch(url, init);
+    const response = await fetch(url, withHeaders(url, init));
     if (response.status === 404 || response.status === 204) return undefined;
     if (!response.ok) throw new Error(`${url}: ${response.status}`);
     return createImageBitmap(await response.blob());
@@ -170,7 +173,7 @@ function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, Til
     }
     for (let attempt = 0; ; attempt += 1) {
       const init: PriorityInit = { priority };
-      const response = await fetch(url, init);
+      const response = await fetch(url, withHeaders(url, init));
       if (response.status === 404 || response.status === 204) return undefined;
       if (response.ok) {
         // Every layer: renderers of other subsets share the tile
@@ -657,6 +660,10 @@ const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
   (self as unknown as Worker).postMessage(message, transfer);
 
 self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
+  if (data.type === 'headers') {
+    setHeaderRules(data.rules);
+    return;
+  }
   if (data.type === 'init') {
     if (data.workers !== undefined) cache.capacity = cacheShare(data.workers);
     renderers.set(data.key, {
