@@ -440,6 +440,8 @@ export class GeoMap {
       }
     }
     this.applySwipe();
+    // A street-level eye stays one in the new engine
+    if (this.#firstPerson) this.setFirstPerson(this.#firstPerson);
     this.resize();
   }
 

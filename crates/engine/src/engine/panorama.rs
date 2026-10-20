@@ -14,6 +14,8 @@ use wasm_bindgen::prelude::*;
 
 /// Cameras of a panorama at most
 const CAMERAS: usize = 8;
+/// Metres around the panorama its images color, seen from above (the street it was taken in)
+const REACH_FROM_ABOVE: f64 = 40.0;
 /// Numbers per camera given to `setPanorama`: rotation (9, row-major), position (3), focal x and y, center x and y,
 /// skew, image width and height, principal point of the distortion x and y, its three coefficients, its limit
 const CAMERA_NUMBERS: usize = 25;
@@ -36,6 +38,9 @@ uniform sampler2DArray u_images;
 uniform mat4 u_inverse;
 // The panorama in the local frame, and the radius of its backdrop sphere (pixels of the local frame)
 uniform vec4 u_center;
+// How far from the panorama the scene takes its images (pixels): its backdrop's radius at street level, a street's
+// width seen from above (beyond, the images are stretched past recognition); 1 when the backdrop shows
+uniform vec2 u_reach;
 uniform int u_count;
 // Local frame to each camera (x right, y down, z forward, metres)
 uniform mat4 u_cameras[CAMERAS];
@@ -63,8 +68,8 @@ void main() {
   // Beyond the backdrop, or the sky: the point of the sphere around the panorama on the ray from the eye, when the
   // eye is within it (from outside, only what stands within it)
   vec3 o = near - u_center.xyz;
-  if (length(p - u_center.xyz) > u_center.w) {
-    if (dot(o, o) > u_center.w * u_center.w) discard;
+  if (length(p - u_center.xyz) > u_reach.x) {
+    if (u_reach.y < 0.5 || dot(o, o) > u_center.w * u_center.w) discard;
     float b = dot(o, ray);
     float c = dot(o, o) - u_center.w * u_center.w;
     float t = -b + sqrt(max(b * b - c, 0.0));
@@ -126,7 +131,7 @@ struct Settings {
 pub(super) struct Panorama {
     settings: Settings,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 11],
+    uniforms: [Option<glow::UniformLocation>; 12],
     vao: glow::VertexArray,
     /// The cameras' images, a layer each, at the size of the first to arrive (the images of a panorama share one: a
     /// reduced set of them, smaller than their calibration, is read as well)
@@ -159,6 +164,7 @@ impl Panorama {
                 "u_distortions",
                 "u_limits",
                 "u_opacity",
+                "u_reach",
             ],
         );
         let loaded = vec![false; settings.cameras.len()];
@@ -300,7 +306,14 @@ impl Engine {
             distortions_u,
             limits_u,
             opacity_u,
+            reach_u,
         ] = &panorama.uniforms;
+        // At street level the images reach the backdrop; from above, the street around the panorama only
+        let (reach, backdrop) = if self.camera.first_person.is_some() {
+            (s.radius, 1.0)
+        } else {
+            (REACH_FROM_ABOVE, 0.0)
+        };
         let gl = &self.gl;
         // SAFETY: the pass over the default framebuffer, the state set back after
         unsafe {
@@ -322,6 +335,7 @@ impl Engine {
             gl.uniform_4_f32_slice(distortions_u.as_ref(), &distortions);
             gl.uniform_2_f32_slice(limits_u.as_ref(), &limits);
             gl.uniform_1_f32(opacity_u.as_ref(), s.opacity);
+            gl.uniform_2_f32(reach_u.as_ref(), (reach * k) as f32, backdrop);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(depth));
             gl.active_texture(glow::TEXTURE1);

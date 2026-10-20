@@ -34,7 +34,8 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   format: positions and attitudes in GeoJSON, Lambert-93 by default, the cameras' calibration with MicMac's radial
   distortion) projected onto the scene around the panorama shown, a backdrop sphere for the sky; `enter` walks from
   panorama to panorama at street level (the drag turning the eye, a click going to the nearest panorama, Z and S to
-  the next and previous ones), `exit` gives the camera back.
+  the next and previous ones), `exit` gives the camera back. Seen from above, a panorama colors the street around it only (40 m),
+  its backdrop shown at street level.
 - A street-level camera (`map.setFirstPerson`): an eye above the ground looking any way, straight up included, its
   own field of view; the drag turns it, the wheel narrows its view.
 - Examples: panoramas, swipe (the orthophotos of 1950-1965 against today's), 3D Tiles features (picked, tinted), 3D

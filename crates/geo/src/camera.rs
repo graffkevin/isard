@@ -413,7 +413,12 @@ impl Camera {
         // finite even then
         let zoom = self.zoom.max(floor).min(self.max_zoom);
         self.zoom = if zoom.is_finite() { zoom } else { MIN_ZOOM };
-        self.pitch = self.pitch.max(0.0).min(self.max_pitch.max(0.0).min(PITCH_LIMIT));
+        // A street-level eye looks any way but straight down or up; the camera around a point to its highest pitch
+        self.pitch = if self.first_person.is_some() {
+            self.pitch.max(1.0).min(179.0)
+        } else {
+            self.pitch.max(0.0).min(self.max_pitch.max(0.0).min(PITCH_LIMIT))
+        };
         if !self.bearing.is_finite() {
             self.bearing = 0.0;
         }
@@ -718,6 +723,11 @@ impl Camera {
     /// finer relief, the ground under the center being tangent to the sphere (a tilted globe keeps its curve to zoom
     /// 10, where mountains show). If the new ground would come too close to the eye, the altitude is just set.
     pub fn settle_elevation(&mut self, elevation: f64) {
+        // A street-level eye stands on the ground: it rises and sinks with it, where it is
+        if self.first_person.is_some() {
+            self.elevation = elevation;
+            return;
+        }
         let delta = elevation - self.elevation;
         let view = self.view();
         let pitch = self.pitch.to_radians();
@@ -788,6 +798,28 @@ mod tests {
         c.globe = true;
         c.zoom = zoom;
         c
+    }
+
+    #[test]
+    fn a_street_level_eye_stays_where_it_stands() {
+        let mut c = Camera::new(2.3348, 48.8506, 20.0);
+        c.width = 1000.0;
+        c.height = 650.0;
+        c.first_person = Some(FirstPerson {
+            height: 2.5,
+            fov: 75f64.to_radians(),
+        });
+        c.pitch = 120.0;
+        let center = c.center;
+        // Finer relief arriving under it: the eye rises with the ground, neither slides nor zooms nor tilts
+        c.settle_elevation(80.0);
+        assert_eq!((c.center, c.zoom, c.pitch, c.elevation), (center, 20.0, 120.0, 80.0));
+        c.clamp();
+        assert!((c.pitch - 120.0).abs() < 1e-12, "{}", c.pitch);
+        // Looking up: the eye 2.5 m above the ground, under the far plane's sky
+        let view = c.view();
+        let k = view.vertical;
+        assert!((view.eye.z - (80.0 + 2.5) * k).abs() < 1e-6 * k, "{}", view.eye.z / k);
     }
 
     #[test]
