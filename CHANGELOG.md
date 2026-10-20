@@ -21,6 +21,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   Bâtiments 3D: each tile raised by the RAF20 geoid, onto the IGN relief (44 m under it in Paris without).
 - Untextured 3D Tiles meshes shaded: each face by its slope to a light from the north-west and above, as maps shade
   (the Bâtiments 3D were drawn flat); textured meshes keep the light of their photos.
+- `map.elevationAt(lonLat)`: the altitude of the relief at a position, from the tiles the map keeps;
+  `map.metersPerPixel(point?)`: metres on the ground per CSS pixel at a screen point, for a scale bar;
+  `map.setDoubleClickZoom(enabled)`: a double click zooms or not (off while a drawing takes double clicks).
 
 ## [0.7.0] - 2026-10-20
 

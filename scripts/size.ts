@@ -52,8 +52,9 @@ const BUDGETS = {
   modules: 118,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   // 38 until the icon atlas, about 0.2 KB
-  // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB
-  bindings: 44,
+  // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB; 44 until the
+  // request headers, the surface queries, the 3D Tiles features and the relief at a position, about 0.5 KB
+  bindings: 46,
   // 13 until the COPC chunks (their range requests, the point cloud module's bindings), about 1.4 KB
   'decoder.worker.js': 15,
   // 8.6 until the raster layers of a style, flat extrusions, line gaps and zoom expressions of text sizes; 9.2 until

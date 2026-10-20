@@ -419,6 +419,17 @@ impl Engine {
         }
     }
 
+    /// Altitude of the relief at a position (metres, exaggeration included), from the copy of its tiles kept on the
+    /// CPU (as coarse as the tiles loaded there); undefined without relief or where none is loaded
+    #[must_use]
+    #[wasm_bindgen(js_name = elevationAt)]
+    pub fn elevation_at(&self, lon: f64, lat: f64) -> Option<f64> {
+        if !lon.is_finite() || !lat.is_finite() {
+            return None;
+        }
+        ground_elevation(self.terrain.as_ref(), camera::mercator(lon, lat))
+    }
+
     /// The headers added to the engine's requests by URL prefix (`setRequestHeaders`, the same for every map of the
     /// page): `prefixes[i]` with `counts[i]` name and value pairs, in order, flattened into `pairs`
     #[wasm_bindgen(js_name = setRequestHeaders)]

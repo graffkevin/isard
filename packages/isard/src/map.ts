@@ -764,6 +764,31 @@ export class GeoMap {
     return this.engine.ground(point[0], point[1]);
   }
 
+  /** Altitude of the relief at a position, in metres (exaggeration included): from the copy of its tiles the map
+   * keeps, as fine as the tiles loaded there; undefined without relief or where none is loaded yet */
+  elevationAt(lonLat: LonLat): number | undefined {
+    return this.engine.elevationAt(lonLat[0], lonLat[1]);
+  }
+
+  /** Metres on the ground per CSS pixel at a screen point (default the center of the map), across the screen: for a
+   * scale bar; undefined above the horizon */
+  metersPerPixel(point?: Point): number | undefined {
+    const [x, y] = point ?? [this.canvas.clientWidth / 2, this.canvas.clientHeight / 2];
+    const a = this.unproject([x - 0.5, y]);
+    const b = this.unproject([x + 0.5, y]);
+    if (!a || !b) return undefined;
+    // Haversine, on the mean radius of the body
+    const rad = Math.PI / 180;
+    const [dLat, dLon] = [(b[1] - a[1]) * rad, (b[0] - a[0]) * rad];
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * rad) * Math.cos(b[1] * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * this.settings.body.radius * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  /** Whether a double click zooms in (Shift: out), on by default: off while a drawing takes double clicks */
+  setDoubleClickZoom(enabled: boolean): void {
+    if (this.interaction) this.interaction.doubleClickZoom = enabled;
+  }
+
   /** What is drawn under a screen point (CSS pixels), on the relief or standing on it (a roof, a wall, a mesh): its
    * position and its height above the relief, in metres; undefined where nothing was drawn. The last frame's scene is
    * drawn again and read back, waiting for the GPU (a stall): for clicks and drags */

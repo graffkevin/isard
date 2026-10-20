@@ -98,6 +98,8 @@ export class Interaction {
   /** The canvas's place on the page, read once: reading it on every pointer move would force a layout each time.
    * Read again after a resize, a scroll, and when a pointer comes in or goes down */
   private rect: DOMRect | undefined;
+  /** A double click zooms in (Shift: out); off while the page takes double clicks (ending a drawing) */
+  doubleClickZoom = true;
 
   constructor(
     private readonly map: GeoMap,
@@ -139,7 +141,9 @@ export class Interaction {
     const wheel = (e: WheelEvent) => this.onWheel(e);
     container.addEventListener('wheel', wheel, { passive: false });
     this.cleanup.push(() => container.removeEventListener('wheel', wheel));
-    listen('dblclick', (e) => this.zoomBy(e.shiftKey ? -1 : 1, this.local(e)));
+    listen('dblclick', (e) => {
+      if (this.doubleClickZoom) this.zoomBy(e.shiftKey ? -1 : 1, this.local(e));
+    });
     listen('contextmenu', (e) => e.preventDefault());
     if (options.keyboard ?? true) {
       // On the container: the keys work with the focus on a marker or a control too
