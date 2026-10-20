@@ -17,9 +17,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   a position, the scene drawn from above into one pixel (no jump across the edges of roofs, as the camera's ray
   would give).
 - The viewshed's cone in 3D (`coneColor`): its fan through the axis, at the eye's height and tilted with it, from
-  the eye to the range, solid where nothing hides it and faint behind the scene. The viewshed examples draw it
-  instead of the cone's edges on the ground (hidden under a mesh, wrong for a raised or tilted cone), and have an
-  opacity slider. Their observers stand 1 m above what they stand on by default (0.1 m steps), the stem of the pin
+  the eye to the range, solid where nothing hides it and faint behind the scene. The viewshed examples no longer
+  draw the cone's edges on the ground (hidden under a mesh, wrong for a raised or tilted cone), and have an opacity
+  slider. Their observers stand 1 m above what they stand on by default (0.1 m steps), the stem of the pin
   down to that surface; a dragged pin follows the pointer at once, what it stands on and the viewshed a few times a
   second and at the release.
 - The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the

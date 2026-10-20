@@ -1,6 +1,6 @@
 /**
- * The observers of the viewshed examples: a pin each, its settings in its popup (one popup open at a time), its cone
- * drawn in 3D, the whole given to `map.setViewshed` at each change. The page has a `#count`, a `#clear` button and
+ * The observers of the viewshed examples: a pin each, its settings in its popup (one popup open at a time), the
+ * whole given to `map.setViewshed` at each change. The page has a `#count`, a `#clear` button and
  * an `#opacity` slider; a click on the map adds an observer, a pin drags, its popup removes it. On surfaces, an observer
  * clicked or dragged onto a roof or a mesh stands on it.
  */
@@ -76,7 +76,6 @@ export function observers(
           range: o.range,
           ...(o.oneWay ? { direction: o.direction, tilt: o.tilt, fov: o.fov, verticalFov: o.verticalFov } : {}),
           opacity: Number(opacity.value) / 100,
-          coneColor: '#1c7ed6',
         };
       }),
     );
