@@ -1,6 +1,6 @@
 {
   "name": "isard",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "A WebGL2 map engine for large, interactive data layers, labels and 3D Tiles over raster or vector basemaps (Rust core in WebAssembly)",
   "license": "MIT",
   "author": "Kevin Graff",
