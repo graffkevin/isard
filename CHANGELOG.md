@@ -17,6 +17,10 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   properties, from the tile's `EXT_mesh_features` feature IDs and `EXT_structural_metadata` property table (3D Tiles
   1.1: scalars, booleans, strings, enums) or a b3dm's `_BATCHID` and batch table (1.0, its JSON arrays); the
   Bâtiments 3D of the IGN give their BD TOPO attributes (cleabs, hauteur, nature, usage…).
+- `geoid` for 3D Tiles whose heights are altitudes (NGF-IGN69) rather than heights above the ellipsoid, as the IGN's
+  Bâtiments 3D: each tile raised by the RAF20 geoid, onto the IGN relief (44 m under it in Paris without).
+- Untextured 3D Tiles meshes shaded: each face by its slope to a light from the north-west and above, as maps shade
+  (the Bâtiments 3D were drawn flat); textured meshes keep the light of their photos.
 
 ## [0.7.0] - 2026-10-20
 

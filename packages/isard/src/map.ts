@@ -1055,9 +1055,9 @@ export class GeoMap {
 
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */
   addTiles3d(options: Tiles3dOptions): Tiles3dLayer {
-    const { url, maxScreenSpaceError = 16, opacity = 1, pointSize, color } = options;
+    const { url, maxScreenSpaceError = 16, opacity = 1, pointSize, color, geoid = false } = options;
     return this.add(
-      new Tiles3dLayer(this, url, {
+      new Tiles3dLayer(this, url, geoid, {
         maxScreenSpaceError,
         opacity,
         ...(pointSize !== undefined ? { pointSize } : {}),

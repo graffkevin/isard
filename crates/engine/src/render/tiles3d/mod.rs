@@ -41,10 +41,19 @@ uniform mat4 u_matrix;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec2 a_uv;
 out vec2 v_uv;
+out vec3 v_position;
 void main() {
   v_uv = a_uv;
+  v_position = a_position;
   gl_Position = u_matrix * vec4(a_position, 1.0);
 }";
+
+/// Toward the light at an ECEF point, ECEF axes: from the north-west and above, as the shading of maps
+fn light_at(anchor: glam::DVec3) -> glam::DVec3 {
+    let g = geo::geodesy::from_ecef(anchor);
+    let [east, north, up] = geo::geodesy::enu(g.x, g.y);
+    (-0.35 * east + 0.35 * north + 0.87 * up).normalize()
+}
 
 /// The picking pass: each feature of a tile its handle, the tile's first one (`u_base`) plus the feature
 const PICK_VERTEX: &str = r"#version 300 es
@@ -77,11 +86,20 @@ uniform float u_textured;
 uniform float u_opacity;
 // The layer's color (alpha 1 when it has one): it tints the textures and is the color of the untextured meshes
 uniform vec4 u_color;
+// Toward the light, ECEF axes (from the north-west and above, at the tile)
+uniform vec3 u_light;
 in vec2 v_uv;
+in vec3 v_position;
 out vec4 color;
 void main() {
   vec4 plain = u_color.a > 0.5 ? vec4(u_color.rgb, 1.0) : vec4(0.8, 0.8, 0.8, 1.0);
   vec4 c = u_textured > 0.5 ? texture(u_texture, v_uv) * vec4(u_color.a > 0.5 ? u_color.rgb : vec3(1.0), 1.0) : plain;
+  if (u_textured < 0.5) {
+    // Untextured (buildings without their photos): each face shaded by its slope to the light, from the screen
+    // derivatives of the position; a textured mesh has its light in its photos
+    vec3 n = normalize(cross(dFdx(v_position), dFdy(v_position)));
+    c.rgb *= 0.55 + 0.45 * abs(dot(n, u_light));
+  }
   color = vec4(c.rgb, c.a * u_opacity);
 }";
 
@@ -152,7 +170,7 @@ pub struct Tiles3dLayer {
     /// Pool of decoding workers (`load(id, url, transform, yUp) → Promise`, `abort(id)`); None: decoding here
     loader: Option<JsValue>,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 5],
+    uniforms: [Option<glow::UniformLocation>; 6],
     /// The picking pass and its uniforms (matrix, base, count, layer)
     pick_program: glow::Program,
     pick_uniforms: [Option<glow::UniformLocation>; 4],
@@ -162,6 +180,8 @@ pub struct Tiles3dLayer {
     pub opacity: f32,
     /// A color tinting the textures, and of the untextured meshes (RGB 0-1)
     pub color: Option<[f32; 3]>,
+    /// Its heights are altitudes (NGF-IGN69): each tile raised by the RAF20 geoid onto the relief
+    pub geoid: bool,
     /// Size of the points (CSS pixels)
     pub point_size: f64,
     /// The program of the points, made with the first tile holding some
@@ -190,7 +210,7 @@ impl Tiles3dLayer {
         let uniforms = gl::uniforms(
             gl,
             program,
-            ["u_matrix", "u_texture", "u_textured", "u_opacity", "u_color"],
+            ["u_matrix", "u_texture", "u_textured", "u_opacity", "u_color", "u_light"],
         );
         let pick_program = match gl::program(gl, PICK_VERTEX, PICK_FRAGMENT) {
             Ok(p) => p,
@@ -218,6 +238,7 @@ impl Tiles3dLayer {
             max_error,
             opacity: 1.0,
             color: None,
+            geoid: false,
             point_size: 2.0,
             points: None,
             budget: 512 << 20,
@@ -332,7 +353,12 @@ impl Tiles3dLayer {
                 }
             };
             match uploaded {
-                Ok(gpu) => {
+                Ok(mut gpu) => {
+                    if self.geoid {
+                        // Altitudes, not heights above the ellipsoid: the tile raised by the geoid under its anchor
+                        let g = geo::geodesy::from_ecef(gpu.anchor);
+                        gpu.anchor = geo::geodesy::to_ecef(g.x, g.y, g.z + geo::geoid::height(g.x, g.y));
+                    }
                     if !gpu.points.is_empty() && self.points.is_none() {
                         match PointProgram::new(gl) {
                             Ok(program) => self.points = Some(program),
@@ -557,7 +583,7 @@ impl Tiles3dLayer {
     /// level drawn at each pixel: 255 for the selected tiles, depth + 1 for a parent, which passes only over coarser
     /// values (its own fragments included, so its surface still sorts by depth)
     fn render(&self, gl: &glow::Context, view: &View, tiles: &[usize], backfill: &[usize]) {
-        let [matrix, texture, textured, opacity, color] = &self.uniforms;
+        let [matrix, texture, textured, opacity, color, light] = &self.uniforms;
         // SAFETY: draws with objects owned by this layer
         unsafe {
             gl.use_program(Some(self.program));
@@ -587,6 +613,8 @@ impl Tiles3dLayer {
                 }
                 let m = view.view_proj * view.ecef_matrix(mesh.anchor);
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&m));
+                let l = light_at(mesh.anchor);
+                gl.uniform_3_f32(light.as_ref(), l.x as f32, l.y as f32, l.z as f32);
                 for p in &mesh.primitives {
                     gl.uniform_1_f32(textured.as_ref(), if p.texture.is_some() { 1.0 } else { 0.0 });
                     gl.bind_texture(glow::TEXTURE_2D, p.texture);
@@ -806,9 +834,11 @@ impl Engine {
 
     /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
     /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
+    /// `geoid`: its heights are altitudes (NGF-IGN69), each tile raised by the RAF20 geoid onto the relief.
     #[wasm_bindgen(js_name = addTiles3d)]
-    pub fn add_tiles3d(&mut self, url: String, max_error: f64) -> Result<u32, JsValue> {
-        let layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
+    pub fn add_tiles3d(&mut self, url: String, max_error: f64, geoid: Option<bool>) -> Result<u32, JsValue> {
+        let mut layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
+        layer.geoid = geoid.unwrap_or(false);
         Ok(self.add_layer(Box::new(layer)))
     }
 

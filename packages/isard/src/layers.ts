@@ -246,6 +246,7 @@ export class Tiles3dLayer extends Layer {
   constructor(
     map: LayerHost,
     private readonly url: string,
+    private readonly geoid: boolean,
     private style: Tiles3dStyle,
   ) {
     super(map);
@@ -282,7 +283,7 @@ export class Tiles3dLayer extends Layer {
 
   /** @internal */
   protected create(engine: Engine): number {
-    const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError);
+    const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError, this.geoid);
     this.applyStyle(engine, id);
     return id;
   }

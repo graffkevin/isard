@@ -327,6 +327,9 @@ export interface Tiles3dStyle {
 export interface Tiles3dOptions extends Partial<Tiles3dStyle> {
   /** URL of a `tileset.json` (3D Tiles 1.0 b3dm and pnts, 1.1 glb meshes and points, external tilesets) */
   url: string;
+  /** Its heights are altitudes above the geoid (NGF-IGN69), as the IGN's Bâtiments 3D, rather than above the
+   * ellipsoid (3D Tiles as specified): each tile raised by the RAF20 geoid, onto the IGN relief (default false) */
+  geoid?: boolean;
 }
 
 export interface MapPointerEvent {
