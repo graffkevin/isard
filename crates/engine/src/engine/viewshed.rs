@@ -331,7 +331,7 @@ impl Viewshed {
 
 /// The view from `eye` along one face of a cube (the faces in the order of `TEXTURE_CUBE_MAP_POSITIVE_X` + i, their
 /// up vectors those of the cube map's layout), sharing the local frame of `view`
-fn face_view(view: &View, eye: DVec3, face: u32, near: f64, far: f64) -> View {
+pub(super) fn face_view(view: &View, eye: DVec3, face: u32, near: f64, far: f64) -> View {
     let (look, up) = face_axes(face);
     let projection = glam::dcamera::rh::proj::opengl::perspective(std::f64::consts::FRAC_PI_2, 1.0, near, far);
     let mut face_view = view.clone();

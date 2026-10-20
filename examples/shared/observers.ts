@@ -27,7 +27,7 @@ interface Observer extends ObserverSettings {
 }
 
 const SLIDERS: [keyof ObserverSettings, string, number, number, number, string][] = [
-  ['height', 'Height above it', 1, 60, 1, ' m'],
+  ['height', 'Height above it', 0, 60, 0.1, ' m'],
   ['direction', 'Direction', 0, 359, 1, '°'],
   ['tilt', 'Tilt', -60, 30, 1, '°'],
   ['fov', 'Field of view', 10, 170, 5, '°'],
@@ -69,7 +69,7 @@ export function observers(
       all.map((o): ViewshedOptions => {
         // The pin raised to the eye, on what it stands on
         const height = base(o) + o.height;
-        o.pin.setHeight(height);
+        o.pin.setHeight(height, base(o));
         return {
           position: o.pin.getLonLat(),
           height,
@@ -89,15 +89,12 @@ export function observers(
     const form = document.createElement('div');
     form.className = 'observer';
     const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
-    const pin = new Marker({ draggable: true, surface: options.surfaces ?? false })
-      .setLonLat(at)
-      .setPopup(popup)
-      .addTo(map);
+    const pin = new Marker({ draggable: true }).setLonLat(at).setPopup(popup).addTo(map);
     const observer: Observer = {
       pin,
       popup,
       base: standing,
-      height: 2,
+      height: 1,
       range: 900,
       oneWay: true,
       direction: 170,
@@ -157,10 +154,21 @@ export function observers(
       where.textContent = on ? ` · on ${on.what}, ${Math.round(on.metres)} m` : '';
     };
     stand();
-    pin.on('drag', ({ surface }) => {
-      if (surface !== undefined) observer.base = surface;
+    // The pin follows the pointer at once; what it stands on and the viewshed follow a few times a second, and at
+    // the release (each costs a frame of the scene)
+    let pending = 0;
+    const follow = () => {
+      pending = 0;
+      if (options.surfaces) observer.base = map.surfaceAt(pin.getLonLat()) ?? 0;
       stand();
       show();
+    };
+    pin.on('drag', () => {
+      pending ||= window.setTimeout(follow, 200);
+    });
+    pin.on('dragend', () => {
+      window.clearTimeout(pending);
+      follow();
     });
     pin.togglePopup();
     show();

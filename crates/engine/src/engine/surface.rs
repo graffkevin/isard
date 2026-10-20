@@ -1,13 +1,15 @@
-//! What is drawn under a screen point: the relief, or a surface standing on it (extrusions, 3D Tiles, models). The
-//! solid scene of the last frame is drawn again into a depth texture, as for the viewshed; a pass reads that depth at
-//! the pixel and packs it in the color of the picking target, read back. Its position is then on the camera's ray at
-//! that depth.
+//! What is drawn under a screen point, or at a position: the relief, or a surface standing on it (extrusions, 3D
+//! Tiles, models). The solid scene of the last frame is drawn again into a depth texture, as for the viewshed; a pass
+//! reads that depth at a pixel and packs it in the color of the picking target, read back. Under a screen point, the
+//! position is then on the camera's ray at that depth; at a position, the scene is drawn from above into a single
+//! pixel, looking straight down, and the depth there is the top of what stands at that position.
 
-use super::Engine;
+use super::{Engine, viewshed};
 use crate::js;
 use crate::render::gl::{self, Objects};
 use crate::render::raster::unpack_depth;
-use geo::camera::{self, Camera};
+use geo::camera::{self, Camera, View};
+use glam::DVec3;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
@@ -110,9 +112,10 @@ impl Probe {
 }
 
 impl Engine {
-    /// Depth (0-1) of the solid scene of the last frame at a device pixel, None where nothing was drawn
-    fn surface_depth(&mut self, cursor: (i32, i32), size: (i32, i32)) -> Option<f64> {
-        let view = self.drawn.clone()?;
+    /// Depth (0-1) of the solid scene of the last frame seen with `view` at a device pixel of a `viewport` (from the
+    /// corner), None where nothing was drawn
+    fn surface_depth(&mut self, view: &View, cursor: (i32, i32), viewport: (i32, i32)) -> Option<f64> {
+        let size = self.canvas_size();
         let mut probe = match self.surface.take() {
             Some(probe) => probe,
             None => Probe::new(&self.gl).ok()?,
@@ -124,10 +127,10 @@ impl Engine {
             // SAFETY: offscreen passes on the live context, the default framebuffer bound again after
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-                gl.viewport(0, 0, size.0, size.1);
-                self.draw_solid_depth(&view);
+                gl.viewport(0, 0, viewport.0, viewport.1);
+                self.draw_solid_depth(view);
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(pick));
-                gl.viewport(0, 0, size.0, size.1);
+                gl.viewport(0, 0, viewport.0, viewport.1);
                 gl.disable(glow::BLEND);
                 gl.disable(glow::CULL_FACE);
                 gl.enable(glow::SCISSOR_TEST);
@@ -170,7 +173,7 @@ impl Engine {
         let (Some(cursor), Some(view)) = (self.device_point(x, y, size), self.drawn.clone()) else {
             return JsValue::UNDEFINED;
         };
-        let Some(depth) = self.surface_depth(cursor, size) else {
+        let Some(depth) = self.surface_depth(&view, cursor, size) else {
             return JsValue::UNDEFINED;
         };
         let ndc = glam::DVec4::new(
@@ -187,5 +190,31 @@ impl Engine {
         let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
         let at = camera::lon_lat(m);
         js::triple(at.x, at.y, altitude - ground)
+    }
+
+    /// The height above the relief (metres) of the top of what stands at a position (degrees): a roof, a mesh, 0 on
+    /// the bare ground; undefined where nothing of the last frame is there. The scene is drawn from above into a single
+    /// pixel and read back (a stall, cheap: one pixel to fill)
+    #[wasm_bindgen(js_name = surfaceAt)]
+    pub fn surface_at(&mut self, lon: f64, lat: f64) -> JsValue {
+        const ABOVE: f64 = 2000.0;
+        let Some(view) = self.drawn.clone() else {
+            return JsValue::UNDEFINED;
+        };
+        if !lon.is_finite() || !lat.is_finite() {
+            return JsValue::UNDEFINED;
+        }
+        let m = camera::mercator(lon, lat);
+        let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
+        let k = view.pixels_per_metre(lat);
+        let top = view.geodetic(DVec3::new(lon, lat, ground + ABOVE));
+        // The face of the cube looking down
+        let down = viewshed::face_view(&view, top, 5, k, (ABOVE + 1000.0) * k);
+        let Some(depth) = self.surface_depth(&down, (0, 0), (1, 1)) else {
+            return JsValue::UNDEFINED;
+        };
+        let p = down.inverse * glam::DVec4::new(0.0, 0.0, 2.0 * depth - 1.0, 1.0);
+        let altitude = Camera::altitude_of(&view, p.truncate() / p.w);
+        JsValue::from_f64(altitude - ground)
     }
 }

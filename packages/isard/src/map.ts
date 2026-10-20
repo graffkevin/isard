@@ -768,6 +768,13 @@ export class GeoMap {
     return hit && { lonLat: [hit[0], hit[1]], height: hit[2] };
   }
 
+  /** The height above the relief, in metres, of the top of what stands at a position: a roof, a mesh, 0 on the bare
+   * ground; undefined where nothing of the last frame is there. The scene is drawn from above into a single pixel and
+   * read back: cheap, but it waits for the GPU */
+  surfaceAt(lonLat: LonLat): number | undefined {
+    return this.engine.surfaceAt(lonLat[0], lonLat[1]);
+  }
+
   // ── Overlays and controls ──
 
   /** Adds a control in a corner of the map; controls stack from the corner inward */

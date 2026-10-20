@@ -7,17 +7,21 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Added
 
-- A height above the ground for markers and popups (`height` option, `setHeight`) and for `map.project`: a raised
-  marker has a stem down to its position on the ground, its popup raised with it. The viewshed example: each pin at
+- A height above the ground for markers and popups (`height` option, `setHeight(height, base)`) and for
+  `map.project`: a raised marker has a stem down to what it stands on (`base` metres: a roof, a mesh; the ground by
+  default), its popup raised with it. The viewshed example: each pin at
   its observer's eye, the cone's tilt and vertical field of view in its popup (120° by default, as an eye rather
   than a camera: the ground in front of a raised observer is in view).
 - `map.pickSurface(point)`: what is drawn under a screen point, on the relief or standing on it (a roof, a wall, a
-  mesh), its position and height above the relief; `Marker` option `surface` to drag a marker over them, its drag
-  events carrying that height.
+  mesh), its position and height above the relief; `map.surfaceAt(lonLat)`: the height of the top of what stands at
+  a position, the scene drawn from above into one pixel (no jump across the edges of roofs, as the camera's ray
+  would give).
 - The viewshed's cone in 3D (`coneColor`): its fan through the axis, at the eye's height and tilted with it, from
   the eye to the range, solid where nothing hides it and faint behind the scene. The viewshed examples draw it
   instead of the cone's edges on the ground (hidden under a mesh, wrong for a raised or tilted cone), and have an
-  opacity slider.
+  opacity slider. Their observers stand 1 m above what they stand on by default (0.1 m steps), the stem of the pin
+  down to that surface; a dragged pin follows the pointer at once, what it stands on and the viewshed a few times a
+  second and at the release.
 - The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the
   cathedral, its walls and roofs hiding and tinted, an observer clicked or dragged onto the mesh standing on it; the
   observers of both viewshed examples in one shared module.
