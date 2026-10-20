@@ -51,10 +51,13 @@ precision highp float;
 uniform sampler2D u_texture;
 uniform float u_textured;
 uniform float u_opacity;
+// The layer's color (alpha 1 when it has one): it tints the textures and is the color of the untextured meshes
+uniform vec4 u_color;
 in vec2 v_uv;
 out vec4 color;
 void main() {
-  vec4 c = u_textured > 0.5 ? texture(u_texture, v_uv) : vec4(0.8, 0.8, 0.8, 1.0);
+  vec4 plain = u_color.a > 0.5 ? vec4(u_color.rgb, 1.0) : vec4(0.8, 0.8, 0.8, 1.0);
+  vec4 c = u_textured > 0.5 ? texture(u_texture, v_uv) * vec4(u_color.a > 0.5 ? u_color.rgb : vec3(1.0), 1.0) : plain;
   color = vec4(c.rgb, c.a * u_opacity);
 }";
 
@@ -125,9 +128,11 @@ pub struct Tiles3dLayer {
     /// Pool of decoding workers (`load(id, url, transform, yUp) → Promise`, `abort(id)`); None: decoding here
     loader: Option<JsValue>,
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 4],
+    uniforms: [Option<glow::UniformLocation>; 5],
     pub max_error: f64,
     pub opacity: f32,
+    /// A color tinting the textures, and of the untextured meshes (RGB 0-1)
+    pub color: Option<[f32; 3]>,
     /// Size of the points (CSS pixels)
     pub point_size: f64,
     /// The program of the points, made with the first tile holding some
@@ -153,7 +158,11 @@ impl Tiles3dLayer {
         redraw: &Rc<dyn Fn()>,
     ) -> Result<Self, String> {
         let program = gl::program(gl, VERTEX, FRAGMENT)?;
-        let uniforms = gl::uniforms(gl, program, ["u_matrix", "u_texture", "u_textured", "u_opacity"]);
+        let uniforms = gl::uniforms(
+            gl,
+            program,
+            ["u_matrix", "u_texture", "u_textured", "u_opacity", "u_color"],
+        );
         let layer = Self {
             url,
             tree: Tree::default(),
@@ -167,6 +176,7 @@ impl Tiles3dLayer {
             uniforms,
             max_error,
             opacity: 1.0,
+            color: None,
             point_size: 2.0,
             points: None,
             budget: 512 << 20,
@@ -506,12 +516,14 @@ impl Tiles3dLayer {
     /// level drawn at each pixel: 255 for the selected tiles, depth + 1 for a parent, which passes only over coarser
     /// values (its own fragments included, so its surface still sorts by depth)
     fn render(&self, gl: &glow::Context, view: &View, tiles: &[usize], backfill: &[usize]) {
-        let [matrix, texture, textured, opacity] = &self.uniforms;
+        let [matrix, texture, textured, opacity, color] = &self.uniforms;
         // SAFETY: draws with objects owned by this layer
         unsafe {
             gl.use_program(Some(self.program));
             gl.uniform_1_i32(texture.as_ref(), 0);
             gl.uniform_1_f32(opacity.as_ref(), self.opacity);
+            let [r, g, b] = self.color.unwrap_or([1.0; 3]);
+            gl.uniform_4_f32(color.as_ref(), r, g, b, if self.color.is_some() { 1.0 } else { 0.0 });
             gl.active_texture(glow::TEXTURE0);
             gl.enable(glow::DEPTH_TEST);
             gl.depth_func(glow::LEQUAL);
@@ -711,12 +723,17 @@ impl Engine {
         Ok(self.add_layer(Box::new(layer)))
     }
 
-    /// Screen-space error threshold, opacity and size of the points (CSS pixels, 2 if not given) of a 3D Tiles layer
+    /// Screen-space error threshold, opacity, size of the points (CSS pixels, 2 if not given) and color (RGB 0-1, empty
+    /// for none: it tints the textures and colors the untextured meshes) of a 3D Tiles layer
     #[wasm_bindgen(js_name = setTiles3dStyle)]
-    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32, point_size: Option<f64>) {
+    pub fn set_tiles3d_style(&mut self, id: u32, max_error: f64, opacity: f32, point_size: Option<f64>, color: &[f32]) {
         if let Some((layer, _)) = self.layer_mut::<Tiles3dLayer>(id) {
             layer.max_error = max_error;
             layer.opacity = opacity;
+            layer.color = match *color {
+                [r, g, b, ..] => Some([r, g, b].map(|c| c.clamp(0.0, 1.0))),
+                _ => None,
+            };
             layer.point_size = point_size
                 .filter(|s| s.is_finite() && *s > 0.0)
                 .unwrap_or(2.0)

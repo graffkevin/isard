@@ -120,7 +120,7 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
     expect(core.freed).toBe(true);
     expect(created(full)).toEqual(['addLines', 'addTiles3d', 'addCircles']);
     expect([below.id, tiles.id, above.id].every((id) => id >= 0)).toBe(true);
-    expect(full.last('setTiles3dStyle')).toEqual([tiles.id, 16, 0.5]);
+    expect(full.last('setTiles3dStyle')).toEqual([tiles.id, 16, 0.5, undefined, new Float32Array()]);
     expect(full.last('setZoomRange')).toEqual([3, 22]);
     expect(full.last('setMaxPitch')).toEqual([60]);
     expect(map.getCamera()).toMatchObject({ center: [5, 45], zoom: 12 });
@@ -464,9 +464,9 @@ describe('point clouds, on the engine with 3D Tiles', () => {
     expect(engineOf(map).last('setPointCloudStyle')?.[1]).toSatisfy((n) => (n as Float64Array)[13] === 8);
     const tiles = map.addPointCloud({ url: 'points/tileset.json', pointSize: 4 });
     expect(tiles.format).toBe('3dtiles');
-    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 4]);
+    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 4, new Float32Array()]);
     tiles.setStyle({ pointSize: 5 });
-    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 5]);
+    expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 5, new Float32Array()]);
     expect(tiles.info()).toBeUndefined();
     expect(lidar.id).toBeGreaterThanOrEqual(0);
   });

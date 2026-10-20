@@ -11,6 +11,8 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   (an access token for a private Géoplateforme stream, a server behind single sign-on), from the page, its workers
   (vector tiles, 3D Tiles, point clouds) and its engine (raster tiles, tilesets): for the whole page, again with a
   new token when it is renewed, without headers to stop.
+- A color for 3D Tiles (`color` in `addTiles3d` and `setStyle`): it tints the textures of the meshes and colors the
+  untextured ones (light grey without it).
 
 ## [0.7.0] - 2026-10-20
 

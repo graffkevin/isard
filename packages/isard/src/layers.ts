@@ -6,6 +6,7 @@
 import { parseColor, rampTexels, stops } from './features.ts';
 import { mercatorX, mercatorY, toMercator } from './geo.ts';
 import type { GeoMap } from './map.ts';
+import { rgb } from './settings.ts';
 import type {
   LayerHost,
   LonLat,
@@ -254,7 +255,7 @@ export class Tiles3dLayer extends Layer {
     this.style = { ...this.style, ...style };
     // Kept for its creation while the engine with 3D Tiles loads
     if (this.id < 0) return;
-    this.map.engine.setTiles3dStyle(this.id, this.style.maxScreenSpaceError, this.style.opacity, this.style.pointSize);
+    this.applyStyle(this.map.engine, this.id);
     this.map.requestRender();
   }
 
@@ -272,8 +273,13 @@ export class Tiles3dLayer extends Layer {
   /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError);
-    engine.setTiles3dStyle(id, this.style.maxScreenSpaceError, this.style.opacity, this.style.pointSize);
+    this.applyStyle(engine, id);
     return id;
+  }
+
+  private applyStyle(engine: Engine, id: number): void {
+    const { maxScreenSpaceError, opacity, pointSize, color } = this.style;
+    engine.setTiles3dStyle(id, maxScreenSpaceError, opacity, pointSize, new Float32Array(color ? rgb(color) : []));
   }
 }
 

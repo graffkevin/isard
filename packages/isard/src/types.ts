@@ -319,6 +319,9 @@ export interface Tiles3dStyle {
   opacity: number;
   /** Size of the points of point cloud tiles (`.pnts`, glTF points), CSS pixels: 2 by default */
   pointSize?: number;
+  /** A CSS color multiplying the textures of the meshes, the color of the untextured ones (buildings without
+   * textures are light grey without it); none by default */
+  color?: string;
 }
 
 export interface Tiles3dOptions extends Partial<Tiles3dStyle> {

@@ -306,7 +306,7 @@ export class PointCloudLayer extends Layer {
   private apply(engine: Engine, id: number): void {
     const s = this.style;
     if (this.format === '3dtiles') {
-      engine.setTiles3dStyle(id, s.maxScreenSpaceError, 1, s.pointSize);
+      engine.setTiles3dStyle(id, s.maxScreenSpaceError, 1, s.pointSize, new Float32Array());
       return;
     }
     const rate = this.options.requestsPerSecond ?? (/^https?:\/\/data\.geopf\.fr\//.test(this.url) ? 8 : 0);
