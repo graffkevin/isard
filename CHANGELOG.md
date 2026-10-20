@@ -34,7 +34,8 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   format: positions and attitudes in GeoJSON, Lambert-93 by default, the cameras' calibration with MicMac's radial
   distortion) projected onto the scene around the panorama shown, a backdrop sphere for the sky; `enter` walks from
   panorama to panorama at street level (the drag turning the eye, a click going to the nearest panorama, Z and S to
-  the next and previous ones), `exit` gives the camera back. Seen from above, a panorama colors the street around it only (40 m),
+  the next and previous ones, the wheel to the nearest one ahead or behind), `exit` gives the camera back. Drawn by
+  the engine with 3D Tiles (`addPanoramas` loads it). Seen from above, a panorama colors the street around it only (40 m),
   its backdrop shown at street level.
 - A street-level camera (`map.setFirstPerson`): an eye above the ground looking any way, straight up included, its
   own field of view; the drag turns it, the wheel narrows its view.
@@ -71,6 +72,11 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Fixed
 
+- The camera settling onto finer relief after a move ends where the relief puts it whatever order its tiles arrived
+  in (each settle from the camera the move left, not from the last settle): the same view for the same relief, the
+  pitched scenes of the visual tests stable.
+- A map rebuilding its engine (the engine with 3D Tiles loaded, a context restored) keeps its viewshed, its
+  panoramas shown and its street-level eye.
 - 3D Tiles past their GPU memory budget no longer load without end: the tiles of the view that were not drawn yet
   (loaded, waiting for their siblings, or parents of drawn tiles) were unloaded first, then asked again, and so on
   (about 400 requests and 180 frames every 10 s over the Strasbourg mesh at zoom 18, pitch 70). The tiles of the view

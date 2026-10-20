@@ -21,9 +21,9 @@ const BUDGETS = {
   // until the surface under a point (the solid scene's depth read back, map.pickSurface), about 0.7 KB; 238 until the
   // viewshed's cones drawn in 3D (their edges widened on screen), about 1.3 KB; 240 until the request headers by URL
   // prefix (setRequestHeaders) and the vertical surface query, about 1.2 KB; 242 until the swipe (its columns of the
-  // canvas per layer) and the relief at a position, about 0.4 KB; 244 until the panoramas (their images projected
-  // onto the scene from the screen's depth, a backdrop sphere), about 3.2 KB
-  'isard_core_bg.wasm': 250,
+  // canvas per layer) and the relief at a position, about 0.4 KB; the street-level camera, about 0.5 KB (the
+  // panoramas are in the engine with 3D Tiles only)
+  'isard_core_bg.wasm': 246,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
   // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB; 356 until
@@ -31,8 +31,9 @@ const BUDGETS = {
   // layer (its head, hierarchy pages, octree traversal within a point budget, the grids positioning its points, its
   // requests to the workers held to a rate, Eye-Dome Lighting, picking, about 28 KB); its LAZ decoder is the point
   // cloud module below, not in the engines (the core engine does not change); 404 until the picking of 3D Tiles
-  // features and their properties (EXT_mesh_features, EXT_structural_metadata, b3dm batch tables), about 12 KB
-  'isard_bg.wasm': 416,
+  // features and their properties (EXT_mesh_features, EXT_structural_metadata, b3dm batch tables), about 12 KB;
+  // 416 until the panoramas (their images projected onto the scene, a backdrop sphere), about 3.5 KB
+  'isard_bg.wasm': 420,
   /** The point cloud module (the LAZ decoder of COPC), loaded by the decoding workers with the first point cloud */
   'isard_points_bg.wasm': 46,
   /** The package's modules (dist/*.js but the workers), all together */

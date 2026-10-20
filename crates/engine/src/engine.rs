@@ -2,6 +2,7 @@
 //! and the frame loop. The layers drawn over the ground (`Layer`) export their own methods, next to them; the picking
 //! is in `pick`.
 
+#[cfg(feature = "tiles3d")]
 mod panorama;
 mod pick;
 mod surface;
@@ -119,6 +120,9 @@ pub struct Engine {
     /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
     /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
     handled: bool,
+    /// The camera as the user's last move left it (center, zoom, elevation): each settle onto finer relief starts
+    /// from it, so that where the camera ends depends on the relief only, not on the order its tiles arrived in
+    settle_base: Option<(glam::DVec2, f64, f64)>,
     /// The collision grid of the labels, kept from frame to frame
     label_grid: Option<geo::collision::Grid>,
     /// What can be seen from a point, drawn over the frame
@@ -127,7 +131,8 @@ pub struct Engine {
     surface: Option<surface::Probe>,
     /// Layers shown on one side of a vertical line only (`setSwipe`)
     swipe: Option<Swipe>,
-    /// The panorama projected onto the scene (`setPanorama`)
+    /// The panorama projected onto the scene (`setPanorama`), in the engine with 3D Tiles
+    #[cfg(feature = "tiles3d")]
     panorama: Option<panorama::Panorama>,
 }
 
@@ -202,6 +207,7 @@ impl Engine {
             viewshed: None,
             surface: None,
             swipe: None,
+            #[cfg(feature = "tiles3d")]
             panorama: None,
             async_pick: None,
             loading: Loading::IMMEDIATE,
@@ -210,6 +216,7 @@ impl Engine {
             glyphs: None,
             icons: None,
             handled: false,
+            settle_base: None,
             label_grid: None,
         })
     }
@@ -231,6 +238,7 @@ impl Engine {
         self.camera.first_person = None;
         self.camera.set_view(lon, lat, zoom, pitch, bearing);
         self.handled = false;
+        self.settle_base = None;
     }
 
     /// A street-level view: the eye `height` metres above the ground at `lon`, `lat` (degrees), looking `bearing`
@@ -250,6 +258,7 @@ impl Engine {
             fov: finite(fov, 75.0).clamp(10.0, 140.0).to_radians(),
         });
         self.handled = false;
+        self.settle_base = None;
         (self.redraw)();
     }
 
@@ -540,6 +549,7 @@ impl Engine {
         self.camera.pan_at(from, to, altitude);
         self.grab = Some((to, altitude));
         self.handled = true;
+        self.settle_base = None;
     }
 
     #[wasm_bindgen(js_name = zoomAt)]
@@ -559,6 +569,7 @@ impl Engine {
         self.camera.zoom_at_altitude(delta, at, altitude);
         self.grab = Some((at, altitude));
         self.handled = true;
+        self.settle_base = None;
     }
 
     /// Turns and tilts around the screen center, in degrees
@@ -570,6 +581,7 @@ impl Engine {
         self.camera.pitch += pitch;
         self.camera.clamp();
         self.handled = true;
+        self.settle_base = None;
     }
 
     /// Position under a screen point (CSS pixels), undefined above the horizon; on the relief itself
@@ -718,24 +730,7 @@ impl Engine {
 
     pub fn render(&mut self) -> bool {
         self.frame += 1;
-        // The camera turns around the relief under its center (sea level without relief)
-        let key_of = |c: &Camera| [c.center.x, c.center.y, c.zoom, c.pitch, c.bearing].map(f64::to_bits);
-        if self.terrain.is_none() {
-            self.camera.elevation = 0.0;
-        } else if let Some(h) = ground_elevation(self.terrain.as_ref(), self.camera.center) {
-            if self.handled {
-                // Moved by the user (or finer relief under a camera they moved): the eye stays, the orbited point
-                // comes down to the ground under the center, nothing moves on screen
-                let still = key_of(&self.camera) == self.last_camera;
-                self.camera.settle_elevation(h);
-                if still {
-                    self.last_camera = key_of(&self.camera);
-                }
-            } else {
-                // Set by the application: its center holds, the camera rises and sinks with the ground
-                self.camera.elevation = h;
-            }
-        }
+        self.follow_relief();
         let view = self.camera.view();
         let (w, h) = (
             self.camera.width * self.pixel_ratio,
@@ -820,13 +815,44 @@ impl Engine {
         if let Some((terrain, _)) = &self.terrain {
             terrain.finish(&self.redraw);
         }
+        #[cfg(feature = "tiles3d")]
         self.draw_panorama(&view);
         self.draw_viewshed(&view);
         loading
     }
 }
 
+/// The camera's key: its center, zoom, pitch and bearing, bit for bit (a frame whose camera has not moved)
+fn key_of(c: &Camera) -> [u64; 5] {
+    [c.center.x, c.center.y, c.zoom, c.pitch, c.bearing].map(f64::to_bits)
+}
+
 impl Engine {
+    /// The camera onto the relief under its center (sea level without relief), before a frame
+    fn follow_relief(&mut self) {
+        if self.terrain.is_none() {
+            self.camera.elevation = 0.0;
+        } else if let Some(h) = ground_elevation(self.terrain.as_ref(), self.camera.center) {
+            if self.handled {
+                // Moved by the user (or finer relief under a camera they moved): the eye stays, the orbited point
+                // comes down to the ground under the center, nothing moves on screen
+                let still = key_of(&self.camera) == self.last_camera;
+                let base =
+                    *self
+                        .settle_base
+                        .get_or_insert((self.camera.center, self.camera.zoom, self.camera.elevation));
+                (self.camera.center, self.camera.zoom, self.camera.elevation) = base;
+                self.camera.settle_elevation(h);
+                if still {
+                    self.last_camera = key_of(&self.camera);
+                }
+            } else {
+                // Set by the application: its center holds, the camera rises and sinks with the ground
+                self.camera.elevation = h;
+            }
+        }
+    }
+
     /// Draws a layer over the ground, in its columns of the canvas only if it is a layer of the swipe; whether it is
     /// still loading
     fn draw_layer(&self, layer: &mut dyn Layer, id: u32, view: &View) -> bool {
@@ -999,6 +1025,7 @@ impl Drop for Engine {
             if let Some(mut probe) = self.surface.take() {
                 probe.delete(gl);
             }
+            #[cfg(feature = "tiles3d")]
             if let Some(mut panorama) = self.panorama.take() {
                 panorama.delete(gl);
             }

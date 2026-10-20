@@ -1,8 +1,9 @@
 /**
  * Panoramas: the oriented images of a vehicle's cameras (iTowns' immersive sample of Paris, rue Servandoni) projected
  * onto the scene around the panorama shown, the BD TOPO buildings raised to take them. From above, the panorama
- * colors its street; walking in puts the eye at the cameras: the drag turns it, a click on the street goes to the
- * panorama nearest to the point clicked, Z and S to the next and the previous ones.
+ * colors its street; the page starts walking in, the eye at the cameras: the drag turns it, the wheel goes to the
+ * nearest panorama ahead (or behind), a click on the street to the one nearest to the point clicked, Z and S to the
+ * next and the previous ones.
  */
 import { GeoMap, geoplateformeWfs } from 'isard';
 import { element } from '../shared/page.ts';
@@ -30,10 +31,12 @@ const panoramas = await map.addPanoramas({
   calibrationUrl: `${SAMPLE}/cameraCalibration.json`,
   backgroundDistance: 1200,
 });
-await panoramas.show(0);
+// Straight in the street, at the first panorama
+await panoramas.enter({ index: 0 });
 
 const walk = element<HTMLButtonElement>('walk');
-let walking = false;
+let walking = true;
+walk.textContent = 'Leave';
 const where = () => {
   const pano = panoramas.current;
   element('where').textContent = pano ? `panorama ${pano.index + 1} of ${panoramas.list.length}` : '';

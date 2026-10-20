@@ -442,6 +442,9 @@ export class GeoMap {
     this.applySwipe();
     // A street-level eye stays one in the new engine
     if (this.#firstPerson) this.setFirstPerson(this.#firstPerson);
+    // What the old engine drew over the scene: the viewshed, the panoramas shown
+    if (this.viewshed) this.setViewshed(this.viewshed);
+    for (const set of this.panoramaSets) if (set.current) void set.show(set.current.index).catch(report);
     this.resize();
   }
 
@@ -682,7 +685,11 @@ export class GeoMap {
    * (`direction`): the relief, extrusions, 3D Tiles and models hide what lies behind them (only what the map has
    * loaded for its view). Several observers (16 at most): what any of them sees is seen, what is hidden from all those
    * that reach it is hidden, in the colors and opacity of the first. Undefined or none removes it */
+  /** The viewshed set, set again in a new engine */
+  private viewshed: ViewshedOptions | readonly ViewshedOptions[] | undefined;
+
   setViewshed(options: ViewshedOptions | readonly ViewshedOptions[] | undefined): void {
+    this.viewshed = options;
     let observers: readonly ViewshedOptions[] = [];
     if (options) observers = 'position' in options ? [options] : options;
     const [first] = observers;
@@ -833,6 +840,12 @@ export class GeoMap {
    * and calibrations loaded, none shown until `show`, which projects one onto the scene around it
    */
   async addPanoramas(options: PanoramaOptions): Promise<Panoramas> {
+    // Drawn by the engine with 3D Tiles: loaded first if needed
+    if (!this.tiles3dModule) {
+      this.upgrade();
+      await this.upgrading;
+      if (!this.tiles3dModule) throw new Error('isard: panoramas need the engine with 3D Tiles, which failed to load');
+    }
     const host: PanoramaHost = {
       setPanorama: (...args) => {
         this.engine.setPanorama(...args);
@@ -844,18 +857,31 @@ export class GeoMap {
       firstPerson: () => this.firstPerson,
       setFirstPerson: (view) => this.setFirstPerson(view),
       elevationAt: (lonLat) => this.elevationAt(lonLat),
-      listen: (click, key) => {
+      listen: (click, key, wheel) => {
         const off = this.on('click', ({ lonLat }) => click(lonLat));
         const container = this.getContainer();
+        // Before the map's own wheel (its zoom, the eye's field of view)
+        const onWheel = (e: WheelEvent) => {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          wheel(e);
+        };
         container.addEventListener('keydown', key);
+        container.addEventListener('wheel', onWheel, { capture: true, passive: false });
         return () => {
           off();
           container.removeEventListener('keydown', key);
+          container.removeEventListener('wheel', onWheel, { capture: true });
         };
       },
     };
-    return loadPanoramas(host, options);
+    const panoramas = await loadPanoramas(host, options);
+    this.panoramaSets.add(panoramas);
+    return panoramas;
   }
+
+  /** The panorama sets, their panorama shown again in a new engine */
+  private readonly panoramaSets = new Set<Panoramas>();
 
   /** Altitude of the relief at a position, in metres (exaggeration included): from the copy of its tiles the map
    * keeps, as fine as the tiles loaded there; undefined without relief or where none is loaded yet */

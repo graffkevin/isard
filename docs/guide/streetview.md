@@ -24,10 +24,12 @@ await panoramas.show(panoramas.nearest([2.3348, 48.8506]).index);
 - **Images** (`url`): `{cameraId}` and `{panoId}` replaced. Images smaller than their calibration (a reduced set) are
   read as well.
 
-Each pixel of the scene drawn (relief, buildings, 3D Tiles, models) is taken into each camera of the panorama shown
+Panoramas are drawn by the engine with 3D Tiles: `addPanoramas` loads it first if the map has not (see [the engine
+with 3D Tiles](../layers/tiles3d#the-engine-with-3d-tiles)). Each pixel of the scene drawn (relief, buildings, 3D Tiles, models) is taken into each camera of the panorama shown
 and colored by its image there, the cameras blended toward their borders; beyond `backgroundDistance` and where
 nothing is drawn (the sky), the pixel is taken on a sphere of that radius around the panorama. The geometry the
-images fall on is the map's own: buildings raised from the BD TOPO, a photomesh, the relief.
+images fall on is the map's own: buildings raised from the BD TOPO, a photomesh, the relief. Seen from above, a
+panorama colors the street around it only (40 metres), its backdrop shown at street level.
 
 `panoramas.list` gives each panorama (`index`, `id`, `lonLat`, `height`, `heading`), `current` the one shown,
 `hide()` hides it. The requests go through `setRequestHeaders` like the others (a private source).
@@ -39,8 +41,8 @@ await panoramas.enter({ near: [2.3348, 48.8506] }); // the eye on a panorama
 panoramas.exit(); // back to the camera turning around a point
 ```
 
-`enter` puts the eye at the panorama's cameras: the drag turns it, the wheel narrows or widens its field of view, a
-click on the ground goes to the panorama nearest to the point clicked, Z and S (or Page Up and Page Down) to the next
+`enter` puts the eye at the panorama's cameras: the drag turns it, the wheel walks to the nearest panorama ahead
+(or behind), a click on the ground goes to the panorama nearest to the point clicked, Z and S (or Page Up and Page Down) to the next
 and the previous ones, `go(index)` from the page. `exit` gives the camera back above where the eye stood, facing the
 same way.
 

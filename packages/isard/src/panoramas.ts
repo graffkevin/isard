@@ -61,8 +61,13 @@ export interface PanoramaHost {
   firstPerson(): Readonly<Required<FirstPersonView>> | undefined;
   setFirstPerson(view: FirstPersonView | undefined): void;
   elevationAt(lonLat: LonLat): number | undefined;
-  /** Follows the clicks on the map (with the ground clicked) and the keys typed on it; returns what stops */
-  listen(click: (lonLat: LonLat | undefined) => void, key: (e: KeyboardEvent) => void): () => void;
+  /** Follows the clicks on the map (with the ground clicked), the keys typed on it and its wheel (taken from the
+   * map's own); returns what stops */
+  listen(
+    click: (lonLat: LonLat | undefined) => void,
+    key: (e: KeyboardEvent) => void,
+    wheel: (e: WheelEvent) => void,
+  ): () => void;
 }
 
 interface Calibration {
@@ -204,8 +209,9 @@ export class Panoramas {
 
   /**
    * Street-level walk from panorama to panorama (the iTowns immersive view): the eye on a panorama, the drag
-   * turning it; a click goes to the panorama nearest to the clicked point, Z and S (or Page Up and Page Down) to the
-   * next and the previous ones. Starts on the panorama `index`, else the one nearest to `near`
+   * turning it; a click goes to the panorama nearest to the clicked point, the wheel to the nearest one ahead (or
+   * behind), Z and S (or Page Up and Page Down) to the next and the previous ones. Starts on the panorama `index`,
+   * else the one nearest to `near`
    */
   async enter(start: { index?: number; near?: LonLat } = {}): Promise<void> {
     const first = start.index ?? (start.near && this.nearest(start.near)?.index) ?? 0;
@@ -221,8 +227,41 @@ export class Panoramas {
         e.preventDefault();
         void this.go((this.current.index + step + this.list.length) % this.list.length);
       },
+      (e) => {
+        // One step per notch, the next ones once it is shown
+        if (this.moving || e.deltaY === 0) return;
+        const target = this.ahead(e.deltaY < 0);
+        if (target) {
+          this.moving = true;
+          void this.go(target.index).finally(() => {
+            this.moving = false;
+          });
+        }
+      },
     );
     await this.go(first, this.list[first]?.heading);
+  }
+
+  /** A step of the wheel under way */
+  private moving = false;
+
+  /** The nearest panorama ahead of the eye (within 60° of where it looks), or behind it */
+  ahead(forward = true): Panorama | undefined {
+    const eye = this.host.firstPerson();
+    const here = this.current;
+    if (!eye || !here) return undefined;
+    const cos = Math.cos(here.lonLat[1] * RAD);
+    const look = (eye.bearing + (forward ? 0 : 180)) * RAD;
+    let best: Panorama | undefined;
+    let distance = Number.POSITIVE_INFINITY;
+    for (const p of this.list) {
+      if (p === here) continue;
+      const [east, north] = [(p.lonLat[0] - here.lonLat[0]) * cos, p.lonLat[1] - here.lonLat[1]];
+      const d = Math.hypot(east, north);
+      const off = Math.acos(Math.max(-1, Math.min(1, (east * Math.sin(look) + north * Math.cos(look)) / (d || 1))));
+      if (off < 60 * RAD && d < distance) [best, distance] = [p, d];
+    }
+    return best;
   }
 
   /** Goes to a panorama during the walk, the eye looking the same way (or `bearing`) */
