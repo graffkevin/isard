@@ -124,6 +124,15 @@ pub struct Engine {
     viewshed: Option<viewshed::Viewshed>,
     /// What reads the surface under a point (`surface`), made on the first query
     surface: Option<surface::Probe>,
+    /// Layers shown on one side of a vertical line only (`setSwipe`)
+    swipe: Option<Swipe>,
+}
+
+/// A swipe: `layers` shown left of `x` (CSS pixels from the left of the canvas), or right of it
+struct Swipe {
+    x: f64,
+    right: bool,
+    layers: Vec<u32>,
 }
 
 /// The camera counts as moving until this long after its last change (ms)
@@ -189,6 +198,7 @@ impl Engine {
             pick_target: None,
             viewshed: None,
             surface: None,
+            swipe: None,
             async_pick: None,
             loading: Loading::IMMEDIATE,
             drawn: None,
@@ -428,6 +438,18 @@ impl Engine {
             return None;
         }
         ground_elevation(self.terrain.as_ref(), camera::mercator(lon, lat))
+    }
+
+    /// Shows `layers` on one side of a vertical line only, the others beneath on the other side (comparing two states
+    /// of a place): left of `x` (CSS pixels from the left of the canvas), or right of it; a non-finite `x` stops
+    #[wasm_bindgen(js_name = setSwipe)]
+    pub fn set_swipe(&mut self, x: f64, right: bool, layers: &[u32]) {
+        self.swipe = (x.is_finite() && !layers.is_empty()).then(|| Swipe {
+            x,
+            right,
+            layers: layers.to_vec(),
+        });
+        (self.redraw)();
     }
 
     /// The headers added to the engine's requests by URL prefix (`setRequestHeaders`, the same for every map of the
@@ -710,8 +732,9 @@ impl Engine {
         self.place_labels(&mut layers, &view);
         let mut i = 0;
         while i < layers.len() {
+            let id = layers[i].0;
             if let Slot::Layer(layer) = &mut layers[i].1 {
-                loading |= layer.draw(&self.frame_state(&view));
+                loading |= self.draw_layer(layer.as_mut(), id, &view);
                 i += 1;
                 continue;
             }
@@ -720,10 +743,14 @@ impl Engine {
             while j < layers.len() && j - i < STACK && matches!(layers[j].1, Slot::Raster(_)) {
                 j += 1;
             }
+            // Each in its columns of the canvas: all of it, or its side of the swipe
             let mut stack: Vec<&mut RasterSource> = layers[i..j]
                 .iter_mut()
-                .filter_map(|(_, slot)| match slot {
-                    Slot::Raster(source) => Some(source.as_mut()),
+                .filter_map(|(id, slot)| match slot {
+                    Slot::Raster(source) => {
+                        source.clip = self.swipe_columns(*id).unwrap_or(crate::render::raster::UNCLIPPED);
+                        Some(source.as_mut())
+                    }
                     Slot::Layer(_) => None,
                 })
                 .collect();
@@ -735,16 +762,9 @@ impl Engine {
                 .as_mut()
                 .map(|(source, exaggeration)| (source, *exaggeration));
             let fog = self.sky.atmosphere.map(|a| a.fog(&view));
-            self.raster_pass.draw(
-                &self.gl,
-                &view,
-                &mut stack,
-                terrain,
-                self.frame,
-                now,
-                self.loading.fade_ms,
-                fog,
-            );
+            let (frame, fade) = (self.frame, self.loading.fade_ms);
+            self.raster_pass
+                .draw(&self.gl, &view, &mut stack, terrain, frame, now, fade, fog);
             for source in &stack {
                 source.finish(&self.redraw);
             }
@@ -760,6 +780,35 @@ impl Engine {
 }
 
 impl Engine {
+    /// Draws a layer over the ground, in its columns of the canvas only if it is a layer of the swipe; whether it is
+    /// still loading
+    fn draw_layer(&self, layer: &mut dyn Layer, id: u32, view: &View) -> bool {
+        let columns = self.swipe_columns(id);
+        if let Some([from, to]) = columns {
+            let height = (self.camera.height * self.pixel_ratio).ceil() as i32;
+            let from = from.max(0.0) as i32;
+            let to = to.min((self.camera.width * self.pixel_ratio).ceil() as f32) as i32;
+            // SAFETY: state change on the live context, set back below
+            unsafe {
+                self.gl.enable(glow::SCISSOR_TEST);
+                self.gl.scissor(from, 0, (to - from).max(0), height);
+            }
+        }
+        let loading = layer.draw(&self.frame_state(view));
+        if columns.is_some() {
+            // SAFETY: state change on the live context
+            unsafe { self.gl.disable(glow::SCISSOR_TEST) };
+        }
+        loading
+    }
+
+    /// The columns of the canvas a layer of the swipe shows in (device pixels from the left), None for the others
+    fn swipe_columns(&self, id: u32) -> Option<[f32; 2]> {
+        let swipe = self.swipe.as_ref().filter(|s| s.layers.contains(&id))?;
+        let x = (swipe.x * self.pixel_ratio) as f32;
+        Some(if swipe.right { [x, 1e9] } else { [-1e9, x] })
+    }
+
     /// The body the map is drawn on
     pub(crate) fn body(&self) -> geo::geodesy::Body {
         self.camera.body

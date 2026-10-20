@@ -24,6 +24,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - `map.elevationAt(lonLat)`: the altitude of the relief at a position, from the tiles the map keeps;
   `map.metersPerPixel(point?)`: metres on the ground per CSS pixel at a screen point, for a scale bar;
   `map.setDoubleClickZoom(enabled)`: a double click zooms or not (off while a drawing takes double clicks).
+- `map.setSwipe({ position, layers, side })`: layers shown on one side of a vertical line only, the layers beneath
+  them on the other (comparing two states of a place, two basemaps): rasters cut in the ground's pass, the other
+  layers by a scissor; set again as the line moves.
 
 ## [0.7.0] - 2026-10-20
 

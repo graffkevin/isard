@@ -126,6 +126,7 @@ export type {
   RasterGrid,
   RasterOptions,
   RasterStyle,
+  SwipeOptions,
   TerrainEncoding,
   TerrainModel,
   TerrainOptions,

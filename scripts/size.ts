@@ -20,8 +20,9 @@ const BUDGETS = {
   // until its several observers (an accumulation target, the pass tinting from it), about 0.4 KB, in both engines; 236
   // until the surface under a point (the solid scene's depth read back, map.pickSurface), about 0.7 KB; 238 until the
   // viewshed's cones drawn in 3D (their edges widened on screen), about 1.3 KB; 240 until the request headers by URL
-  // prefix (setRequestHeaders) and the vertical surface query, about 1.2 KB
-  'isard_core_bg.wasm': 242,
+  // prefix (setRequestHeaders) and the vertical surface query, about 1.2 KB; 242 until the swipe (its columns of the
+  // canvas per layer) and the relief at a position, about 0.4 KB
+  'isard_core_bg.wasm': 244,
   /** The engine with 3D Tiles, loaded for the first 3D Tiles layer */
   // 341 until the icons of the symbol layers, about 1.9 KB; 348 until the custom layers and the glTF models (their
   // instances drawn in one call, their file decoded and uploaded as a 3D Tiles tile, picked), about 7.5 KB; 356 until

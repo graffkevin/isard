@@ -158,8 +158,13 @@ pub struct RasterStats {
     pub missing: usize,
 }
 
+/// Columns of the canvas a raster layer shows in when it is not cut by a swipe (device pixels)
+pub const UNCLIPPED: [f32; 2] = [-1e9, 1e9];
+
 pub struct RasterSource {
     pub options: RasterOptions,
+    /// The columns of the canvas it shows in (device pixels, from the left): `UNCLIPPED`, or one side of a swipe
+    pub clip: [f32; 2],
     pool: glow::Texture,
     cache: Cache,
     /// Requests in flight: their abort handle and start time (ms)
@@ -219,6 +224,7 @@ impl RasterSource {
             pool
         };
         Ok(Self {
+            clip: UNCLIPPED,
             cache: Cache::new(options.min_z, options.max_z, slots),
             options,
             pool,

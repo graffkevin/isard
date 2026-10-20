@@ -81,6 +81,8 @@ uniform highp sampler2DArray u_tiles3;
 uniform int u_count;
 uniform float u_opacity[4];
 uniform float u_saturation[4];
+// The columns of the canvas each layer shows in (device pixels, from the left): all of it but a layer of a swipe
+uniform vec2 u_clip[4];
 // Fog of the atmosphere: color, then the distances where it starts and is full (none if the second is 0)
 uniform vec3 u_fog;
 uniform vec2 u_fog_range;
@@ -90,8 +92,9 @@ in float v_distance;
 out vec4 color;
 
 // One layer, straight alpha: the tile mixed with its stand-in while it fades in; slot < 0 = none
-vec4 layer(highp sampler2DArray tiles, vec4 uv, vec3 slot, float opacity, float saturation) {
+vec4 layer(highp sampler2DArray tiles, vec4 uv, vec3 slot, float opacity, float saturation, vec2 clip) {
   vec4 c = slot.x >= 0.0 ? texture(tiles, vec3(uv.xy, slot.x)) : vec4(0.0);
+  if (gl_FragCoord.x < clip.x || gl_FragCoord.x > clip.y) return vec4(0.0);
   if (slot.z < 1.0) {
     c = slot.y >= 0.0 ? mix(texture(tiles, vec3(uv.zw, slot.y)), c, slot.z) : vec4(c.rgb, c.a * slot.z);
   }
@@ -106,10 +109,10 @@ void over(inout vec4 acc, vec4 c) {
 
 void main() {
   vec4 acc = vec4(0.0);
-  over(acc, layer(u_tiles0, v_uv[0], v_slot[0], u_opacity[0], u_saturation[0]));
-  if (u_count > 1) over(acc, layer(u_tiles1, v_uv[1], v_slot[1], u_opacity[1], u_saturation[1]));
-  if (u_count > 2) over(acc, layer(u_tiles2, v_uv[2], v_slot[2], u_opacity[2], u_saturation[2]));
-  if (u_count > 3) over(acc, layer(u_tiles3, v_uv[3], v_slot[3], u_opacity[3], u_saturation[3]));
+  over(acc, layer(u_tiles0, v_uv[0], v_slot[0], u_opacity[0], u_saturation[0], u_clip[0]));
+  if (u_count > 1) over(acc, layer(u_tiles1, v_uv[1], v_slot[1], u_opacity[1], u_saturation[1], u_clip[1]));
+  if (u_count > 2) over(acc, layer(u_tiles2, v_uv[2], v_slot[2], u_opacity[2], u_saturation[2], u_clip[2]));
+  if (u_count > 3) over(acc, layer(u_tiles3, v_uv[3], v_slot[3], u_opacity[3], u_saturation[3], u_clip[3]));
   if (u_fog_range.y > 0.0) acc.rgb = mix(acc.rgb, u_fog * acc.a, smoothstep(u_fog_range.x, u_fog_range.y, v_distance));
   color = acc;
 }";

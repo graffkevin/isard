@@ -225,6 +225,15 @@ export interface ViewshedOptions {
   verticalFov?: number;
 }
 
+/** Layers shown on one side of a vertical line only (`GeoMap.setSwipe`) */
+export interface SwipeOptions {
+  /** CSS pixels from the left of the map */
+  position: number;
+  layers: readonly Layer[];
+  /** The side they show on (default 'left') */
+  side?: 'left' | 'right';
+}
+
 /** Animation of a camera move */
 export interface AnimationOptions {
   /** Milliseconds */

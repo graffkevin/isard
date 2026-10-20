@@ -67,7 +67,7 @@ impl Stack {
 /// the others have on its area
 pub struct RasterPass {
     program: glow::Program,
-    uniforms: [Option<glow::UniformLocation>; 13],
+    uniforms: [Option<glow::UniformLocation>; 14],
     projection: Projection,
     /// The ground's depth, for picking positions in relief
     depth: glow::Program,
@@ -78,6 +78,19 @@ pub struct RasterPass {
     /// Stacks drawn this frame
     drawn: usize,
     data: Vec<f32>,
+}
+
+/// The opacity, saturation and columns of the canvas of the first `n` sources of a pass, for its uniforms
+fn source_uniforms(sources: &[&mut RasterSource], n: usize) -> ([f32; STACK], [f32; STACK], [f32; 2 * STACK]) {
+    let mut opacity = [0f32; STACK];
+    let mut saturation = [1f32; STACK];
+    let mut clip = [0f32; 2 * STACK];
+    for (k, source) in sources.iter().take(n).enumerate() {
+        opacity[k] = source.options.opacity;
+        saturation[k] = source.options.saturation;
+        clip[2 * k..2 * k + 2].copy_from_slice(&source.clip);
+    }
+    (opacity, saturation, clip)
 }
 
 impl RasterPass {
@@ -108,6 +121,7 @@ impl RasterPass {
                     "u_eye",
                     "u_fog",
                     "u_fog_range",
+                    "u_clip",
                 ],
             ),
             projection: Projection::new(gl, program),
@@ -246,12 +260,7 @@ impl RasterPass {
             self.data.extend_from_slice(&heights);
         }
         sources[0].plan.tiles = tiles;
-        let mut opacity = [0f32; STACK];
-        let mut saturation = [1f32; STACK];
-        for (k, source) in sources.iter().take(n).enumerate() {
-            opacity[k] = source.options.opacity;
-            saturation[k] = source.options.saturation;
-        }
+        let (opacity, saturation, clip) = source_uniforms(sources, n);
         let count = (self.data.len() / INSTANCE) as i32;
         let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
         stack.last = Some((count, relief));
@@ -272,6 +281,7 @@ impl RasterPass {
                 eye,
                 fog_u,
                 fog_range,
+                clip_u,
             ] = &self.uniforms;
             let ([r, g, b], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
             gl.uniform_3_f32(eye.as_ref(), view.eye.x as f32, view.eye.y as f32, view.eye.z as f32);
@@ -281,6 +291,7 @@ impl RasterPass {
             gl.uniform_1_i32(count_u.as_ref(), n as i32);
             gl.uniform_1_f32_slice(opacity_u.as_ref(), &opacity);
             gl.uniform_1_f32_slice(saturation_u.as_ref(), &saturation);
+            gl.uniform_2_f32_slice(clip_u.as_ref(), &clip);
             gl.uniform_1_f32(relief_u.as_ref(), relief);
             self.projection.set(gl, view);
             for (k, unit) in [t0, t1, t2, t3].into_iter().enumerate() {

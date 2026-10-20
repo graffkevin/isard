@@ -77,6 +77,7 @@ import type {
   Point,
   Projection,
   RasterOptions,
+  SwipeOptions,
   TerrainModel,
   TerrainOptions,
   Tiles3dOptions,
@@ -436,7 +437,31 @@ export class GeoMap {
         report(error);
       }
     }
+    this.applySwipe();
     this.resize();
+  }
+
+  /** The swipe set (`setSwipe`), applied again with the layers' ids of a new engine */
+  private swipe: SwipeOptions | undefined;
+
+  /**
+   * Compares two states of a place: `layers` shown on one side of a vertical line only, at `position` CSS pixels
+   * from the left of the map (left of it by default, `side: 'right'` for the other), the layers beneath them on the
+   * other side. Set again as the line moves (a slider, a drag); undefined stops
+   */
+  setSwipe(options: SwipeOptions | undefined): void {
+    this.swipe = options && options.layers.length > 0 ? { ...options, layers: [...options.layers] } : undefined;
+    this.applySwipe();
+    this.requestRender();
+  }
+
+  private applySwipe(): void {
+    const s = this.swipe;
+    const ids = Uint32Array.from(
+      (s?.layers ?? []).filter((l) => l.id >= 0),
+      (l) => l.id,
+    );
+    this.engine.setSwipe(s && ids.length > 0 ? s.position : Number.NaN, s?.side === 'right', ids);
   }
 
   /** @internal Forgets a removed layer */
