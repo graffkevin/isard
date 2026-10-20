@@ -5,13 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Viewshed · Isard</title>
     <link rel="stylesheet" href="../shared/page.css" />
+    <style>
+      /* A compact panel: the map stays in view in the docs' frame */
+      .panel {
+        width: 200px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .panel p {
+        margin: 2px 0;
+      }
+      .panel label:has(input[type="range"]) {
+        display: grid;
+        grid-template-columns: 1fr auto;
+      }
+      .panel label:has(input[type="range"]) input {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        margin: 0;
+      }
+    </style>
   </head>
   <body>
     <div id="map"></div>
     <div class="panel">
       <h1>Viewshed</h1>
-      <p>What can be seen from the observer, in green, and what the hill and the BD TOPO buildings hide, in red. The pin
-        is the observer: drag it, or click elsewhere.</p>
+      <p>Seen in green, hidden in red. Drag the pin, or click.</p>
       <p><label>Height <input id="height" type="range" min="1" max="60" step="1" value="2" /> <span id="height-value"></span></label></p>
       <p><label><input id="one-way" type="checkbox" checked /> One way, as a camera</label></p>
       <p><label>Direction <input id="direction" type="range" min="0" max="359" step="1" value="170" /> <span id="direction-value"></span></label></p>
