@@ -470,10 +470,10 @@ impl Engine {
             .map_or(JsValue::UNDEFINED, |p| js::pair(p.x, p.y))
     }
 
-    /// Screen point (CSS pixels) of a ground position, undefined behind the camera
+    /// Screen point (CSS pixels) of a ground position, or `height` metres above it, undefined behind the camera
     #[must_use]
     #[wasm_bindgen(unchecked_return_type = "[x: number, y: number] | undefined")]
-    pub fn project(&self, lon: f64, lat: f64) -> JsValue {
+    pub fn project(&self, lon: f64, lat: f64, height: Option<f64>) -> JsValue {
         let view = self.camera.view();
         let m = camera::mercator(lon, lat);
         // On the relief: its altitude there (from the coarse copy kept on the CPU)
@@ -481,7 +481,8 @@ impl Engine {
             .terrain
             .as_ref()
             .and_then(|(terrain, exaggeration)| terrain.altitude(m).map(|h| h * f64::from(*exaggeration)))
-            .unwrap_or(0.0);
+            .unwrap_or(0.0)
+            + height.filter(|h| h.is_finite()).unwrap_or(0.0);
         // On the plane or the sphere, on the copy of the world nearest to the center; past the horizon of the
         // globe, hidden by the body
         let shift = -(m.x - self.camera.center.x).round();

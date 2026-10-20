@@ -71,7 +71,9 @@ interface Observer {
   range: number;
   oneWay: boolean;
   direction: number;
+  tilt: number;
   fov: number;
+  verticalFov: number;
 }
 const observers: Observer[] = [];
 let named = 0;
@@ -89,14 +91,17 @@ const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
 
 const show = () => {
   map.setViewshed(
-    observers.map(
-      (o): ViewshedOptions => ({
+    observers.map((o): ViewshedOptions => {
+      // The pin raised to the eye, on its roof or on the ground
+      const height = roofAt(o.pin.getLonLat()) + o.height;
+      o.pin.setHeight(height);
+      return {
         position: o.pin.getLonLat(),
-        height: roofAt(o.pin.getLonLat()) + o.height,
+        height,
         range: o.range,
-        ...(o.oneWay ? { direction: o.direction, fov: o.fov } : {}),
-      }),
-    ),
+        ...(o.oneWay ? { direction: o.direction, tilt: o.tilt, fov: o.fov, verticalFov: o.verticalFov } : {}),
+      };
+    }),
   );
   edges.setData(
     observers
@@ -119,12 +124,23 @@ const add = (lonLat: LonLat, settings: Partial<Observer> = {}) => {
   const form = element<HTMLTemplateElement>('observer').content.firstElementChild?.cloneNode(true) as HTMLElement;
   const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
   const pin = new Marker({ draggable: true }).setLonLat(lonLat).setPopup(popup).addTo(map);
-  const observer: Observer = { pin, popup, height: 2, range: 900, oneWay: true, direction: 170, fov: 60, ...settings };
+  const observer: Observer = {
+    pin,
+    popup,
+    height: 2,
+    range: 900,
+    oneWay: true,
+    direction: 170,
+    tilt: 0,
+    fov: 60,
+    verticalFov: 40,
+    ...settings,
+  };
   observers.push(observer);
   named += 1;
   const part = <T extends HTMLElement>(name: string) => form.querySelector(`.${name}`) as T;
   part('name').textContent = `Observer ${named}`;
-  const sliders = { height: 'm', direction: '°', fov: '°', range: 'm' } as const;
+  const sliders = { height: 'm', direction: '°', tilt: '°', fov: '°', verticalFov: '°', range: 'm' } as const;
   for (const [name, unit] of Object.entries(sliders) as [keyof typeof sliders, string][]) {
     const input = part<HTMLInputElement>(name);
     const value = part(`${name}-value`);

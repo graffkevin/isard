@@ -30,6 +30,19 @@ const ANCHOR_TRANSLATE: Record<Anchor, string> = {
   'bottom-right': 'translate(-100%, -100%)',
 };
 
+/** Where the anchor lies within the element, CSS percentages: the stem of a raised marker starts there */
+const ANCHOR_POINT: Record<Anchor, [string, string]> = {
+  center: ['50%', '50%'],
+  top: ['50%', '0'],
+  bottom: ['50%', '100%'],
+  left: ['0', '50%'],
+  right: ['100%', '50%'],
+  'top-left': ['0', '0'],
+  'top-right': ['100%', '0'],
+  'bottom-left': ['0', '100%'],
+  'bottom-right': ['100%', '100%'],
+};
+
 /** Overlays further than this out of the canvas (CSS pixels) are hidden: no part of them can show, and huge
  * transforms near the horizon would only cost the compositor */
 const MARGIN = 500;
@@ -58,9 +71,18 @@ class Emitter<E> {
   }
 }
 
-/** Moves `element` so that its anchor sits on `lonLat`, or hides it when the position is out of sight */
-function place(map: GeoMap, element: HTMLElement, lonLat: LonLat, anchor: Anchor, offset: Point, size: Point): void {
-  const point = map.project(lonLat);
+/** Moves `element` so that its anchor sits on `lonLat`, `height` metres above the ground, or hides it when the
+ * position is out of sight; returns the screen point */
+function place(
+  map: GeoMap,
+  element: HTMLElement,
+  lonLat: LonLat,
+  height: number,
+  anchor: Anchor,
+  offset: Point,
+  size: Point,
+): Point | undefined {
+  const point = map.project(lonLat, height);
   const visible =
     point !== undefined &&
     point[0] > -MARGIN &&
@@ -69,13 +91,14 @@ function place(map: GeoMap, element: HTMLElement, lonLat: LonLat, anchor: Anchor
     point[1] < size[1] + MARGIN;
   if (!visible) {
     element.style.display = 'none';
-    return;
+    return undefined;
   }
   element.style.display = '';
   // Whole pixels: a fractional translation blurs text and icons
   const x = Math.round(point[0] + offset[0]);
   const y = Math.round(point[1] + offset[1]);
   element.style.transform = `translate(${x}px, ${y}px) ${ANCHOR_TRANSLATE[anchor]}`;
+  return point;
 }
 
 /** Round pin, its tip at the bottom: the default marker */
@@ -98,6 +121,8 @@ export interface MarkerOptions {
   offset?: Point;
   /** The marker can be dragged over the map, on the relief (default false) */
   draggable?: boolean;
+  /** Metres above the ground (default 0): a raised marker has a stem down to its position on the ground */
+  height?: number;
   /** Classes added to the element, space separated */
   className?: string;
 }
@@ -121,6 +146,9 @@ export class Marker {
   private offset: Point;
   private draggable: boolean;
   private lonLat: LonLat = [0, 0];
+  private height: number;
+  /** The line from a raised marker down to the ground */
+  private readonly stem: HTMLElement;
   private map: GeoMap | undefined;
   private popup: Popup | undefined;
   /** While pressed: the press point and the gap between the pointer and the marker's position */
@@ -134,6 +162,11 @@ export class Marker {
     this.anchor = options.anchor ?? (options.element ? 'center' : 'bottom');
     this.offset = options.offset ?? [0, 0];
     this.draggable = options.draggable ?? false;
+    this.height = options.height ?? 0;
+    this.stem = document.createElement('div');
+    this.stem.className = 'isard-marker-stem';
+    [this.stem.style.left, this.stem.style.top] = ANCHOR_POINT[this.anchor];
+    this.element.append(this.stem);
     this.element.classList.add('isard-marker');
     if (options.className) this.element.classList.add(...options.className.split(/\s+/).filter(Boolean));
     this.element.classList.toggle('isard-marker-draggable', this.draggable);
@@ -160,6 +193,18 @@ export class Marker {
     return this;
   }
 
+  getHeight(): number {
+    return this.height;
+  }
+
+  /** Metres above the ground: a raised marker has a stem down to its position on the ground; its popup is raised too */
+  setHeight(height: number): this {
+    this.height = Number.isFinite(height) ? height : 0;
+    this.popup?.setHeight(this.height);
+    this.map?.positionOverlay(this);
+    return this;
+  }
+
   setOffset(offset: Point): this {
     this.offset = [offset[0], offset[1]];
     this.map?.positionOverlay(this);
@@ -181,6 +226,7 @@ export class Marker {
   setPopup(popup: Popup | undefined): this {
     this.popup?.remove();
     this.popup = popup;
+    popup?.setHeight(this.height);
     return this;
   }
 
@@ -221,7 +267,18 @@ export class Marker {
 
   /** @internal */
   position(size: Point): void {
-    if (this.map) place(this.map, this.element, this.lonLat, this.anchor, this.offset, size);
+    if (!this.map) return;
+    const top = place(this.map, this.element, this.lonLat, this.height, this.anchor, this.offset, size);
+    const ground = top && this.height !== 0 ? this.map.project(this.lonLat) : undefined;
+    if (!top || !ground) {
+      this.stem.style.display = 'none';
+      return;
+    }
+    // From the anchor down to the ground, a line turned toward it
+    const [dx, dy] = [ground[0] - top[0], ground[1] - top[1]];
+    this.stem.style.display = '';
+    this.stem.style.height = `${Math.hypot(dx, dy)}px`;
+    this.stem.style.transform = `rotate(${Math.atan2(dy, dx) - Math.PI / 2}rad)`;
   }
 
   private local(e: PointerEvent): Point | undefined {
@@ -232,6 +289,7 @@ export class Marker {
   private down(e: PointerEvent): void {
     this.swallowClick = false;
     if (!this.draggable || !this.map || e.button !== 0) return;
+    // The gap to the position on the ground, below a raised marker
     const point = this.map.project(this.lonLat);
     const at = this.local(e);
     if (!point || !at) return;
@@ -315,6 +373,7 @@ export class Popup {
   private readonly events = new Emitter<PopupEvents>();
   private offset: Point;
   private lonLat: LonLat = [0, 0];
+  private height = 0;
   private map: GeoMap | undefined;
   private stopListening: (() => void) | undefined;
 
@@ -359,6 +418,17 @@ export class Popup {
 
   setOffset(offset: Point): this {
     this.offset = [offset[0], offset[1]];
+    this.map?.positionOverlay(this);
+    return this;
+  }
+
+  getHeight(): number {
+    return this.height;
+  }
+
+  /** Metres above the ground (default 0); a marker's popup follows the marker's height */
+  setHeight(height: number): this {
+    this.height = Number.isFinite(height) ? height : 0;
     this.map?.positionOverlay(this);
     return this;
   }
@@ -417,6 +487,6 @@ export class Popup {
 
   /** @internal */
   position(size: Point): void {
-    if (this.map) place(this.map, this.container, this.lonLat, this.anchor, this.offset, size);
+    if (this.map) place(this.map, this.container, this.lonLat, this.height, this.anchor, this.offset, size);
   }
 }

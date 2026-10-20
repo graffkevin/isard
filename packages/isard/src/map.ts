@@ -748,9 +748,10 @@ export class GeoMap {
     this.hoverPoll = 0;
   }
 
-  /** Screen point (CSS pixels) of a position, undefined behind the camera */
-  project(lonLat: LonLat): Point | undefined {
-    return this.engine.project(lonLat[0], lonLat[1]);
+  /** Screen point (CSS pixels) of a position on the ground (the relief), or `height` metres above it, undefined
+   * behind the camera */
+  project(lonLat: LonLat, height = 0): Point | undefined {
+    return this.engine.project(lonLat[0], lonLat[1], height);
   }
 
   /** Position under a screen point (CSS pixels), undefined above the horizon */

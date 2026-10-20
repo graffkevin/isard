@@ -3,6 +3,14 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- A height above the ground for markers and popups (`height` option, `setHeight`) and for `map.project`: a raised
+  marker has a stem down to its position on the ground, its popup raised with it. The viewshed example: each pin at
+  its observer's eye, the cone's tilt and vertical field of view in its popup.
+
 ## [0.6.1] - 2026-10-20
 
 ### Added
