@@ -1,6 +1,6 @@
 [package]
 name = "isard-geo"
-version = "0.6.0"
+version = "0.6.1"
 publish = false
 edition = "2024"
 license = "MIT"
