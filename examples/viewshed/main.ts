@@ -133,7 +133,7 @@ const add = (lonLat: LonLat, settings: Partial<Observer> = {}) => {
     direction: 170,
     tilt: 0,
     fov: 60,
-    verticalFov: 40,
+    verticalFov: 120,
     ...settings,
   };
   observers.push(observer);
