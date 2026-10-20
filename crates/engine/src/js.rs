@@ -19,6 +19,11 @@ pub fn pair(a: f64, b: f64) -> JsValue {
     Array::of2(&a.into(), &b.into()).into()
 }
 
+/// A three-number tuple
+pub fn triple(a: f64, b: f64, c: f64) -> JsValue {
+    Array::of3(&a.into(), &b.into(), &c.into()).into()
+}
+
 /// Sets the Fetch Priority of a request (`"high"`, `"low"`, `"auto"`). Besides ordering, an explicit priority keeps
 /// Firefox from holding the request back: by default it throttles plain fetches for as long as another request of the
 /// page is pending, ~10 s per slow server response (`network.http.throttle.enable`)

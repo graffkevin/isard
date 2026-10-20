@@ -263,7 +263,7 @@ fn hit_value(hit: Option<(u32, u32)>) -> JsValue {
 
 impl Engine {
     /// The canvas in device pixels
-    fn canvas_size(&self) -> (i32, i32) {
+    pub(super) fn canvas_size(&self) -> (i32, i32) {
         (
             (self.camera.width * self.pixel_ratio).round() as i32,
             (self.camera.height * self.pixel_ratio).round() as i32,
@@ -271,7 +271,7 @@ impl Engine {
     }
 
     /// A screen point (CSS pixels) in device pixels, y up; None outside the canvas
-    fn device_point(&self, x: f64, y: f64, size: (i32, i32)) -> Option<(i32, i32)> {
+    pub(super) fn device_point(&self, x: f64, y: f64, size: (i32, i32)) -> Option<(i32, i32)> {
         if !x.is_finite() || !y.is_finite() {
             return None;
         }
@@ -563,7 +563,7 @@ impl Engine {
     }
 
     /// The picking framebuffer, (re)created at the canvas size
-    fn pick_target(&mut self, size: (i32, i32)) -> Result<glow::Framebuffer, String> {
+    pub(super) fn pick_target(&mut self, size: (i32, i32)) -> Result<glow::Framebuffer, String> {
         if let Some(target) = &self.pick_target
             && target.size == size
         {

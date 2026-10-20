@@ -114,7 +114,8 @@ export async function geoplateformeWfs<P = Properties>(
       // WFS 2.0 in EPSG:4326: latitude first
       BBOX: `${south},${west},${north},${east},urn:ogc:def:crs:EPSG::4326`,
       COUNT: String(count),
-      STARTINDEX: String(start),
+      // The first page as a single request always was
+      ...(start > 0 ? { STARTINDEX: String(start) } : {}),
     }).toString();
     const response = await fetch(url, options.signal ? { signal: options.signal } : {});
     if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);

@@ -2,8 +2,9 @@
  * Viewshed over a textured mesh: the photomesh of the Eurométropole de Strasbourg (2022, open data) in 3D Tiles, on
  * the IGN relief (RGE ALTI), around the cathedral. The mesh's surfaces are drawn into each observer's depth cube as the
  * relief is: its walls and roofs hide what lies behind them, and are tinted seen or hidden. Only the tiles the map
- * loaded for its view hide anything, at the detail chosen for the camera. A click on the map adds an observer, a
- * click on its pin opens its settings (one popup open at a time), and the pin drags.
+ * loaded for its view hide anything, at the detail chosen for the camera. A click on the map adds an observer where
+ * the click meets the mesh, on a roof as on the ground; a click on its pin opens its settings (one popup open at a
+ * time), and the pin drags over the mesh.
  */
 import { GeoMap } from 'isard';
 import { observers } from '../shared/observers.ts';
@@ -15,7 +16,8 @@ const map = await GeoMap.create(element('map'), {
   pitch: 60,
   bearing: 70,
   basemap: 'ign-ortho',
-  terrain: { model: 'ign' },
+  // The mesh's heights are altitudes (NGF-IGN69), not heights above the ellipsoid: the relief as served, under it
+  terrain: { model: 'ign', geoid: false },
   projection: 'mercator',
   // 3D Tiles at once: the engine that draws them from the start, not after the one without them
   tiles3d: true,
@@ -27,4 +29,4 @@ map.addTiles3d({
 });
 
 // On the cathedral's square, looking along its front
-observers(map, { defaults: { range: 400, direction: 60, fov: 90 } })([7.7499, 48.5816]);
+observers(map, { surfaces: true, defaults: { range: 400, direction: 60, fov: 90 } })([7.7499, 48.5816]);

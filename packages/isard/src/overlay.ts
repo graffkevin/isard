@@ -123,6 +123,9 @@ export interface MarkerOptions {
   draggable?: boolean;
   /** Metres above the ground (default 0): a raised marker has a stem down to its position on the ground */
   height?: number;
+  /** Dragged over what is drawn (roofs, walls, meshes) rather than the relief alone: its drag events then carry the
+   * height of what lies under it (default false) */
+  surface?: boolean;
   /** Classes added to the element, space separated */
   className?: string;
 }
@@ -130,6 +133,8 @@ export interface MarkerOptions {
 export interface MarkerEvent {
   target: Marker;
   lonLat: LonLat;
+  /** With `surface`: the metres above the relief of what lies under the marker */
+  surface?: number;
 }
 
 export interface MarkerEvents {
@@ -147,6 +152,7 @@ export class Marker {
   private draggable: boolean;
   private lonLat: LonLat = [0, 0];
   private height: number;
+  private readonly surface: boolean;
   /** The line from a raised marker down to the ground */
   private readonly stem: HTMLElement;
   private map: GeoMap | undefined;
@@ -163,6 +169,7 @@ export class Marker {
     this.offset = options.offset ?? [0, 0];
     this.draggable = options.draggable ?? false;
     this.height = options.height ?? 0;
+    this.surface = options.surface ?? false;
     this.stem = document.createElement('div');
     this.stem.className = 'isard-marker-stem';
     [this.stem.style.left, this.stem.style.top] = ANCHOR_POINT[this.anchor];
@@ -289,8 +296,8 @@ export class Marker {
   private down(e: PointerEvent): void {
     this.swallowClick = false;
     if (!this.draggable || !this.map || e.button !== 0) return;
-    // The gap to the position on the ground, below a raised marker
-    const point = this.map.project(this.lonLat);
+    // The gap to the position on the ground, below a raised marker; on surfaces, to the marker's tip
+    const point = this.map.project(this.lonLat, this.surface ? this.height : 0);
     const at = this.local(e);
     if (!point || !at) return;
     // The map must not start panning under the marker
@@ -308,8 +315,10 @@ export class Marker {
     e.stopPropagation();
     const { start, gap } = this.grab;
     if (!this.dragging && Math.hypot(at[0] - start[0], at[1] - start[1]) < DRAG_TOLERANCE) return;
-    // On the relief: the ground under the point, read back from the picking pass
-    const lonLat = this.map.unproject([at[0] - gap[0], at[1] - gap[1]]);
+    // Under the point: the relief read back from the picking pass, or with `surface` whatever is drawn there
+    const under: Point = [at[0] - gap[0], at[1] - gap[1]];
+    const hit = this.surface ? this.map.pickSurface(under) : undefined;
+    const lonLat = this.surface ? hit?.lonLat : this.map.unproject(under);
     if (!lonLat) return;
     if (!this.dragging) {
       this.dragging = true;
@@ -317,7 +326,7 @@ export class Marker {
       this.events.emit('dragstart', { target: this, lonLat: this.getLonLat() });
     }
     this.setLonLat(lonLat);
-    this.events.emit('drag', { target: this, lonLat: this.getLonLat() });
+    this.events.emit('drag', { target: this, lonLat: this.getLonLat(), ...(hit ? { surface: hit.height } : {}) });
   }
 
   private up(e: PointerEvent): void {

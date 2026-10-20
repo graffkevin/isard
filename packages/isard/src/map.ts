@@ -759,6 +759,14 @@ export class GeoMap {
     return this.engine.ground(point[0], point[1]);
   }
 
+  /** What is drawn under a screen point (CSS pixels), on the relief or standing on it (a roof, a wall, a mesh): its
+   * position and its height above the relief, in metres; undefined where nothing was drawn. The last frame's scene is
+   * drawn again and read back, waiting for the GPU (a stall): for clicks and drags */
+  pickSurface(point: Point): { lonLat: LonLat; height: number } | undefined {
+    const hit = this.engine.surface(point[0], point[1]);
+    return hit && { lonLat: [hit[0], hit[1]], height: hit[2] };
+  }
+
   // ── Overlays and controls ──
 
   /** Adds a control in a corner of the map; controls stack from the corner inward */

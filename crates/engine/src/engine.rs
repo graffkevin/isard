@@ -3,6 +3,7 @@
 //! is in `pick`.
 
 mod pick;
+mod surface;
 mod viewshed;
 
 use crate::js;
@@ -121,6 +122,8 @@ pub struct Engine {
     label_grid: Option<geo::collision::Grid>,
     /// What can be seen from a point, drawn over the frame
     viewshed: Option<viewshed::Viewshed>,
+    /// What reads the surface under a point (`surface`), made on the first query
+    surface: Option<surface::Probe>,
 }
 
 /// The camera counts as moving until this long after its last change (ms)
@@ -185,6 +188,7 @@ impl Engine {
             preload_generation: 0,
             pick_target: None,
             viewshed: None,
+            surface: None,
             async_pick: None,
             loading: Loading::IMMEDIATE,
             drawn: None,
@@ -866,6 +870,9 @@ impl Drop for Engine {
             }
             if let Some(mut viewshed) = self.viewshed.take() {
                 viewshed.delete(gl);
+            }
+            if let Some(mut probe) = self.surface.take() {
+                probe.delete(gl);
             }
             if let Some(mut pick) = self.async_pick.take() {
                 pick.delete(gl);

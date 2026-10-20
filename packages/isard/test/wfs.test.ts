@@ -9,7 +9,7 @@ afterEach(() => {
 /** A WFS of `matched` features numbered from 0, answering pages as the Géoplateforme does (5000 at most) */
 const serve = (matched: number, asked: string[]) => {
   globalThis.fetch = (async (input: URL) => {
-    const start = Number(input.searchParams.get('STARTINDEX'));
+    const start = Number(input.searchParams.get('STARTINDEX') ?? 0);
     const count = Math.min(Number(input.searchParams.get('COUNT')), 5000);
     asked.push(`${start}+${count}`);
     const features = Array.from({ length: Math.max(0, Math.min(count, matched - start)) }, (_, i) => ({

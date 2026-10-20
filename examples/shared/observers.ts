@@ -1,7 +1,8 @@
 /**
  * The observers of the viewshed examples: a pin each, its settings in its popup (one popup open at a time), the
  * edges of its cone on the ground, the whole given to `map.setViewshed` at each change. The page has a `#count` and
- * a `#clear` button; a click on the map adds an observer, a pin drags, its popup removes it.
+ * a `#clear` button; a click on the map adds an observer, a pin drags, its popup removes it. On surfaces, an observer
+ * clicked or dragged onto a roof or a mesh stands on it.
  */
 import { type GeoMap, type LonLat, Marker, Popup, type ViewshedOptions } from 'isard';
 import { element } from './page.ts';
@@ -21,6 +22,8 @@ export interface ObserverSettings {
 interface Observer extends ObserverSettings {
   pin: Marker;
   popup: Popup;
+  /** On surfaces: the metres above the relief of what it stands on */
+  base: number;
 }
 
 const SLIDERS: [keyof ObserverSettings, string, number, number, number, string][] = [
@@ -50,19 +53,26 @@ const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
 
 /**
  * Observers on `map`. `standOn` gives the metres of what stands under a point (a roof), with its name for the popup;
- * `defaults` the settings of a new observer. Returns the function adding one, its popup open
+ * or with `surfaces` the observers stand on whatever is drawn under the click or the drag (`map.pickSurface`).
+ * `defaults`: the settings of a new observer. Returns the function adding one, its popup open
  */
 export function observers(
   map: GeoMap,
   options: {
     standOn?: (at: LonLat) => { metres: number; what: string } | undefined;
+    surfaces?: boolean;
     defaults?: Partial<ObserverSettings>;
   } = {},
-): (at: LonLat, settings?: Partial<ObserverSettings>) => void {
+): (at: LonLat, settings?: Partial<ObserverSettings>, standing?: number) => void {
   const all: Observer[] = [];
   let named = 0;
   const edges = map.addLines({ data: [], color: '#1c7ed6', width: 2.5 });
-  const base = (o: Observer) => options.standOn?.(o.pin.getLonLat())?.metres ?? 0;
+  /** What an observer stands on, if anything above the relief */
+  const under = (o: Observer) => {
+    if (!options.surfaces) return options.standOn?.(o.pin.getLonLat());
+    return o.base > 0.5 ? { metres: o.base, what: 'a surface' } : undefined;
+  };
+  const base = (o: Observer) => under(o)?.metres ?? 0;
 
   const show = () => {
     map.setViewshed(
@@ -95,14 +105,18 @@ export function observers(
     element<HTMLButtonElement>('clear').disabled = all.length === 0;
   };
 
-  const add = (at: LonLat, settings: Partial<ObserverSettings> = {}) => {
+  const add = (at: LonLat, settings: Partial<ObserverSettings> = {}, standing = 0) => {
     const form = document.createElement('div');
     form.className = 'observer';
     const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
-    const pin = new Marker({ draggable: true }).setLonLat(at).setPopup(popup).addTo(map);
+    const pin = new Marker({ draggable: true, surface: options.surfaces ?? false })
+      .setLonLat(at)
+      .setPopup(popup)
+      .addTo(map);
     const observer: Observer = {
       pin,
       popup,
+      base: standing,
       height: 2,
       range: 900,
       oneWay: true,
@@ -159,11 +173,12 @@ export function observers(
     });
     // What it stands on, as the pin moves
     const stand = () => {
-      const under = options.standOn?.(pin.getLonLat());
-      where.textContent = under ? ` · on ${under.what}, ${Math.round(under.metres)} m` : '';
+      const on = under(observer);
+      where.textContent = on ? ` · on ${on.what}, ${Math.round(on.metres)} m` : '';
     };
     stand();
-    pin.on('drag', () => {
+    pin.on('drag', ({ surface }) => {
+      if (surface !== undefined) observer.base = surface;
       stand();
       show();
     });
@@ -171,8 +186,10 @@ export function observers(
     show();
   };
 
-  map.on('click', ({ lonLat }) => {
-    if (lonLat) add(lonLat);
+  map.on('click', ({ point, lonLat }) => {
+    const hit = options.surfaces ? map.pickSurface(point) : undefined;
+    if (hit) add(hit.lonLat, {}, hit.height);
+    else if (lonLat) add(lonLat);
   });
   element('clear').addEventListener('click', () => {
     for (const o of all.splice(0)) o.pin.remove();

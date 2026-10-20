@@ -338,7 +338,7 @@ fn face_axes(face: u32) -> (DVec3, DVec3) {
 impl Engine {
     /// The solid scene's depth into the bound target, seen with `view`. Call with the target bound and the viewport
     /// set; the state is set back but for the framebuffer
-    unsafe fn draw_solid_depth(&self, view: &View) {
+    pub(super) unsafe fn draw_solid_depth(&self, view: &View) {
         let gl = &self.gl;
         gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after

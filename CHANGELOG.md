@@ -11,8 +11,13 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   marker has a stem down to its position on the ground, its popup raised with it. The viewshed example: each pin at
   its observer's eye, the cone's tilt and vertical field of view in its popup (120° by default, as an eye rather
   than a camera: the ground in front of a raised observer is in view).
+- `map.pickSurface(point)`: what is drawn under a screen point, on the relief or standing on it (a roof, a wall, a
+  mesh), its position and height above the relief; `Marker` option `surface` to drag a marker over them, its drag
+  events carrying that height.
 - The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the
-  cathedral, its walls and roofs hiding and tinted; the observers of both viewshed examples in one shared module.
+  cathedral, its walls and roofs hiding and tinted, an observer clicked or dragged onto the mesh standing on it (the
+  relief as served under the mesh, whose heights are altitudes); the observers of both viewshed examples in one
+  shared module.
 
 ### Fixed
 
