@@ -11,6 +11,8 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   marker has a stem down to its position on the ground, its popup raised with it. The viewshed example: each pin at
   its observer's eye, the cone's tilt and vertical field of view in its popup (120° by default, as an eye rather
   than a camera: the ground in front of a raised observer is in view).
+- The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the
+  cathedral, its walls and roofs hiding and tinted; the observers of both viewshed examples in one shared module.
 
 ### Fixed
 

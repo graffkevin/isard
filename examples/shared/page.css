@@ -54,3 +54,30 @@ body {
   color: #fff;
   border-color: #1d2433;
 }
+
+/* An observer's settings, in its pin's popup */
+.observer {
+  width: 180px;
+  font-size: 12px;
+}
+.observer p {
+  margin: 3px 0;
+}
+.observer label:has(input[type="range"]) {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+.observer label:has(input[type="range"]) input {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  margin: 0;
+}
+.observer button {
+  font: inherit;
+  padding: 2px 8px;
+  border: 1px solid #ccd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}

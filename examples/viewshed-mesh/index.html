@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Viewshed on a mesh · Isard</title>
+    <link rel="stylesheet" href="../shared/page.css" />
+    <style>
+      /* A compact panel: the map stays in view in the docs' frame */
+      .panel {
+        width: 200px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .panel p {
+        margin: 2px 0;
+      }
+      .panel button {
+        padding: 1px 8px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div class="panel">
+      <h1>Viewshed on a mesh</h1>
+      <p>Seen in green, hidden in red. Click the map to add an observer, a pin to set its view; drag it to move it.</p>
+      <p><span id="count"></span> <button id="clear" type="button">Remove all</button></p>
+    </div>
+    <script type="module" src="../dist/viewshed-mesh/main.js"></script>
+  </body>
+</html>

@@ -89,7 +89,7 @@ const VIEWPORTS: Record<string, [number, number]> = {
  * tiles): the relief of Mars is tested over Olympus Mons. The viewshed too while it is a prototype (the relief and the
  * BD TOPO buildings of Montmartre).
  */
-const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris', 'viewshed']);
+const OPT_IN = new Set(['tiles3d', 'mars-valles-marineris', 'viewshed', 'viewshed-mesh']);
 
 /**
  * The viewer (apps/viewer/dist), tested as an example: a committed GeoJSON (tests/visual/data) added by its `?data=`

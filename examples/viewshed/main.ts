@@ -5,7 +5,8 @@
  * reaches it. A click on the map adds an observer; a click on its pin opens its settings (one popup open at a time),
  * and the pin drags. On a building, the observer stands on its roof.
  */
-import { GeoMap, geoplateformeWfs, type LonLat, Marker, Popup, type ViewshedOptions } from 'isard';
+import { GeoMap, geoplateformeWfs, type LonLat } from 'isard';
+import { observers } from '../shared/observers.ts';
 import { element } from '../shared/page.ts';
 
 type Building = { hauteur: number | null };
@@ -63,133 +64,9 @@ const roofAt = (at: LonLat) => {
   return under?.height ?? 0;
 };
 
-/** An observer's settings, as its popup's inputs give them */
-interface Observer {
-  pin: Marker;
-  popup: Popup;
-  height: number;
-  range: number;
-  oneWay: boolean;
-  direction: number;
-  tilt: number;
-  fov: number;
-  verticalFov: number;
-}
-const observers: Observer[] = [];
-let named = 0;
-
-// The edges of the cones on the ground, from each observer to its range
-const edges = map.addLines({ data: [], color: '#1c7ed6', width: 2.5 });
-const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
-  const b = (heading * Math.PI) / 180;
-  const k = metres / 6378137;
-  return [
-    lon + ((k * Math.sin(b)) / Math.cos((lat * Math.PI) / 180)) * (180 / Math.PI),
-    lat + k * Math.cos(b) * (180 / Math.PI),
-  ];
-};
-
-const show = () => {
-  map.setViewshed(
-    observers.map((o): ViewshedOptions => {
-      // The pin raised to the eye, on its roof or on the ground
-      const height = roofAt(o.pin.getLonLat()) + o.height;
-      o.pin.setHeight(height);
-      return {
-        position: o.pin.getLonLat(),
-        height,
-        range: o.range,
-        ...(o.oneWay ? { direction: o.direction, tilt: o.tilt, fov: o.fov, verticalFov: o.verticalFov } : {}),
-      };
-    }),
-  );
-  edges.setData(
-    observers
-      .filter((o) => o.oneWay)
-      .map((o) => {
-        const at = o.pin.getLonLat();
-        const [a, b] = [-1, 1].map((side) => along(at, o.direction + (side * o.fov) / 2, o.range));
-        return {
-          type: 'Feature' as const,
-          properties: {},
-          geometry: { type: 'LineString' as const, coordinates: [a ?? at, at, b ?? at] },
-        };
-      }),
-  );
-  element('count').textContent = `${observers.length} observer${observers.length > 1 ? 's' : ''}`;
-  element<HTMLButtonElement>('clear').disabled = observers.length === 0;
-};
-
-const add = (lonLat: LonLat, settings: Partial<Observer> = {}) => {
-  const form = element<HTMLTemplateElement>('observer').content.firstElementChild?.cloneNode(true) as HTMLElement;
-  const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
-  const pin = new Marker({ draggable: true }).setLonLat(lonLat).setPopup(popup).addTo(map);
-  const observer: Observer = {
-    pin,
-    popup,
-    height: 2,
-    range: 900,
-    oneWay: true,
-    direction: 170,
-    tilt: 0,
-    fov: 60,
-    verticalFov: 120,
-    ...settings,
-  };
-  observers.push(observer);
-  named += 1;
-  const part = <T extends HTMLElement>(name: string) => form.querySelector(`.${name}`) as T;
-  part('name').textContent = `Observer ${named}`;
-  const sliders = { height: 'm', direction: '°', tilt: '°', fov: '°', verticalFov: '°', range: 'm' } as const;
-  for (const [name, unit] of Object.entries(sliders) as [keyof typeof sliders, string][]) {
-    const input = part<HTMLInputElement>(name);
-    const value = part(`${name}-value`);
-    input.value = String(observer[name]);
-    const read = () => {
-      observer[name] = Number(input.value);
-      value.textContent = `${input.value}${unit === 'm' ? ' m' : unit}`;
-    };
-    read();
-    input.addEventListener('input', () => {
-      read();
-      show();
-    });
-  }
-  const oneWay = part<HTMLInputElement>('one-way');
-  oneWay.checked = observer.oneWay;
-  oneWay.addEventListener('input', () => {
-    observer.oneWay = oneWay.checked;
-    show();
-  });
-  part('remove').addEventListener('click', () => {
-    pin.remove();
-    observers.splice(observers.indexOf(observer), 1);
-    show();
-  });
-  // One popup open at a time
-  popup.on('open', () => {
-    for (const other of observers) if (other !== observer) other.popup.remove();
-  });
-  // On a roof or on the ground, as the pin moves
-  const stand = () => {
-    const roof = roofAt(pin.getLonLat());
-    part('where').textContent = roof > 0 ? ` · on a roof, ${Math.round(roof)} m` : '';
-  };
-  stand();
-  // The view follows the pin as it is dragged
-  pin.on('drag', () => {
-    stand();
-    show();
-  });
-  pin.togglePopup();
-  show();
-};
-
-map.on('click', ({ lonLat }) => {
-  if (lonLat) add(lonLat);
-});
-element('clear').addEventListener('click', () => {
-  for (const o of observers.splice(0)) o.pin.remove();
-  show();
-});
-add([2.34305, 48.88615]);
+observers(map, {
+  standOn: (at) => {
+    const metres = roofAt(at);
+    return metres > 0 ? { metres, what: 'a roof' } : undefined;
+  },
+})([2.34305, 48.88615]);
