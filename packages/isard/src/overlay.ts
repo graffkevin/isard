@@ -494,3 +494,143 @@ export class Popup {
     if (this.map) place(this.map, this.container, this.lonLat, this.height, this.anchor, this.offset, size);
   }
 }
+
+export interface PanelOptions {
+  /** The element shown in 3D (a video, an iframe, an image…), laid out at its CSS size */
+  element: HTMLElement;
+  /** Its width on the ground, metres; its height follows its CSS aspect */
+  width: number;
+  /** Degrees clockwise from north the side it faces (default 0: it faces north, read from the north) */
+  heading?: number;
+  /** Degrees it leans back from upright (default 0: standing; 90: lying flat) */
+  pitch?: number;
+  /** Metres of its bottom edge above the ground (the relief; default 0) */
+  height?: number;
+  /** Classes added to the element, space separated */
+  className?: string;
+}
+
+/** `a × b`, 4 × 4 column-major */
+function multiply(a: ArrayLike<number>, b: ArrayLike<number>): number[] {
+  const out = new Array<number>(16).fill(0);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      let sum = 0;
+      for (let k = 0; k < 4; k++) sum += (a[k * 4 + r] ?? 0) * (b[c * 4 + k] ?? 0);
+      out[c * 4 + r] = sum;
+    }
+  }
+  return out;
+}
+
+/**
+ * An element standing in 3D at a position: a video, a web page, a sign, `width` metres wide on the ground, facing
+ * `heading`. Placed after each frame by a CSS 3D transform (the element is not drawn by WebGL: the scene does not
+ * hide it); hidden when its position is behind the camera
+ */
+export class Panel {
+  private readonly element: HTMLElement;
+  private lonLat: LonLat = [0, 0];
+  private width: number;
+  private heading: number;
+  private pitch: number;
+  private height: number;
+  private map: GeoMap | undefined;
+  /** Its CSS size, read once it is on the page (`resize` reads it again) */
+  private size: Point | undefined;
+
+  constructor(options: PanelOptions) {
+    this.element = options.element;
+    this.width = options.width;
+    this.heading = options.heading ?? 0;
+    this.pitch = options.pitch ?? 0;
+    this.height = options.height ?? 0;
+    this.element.classList.add('isard-panel');
+    if (options.className) this.element.classList.add(...options.className.split(/\s+/).filter(Boolean));
+  }
+
+  getElement(): HTMLElement {
+    return this.element;
+  }
+
+  getLonLat(): LonLat {
+    return [...this.lonLat];
+  }
+
+  setLonLat(lonLat: LonLat): this {
+    this.lonLat = [lonLat[0], lonLat[1]];
+    this.map?.positionOverlay(this);
+    return this;
+  }
+
+  /** Width (metres), heading and pitch (degrees), height of its bottom edge (metres), as in `PanelOptions` */
+  setPlacement(placement: Partial<Pick<PanelOptions, 'width' | 'heading' | 'pitch' | 'height'>>): this {
+    this.width = placement.width ?? this.width;
+    this.heading = placement.heading ?? this.heading;
+    this.pitch = placement.pitch ?? this.pitch;
+    this.height = placement.height ?? this.height;
+    this.map?.positionOverlay(this);
+    return this;
+  }
+
+  /** Reads the element's CSS size again (after it changed) */
+  resize(): this {
+    this.size = undefined;
+    this.map?.positionOverlay(this);
+    return this;
+  }
+
+  addTo(map: GeoMap): this {
+    if (this.map === map) return this;
+    this.remove();
+    this.map = map;
+    map.attachOverlay(this, this.element);
+    return this;
+  }
+
+  remove(): this {
+    this.map?.detachOverlay(this, this.element);
+    this.map = undefined;
+    this.size = undefined;
+    return this;
+  }
+
+  /** @internal */
+  position(viewport: Point): void {
+    const map = this.map;
+    if (!map) return;
+    this.size ??= [this.element.offsetWidth || 300, this.element.offsetHeight || 150];
+    const [w, h] = this.size;
+    const ground = map.elevationAt(this.lonLat) ?? 0;
+    const local = map.engine.localMatrix(this.lonLat[0], this.lonLat[1], ground);
+    // The element's pixels to the local frame (metres, x east, y north, z up): its bottom edge centered on the
+    // position, `height` up, facing `heading`, leant back by `pitch`
+    const rad = Math.PI / 180;
+    const [hd, pt] = [this.heading * rad, this.pitch * rad];
+    const s = this.width / w;
+    // Across it (left to right as read from the side it faces), and up it
+    const [ax, ay] = [-Math.cos(hd), Math.sin(hd)];
+    const [ux, uy, uz] = [-Math.sin(hd) * Math.sin(pt), -Math.cos(hd) * Math.sin(pt), Math.cos(pt)];
+    const top = h * s;
+    const origin = [-ax * (this.width / 2) + ux * top, -ay * (this.width / 2) + uy * top, this.height + uz * top];
+    const toLocal = [ax * s, ay * s, 0, 0, -ux * s, -uy * s, -uz * s, 0, 0, 0, 0, 0, ...origin, 1];
+    // Clip space to the map's CSS pixels; the depth flattened
+    const [vw, vh] = viewport;
+    const toScreen = [vw / 2, 0, 0, 0, 0, -vh / 2, 0, 0, 0, 0, 0, 0, vw / 2, vh / 2, 0, 1];
+    const clip = multiply(local, toLocal);
+    // Behind the camera (its center): hidden
+    const centerW = (clip[3] ?? 0) * (w / 2) + (clip[7] ?? 0) * (h / 2) + (clip[15] ?? 0);
+    // Hidden without touching its display (the page's layout of its content)
+    if (!(centerW > 0)) {
+      this.element.style.visibility = 'hidden';
+      return;
+    }
+    this.element.style.visibility = '';
+    // Its depth axis the identity, out of the rest: its points have no depth, and a transform that cannot be
+    // inverted is not drawn
+    const m = multiply(toScreen, clip);
+    m.splice(8, 4, 0, 0, 1, 0);
+    for (const k of [2, 6, 14]) m[k] = 0;
+    this.element.style.transform = `matrix3d(${m.join(',')})`;
+  }
+}

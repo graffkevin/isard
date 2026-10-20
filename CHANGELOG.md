@@ -27,6 +27,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - `map.setSwipe({ position, layers, side })`: layers shown on one side of a vertical line only, the layers beneath
   them on the other (comparing two states of a place, two basemaps): rasters cut in the ground's pass, the other
   layers by a scissor; set again as the line moves.
+- `Panel`: an element standing in 3D at a position (a video, a web page, a sign), `width` metres wide, facing
+  `heading`, leant back by `pitch`, `height` above the ground: placed after each frame by a CSS 3D transform from
+  the camera (`engine.localMatrix`), as the CSS3D objects of three.js.
 
 ## [0.7.0] - 2026-10-20
 

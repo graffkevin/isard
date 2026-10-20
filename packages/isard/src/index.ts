@@ -85,6 +85,8 @@ export {
   type MarkerEvent,
   type MarkerEvents,
   type MarkerOptions,
+  Panel,
+  type PanelOptions,
   Popup,
   type PopupEvents,
   type PopupOptions,

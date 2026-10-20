@@ -429,6 +429,19 @@ impl Engine {
         }
     }
 
+    /// Model-view-projection matrix (16 numbers, column-major) of the local frame at a longitude, latitude (degrees)
+    /// and altitude (metres), x east, y north, z up, in metres, for the last frame drawn (else the camera): the 3D
+    /// overlays of the page (`Panel`) placed with it after each frame
+    #[wasm_bindgen(js_name = localMatrix)]
+    #[must_use]
+    pub fn local_matrix(&self, lon: f64, lat: f64, altitude: f64) -> Vec<f32> {
+        let view = self.drawn.clone().unwrap_or_else(|| self.camera.view());
+        (view.view_proj * view.enu_matrix(glam::DVec3::new(lon, lat, altitude)))
+            .to_cols_array()
+            .map(|v| v as f32)
+            .to_vec()
+    }
+
     /// Altitude of the relief at a position (metres, exaggeration included), from the copy of its tiles kept on the
     /// CPU (as coarse as the tiles loaded there); undefined without relief or where none is loaded
     #[must_use]

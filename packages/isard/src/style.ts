@@ -55,6 +55,7 @@ const CSS = `
 .isard-marker-stem { position: absolute; z-index: -1; width: 2px; margin-left: -1px; transform-origin: top center; background: var(--isard-marker-color); opacity: 0.8; pointer-events: none; }
 .isard-marker-stem::after { content: ""; position: absolute; bottom: -3px; left: -2px; width: 6px; height: 6px; border-radius: 50%; background: inherit; }
 .isard-marker-pin { display: block; color: var(--isard-marker-color); filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.35)); }
+.isard-panel { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: auto; will-change: transform; }
 .isard-popup {
   position: absolute; top: 0; left: 0; display: flex; pointer-events: none; will-change: transform; z-index: 1;
   color: var(--isard-popup-fg);
