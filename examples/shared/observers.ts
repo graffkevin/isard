@@ -1,7 +1,7 @@
 /**
- * The observers of the viewshed examples: a pin each, its settings in its popup (one popup open at a time), the
- * edges of its cone on the ground, the whole given to `map.setViewshed` at each change. The page has a `#count` and
- * a `#clear` button; a click on the map adds an observer, a pin drags, its popup removes it. On surfaces, an observer
+ * The observers of the viewshed examples: a pin each, its settings in its popup (one popup open at a time), its cone
+ * drawn in 3D, the whole given to `map.setViewshed` at each change. The page has a `#count`, a `#clear` button and
+ * an `#opacity` slider; a click on the map adds an observer, a pin drags, its popup removes it. On surfaces, an observer
  * clicked or dragged onto a roof or a mesh stands on it.
  */
 import { type GeoMap, type LonLat, Marker, Popup, type ViewshedOptions } from 'isard';
@@ -41,16 +41,6 @@ const line = (...children: (Node | string)[]) => {
   return p;
 };
 
-/** The edge of a cone: from `at`, `metres` along `heading` (degrees clockwise from north) */
-const along = ([lon, lat]: LonLat, heading: number, metres: number): LonLat => {
-  const b = (heading * Math.PI) / 180;
-  const k = metres / 6378137;
-  return [
-    lon + ((k * Math.sin(b)) / Math.cos((lat * Math.PI) / 180)) * (180 / Math.PI),
-    lat + k * Math.cos(b) * (180 / Math.PI),
-  ];
-};
-
 /**
  * Observers on `map`. `standOn` gives the metres of what stands under a point (a roof), with its name for the popup;
  * or with `surfaces` the observers stand on whatever is drawn under the click or the drag (`map.pickSurface`).
@@ -66,7 +56,7 @@ export function observers(
 ): (at: LonLat, settings?: Partial<ObserverSettings>, standing?: number) => void {
   const all: Observer[] = [];
   let named = 0;
-  const edges = map.addLines({ data: [], color: '#1c7ed6', width: 2.5 });
+  const opacity = element<HTMLInputElement>('opacity');
   /** What an observer stands on, if anything above the relief */
   const under = (o: Observer) => {
     if (!options.surfaces) return options.standOn?.(o.pin.getLonLat());
@@ -85,22 +75,12 @@ export function observers(
           height,
           range: o.range,
           ...(o.oneWay ? { direction: o.direction, tilt: o.tilt, fov: o.fov, verticalFov: o.verticalFov } : {}),
+          opacity: Number(opacity.value) / 100,
+          coneColor: '#1c7ed6',
         };
       }),
     );
-    edges.setData(
-      all
-        .filter((o) => o.oneWay)
-        .map((o) => {
-          const at = o.pin.getLonLat();
-          const [a, b] = [-1, 1].map((side) => along(at, o.direction + (side * o.fov) / 2, o.range));
-          return {
-            type: 'Feature' as const,
-            properties: {},
-            geometry: { type: 'LineString' as const, coordinates: [a ?? at, at, b ?? at] },
-          };
-        }),
-    );
+    element('opacity-value').textContent = `${opacity.value} %`;
     element('count').textContent = `${all.length} observer${all.length > 1 ? 's' : ''}`;
     element<HTMLButtonElement>('clear').disabled = all.length === 0;
   };
@@ -191,6 +171,7 @@ export function observers(
     if (hit) add(hit.lonLat, {}, hit.height);
     else if (lonLat) add(lonLat);
   });
+  opacity.addEventListener('input', show);
   element('clear').addEventListener('click', () => {
     for (const o of all.splice(0)) o.pin.remove();
     show();

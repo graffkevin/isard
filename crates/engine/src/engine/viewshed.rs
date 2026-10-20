@@ -14,6 +14,8 @@
 //! The scene drawn from the observer is the one the frame selected: tiles out of the camera's view are not there to
 //! hide anything.
 
+mod outline;
+
 use super::{Engine, Slot};
 use crate::render::gl::{self, Objects};
 use geo::camera::View;
@@ -102,7 +104,8 @@ void main() {
 }";
 
 /// The tint over the screen, from the accumulation (its red channel: seen by some observer; green: within the reach
-/// of one)
+/// of one). Multiplied into the frame: the scene keeps its textures and its shading under the colors, brightened to
+/// their strongest channel so that they color rather than darken
 const TINT: &str = r"#version 300 es
 precision highp float;
 uniform sampler2D u_accumulation;
@@ -112,10 +115,15 @@ uniform float u_opacity;
 in vec2 v_ndc;
 out vec4 color;
 
+vec3 bright(vec3 c) {
+  return c / max(max(c.r, c.g), max(c.b, 1e-3));
+}
+
 void main() {
   vec2 a = texture(u_accumulation, v_ndc * 0.5 + 0.5).rg;
   if (a.g <= 0.0) discard;
-  color = vec4(mix(u_hidden, u_visible, clamp(a.r / a.g, 0.0, 1.0)), u_opacity * a.g);
+  vec3 tint = mix(bright(u_hidden), bright(u_visible), clamp(a.r / a.g, 0.0, 1.0));
+  color = vec4(mix(vec3(1.0), tint, u_opacity * a.g), 1.0);
 }";
 
 /// What the page set: the observers and the look of the result
@@ -125,6 +133,8 @@ pub(super) struct Settings {
     visible: [f32; 3],
     hidden: [f32; 3],
     opacity: f32,
+    /// The color of the cones' edges drawn in 3D, if they are
+    outline: Option<[f32; 3]>,
 }
 
 /// A point the view is taken from
@@ -188,6 +198,7 @@ pub(super) struct Viewshed {
     cube: glow::Texture,
     cube_target: glow::Framebuffer,
     screen: Option<Screen>,
+    outline: outline::Outline,
 }
 
 impl Viewshed {
@@ -198,6 +209,8 @@ impl Viewshed {
         let vao = objects.vertex_array()?;
         let cube = objects.texture()?;
         let cube_target = objects.framebuffer()?;
+        // On a failure, `objects` deletes the others
+        let outline = outline::Outline::new(gl)?;
         objects.keep();
         let uniforms = gl::uniforms(
             gl,
@@ -240,6 +253,7 @@ impl Viewshed {
             cube,
             cube_target,
             screen: None,
+            outline,
         })
     }
 
@@ -252,6 +266,7 @@ impl Viewshed {
             gl.delete_texture(self.cube);
             gl.delete_framebuffer(self.cube_target);
         }
+        self.outline.delete(gl);
         self.delete_screen(gl);
     }
 
@@ -417,19 +432,38 @@ impl Engine {
             gl.bind_texture(glow::TEXTURE_2D, Some(screen.accumulation));
             gl.bind_vertex_array(Some(viewshed.vao));
             gl.disable(glow::CULL_FACE);
+            gl.enable(glow::BLEND);
+            gl.blend_func_separate(glow::DST_COLOR, glow::ZERO, glow::ZERO, glow::ONE);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.bind_vertex_array(None);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         gl::reset_state(gl);
+        if let Some(color) = s.outline {
+            let mut segments = Vec::new();
+            for observer in &s.observers {
+                if let Some(cone) = &observer.cone {
+                    let (eye, k) = self.eye(view, observer);
+                    outline::segments(eye, cone, observer.range * k, &mut segments);
+                }
+            }
+            viewshed
+                .outline
+                .draw(gl, view, &segments, color, (2.5 * self.pixel_ratio) as f32, size);
+        }
+    }
+
+    /// An observer's eye in the local frame of `view`, and the pixels of that frame per metre there
+    fn eye(&self, view: &View, s: &Observer) -> (DVec3, f64) {
+        let m = geo::camera::mercator(s.position.x, s.position.y);
+        let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
+        let eye = view.geodetic(DVec3::new(s.position.x, s.position.y, ground + s.height));
+        (eye, view.pixels_per_metre(s.position.y))
     }
 
     /// One observer: its cube, then its comparison into the accumulation, by maximum with the other observers'
     fn draw_observer(&self, viewshed: &Viewshed, view: &View, s: &Observer, screen: Screen) {
-        let m = geo::camera::mercator(s.position.x, s.position.y);
-        let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
-        let eye = view.geodetic(DVec3::new(s.position.x, s.position.y, ground + s.height));
-        let k = view.pixels_per_metre(s.position.y);
+        let (eye, k) = self.eye(view, s);
         let range = s.range * k;
         let near = (0.2 * k).max(range / 20_000.0);
         let far = range * 1.05;
@@ -492,7 +526,7 @@ impl Engine {
     /// (16 at most): longitude, latitude (degrees), metres above the ground, range (metres), then to look one way
     /// only heading, tilt, angles of view across and up (degrees), the heading NaN to look all around. What some
     /// observer sees is tinted with `visible`, what is hidden from all those that reach it with `hidden` (RGB 0-1),
-    /// at `opacity`
+    /// at `opacity`; `outline` (RGB 0-1, or empty) the color of the cones' edges drawn in 3D
     #[wasm_bindgen(js_name = setViewshed)]
     pub fn set_viewshed(
         &mut self,
@@ -500,6 +534,7 @@ impl Engine {
         visible: &[f32],
         hidden: &[f32],
         opacity: f32,
+        outline: &[f32],
     ) -> Result<(), JsValue> {
         let rgb = |c: &[f32]| [0, 1, 2].map(|i| c.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0));
         let finite = |v: f64, default: f64| if v.is_finite() { v } else { default };
@@ -529,6 +564,7 @@ impl Engine {
             } else {
                 0.5
             },
+            outline: (outline.len() >= 3).then(|| rgb(outline)),
         };
         match &mut self.viewshed {
             Some(viewshed) => viewshed.settings = settings,

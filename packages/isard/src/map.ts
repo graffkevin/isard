@@ -636,7 +636,8 @@ export class GeoMap {
       ),
       new Float32Array(rgb(first.visibleColor ?? '#2f9e44')),
       new Float32Array(rgb(first.hiddenColor ?? '#e03131')),
-      first.opacity ?? 0.55,
+      first.opacity ?? 0.7,
+      new Float32Array(first.coneColor ? rgb(first.coneColor) : []),
     );
     this.requestRender();
   }

@@ -15,6 +15,15 @@
       .panel p {
         margin: 2px 0;
       }
+      .panel label:has(input[type="range"]) {
+        display: grid;
+        grid-template-columns: 1fr auto;
+      }
+      .panel label:has(input[type="range"]) input {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        margin: 0;
+      }
       .panel button {
         padding: 1px 8px;
         font-size: 12px;
@@ -27,6 +36,7 @@
       <h1>Viewshed</h1>
       <p>Seen in green, hidden in red. Click the map to add an observer, a pin to set its view; drag it to move it.</p>
       <p><span id="count"></span> <button id="clear" type="button">Remove all</button></p>
+      <p><label>Opacity <span id="opacity-value"></span><input id="opacity" type="range" min="10" max="100" step="5" value="70" /></label></p>
     </div>
     <script type="module" src="../dist/viewshed/main.js"></script>
   </body>

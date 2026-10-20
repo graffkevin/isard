@@ -196,8 +196,8 @@ export interface AtmosphereOptions {
   fogGroundBlend?: number;
 }
 
-/** What can be seen from a point (`GeoMap.setViewshed`); with several observers, the colors and opacity are the
- * first one's */
+/** What can be seen from a point (`GeoMap.setViewshed`); with several observers, the colors, the opacity and the
+ * cone's color are the first one's */
 export interface ViewshedOptions {
   /** The observer */
   position: LonLat;
@@ -209,8 +209,12 @@ export interface ViewshedOptions {
   visibleColor?: string;
   /** A CSS color for what is hidden (default `#e03131`) */
   hiddenColor?: string;
-  /** 0-1 (default 0.55) */
+  /** How strongly the colors tint the scene, multiplied into it so that its textures and shading stay, 0-1 (default
+   * 0.7) */
   opacity?: number;
+  /** A CSS color for the cone drawn in 3D (one way only): its fan through the axis, at the eye's height and tilted
+   * with it, from the eye to the range; solid where nothing hides it, faint behind the scene; none by default */
+  coneColor?: string;
   /** To look one way only (a camera, a lookout), degrees clockwise from north; all around without it */
   direction?: number;
   /** Degrees above the horizon the cone looks, negative below (default 0) */

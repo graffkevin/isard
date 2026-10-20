@@ -14,9 +14,18 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - `map.pickSurface(point)`: what is drawn under a screen point, on the relief or standing on it (a roof, a wall, a
   mesh), its position and height above the relief; `Marker` option `surface` to drag a marker over them, its drag
   events carrying that height.
+- The viewshed's cone in 3D (`coneColor`): its fan through the axis, at the eye's height and tilted with it, from
+  the eye to the range, solid where nothing hides it and faint behind the scene. The viewshed examples draw it
+  instead of the cone's edges on the ground (hidden under a mesh, wrong for a raised or tilted cone), and have an
+  opacity slider.
 - The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the
   cathedral, its walls and roofs hiding and tinted, an observer clicked or dragged onto the mesh standing on it; the
   observers of both viewshed examples in one shared module.
+
+### Changed
+
+- The viewshed's colors are multiplied into the scene instead of laid over it: textures and shading stay under the
+  green and the red (a mesh no longer looks veiled). `opacity` sets how strongly they tint, 0.7 by default.
 
 ### Fixed
 
