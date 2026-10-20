@@ -1,6 +1,8 @@
 //! Tile selection: a quadtree walk that keeps the tiles inside the view frustum (and in front of the horizon on the
 //! globe) and refines each one until it covers about `tile_px` CSS pixels on screen. Under a tilted camera, nearby
-//! tiles get fine and the horizon stays coarse.
+//! tiles get fine and the horizon stays coarse; past the screen center's distance, a tile may grow larger on screen
+//! the farther it is (up to `FAR_COARSENING` times): what lies toward the horizon, seen at a grazing angle and in the
+//! fog, takes fewer tiles (about half as many at 70°), and the pool of a layer holds the view.
 //!
 //! Tiles are tested through a grid of sample points projected like the GPU does (plane, sphere or a blend), so the
 //! same code serves both projections.
@@ -55,6 +57,8 @@ impl TileId {
 
 /// Upper bound on the tiles of one selection
 const MAX_TILES: usize = 400;
+/// How much larger on screen than `tile_px` a far tile may stay: its distance over the screen center's, up to this
+const FAR_COARSENING: f64 = 4.0;
 /// Finest level a selection reaches
 const MAX_Z: u8 = 30;
 /// On the globe, tiles coarser than this are always split (they would be too curved for their mesh)
@@ -87,7 +91,7 @@ pub fn select(view: &View, min_z: u8, max_z: u8, tile_px: f64) -> Vec<Selected> 
         let Some((apparent, distance, angle)) = measure(view, tile) else {
             continue;
         };
-        let fine_enough = apparent <= tile_px;
+        let fine_enough = apparent <= tile_px * (distance / view.center_distance).clamp(1.0, FAR_COARSENING);
         let refine = if tile.z < min_z {
             // Below the layer's first level: go down only if that level would be about the right size, as this tile
             // measures it, or at the view center, where a tile of that level has its size on the plane (large tiles of
@@ -328,6 +332,21 @@ mod tests {
         let tiles = select(&c.view(), 0, 7, 362.0);
         assert!(tiles.iter().any(|&t| contains(t, c.center)), "{tiles:?}");
         assert!(tiles.len() < MAX_TILES);
+    }
+
+    #[test]
+    fn far_tiles_coarsen_with_their_distance() {
+        // Pitched 70° over Paris, a 1575 × 855 map: about 90 tiles (156 if every one covered `tile_px`), within the 96
+        // slots of a pool of 512 px tiles with their stand-ins; the nearest as fine as before
+        let mut c = camera(15.6, 70.0);
+        c.width = 1575.0;
+        c.height = 855.0;
+        let tiles = select(&c.view(), 0, 19, 362.0);
+        assert!(tiles.len() <= 96, "{}", tiles.len());
+        assert_eq!(tiles.iter().map(|t| t.z).max(), Some(18));
+        // Seen from above, nothing changes: every tile is about as far as the center
+        let flat = camera(14.0, 0.0);
+        assert!(select(&flat.view(), 0, 19, 362.0).iter().all(|t| t.z == 15));
     }
 
     #[test]

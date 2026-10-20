@@ -26,6 +26,10 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   (the coarsest first, the far ones and their stand-ins), asked again, and so on: blank rectangles, tiles of the
   wrong level, a map never idle. The tiles a frame draws and their stand-ins are now held before its uploads, and
   only as many tiles are asked for as there is room left (the farthest wait, drawn with their stand-ins).
+- Fewer tiles toward the horizon of a tilted view: past the screen center's distance, a tile may stay larger on
+  screen the farther it is (up to 4 times), seen at a grazing angle and in the fog: about half as many tiles at
+  70° (106 for the vector basemap over Montmartre, 193 before), 13 of them drawn with stand-ins instead of about
+  100. The views from above do not change.
 - The labels of a tilted vector basemap follow the levels of its ground tiles: far away, those of lower zooms
   (fewer, bigger names) instead of the near ones piled up at the horizon; label tiles that failed are asked again
   after 3 s.
