@@ -15,12 +15,14 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   mesh), its position and height above the relief; `Marker` option `surface` to drag a marker over them, its drag
   events carrying that height.
 - The viewshed on a mesh example: the textured mesh of Strasbourg (Eurométropole, 2022, 3D Tiles) around the
-  cathedral, its walls and roofs hiding and tinted, an observer clicked or dragged onto the mesh standing on it (the
-  relief as served under the mesh, whose heights are altitudes); the observers of both viewshed examples in one
-  shared module.
+  cathedral, its walls and roofs hiding and tinted, an observer clicked or dragged onto the mesh standing on it; the
+  observers of both viewshed examples in one shared module.
 
 ### Fixed
 
+- The viewshed over 3D Tiles still loading: its depth passes drew the finest tiles only, not the coarser ones standing
+  in for those missing, and saw the relief under the mesh there (a tint floating beside the mesh). Its depth targets
+  now have a stencil, and the meshes are drawn into them as the frame draws them.
 - A view tilted to the horizon over 512 px tiles (the vector basemaps) no longer flickers without end: it wanted
   more tiles than the pool holds (105 at 63°, 193 at 70°, for 96 slots), each upload evicting a tile still drawn
   (the coarsest first, the far ones and their stand-ins), asked again, and so on: blank rectangles, tiles of the

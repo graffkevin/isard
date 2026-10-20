@@ -217,7 +217,7 @@ impl Viewshed {
         // SAFETY: storage of a texture just created on the live context
         unsafe {
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, Some(cube));
-            gl.tex_storage_2d(glow::TEXTURE_CUBE_MAP, 1, glow::DEPTH_COMPONENT24, CUBE, CUBE);
+            gl.tex_storage_2d(glow::TEXTURE_CUBE_MAP, 1, glow::DEPTH24_STENCIL8, CUBE, CUBE);
             gl.tex_parameter_i32(glow::TEXTURE_CUBE_MAP, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
             gl.tex_parameter_i32(glow::TEXTURE_CUBE_MAP, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
             gl.tex_parameter_i32(glow::TEXTURE_CUBE_MAP, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
@@ -284,7 +284,12 @@ impl Viewshed {
         // SAFETY: storage and attachment of objects just created on the live context
         unsafe {
             for (texture, target, format, attachment) in [
-                (depth, depth_target, glow::DEPTH_COMPONENT24, glow::DEPTH_ATTACHMENT),
+                (
+                    depth,
+                    depth_target,
+                    glow::DEPTH24_STENCIL8,
+                    glow::DEPTH_STENCIL_ATTACHMENT,
+                ),
                 (accumulation, accumulation_target, glow::RGBA8, glow::COLOR_ATTACHMENT0),
             ] {
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -436,7 +441,7 @@ impl Engine {
             for face in 0..6 {
                 gl.framebuffer_texture_2d(
                     glow::FRAMEBUFFER,
-                    glow::DEPTH_ATTACHMENT,
+                    glow::DEPTH_STENCIL_ATTACHMENT,
                     glow::TEXTURE_CUBE_MAP_POSITIVE_X + face,
                     Some(viewshed.cube),
                     0,

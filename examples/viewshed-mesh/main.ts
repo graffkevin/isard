@@ -16,8 +16,7 @@ const map = await GeoMap.create(element('map'), {
   pitch: 60,
   bearing: 70,
   basemap: 'ign-ortho',
-  // The mesh's heights are altitudes (NGF-IGN69), not heights above the ellipsoid: the relief as served, under it
-  terrain: { model: 'ign', geoid: false },
+  terrain: { model: 'ign' },
   projection: 'mercator',
   // 3D Tiles at once: the engine that draws them from the start, not after the one without them
   tiles3d: true,
@@ -25,7 +24,8 @@ const map = await GeoMap.create(element('map'), {
 
 map.addTiles3d({
   url: 'https://s3.eu-west-2.wasabisys.com/ems-sgct-photomaillage/ODACIT/EMS_PM2022/tileset.json',
-  maxScreenSpaceError: 8,
+  // Coarser than the Lille example's: a heavy mesh, drawn six times more from each observer
+  maxScreenSpaceError: 16,
 });
 
 // On the cathedral's square, looking along its front

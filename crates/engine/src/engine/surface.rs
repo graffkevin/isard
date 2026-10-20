@@ -90,14 +90,14 @@ impl Probe {
         // SAFETY: storage and attachment of objects just created on the live context
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH_COMPONENT24, size.0, size.1);
+            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH24_STENCIL8, size.0, size.1);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
             gl.bind_texture(glow::TEXTURE_2D, None);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
             gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
-                glow::DEPTH_ATTACHMENT,
+                glow::DEPTH_STENCIL_ATTACHMENT,
                 glow::TEXTURE_2D,
                 Some(texture),
                 0,
