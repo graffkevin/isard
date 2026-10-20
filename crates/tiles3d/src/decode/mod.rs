@@ -17,7 +17,10 @@
 mod accessor;
 mod container;
 mod gltf;
+mod metadata;
 mod pnts;
+
+pub use metadata::{Properties, Property};
 
 use container::{parse_glb, split};
 use glam::{DMat4, DVec3};
@@ -37,6 +40,8 @@ pub struct Primitive {
     pub image: Option<usize>,
     /// Base color factor of its material (linear RGBA, white by default), which multiplies the image
     pub color: [f32; 4],
+    /// The feature of each vertex (`EXT_mesh_features` feature IDs, a b3dm's `_BATCHID`), None without
+    pub features: Option<Rc<[f32]>>,
 }
 
 /// Points (a `.pnts`, or a glTF primitive of mode 0)
@@ -56,6 +61,8 @@ pub struct Mesh {
     /// Encoded images (JPEG, PNG, WebP, KTX2) and their media types, each once however many primitives use it
     pub images: Vec<(Rc<[u8]>, String)>,
     pub points: Vec<Points>,
+    /// The properties of its features (`Primitive::features` index them)
+    pub properties: Option<Properties>,
 }
 
 impl Mesh {
@@ -110,10 +117,11 @@ pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometr
             primitives: Vec::new(),
             images: Vec::new(),
             points: vec![points],
+            properties: None,
         });
     }
-    let (glb, rtc) = split(bytes)?;
-    decode_glb(glb, transform, y_up, rtc, draco)
+    let (glb, rtc, batch) = split(bytes)?;
+    decode_glb(glb, transform, y_up, rtc, draco, batch.as_ref())
 }
 
 /// The center of the bounds of positions, None if there is none (or one is not finite)
@@ -139,7 +147,7 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
     if bytes.get(..4) == Some(b"pnts") {
         return Ok(pnts::draco_request(bytes)?.into_iter().collect());
     }
-    let (glb, _) = split(bytes)?;
+    let (glb, _, _) = split(bytes)?;
     let (json, bin) = parse_glb(glb)?;
     let gltf = Gltf::new(&json, bin, &[]);
     let mut out = Vec::new();
@@ -496,7 +504,7 @@ mod tests {
                 try_all(&bytes);
             }
             // JSON fields
-            let (glb_bytes, _) = split(fixture).unwrap();
+            let (glb_bytes, _, _) = split(fixture).unwrap();
             let (json, bin) = parse_glb(glb_bytes).unwrap();
             let mut paths = Vec::new();
             pointers(&json, String::new(), &mut paths);

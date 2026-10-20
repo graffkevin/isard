@@ -28,8 +28,9 @@ const BUDGETS = {
   // the point clouds, about 40 KB: the 3D Tiles points (pnts, glTF points, their program, about 12 KB) and the COPC
   // layer (its head, hierarchy pages, octree traversal within a point budget, the grids positioning its points, its
   // requests to the workers held to a rate, Eye-Dome Lighting, picking, about 28 KB); its LAZ decoder is the point
-  // cloud module below, not in the engines (the core engine does not change)
-  'isard_bg.wasm': 404,
+  // cloud module below, not in the engines (the core engine does not change); 404 until the picking of 3D Tiles
+  // features and their properties (EXT_mesh_features, EXT_structural_metadata, b3dm batch tables), about 12 KB
+  'isard_bg.wasm': 416,
   /** The point cloud module (the LAZ decoder of COPC), loaded by the decoding workers with the first point cloud */
   'isard_points_bg.wasm': 46,
   /** The package's modules (dist/*.js but the workers), all together */

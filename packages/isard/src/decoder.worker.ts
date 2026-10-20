@@ -90,10 +90,11 @@ async function load(
     const vertices = tile.points ?? [];
     const primitives = await Promise.all(
       tile.primitives.map(
-        async ({ vertices, indices, image, mime, color }): Promise<DecodedPrimitive> => ({
+        async ({ vertices, indices, image, mime, color, features }): Promise<DecodedPrimitive> => ({
           vertices,
           indices,
           ...(color ? { color } : {}),
+          ...(features ? { features } : {}),
           ...(image ? await decode(image, mime) : { bitmap: null }),
         }),
       ),
@@ -104,11 +105,17 @@ async function load(
       transfer.add(p.vertices.buffer);
       transfer.add(p.indices.buffer);
       if (p.color) transfer.add(p.color.buffer);
+      if (p.features) transfer.add(p.features.buffer);
       if (p.bitmap) transfer.add(p.bitmap);
       for (const level of p.texture?.levels ?? []) transfer.add(level.data.buffer);
     }
     for (const v of vertices) transfer.add(v.buffer);
-    const decodedTile = { anchor: tile.anchor, primitives, ...(vertices.length > 0 ? { points: vertices } : {}) };
+    const decodedTile = {
+      anchor: tile.anchor,
+      primitives,
+      ...(vertices.length > 0 ? { points: vertices } : {}),
+      ...(tile.properties ? { properties: tile.properties } : {}),
+    };
     reply({ type: 'tile', id, tile: decodedTile }, [...transfer]);
   } catch (error) {
     reply({ type: 'error', id, error: String(error), aborted: controller.signal.aborted });

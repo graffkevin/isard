@@ -59,6 +59,7 @@ pub(super) fn decode_glb(
     y_up: bool,
     rtc: DVec3,
     draco: &[DracoGeometry],
+    batch: Option<&(Value, usize)>,
 ) -> Result<Mesh, String> {
     let (json, bin) = parse_glb(bytes)?;
     for required in json["extensionsRequired"].as_array().into_iter().flatten() {
@@ -122,6 +123,18 @@ pub(super) fn decode_glb(
             points
         })
         .collect();
+    // The properties of the features: the property table of the first primitive with one (3D Tiles 1.1), else the
+    // b3dm's batch table
+    let table = json["meshes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["primitives"].as_array().into_iter().flatten())
+        .find_map(|p| index(&p["extensions"]["EXT_mesh_features"]["featureIds"][0]["propertyTable"]));
+    let properties = match table {
+        Some(table) => super::metadata::property_table(&gltf, table)?,
+        None => batch.and_then(|(table, count)| super::metadata::batch_table(table, *count)),
+    };
     Ok(Mesh {
         anchor,
         primitives,
@@ -132,6 +145,7 @@ pub(super) fn decode_glb(
             .map(|(_, bytes, mime)| (bytes, mime))
             .collect(),
         points,
+        properties,
     })
 }
 
@@ -338,6 +352,19 @@ impl<'a> Gltf<'a> {
             return Ok(None);
         };
         let count = positions.len() / 3;
+        // The feature of each vertex: the first feature ID set given by an attribute (`EXT_mesh_features`), else a
+        // b3dm's `_BATCHID`; not for Draco primitives (their attributes are the decoder's)
+        let feature_set = &primitive["extensions"]["EXT_mesh_features"]["featureIds"][0];
+        let attribute = feature_set["attribute"]
+            .as_u64()
+            .map_or_else(|| "_BATCHID".to_owned(), |n| format!("_FEATURE_ID_{n}"));
+        let features = match self::index(&primitive["attributes"][attribute]) {
+            Some(accessor) if !primitive["extensions"]["KHR_draco_mesh_compression"].is_object() => {
+                self.spend(count)?;
+                Some(self.floats(accessor)?).filter(|f| f.len() == count)
+            }
+            _ => None,
+        };
         if !positions.len().is_multiple_of(3) || uvs.len() != count * 2 || indices.iter().any(|&i| i as usize >= count)
         {
             return Err("inconsistent glTF primitive".into());
@@ -389,6 +416,7 @@ impl<'a> Gltf<'a> {
                 indices,
                 image,
                 color,
+                features,
             },
             world_positions,
         )))

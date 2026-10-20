@@ -46,6 +46,30 @@ void main() {
   gl_Position = u_matrix * vec4(a_position, 1.0);
 }";
 
+/// The picking pass: each feature of a tile its handle, the tile's first one (`u_base`) plus the feature
+const PICK_VERTEX: &str = r"#version 300 es
+uniform mat4 u_matrix;
+layout(location = 0) in vec3 a_position;
+layout(location = 7) in float a_feature;
+flat out float v_feature;
+void main() {
+  v_feature = a_feature;
+  gl_Position = u_matrix * vec4(a_position, 1.0);
+}";
+
+/// The handle + 1 in RGB (24 bits, little end in red) and the layer in alpha, as the other picking passes
+const PICK_FRAGMENT: &str = r"#version 300 es
+precision highp float;
+uniform float u_base;
+uniform float u_count;
+uniform float u_layer;
+flat in float v_feature;
+out vec4 color;
+void main() {
+  float id = u_base + clamp(floor(v_feature + 0.5), 0.0, u_count - 1.0) + 1.0;
+  color = vec4(mod(id, 256.0), mod(floor(id / 256.0), 256.0), floor(id / 65536.0), u_layer) / 255.0;
+}";
+
 const FRAGMENT: &str = r"#version 300 es
 precision highp float;
 uniform sampler2D u_texture;
@@ -129,6 +153,11 @@ pub struct Tiles3dLayer {
     loader: Option<JsValue>,
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 5],
+    /// The picking pass and its uniforms (matrix, base, count, layer)
+    pick_program: glow::Program,
+    pick_uniforms: [Option<glow::UniformLocation>; 4],
+    /// The tiles of the last picking pass: the first handle of each and its tile
+    picked: RefCell<Vec<(u32, usize)>>,
     pub max_error: f64,
     pub opacity: f32,
     /// A color tinting the textures, and of the untextured meshes (RGB 0-1)
@@ -163,6 +192,15 @@ impl Tiles3dLayer {
             program,
             ["u_matrix", "u_texture", "u_textured", "u_opacity", "u_color"],
         );
+        let pick_program = match gl::program(gl, PICK_VERTEX, PICK_FRAGMENT) {
+            Ok(p) => p,
+            Err(e) => {
+                // SAFETY: the program just made, not used
+                unsafe { gl.delete_program(program) };
+                return Err(e);
+            }
+        };
+        let pick_uniforms = gl::uniforms(gl, pick_program, ["u_matrix", "u_base", "u_count", "u_layer"]);
         let layer = Self {
             url,
             tree: Tree::default(),
@@ -174,6 +212,9 @@ impl Tiles3dLayer {
             loader,
             program,
             uniforms,
+            pick_program,
+            pick_uniforms,
+            picked: RefCell::default(),
             max_error,
             opacity: 1.0,
             color: None,
@@ -616,6 +657,51 @@ impl Layer for Tiles3dLayer {
         )
     }
 
+    fn pickable(&self) -> bool {
+        true
+    }
+
+    fn draw_pick(&self, frame: &Frame, layer: u8) {
+        let gl = frame.gl;
+        let [matrix, base_u, count_u, layer_u] = &self.pick_uniforms;
+        let mut picked = self.picked.borrow_mut();
+        picked.clear();
+        let mut base = 0u32;
+        // SAFETY: draws with objects owned by this layer; the state set back after
+        unsafe {
+            gl.use_program(Some(self.pick_program));
+            gl.uniform_1_f32(layer_u.as_ref(), f32::from(layer));
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.disable(glow::CULL_FACE);
+            // Primitives without features: all of their vertices the tile's first handle
+            gl.vertex_attrib_1_f32(gpu::FEATURE_ATTRIBUTE, 0.0);
+            for &i in self.selection.draw.iter().chain(&self.selection.backfill) {
+                let Some(State::Ready(mesh)) = self.states.get(i) else {
+                    continue;
+                };
+                let count = mesh.feature_count.max(1);
+                // 24 bits of handles in all
+                if base.saturating_add(count) >= (1 << 24) - 1 {
+                    break;
+                }
+                picked.push((base, i));
+                let m = frame.view.view_proj * frame.view.ecef_matrix(mesh.anchor);
+                gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&m));
+                gl.uniform_1_f32(base_u.as_ref(), base as f32);
+                gl.uniform_1_f32(count_u.as_ref(), count as f32);
+                for p in &mesh.primitives {
+                    gl.bind_vertex_array(Some(p.vao));
+                    gl.draw_elements(glow::TRIANGLES, p.count, glow::UNSIGNED_INT, 0);
+                }
+                base += count;
+            }
+            gl.bind_vertex_array(None);
+            gl.disable(glow::DEPTH_TEST);
+            gl.enable(glow::CULL_FACE);
+        }
+    }
+
     fn draw_depth(&self, frame: &Frame) {
         // As the frame draws them: the finest tiles, and their stand-ins where they are missing (the depth targets
         // have a stencil to sort them out)
@@ -636,8 +722,11 @@ impl Layer for Tiles3dLayer {
         if let Some(points) = &self.points {
             points.delete(gl);
         }
-        // SAFETY: the program is owned by this layer, not used afterwards
-        unsafe { gl.delete_program(self.program) };
+        // SAFETY: the programs are owned by this layer, not used afterwards
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_program(self.pick_program);
+        }
     }
 }
 
@@ -739,6 +828,36 @@ impl Engine {
                 .unwrap_or(2.0)
                 .min(64.0);
         }
+    }
+
+    /// The feature of a picked handle (`pick`'s index on a 3D Tiles layer): `[properties, feature]`, its properties
+    /// (undefined when its tile has none) and its index in its tile; undefined if the handle is not of the last picking
+    /// pass
+    #[wasm_bindgen(js_name = tiles3dFeature, unchecked_return_type = "[properties: Record<string, unknown> | undefined, feature: number] | undefined")]
+    #[must_use]
+    pub fn tiles3d_feature(&self, id: u32, index: u32) -> JsValue {
+        let Some(layer) = self.layer::<Tiles3dLayer>(id) else {
+            return JsValue::UNDEFINED;
+        };
+        let picked = layer.picked.borrow();
+        let found = picked
+            .iter()
+            .rev()
+            .find(|(base, _)| *base <= index)
+            .and_then(|&(base, tile)| match layer.states.get(tile) {
+                Some(State::Ready(mesh)) if index - base < mesh.feature_count.max(1) => Some((mesh, index - base)),
+                _ => None,
+            });
+        let Some((mesh, feature)) = found else {
+            return JsValue::UNDEFINED;
+        };
+        let out = js_sys::Array::new();
+        let properties = mesh.properties.as_ref().map_or(JsValue::UNDEFINED, |list| {
+            js_sys::Reflect::get_u32(list, feature).unwrap_or(JsValue::UNDEFINED)
+        });
+        out.push(&properties);
+        out.push(&JsValue::from(feature));
+        out.into()
     }
 
     /// Counters of a 3D Tiles layer, undefined if there is none with this id

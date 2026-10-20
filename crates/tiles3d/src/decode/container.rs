@@ -6,10 +6,14 @@ use glam::DVec3;
 use serde_json::Value;
 
 /// The glTF binary of a tile and its `RTC_CENTER`
-pub(super) fn split(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
+/// A b3dm's batch table (its JSON) and its length
+pub(super) type BatchTable = (Value, usize);
+
+/// The glTF of a tile, its RTC center, and for a b3dm its batch table
+pub(super) fn split(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> {
     match bytes.get(..4) {
         Some(b"b3dm") => b3dm_glb(bytes),
-        Some(b"glTF") => Ok((bytes, DVec3::ZERO)),
+        Some(b"glTF") => Ok((bytes, DVec3::ZERO, None)),
         _ if bytes.trim_ascii_start().starts_with(b"{") => {
             Err("a JSON document (external tileset?), not a mesh".into())
         }
@@ -36,15 +40,17 @@ fn trim_padding(text: &[u8]) -> &[u8] {
     &text[..end]
 }
 
-fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
+fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> {
     let feature_json = u32_at(bytes, 12)?;
     let feature_binary = u32_at(bytes, 16)?;
     let batch_json = u32_at(bytes, 20)?;
     let batch_binary = u32_at(bytes, 24)?;
     let mut rtc = DVec3::ZERO;
+    let mut batch_length = 0;
     if feature_json > 0 {
         let text = slice(bytes, 28, feature_json).ok_or("truncated feature table")?;
         let table: Value = serde_json::from_slice(trim_padding(text)).map_err(|e| e.to_string())?;
+        batch_length = index(&table["BATCH_LENGTH"]).unwrap_or(0);
         let center = &table["RTC_CENTER"];
         if let Some([x, y, z]) = center.as_array().map(Vec::as_slice) {
             rtc = DVec3::new(
@@ -66,7 +72,13 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3), String> {
         .into_iter()
         .try_fold(28usize, usize::checked_add)
         .ok_or("bad b3dm header")?;
-    Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc))
+    // The batch table's JSON, if it reads (a broken one only loses the properties)
+    let batch = (batch_json > 0)
+        .then(|| slice(bytes, 28 + feature_json + feature_binary, batch_json))
+        .flatten()
+        .and_then(|text| serde_json::from_slice::<Value>(trim_padding(text)).ok())
+        .map(|table| (table, batch_length));
+    Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc, batch))
 }
 
 /// Chunk types of a glTF binary

@@ -341,7 +341,8 @@ export interface MapHoverFeatureEvent extends MapPointerEvent {
   hit: FeatureHit | undefined;
 }
 
-/** A picked feature: its layer handle, its index there and, for line, circle and fill layers, the feature itself */
+/** A picked feature: its layer handle, its index there and, for line, circle, fill, extrusion, point cloud and 3D
+ * Tiles layers, the feature itself (a building of 3D Tiles with its properties) */
 export interface FeatureHit {
   layer: Layer;
   index: number;

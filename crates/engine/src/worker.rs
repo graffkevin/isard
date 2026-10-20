@@ -21,6 +21,8 @@ export interface EncodedPrimitive {
   mime?: string;
   /** Base color factor of its material (RGBA 0-1), when not white */
   color?: Float32Array<ArrayBuffer>;
+  /** The feature of each vertex (`EncodedTile.properties` index them), when the tile has features */
+  features?: Float32Array<ArrayBuffer>;
 }
 
 /** A tile decoded by `decodeTile` */
@@ -30,6 +32,8 @@ export interface EncodedTile {
   primitives: EncodedPrimitive[];
   /** Its points (`.pnts`, glTF points), 20 bytes a vertex: x, y, z (f32) around the anchor, RGB, a normal */
   points: Uint8Array<ArrayBuffer>[];
+  /** The properties of its features, one object per feature */
+  properties?: Record<string, unknown>[];
 }
 
 /** A texture transcoded for the GPU (KTX2 / Basis Universal): a WebGL internal format and its mip levels */
@@ -50,6 +54,8 @@ export interface DecodedPrimitive {
   texture?: CompressedTexture;
   /** Base color factor of its material (RGBA 0-1), when not white */
   color?: Float32Array<ArrayBuffer>;
+  /** The feature of each vertex, when the tile has features */
+  features?: Float32Array<ArrayBuffer>;
 }
 
 /**
@@ -94,6 +100,8 @@ export interface DecodedTile {
   primitives: DecodedPrimitive[];
   /** Its points' vertices (`EncodedTile.points`) */
   points?: Uint8Array<ArrayBuffer>[];
+  /** The properties of its features (`EncodedTile.properties`) */
+  properties?: Record<string, unknown>[];
 }
 
 /** What the engine expects from a pool of decoding workers (`Engine.setTileLoader`) */
@@ -237,6 +245,9 @@ pub fn decode_tile(
         if p.color.iter().any(|&c| c < 1.0) {
             set(&primitive, "color", &Float32Array::from(&p.color[..]))?;
         }
+        if let Some(features) = &p.features {
+            set(&primitive, "features", &Float32Array::from(&features[..]))?;
+        }
         primitives.push(&primitive);
     }
     set(&out, "primitives", &primitives)?;
@@ -245,5 +256,12 @@ pub fn decode_tile(
         points.push(&Uint8Array::from(&crate::render::points::tile_vertices(p)[..]));
     }
     set(&out, "points", &points)?;
+    if let Some(properties) = &mesh.properties {
+        set(
+            &out,
+            "properties",
+            &crate::render::tiles3d::gpu::feature_properties(properties),
+        )?;
+    }
     Ok(out)
 }

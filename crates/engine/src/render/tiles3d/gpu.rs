@@ -9,9 +9,14 @@ use glow::HasContext;
 use tiles3d::decode::Mesh;
 use wasm_bindgen::{JsCast, JsValue};
 
+/// Location of the feature of each vertex (`a_feature` of the picking pass); a primitive without features gives none
+pub const FEATURE_ATTRIBUTE: u32 = 7;
+
 pub struct GpuPrimitive {
     pub vao: glow::VertexArray,
     buffers: [glow::Buffer; 2],
+    /// The feature of each vertex (at `FEATURE_ATTRIBUTE`), when the tile has features
+    pub features: Option<glow::Buffer>,
     pub count: i32,
     /// One of the mesh's `textures`
     pub texture: Option<glow::Texture>,
@@ -24,6 +29,11 @@ pub struct GpuMesh {
     pub primitives: Vec<GpuPrimitive>,
     /// Its points (`.pnts`, glTF points)
     pub points: Vec<GpuPoints>,
+    /// The properties of its features, a JavaScript array of one object per feature (`GpuPrimitive::features`
+    /// index it)
+    pub properties: Option<JsValue>,
+    /// Features of the tile: those of its properties, at least one past the highest feature of its vertices
+    pub feature_count: u32,
     /// Its textures, each once however many primitives share it
     textures: Vec<glow::Texture>,
     bytes: usize,
@@ -44,17 +54,26 @@ impl Resident for GpuMesh {
     }
 }
 
-/// A vertex array of a primitive: vertices x, y, z, u, v (20 bytes) and indices, uploaded by `fill` into the bound
-/// buffers (from the wasm heap or straight from JavaScript). Deleted again if `fill` fails
+/// The buffers of a primitive's vertex array: vertices, indices, features
+type Arrays = (glow::VertexArray, [glow::Buffer; 2], Option<glow::Buffer>);
+
+/// A vertex array of a primitive: vertices x, y, z, u, v (20 bytes), indices, and its features if `fill_features`
+/// is given, uploaded into the bound buffers (from the wasm heap or straight from JavaScript). Deleted again if a fill
+/// fails
 fn primitive_arrays(
     gl: &glow::Context,
     fill: impl FnOnce(u32) -> Result<(), JsValue>,
     fill_indices: impl FnOnce(u32) -> Result<(), JsValue>,
-) -> Result<(glow::VertexArray, [glow::Buffer; 2]), JsValue> {
+    fill_features: Option<impl FnOnce(u32) -> Result<(), JsValue>>,
+) -> Result<Arrays, JsValue> {
     let mut objects = Objects::new(gl);
     let vao = objects.vertex_array()?;
     let vbo = objects.buffer()?;
     let ibo = objects.buffer()?;
+    let features = match fill_features {
+        Some(_) => Some(objects.buffer()?),
+        None => None,
+    };
     // SAFETY: state setup of objects just created on the live context
     unsafe {
         gl.bind_vertex_array(Some(vao));
@@ -64,12 +83,50 @@ fn primitive_arrays(
         gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, 20, 0);
         gl.enable_vertex_attrib_array(1);
         gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 20, 12);
+        if let (Some(buffer), Some(fill_features)) = (features, fill_features) {
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            fill_features(glow::ARRAY_BUFFER)?;
+            gl.enable_vertex_attrib_array(FEATURE_ATTRIBUTE);
+            gl.vertex_attrib_pointer_f32(FEATURE_ATTRIBUTE, 1, glow::FLOAT, false, 4, 0);
+        }
         gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ibo));
         fill_indices(glow::ELEMENT_ARRAY_BUFFER)?;
         gl.bind_vertex_array(None);
     }
     objects.keep();
-    Ok((vao, [vbo, ibo]))
+    Ok((vao, [vbo, ibo], features))
+}
+
+/// The properties of a tile's features as JavaScript: an array of one object per feature
+pub fn feature_properties(properties: &tiles3d::decode::Properties) -> JsValue {
+    use js_sys::{Array, Object, Reflect};
+    use tiles3d::decode::Property;
+    let out = Array::new();
+    for feature in &properties.features {
+        let object = Object::new();
+        for (name, value) in properties.names.iter().zip(feature) {
+            let value = match value {
+                Property::Null => JsValue::NULL,
+                Property::Bool(b) => JsValue::from_bool(*b),
+                Property::Number(n) => JsValue::from_f64(*n),
+                Property::Text(s) => JsValue::from_str(s),
+            };
+            // Setting a property on a fresh plain object cannot fail
+            let _ = Reflect::set(&object, &JsValue::from_str(name), &value);
+        }
+        out.push(&object);
+    }
+    out.into()
+}
+
+/// One past the highest feature of a primitive's vertices
+fn feature_bound(features: impl IntoIterator<Item = f32>) -> u32 {
+    features
+        .into_iter()
+        .filter(|f| f.is_finite() && *f >= 0.0)
+        .fold(0.0f32, f32::max)
+        .min(16_000_000.0) as u32
+        + 1
 }
 
 /// Uploads a mesh decoded on this thread, with its images decoded (one per `Mesh::images`, a texture each, shared by
@@ -84,6 +141,8 @@ pub fn upload(
         anchor: mesh.anchor,
         primitives: Vec::new(),
         points: Vec::new(),
+        properties: None,
+        feature_count: 0,
         textures: Vec::new(),
         bytes: 0,
         used: frame,
@@ -115,6 +174,10 @@ pub fn upload(
             return Err(e);
         }
     }
+    if let Some(properties) = &mesh.properties {
+        gpu.properties = Some(feature_properties(properties));
+        gpu.feature_count = gpu.feature_count.max(properties.features.len() as u32);
+    }
     for p in &mesh.points {
         match GpuPoints::upload(gl, &tile_vertices(p)) {
             Ok(points) => {
@@ -144,7 +207,7 @@ fn upload_primitive(
         .zip(p.uvs.as_chunks::<2>().0)
         .flat_map(|(&[x, y, z], &[u, v])| [x, y, z, u, v])
         .collect();
-    let (vao, buffers) = primitive_arrays(
+    let (vao, buffers, features_buffer) = primitive_arrays(
         gl,
         |target| {
             // SAFETY: upload into the buffer bound by `primitive_arrays`
@@ -156,11 +219,23 @@ fn upload_primitive(
             unsafe { gl.buffer_data_u8_slice(target, bytes(&p.indices), glow::STATIC_DRAW) };
             Ok(())
         },
+        p.features.as_ref().map(|features| {
+            |target| {
+                // SAFETY: upload into the buffer bound by `primitive_arrays`
+                unsafe { gl.buffer_data_u8_slice(target, bytes(features), glow::STATIC_DRAW) };
+                Ok(())
+            }
+        }),
     )
     .map_err(|e| format!("{e:?}"))?;
+    if let Some(features) = &p.features {
+        gpu.feature_count = gpu.feature_count.max(feature_bound(features.iter().copied()));
+        gpu.bytes += features.len() * 4;
+    }
     gpu.primitives.push(GpuPrimitive {
         vao,
         buffers,
+        features: features_buffer,
         count: p.indices.len() as i32,
         texture,
         color: p.color,
@@ -186,10 +261,17 @@ pub fn upload_decoded(
         anchor,
         primitives: Vec::new(),
         points: Vec::new(),
+        properties: None,
+        feature_count: 0,
         textures: Vec::new(),
         bytes: 0,
         used: frame,
     };
+    let properties = js_get(tile, "properties");
+    if let Ok(list) = properties.clone().dyn_into::<js_sys::Array>() {
+        gpu.feature_count = list.length();
+        gpu.properties = Some(properties);
+    }
     // The bitmaps and transcoded textures met so far and their GPU textures: the same object, the same texture
     let mut shared: Vec<(JsValue, Option<glow::Texture>)> = Vec::new();
     for p in get_array(tile, "primitives").iter() {
@@ -226,8 +308,9 @@ fn upload_decoded_primitive(
 ) -> Result<(), JsValue> {
     let vertices: js_sys::Float32Array = js_get(p, "vertices").dyn_into()?;
     let indices: js_sys::Uint32Array = js_get(p, "indices").dyn_into()?;
+    let features = js_get(p, "features").dyn_into::<js_sys::Float32Array>().ok();
     // glow binds, the raw context uploads into the bound buffers (the same WebGL state)
-    let (vao, buffers) = primitive_arrays(
+    let (vao, buffers, features_buffer) = primitive_arrays(
         gl,
         |target| {
             raw.buffer_data_with_array_buffer_view(target, &vertices, glow::STATIC_DRAW);
@@ -237,10 +320,21 @@ fn upload_decoded_primitive(
             raw.buffer_data_with_array_buffer_view(target, &indices, glow::STATIC_DRAW);
             Ok(())
         },
+        features.as_ref().map(|features| {
+            |target| {
+                raw.buffer_data_with_array_buffer_view(target, features, glow::STATIC_DRAW);
+                Ok(())
+            }
+        }),
     )?;
+    if let Some(features) = &features {
+        gpu.feature_count = gpu.feature_count.max(feature_bound(features.to_vec()));
+        gpu.bytes += features.byte_length() as usize;
+    }
     let primitive = GpuPrimitive {
         vao,
         buffers,
+        features: features_buffer,
         count: indices.length() as i32,
         texture: None,
         color: color_of(p),
@@ -428,7 +522,7 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
     // SAFETY: objects owned by the primitive, not used afterwards
     unsafe {
         gl.delete_vertex_array(p.vao);
-        for b in p.buffers {
+        for b in p.buffers.into_iter().chain(p.features) {
             gl.delete_buffer(b);
         }
     }

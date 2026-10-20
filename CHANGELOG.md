@@ -13,6 +13,10 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   new token when it is renewed, without headers to stop.
 - A color for 3D Tiles (`color` in `addTiles3d` and `setStyle`): it tints the textures of the meshes and colors the
   untextured ones (light grey without it).
+- 3D Tiles features picked (`pickFeature`, 'hoverfeature'): a building of a 3D Tiles layer comes with its
+  properties, from the tile's `EXT_mesh_features` feature IDs and `EXT_structural_metadata` property table (3D Tiles
+  1.1: scalars, booleans, strings, enums) or a b3dm's `_BATCHID` and batch table (1.0, its JSON arrays); the
+  Bâtiments 3D of the IGN give their BD TOPO attributes (cleabs, hauteur, nature, usage…).
 
 ## [0.7.0] - 2026-10-20
 

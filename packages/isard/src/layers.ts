@@ -3,7 +3,7 @@
  * the map recreates its engine and every layer in order, with the same handle (its id is updated). Also the page's
  * own 3D content: custom layers (its WebGL code called in every frame) and glTF models drawn at positions.
  */
-import { parseColor, rampTexels, stops } from './features.ts';
+import { type Feature, parseColor, rampTexels, stops } from './features.ts';
 import { mercatorX, mercatorY, toMercator } from './geo.ts';
 import type { GeoMap } from './map.ts';
 import { rgb } from './settings.ts';
@@ -262,6 +262,16 @@ export class Tiles3dLayer extends Layer {
   /** @internal */
   override get needsFullEngine(): boolean {
     return true;
+  }
+
+  /** @internal The feature picked (`pickFeature`, 'hoverfeature'): the properties of its feature in the tile
+   * (`EXT_structural_metadata`, a b3dm batch table), none for a mesh without features; its index in the tile as id */
+  featureAt(index: number): Feature<Record<string, unknown>> | undefined {
+    if (this.id < 0) return undefined;
+    const hit = this.map.engine.tiles3dFeature(this.id, index);
+    if (!hit) return undefined;
+    const [properties, feature] = hit;
+    return { type: 'Feature', id: feature, properties: properties ?? {}, geometry: null };
   }
 
   /** Loading counters; undefined once the layer is removed, and while the engine with 3D Tiles loads (see
