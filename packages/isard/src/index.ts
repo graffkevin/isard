@@ -89,7 +89,7 @@ export {
   RasterLayer,
   Tiles3dLayer,
 } from './layers.ts';
-export { GeoMap } from './map.ts';
+export { GeoMap, type LayerSpec } from './map.ts';
 export {
   type Anchor,
   Marker,

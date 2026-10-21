@@ -15,7 +15,24 @@
 
 Every `add…` returns a handle: `layer.setStyle(…)`, `layer.setVisible(b)`, `layer.moveBefore(other)`,
 `layer.remove()`, and what is specific to the layer (`setValues`, `setData`…). Each takes `before` to go under
-another layer.
+another layer. `await layer.ready` resolves once the map has drawn it, what it shows in view loaded.
+
+## From a configuration
+
+`map.add({ type, ...options })` takes a layer as an application's configuration describes it, the options of its
+`add…` method:
+
+```ts
+const layers = [
+  { type: 'raster', url: 'https://…/{z}/{x}/{y}.png' },
+  { type: 'tiles3d', url: 'https://…/tileset.json', color: '#d9c9a8' },
+  { type: 'lines', data: routes, color: '#0057b8', width: 3 },
+] satisfies LayerSpec[];
+for (const spec of layers) map.add(spec);
+```
+
+The types: `lines`, `circles`, `fills`, `symbols`, `extrusions`, `raster`, `ground`, `network`, `tiles3d`,
+`pointcloud`, `models`.
 
 ## Comparing two layers: swipe
 

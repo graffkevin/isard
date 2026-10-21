@@ -867,6 +867,23 @@ describe('layers', () => {
     expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.6, 1]);
   });
 
+  test('map.add: a layer by its type and options, the same as its add… method; an unknown type throws', async () => {
+    const { map, engine } = await create();
+    const fills = map.add({ type: 'fills', data: [], color: '#ff0000' });
+    const lines = map.add({ type: 'lines', data: [], before: fills });
+    expect(engine.args('addFills').length + engine.args('addLines').length).toBe(2);
+    const order = (map as unknown as { layers: unknown[] }).layers;
+    expect(order.indexOf(lines)).toBeLessThan(order.indexOf(fills));
+    expect(() => map.add({ type: 'nothing' } as never)).toThrow('no layer of type nothing');
+  });
+
+  test('a preset under the options given', async () => {
+    const { map, engine } = await create({ preset: 'ign-3d', pitch: 20 });
+    expect(map.getCamera().pitch).toBe(20);
+    // The preset's relief (the IGN's), its basemap overridden by the test's 'none'
+    expect(String(engine.last('setTerrain')?.[0])).toContain('geopf');
+  });
+
   test('a removed layer is removed once', async () => {
     const { map, engine } = await create();
     const line = map.addLines({ data: [] });

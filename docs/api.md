@@ -77,7 +77,9 @@ styles the basemaps use, for `vectorTiles({ style })`.
 | `addModels({ url \| data, instances, altitudeReference })` | `ModelLayer` | `setInstances`; instances `{ lonLat, altitude, heading, pitch, roll, scale }`, picked by index ([models](./layers/models)) |
 | `addCustomLayer({ renderingMode, onAdd, render, onRemove }, { before })` | `CustomLayer` | your WebGL drawing in every frame, `frame.matrixAt(lonLat, altitude)` its matrices ([custom layers](./layers/custom)) |
 
-Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`. Every `add…` takes `before`.
+Every handle: `setVisible(b)` (feature layers), `moveBefore(layer)`, `remove()`, `ready` (resolves once drawn).
+Every `add…` takes `before`; `add({ type, ...options })` takes any of them from a configuration ([from a
+configuration](./layers/#from-a-configuration)).
 
 | | |
 |---|---|

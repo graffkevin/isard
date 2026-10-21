@@ -14,6 +14,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - IGN presets: `preset: 'ign' | 'ign-3d' | 'ign-ortho-3d'` (`IGN_PRESETS`), the other options over them;
   `bdtopoBuildings(box)` (the BD TOPO buildings of a box, raised to their height) and `batiments3d()` (the IGN's
   Bâtiments 3D, `geoid` set, colored), the options of their layers in a call.
+- `map.add({ type, ...options })`: a layer from a configuration (`LayerSpec`: `lines`, `circles`, `fills`, `symbols`,
+  `extrusions`, `raster`, `ground`, `network`, `tiles3d`, `pointcloud`, `models`); `layer.ready`, resolved once the
+  map has drawn the layer.
 
 ## [0.8.0] - 2026-10-21
 

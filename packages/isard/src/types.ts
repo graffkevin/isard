@@ -417,4 +417,6 @@ export interface LayerHost {
   moveLayer(layer: object, before: object | undefined): void;
   /** A layer created again in the engine (new id): put at the place of its old id, which is removed */
   replaceLayer(layer: object, old: number): void;
+  /** Resolves once the map is idle (everything in view loaded and drawn) */
+  whenIdle(): Promise<void>;
 }

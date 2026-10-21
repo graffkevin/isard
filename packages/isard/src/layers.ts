@@ -34,6 +34,18 @@ export abstract class Layer {
     return this.#id;
   }
 
+  #ready: Promise<void> | undefined;
+
+  /** Resolves once the map has drawn the layer, what it shows in view loaded (the map idle after it was added; a
+   * layer waiting for the engine with 3D Tiles, once that one has drawn it) */
+  get ready(): Promise<void> {
+    this.#ready ??= (async () => {
+      do await this.map.whenIdle();
+      while (this.#id < 0 && this.needsFullEngine);
+    })();
+    return this.#ready;
+  }
+
   /** @internal Creates the layer in an engine (again after a context loss); its id is -1 if that fails */
   attach(engine: Engine): void {
     this.#id = -1;

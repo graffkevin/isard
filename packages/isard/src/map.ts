@@ -529,7 +529,7 @@ export class GeoMap {
     if (index >= 0) this.layers.splice(index, 1);
   }
 
-  private add<L extends Layer>(layer: L): L {
+  private addLayer<L extends Layer>(layer: L): L {
     // On the core engine, a 3D Tiles layer or a model waits for the engine with 3D Tiles: it is created with the
     // others on it
     if (layer.needsFullEngine && !this.tiles3dModule) this.upgrade();
@@ -1051,7 +1051,53 @@ export class GeoMap {
     const { halo = 0, haloOpacity = 0.11, ramp, unreachedColor = 'rgba(140, 140, 140, 0.25)', fade = 0 } = options;
     const style = { width, max, contour, opacity, halo, haloOpacity, ramp, unreachedColor, fade };
     validateNetwork(nodes, edges);
-    return this.add(new NetworkLayer(this, { nodes, edges, lines }, costs, style, edgeWidths));
+    return this.addLayer(new NetworkLayer(this, { nodes, edges, lines }, costs, style, edgeWidths));
+  }
+
+  /**
+   * A layer from its description, as an application's configuration gives it: `{ type, ...options }`, the options of
+   * the `add…` method of that type (`'lines'` for `addLines`, `'tiles3d'` for `addTiles3d`…); `before` to go under
+   * another layer. The layer's `ready` resolves once the map has drawn it
+   */
+  add<P = Record<string, unknown>>(spec: LayerSpec<P>): Layer {
+    switch (spec.type) {
+      case 'lines':
+        return this.addLines<P>(spec);
+      case 'circles':
+        return this.addCircles<P>(spec);
+      case 'fills':
+        return this.addFills<P>(spec);
+      case 'symbols':
+        return this.addSymbols<P>(spec);
+      case 'extrusions':
+        return this.addExtrusions<P>(spec);
+      case 'raster':
+        return this.addRaster(spec);
+      case 'ground':
+        return this.addGround(spec);
+      case 'network':
+        return this.addNetwork(spec);
+      case 'tiles3d':
+        return this.addTiles3d(spec);
+      case 'pointcloud':
+        return this.addPointCloud(spec);
+      case 'models':
+        return this.addModels(spec);
+      default:
+        throw new Error(`isard: no layer of type ${String((spec as { type?: unknown }).type)}`);
+    }
+  }
+
+  /** @internal Resolves once the map is idle (everything in view loaded and drawn) */
+  whenIdle(): Promise<void> {
+    if (this.gone) return Promise.resolve();
+    return new Promise((resolve) => {
+      const off = this.on('idle', () => {
+        off();
+        resolve();
+      });
+      this.requestRender();
+    });
   }
 
   /** Lines from GeoJSON (line strings, and polygon outlines), styled per feature */
@@ -1197,7 +1243,7 @@ export class GeoMap {
 
   /** Adds a layer, under `before` if given */
   private place<L extends Layer>(layer: L, before: Layer | undefined): L {
-    this.add(layer);
+    this.addLayer(layer);
     if (before) this.moveLayer(layer, before);
     return layer;
   }
@@ -1205,7 +1251,7 @@ export class GeoMap {
   /** Textured meshes in 3D Tiles (photogrammetry, buildings), drawn with depth over the basemap */
   addTiles3d(options: Tiles3dOptions): Tiles3dLayer {
     const { url, maxScreenSpaceError = 16, opacity = 1, pointSize, color, geoid = false } = options;
-    return this.add(
+    return this.addLayer(
       new Tiles3dLayer(this, url, geoid, {
         maxScreenSpaceError,
         opacity,
@@ -1416,3 +1462,17 @@ function sendHeaders(engine: Engine, rules: HeaderRules): void {
     rules.flatMap(([, headers]) => Object.entries(headers).flat()),
   );
 }
+
+/** A layer by its type and the options of its `add…` method (`GeoMap.add`) */
+export type LayerSpec<P = Record<string, unknown>> =
+  | ({ type: 'lines' } & LineOptions<P>)
+  | ({ type: 'circles' } & CircleOptions<P>)
+  | ({ type: 'fills' } & FillOptions<P>)
+  | ({ type: 'symbols' } & SymbolOptions<P>)
+  | ({ type: 'extrusions' } & ExtrusionOptions<P>)
+  | ({ type: 'raster' } & RasterOptions & { before?: Layer })
+  | ({ type: 'ground' } & GroundOptions & { before?: Layer })
+  | ({ type: 'network' } & NetworkOptions)
+  | ({ type: 'tiles3d' } & Tiles3dOptions)
+  | ({ type: 'pointcloud' } & PointCloudOptions & { before?: Layer })
+  | ({ type: 'models' } & ModelOptions & { before?: Layer });
