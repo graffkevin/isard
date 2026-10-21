@@ -43,11 +43,13 @@ const rivers = tiles.raster({
 });
 
 const styles = ['positron', 'liberty', 'bright'];
-for (const id of styles) {
+styles.forEach((id) => {
   element(id).onclick = () => {
     map.setBasemap(`osm-${id}` as Basemap);
-    for (const other of styles) element(other).classList.toggle('on', other === id);
+    styles.forEach((other) => {
+      element(other).classList.toggle('on', other === id);
+    });
   };
-}
+});
 element<HTMLInputElement>('rivers').onchange = (e) =>
   rivers.setStyle({ opacity: (e.target as HTMLInputElement).checked ? 1 : 0 });

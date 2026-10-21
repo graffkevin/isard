@@ -64,10 +64,10 @@ map.on('click', ({ lonLat }) => {
   if (lonLat) map.flyTo({ center: lonLat, zoom: 7, pitch: 45 }, { duration: 4000 });
 });
 
-for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-view]')) {
+document.querySelectorAll<HTMLButtonElement>('button[data-view]').forEach((button) => {
   button.addEventListener('click', () => {
     const view = button.dataset.view ?? '';
     history.replaceState(null, '', view === 'globe' ? location.pathname : `#${view}`);
     map.flyTo(views[view] ?? globe, { duration: 5000 });
   });
-}
+});

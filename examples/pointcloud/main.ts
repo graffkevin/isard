@@ -45,12 +45,14 @@ const names: Record<number, string> = {
 };
 
 const modes: PointColor[] = ['classification', 'elevation', 'intensity'];
-for (const mode of modes) {
+modes.forEach((mode) => {
   element(mode).addEventListener('click', () => {
     cloud.setStyle({ colorBy: mode });
-    for (const m of modes) element(m).classList.toggle('on', m === mode);
+    modes.forEach((m) => {
+      element(m).classList.toggle('on', m === mode);
+    });
   });
-}
+});
 element<HTMLInputElement>('edl').addEventListener('change', (e) => {
   cloud.setStyle({ edl: (e.target as HTMLInputElement).checked });
 });

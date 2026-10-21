@@ -30,10 +30,10 @@ map.on('click', ({ point, lonLat }) => {
     return;
   }
   const table = document.createElement('table');
-  for (const [name, value] of Object.entries(hit.feature.properties ?? {})) {
+  Object.entries(hit.feature.properties ?? {}).forEach(([name, value]) => {
     const row = table.insertRow();
     row.insertCell().textContent = name;
     row.insertCell().textContent = typeof value === 'number' ? String(Math.round(value * 1e6) / 1e6) : String(value);
-  }
+  });
   popup.setLonLat(lonLat).setDOMContent(table).addTo(map);
 });

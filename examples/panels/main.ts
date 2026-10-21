@@ -32,9 +32,11 @@ sign.className = 'sign';
 sign.textContent = 'Square Louise-Michel';
 new Panel({ element: sign, width: 30, heading: 340, height: 2 }).setLonLat([2.3433, 48.8848]).addTo(map);
 
-for (const [lonLat, height] of [
-  [[2.3418, 48.8859], 30],
-  [[2.3446, 48.8857], 60],
-] as const) {
+(
+  [
+    [[2.3418, 48.8859], 30],
+    [[2.3446, 48.8857], 60],
+  ] as const
+).forEach(([lonLat, height]) => {
   new Marker({ height }).setLonLat([...lonLat]).addTo(map);
-}
+});

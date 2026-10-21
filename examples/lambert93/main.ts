@@ -58,15 +58,17 @@ map.addSymbols({
   overlap: true,
 });
 
-for (const id of Object.keys(GRIDS) as (keyof typeof GRIDS)[]) {
+(Object.keys(GRIDS) as (keyof typeof GRIDS)[]).forEach((id) => {
   element(id).onclick = () => {
     const opacity = Number(element<HTMLInputElement>('opacity').value);
     raster.remove();
     raster = plan(id);
     raster.setStyle({ opacity });
     raster.moveBefore(boundaries);
-    for (const other of Object.keys(GRIDS)) element(other).classList.toggle('on', other === id);
+    Object.keys(GRIDS).forEach((other) => {
+      element(other).classList.toggle('on', other === id);
+    });
   };
-}
+});
 element<HTMLInputElement>('opacity').oninput = (e) =>
   raster.setStyle({ opacity: Number((e.target as HTMLInputElement).value) });

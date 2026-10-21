@@ -39,16 +39,18 @@ const metres = (a: number[], b: number[]) => {
   const k = Math.cos(((a[1] ?? 0) * Math.PI) / 180);
   return Math.hypot(((b[0] ?? 0) - (a[0] ?? 0)) * k, (b[1] ?? 0) - (a[1] ?? 0)) * 111_320;
 };
-for (const f of roads.features) {
-  if (f.geometry?.type !== 'LineString') continue;
+roads.features.forEach((f) => {
+  if (f.geometry?.type !== 'LineString') return;
   const line = f.geometry.coordinates;
   const [first, last] = [line[0], line.at(-1)];
-  if (!first || !last) continue;
+  if (!first || !last) return;
   edges.push(node(first), node(last));
-  for (const p of line) points.push(p[0], p[1]);
+  line.forEach((p) => {
+    points.push(p[0], p[1]);
+  });
   start.push(points.length / 2);
   lengths.push(line.slice(1).reduce((s, p, i) => s + metres(line[i] ?? p, p), 0));
-}
+});
 const count = nodes.length / 2;
 element('nodes').textContent = count.toLocaleString('en');
 
@@ -76,7 +78,7 @@ for (let e = 0; e < edges.length / 2; e += 1) {
 }
 
 /** Seconds from the node nearest to a point to every node (a plain Dijkstra over a binary heap) */
-function times(lon: number, lat: number): Float32Array {
+const times = (lon: number, lat: number): Float32Array => {
   let source = 0;
   let best = Number.POSITIVE_INFINITY;
   for (let i = 0; i < count; i += 1) {
@@ -120,7 +122,7 @@ function times(lon: number, lat: number): Float32Array {
     }
   }
   return t;
-}
+};
 
 map.on('hover', ({ lonLat }) => {
   if (!lonLat) return;

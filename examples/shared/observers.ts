@@ -46,14 +46,14 @@ const line = (...children: (Node | string)[]) => {
  * or with `surfaces` the observers stand on whatever is drawn under the click or the drag (`map.pickSurface`).
  * `defaults`: the settings of a new observer. Returns the function adding one, its popup open
  */
-export function observers(
+export const observers = (
   map: GeoMap,
   options: {
     standOn?: (at: LonLat) => { metres: number; what: string } | undefined;
     surfaces?: boolean;
     defaults?: Partial<ObserverSettings>;
   } = {},
-): (at: LonLat, settings?: Partial<ObserverSettings>, standing?: number) => void {
+): ((at: LonLat, settings?: Partial<ObserverSettings>, standing?: number) => void) => {
   const all: Observer[] = [];
   let named = 0;
   const opacity = element<HTMLInputElement>('opacity');
@@ -145,7 +145,9 @@ export function observers(
 
     // One popup open at a time
     popup.on('open', () => {
-      for (const other of all) if (other !== observer) other.popup.remove();
+      all.forEach((other) => {
+        if (other !== observer) other.popup.remove();
+      });
     });
     // What it stands on, as the pin moves
     const stand = () => {
@@ -180,8 +182,10 @@ export function observers(
   });
   opacity.addEventListener('input', show);
   element('clear').addEventListener('click', () => {
-    for (const o of all.splice(0)) o.pin.remove();
+    all.splice(0).forEach((o) => {
+      o.pin.remove();
+    });
     show();
   });
   return add;
-}
+};

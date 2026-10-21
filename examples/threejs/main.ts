@@ -77,7 +77,9 @@ map.addCustomLayer({
     const t = still ? 2 : performance.now() / 1000;
     knot.rotation.set(t * 0.6, 0, t * 0.9);
     ring.rotation.z = t * 0.25;
-    for (const cube of ring.children) cube.rotation.set(t, t * 0.7, 0);
+    ring.children.forEach((cube) => {
+      cube.rotation.set(t, t * 0.7, 0);
+    });
     balloon.position.z = 25 + Math.sin(t * 1.5) * 6;
     // The camera's matrix for the scene's frame; three.js forgets the WebGL state the map changed
     camera.projectionMatrix.fromArray(frame.matrixAt(ANCHOR));

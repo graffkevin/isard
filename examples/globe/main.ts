@@ -102,13 +102,15 @@ const show = async (index: number) => {
 };
 
 let current = 0;
-for (const [id, step] of [
-  ['previous', -1],
-  ['next', 1],
-] as const) {
+(
+  [
+    ['previous', -1],
+    ['next', 1],
+  ] as const
+).forEach(([id, step]) => {
   element(id).addEventListener('click', () => {
     current = (current + step + bodies.length) % bodies.length;
     void show(current);
   });
-}
+});
 await show(current);
