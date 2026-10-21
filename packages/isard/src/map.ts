@@ -2,34 +2,21 @@
  * The map: canvas, camera, layers, events, overlays, credits and the frame loop. Frames are drawn on demand only: an
  * idle map costs nothing. Hover events are coalesced to one per frame, so the values computed for a mouse position are
  * drawn in the same frame. The engine's loading is in engine-loader.ts, its settings from the options in settings.ts,
- * the camera animations in animation.ts.
+ * the camera animations in animation.ts; the parts of the map with a state of their own (the drawing order of the
+ * layers, the overlays and controls, the frame loop, the hover picking, the workers…) in map/.
  */
 
-import { BASEMAPS, HILLSHADE, RENAMED_BASEMAPS, SEA } from './basemap/basemaps.ts';
-import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './basemap/grid.ts';
-import { encodedTerrainLoader, type PngEncoding, type RemoteHeights } from './basemap/terrain.ts';
+import { SEA } from './basemap/basemaps.ts';
 import {
-  BasemapWorkers,
-  defaultWorkerCount,
+  type BasemapWorkers,
   defaultWorkerUrl,
   type PmtilesOptions,
   pmtilesLayer,
-  pmtilesRasterLoader,
-  VECTOR_BASEMAPS,
   VectorTiles,
   type VectorTilesOptions,
 } from './basemap/vectortiles.ts';
-import type { TileLoader } from './engine/loader.ts';
-import { type HeaderRules, headerRules, onHeaderRules } from './engine/requests.ts';
-import {
-  destroyedEngine,
-  type EngineClass,
-  engineUrl,
-  loadEngine,
-  loadFullEngineLater,
-  preloadFullEngine,
-  startTileLoader,
-} from './engine-loader.ts';
+import { onHeaderRules } from './engine/requests.ts';
+import { destroyedEngine, type EngineClass, engineUrl, loadEngine } from './engine-loader.ts';
 import { IGN_PRESETS } from './geoplateforme.ts';
 import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './layers/extrusions.ts';
 import {
@@ -44,8 +31,8 @@ import {
   type LineOptions,
   lineStyle,
 } from './layers/features.ts';
-import { Glyphs } from './layers/glyphs.ts';
-import { Icons, type ImageOptions, type Pixels, readPixels } from './layers/icons.ts';
+import type { Glyphs } from './layers/glyphs.ts';
+import type { Icons, ImageOptions, Pixels } from './layers/icons.ts';
 import {
   CustomLayer,
   type CustomLayerInterface,
@@ -58,23 +45,31 @@ import {
   RasterLayer,
   Tiles3dLayer,
 } from './layers/layers.ts';
-import { loadPanoramas, type PanoramaHost, type PanoramaOptions, type Panoramas } from './layers/panoramas.ts';
+import { loadPanoramas, type PanoramaOptions, type Panoramas } from './layers/panoramas.ts';
 import { PointCloudLayer, type PointCloudOptions } from './layers/pointclouds.ts';
 import { SymbolLayer, type SymbolOptions, symbolStyle } from './layers/symbols.ts';
-import {
-  atmosphereSettings,
-  bodySettings,
-  haloSettings,
-  rgb,
-  type Settings,
-  type TerrainLoader,
-  terrainSettings,
-} from './settings.ts';
+import { BasemapLayers } from './map/basemap-layers.ts';
+import { createCanvas, labelCanvas, watchContext, watchPixelRatio } from './map/canvas.ts';
+import { checkBasemap, report, validateNetwork } from './map/checks.ts';
+import { Credits } from './map/credits.ts';
+import { mapSettings, sendHeaders } from './map/engine-settings.ts';
+import { MapEngines } from './map/engines.ts';
+import { MapListeners } from './map/events.ts';
+import { FrameLoop } from './map/frame-loop.ts';
+import { HoverPick, type HoverPicking } from './map/hover-pick.ts';
+import { addSpec, type LayerSpec } from './map/layer-spec.ts';
+import { LayerStack } from './map/layer-stack.ts';
+import { OverlayHost } from './map/overlay-host.ts';
+import { panoramaHost } from './map/panorama-host.ts';
+import { rasterSource } from './map/raster-source.ts';
+import { SymbolAtlases } from './map/symbol-atlases.ts';
+import { applyViewshed } from './map/viewshed.ts';
+import { MapWorkers } from './map/workers.ts';
+import { atmosphereSettings, rgb, type Settings, terrainSettings } from './settings.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
   Basemap,
-  BasemapName,
   CelestialBody,
   FeatureHit,
   FirstPersonView,
@@ -96,154 +91,64 @@ import type {
 import { AttributionControl, type Control, type ControlPosition } from './ui/controls.ts';
 import { Interaction } from './ui/interaction.ts';
 import type { Positioned } from './ui/overlay.ts';
-import { injectStyle } from './ui/style.ts';
 import { easeTo, flyTo, type Step } from './util/animation.ts';
-import type { Camera, Engine, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
+import type { Camera, Engine, PickHit, RasterLayerStats } from './wasm/isard.js';
 
-/** Reports an error without throwing it here: the console shows it, as an uncaught one */
-const report = (error: unknown): void => {
-  if (typeof reportError === 'function') reportError(error);
-  else
-    queueMicrotask(() => {
-      throw error;
-    });
-};
-
-type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
-
-/** Checks a network's arrays before the engine reads them: node index pairs, indices of existing nodes */
-const validateNetwork = (nodes: Float64Array, edges: Uint32Array): void => {
-  if (nodes.length % 2 !== 0) throw new Error(`isard: network nodes must be lon, lat pairs (length ${nodes.length})`);
-  if (edges.length % 2 !== 0) throw new Error(`isard: network edges must be node index pairs (length ${edges.length})`);
-
-  const count = nodes.length / 2;
-
-  for (let i = 0; i < edges.length; i += 1) {
-    const node = edges[i] as number;
-
-    if (node >= count) throw new Error(`isard: network edge ${i >> 1} refers to node ${node}, of ${count} nodes`);
-  }
-};
-
-/** The observers of a viewshed option: none, one, or several */
-const observersOf = (options: ViewshedOptions | readonly ViewshedOptions[] | undefined): readonly ViewshedOptions[] => {
-  if (!options) return [];
-
-  return 'position' in options ? [options] : options;
-};
-
-const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
-
-/** Frames the hover picking waits for its answer at most (usually one) */
-const MAX_POLLS = 30;
-
-/** The name of a basemap, checked: an unknown one throws */
-const checkBasemap = (basemap: Basemap): BasemapName => {
-  const renamed = RENAMED_BASEMAPS[basemap];
-
-  if (renamed) throw new Error(`isard: the basemap '${basemap}' is now named '${renamed}'`);
-  if (basemap !== 'none' && !(basemap in VECTOR_BASEMAPS) && !(basemap in BASEMAPS)) {
-    throw new Error(`isard: unknown basemap '${basemap}'`);
-  }
-
-  return basemap;
-};
+export type { LayerSpec } from './map/layer-spec.ts';
 
 /** A map (see `GeoMap.create`); layers take it as their host */
 export class GeoMap {
   readonly canvas: HTMLCanvasElement;
-  #glyphs: Glyphs | undefined;
-  #icons: Icons | undefined;
-  /** Layers new layers go under */
-  private readonly onTop = new Set<Layer>();
-  /** The vector basemap, if any: its tiles' workers and its labels */
-  private vector: { tiles: VectorTiles; labels: SymbolLayer<unknown> } | undefined;
-  private readonly glyphsUrl: string | undefined;
-  private readonly basemapWorkerUrl: string | URL;
-  /** Texture size of the vector basemap's tiles */
-  private readonly basemapTileSize: number | undefined;
-  private readonly container: HTMLElement;
-  /** Markers and popups, over the canvas */
-  private readonly overlay: HTMLDivElement;
-  private readonly corners: Record<ControlPosition, HTMLDivElement>;
-  private readonly controls = new Map<Control, HTMLElement>();
-  private readonly positioned = new Set<Positioned>();
-  /** Canvas size in CSS pixels, kept on resize so placing overlays never reads the layout */
-  private size: Point = [0, 0];
   #engine: Engine;
-  /** Layers in drawing order (bottom first), to recreate them after a context loss */
-  private readonly layers: Layer[] = [];
+  /** The engine class (core, or with 3D Tiles) and the engine with 3D Tiles loaded when needed */
+  private readonly engines: MapEngines;
+  /** The layers in drawing order and those kept on top */
+  private readonly stack = new LayerStack(() => this.#engine);
+  /** The basemap and the hillshade */
+  private readonly basemaps: BasemapLayers;
+  /** The glyphs and icons of the symbol layers */
+  private readonly atlases: SymbolAtlases;
+  /** The workers of the vector tiles, the relief and the reprojected rasters */
+  private readonly workers: MapWorkers;
+  private readonly container: HTMLElement;
+  /** The canvas in the container, the markers and popups over it, the controls in its corners */
+  private readonly overlays: OverlayHost;
   private readonly settings: Settings;
   /** The WebGL context is lost: nothing is drawn until it is restored */
   private lost = false;
-  private readonly listeners: Listeners = {
-    movestart: new Set(),
-    move: new Set(),
-    moveend: new Set(),
-    resize: new Set(),
-    hover: new Set(),
-    hoverfeature: new Set(),
-    click: new Set(),
-    render: new Set(),
-    idle: new Set(),
-    leave: new Set(),
-  };
+  private gone = false;
+  private readonly listeners = new MapListeners();
+  /** Frames drawn on demand, with their events */
+  private readonly frames: FrameLoop;
   private readonly resizeObserver: ResizeObserver;
   private readonly interaction: Interaction | undefined;
-  private loader: TileLoader | undefined;
-  /** The class of the engine: without 3D Tiles until a 3D Tiles layer is added, unless asked for from the start */
-  private engineClass: EngineClass;
-  /** The module of the engine with 3D Tiles once it runs this map (the decoding workers run it too) */
-  private tiles3dModule: WebAssembly.Module | undefined;
-  /** The engine with 3D Tiles is loading, for the 3D Tiles layers added on the core engine */
-  private upgrading: Promise<void> | undefined;
-  /** What loading the engine with 3D Tiles and its workers needs */
-  private readonly tiles3dOptions: Pick<
-    GeoMapOptions,
-    'wasmUrl' | 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl' | 'assetsUrl'
-  >;
-  private gone = false;
   /** The map is of the Earth: a basemap by default */
   private readonly earth: boolean;
   /** The body, as the option named it */
   private readonly body: CelestialBody | undefined;
-  private basemap: RasterLayer | undefined;
-  private hillshade: RasterLayer | undefined;
-  /** Called when the credits of the layers or relief change (the attribution controls) */
-  private readonly attributionListeners = new Set<() => void>();
-  /** Credits of the raster layers that have some (basemaps, hillshade, the Géoplateforme's rasters…) */
-  private readonly rasterCredits = new Map<object, string>();
-  private animation: Step | undefined;
-  private hoverPoint: Point | undefined;
-  /** Frame polling the engine for the answer of the hover picking, 0 if none */
-  private hoverPoll = 0;
-  /** Polls of the hover picking under way: given up after `MAX_POLLS` (an answer that never comes) */
-  private hoverPolls = 0;
+  /** Credits of the raster layers that have some, and the attribution controls told when they change */
+  private readonly credits = new Credits();
+  /** The picking for 'hoverfeature', its answer emitted on a later frame */
+  private readonly hoverPick = new HoverPick(
+    () => this.engine,
+    () => this.lost,
+    (result) =>
+      this.emit('hoverfeature', {
+        point: [result.x, result.y],
+        lonLat: result.lonLat,
+        hit: result.hit && this.featureHit(result.hit),
+      }),
+  );
   /** What 'hoverfeature' looks for: within `radius` CSS pixels, in `layers` only if given */
-  hoverPicking: { radius?: number; layers?: readonly Layer[] } = {};
-  private frameRequest = 0;
-  private lastCamera = '';
-  /** The camera moved since the last 'moveend' */
-  private moving = false;
-  /** The last frame found everything loaded ('idle' sent) */
-  private settled = false;
-  private inFrame = false;
-  /** The camera of the frame being drawn: what `getCamera` gives the custom layers while the engine is busy */
-  private frameCamera: Camera | undefined;
+  hoverPicking: HoverPicking = {};
   /** Vector tiles made by `vectorTiles()`, destroyed with the map */
   private readonly vectorSets = new Set<VectorTiles>();
-  /** The workers drawing vector tiles, shared by every `VectorTiles` of the map; created on first use */
-  private basemapPool: BasemapWorkers | undefined;
   /** Stops watching the device pixel ratio */
-  private unwatchRatio: (() => void) | undefined;
+  private readonly unwatchRatio: () => void;
   /** Stops following the page's request headers (`setRequestHeaders`) */
   private unwatchHeaders: () => void = () => undefined;
   /** Stops listening to the canvas's context loss and restoration */
   private readonly unwatchContext: () => void;
-
-  /** The loaders of the relief by encoding, URL and floor: the same loader for the same tiles (the engine keeps its
-   * tiles when only the exaggeration changes) */
-  private readonly terrainLoaders = new Map<string, TerrainLoader>();
 
   /** Loads the engine (once per page) and creates a map filling `container` */
   static async create(container: HTMLElement, given: GeoMapOptions = {}): Promise<GeoMap> {
@@ -270,73 +175,48 @@ export class GeoMap {
     engineClass: EngineClass,
     tiles3dModule: WebAssembly.Module | undefined,
   ) {
-    this.engineClass = engineClass;
-    this.tiles3dModule = tiles3dModule;
-    this.tiles3dOptions = { ...options };
-    this.glyphsUrl = options.glyphs;
-    this.basemapWorkerUrl = options.basemapWorkerUrl ?? defaultWorkerUrl(options.assetsUrl);
-    this.basemapTileSize = options.basemapTileSize;
+    this.engines = new MapEngines(engineClass, tiles3dModule, options, () => this.gone);
+
+    const workerUrl = options.basemapWorkerUrl ?? defaultWorkerUrl(options.assetsUrl);
+
+    this.workers = new MapWorkers(workerUrl, options.workers, () => this.gone, this);
+    this.basemaps = new BasemapLayers(this, this.stack, workerUrl, options.basemapTileSize);
     this.container = container;
-    this.canvas = document.createElement('canvas');
-    Object.assign(this.canvas.style, { display: 'block', width: '100%', height: '100%', touchAction: 'none' });
-    // Overlays and controls are positioned against the container
-    injectStyle(container.ownerDocument);
-    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
-    container.classList.add('isard-map');
-    this.overlay = document.createElement('div');
-    this.overlay.className = 'isard-overlay';
-
-    const corner = (position: ControlPosition) => {
-      const element = document.createElement('div');
-
-      element.className = `isard-ctrl-${position}`;
-
-      return element;
-    };
-
-    this.corners = {
-      'top-left': corner('top-left'),
-      'top-right': corner('top-right'),
-      'bottom-left': corner('bottom-left'),
-      'bottom-right': corner('bottom-right'),
-    };
-    container.append(this.canvas, this.overlay, ...CORNERS.map((position) => this.corners[position]));
+    this.canvas = createCanvas();
+    this.atlases = new SymbolAtlases(this.canvas, options.glyphs, () => this.#engine);
+    this.overlays = new OverlayHost(container, this.canvas, this);
     this.earth = (options.body ?? 'earth') === 'earth';
     this.body = options.body;
-
-    const body = bodySettings(options.body);
-
-    this.settings = {
-      body,
-      zoomRange: [options.minZoom ?? 0, options.maxZoom ?? 22],
-      maxPitch: options.maxPitch ?? 70,
-      globe: (options.projection ?? 'globe') === 'globe',
-      sky: options.sky ?? true,
-      atmosphere: atmosphereSettings(options.atmosphere),
-      terrain: terrainSettings(options.terrain, options.body, body.radius, this.terrainLoader),
-      loading: options.loading ?? 'immediate',
-      background: rgb(options.background ?? (this.earth ? '#f2f2f0' : '#000000')),
-      globeColor: this.earth ? SEA['osm-positron'] : rgb(body.color),
-    };
+    this.settings = mapSettings(options, this.earth, this.workers.terrainLoader);
+    this.frames = new FrameLoop(
+      {
+        engine: () => this.engine,
+        camera: () => this.getCamera(),
+        lost: () => this.lost,
+        interacting: () => this.interaction?.active === true,
+        customLayers: () => this.layers.some((layer) => layer instanceof CustomLayer),
+        upgrading: () => this.engines.upgrading !== undefined,
+        drawn: (hovered) => {
+          // The picking pass sees the frame just drawn; its answer comes on a later frame
+          if (hovered && this.listeners.has('hoverfeature')) this.hoverPick.request(hovered, this.hoverPicking);
+          // Overlays follow the frame just drawn
+          this.overlays.positionAll();
+        },
+      },
+      this.listeners,
+    );
     this.#engine = this.createEngine();
     // Once it has an engine: a map whose creation failed before is not left following them
     this.unwatchHeaders = onHeaderRules((rules) => sendHeaders(this.#engine, rules));
-
     // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
-    const lost = (event: Event) => {
-      event.preventDefault();
-      this.lost = true;
-      cancelAnimationFrame(this.frameRequest);
-      this.frameRequest = 0;
-    };
-    const restored = () => this.restore();
-
-    this.canvas.addEventListener('webglcontextlost', lost);
-    this.canvas.addEventListener('webglcontextrestored', restored);
-    this.unwatchContext = () => {
-      this.canvas.removeEventListener('webglcontextlost', lost);
-      this.canvas.removeEventListener('webglcontextrestored', restored);
-    };
+    this.unwatchContext = watchContext(
+      this.canvas,
+      () => {
+        this.lost = true;
+        this.frames.cancel();
+      },
+      () => this.restore(),
+    );
 
     const start: Camera = this.earth
       ? { center: [2.4246, 48.8457], zoom: 13, pitch: 0, bearing: 0 }
@@ -346,19 +226,14 @@ export class GeoMap {
     this.setBasemap(options.basemap ?? (this.earth ? 'osm-positron' : 'none'), options.hillshade ?? 0);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
-    this.watchRatio();
+    this.unwatchRatio = watchPixelRatio(() => this.resize());
     this.resize();
 
     const interactive = options.interactive ?? true;
     const keyboard = interactive && (options.keyboard ?? true);
 
     this.interaction = interactive ? new Interaction(this, { keyboard }) : undefined;
-    // Reached with Tab when the keys move it; named for screen readers either way
-    this.canvas.classList.add('isard-canvas');
-    this.canvas.setAttribute('role', keyboard ? 'application' : 'region');
-    this.canvas.setAttribute('aria-roledescription', 'map');
-    this.canvas.setAttribute('aria-label', options.ariaLabel ?? 'Map');
-    if (keyboard) this.canvas.tabIndex = 0;
+    labelCanvas(this.canvas, keyboard, options.ariaLabel ?? 'Map');
 
     const attribution = options.attributionControl ?? true;
 
@@ -381,52 +256,30 @@ export class GeoMap {
     return this.#engine;
   }
 
-  private createEngine(): Engine {
-    const engine = new this.engineClass(this.canvas, () => this.requestRender());
-    // The body first: the layers' shaders may take its size
-    const { radius, flattening, atmosphere: air, relief } = this.settings.body;
-
-    engine.setBody(radius, flattening, haloSettings(air), ...relief);
-    sendHeaders(engine, headerRules());
-
-    const { zoomRange, maxPitch, globe, sky, atmosphere, terrain, loading, background, globeColor } = this.settings;
-
-    engine.setZoomRange(...zoomRange);
-    engine.setMaxPitch(maxPitch);
-    engine.setGlobe(globe);
-    engine.setSky(sky);
-    engine.setAtmosphere(atmosphere);
-    engine.setTerrain(terrain?.url, terrain?.exaggeration ?? 1, terrain?.maxZoom, terrain?.geoid, terrain?.loader);
-    engine.setImmediateLoading(loading === 'immediate');
-    engine.setBackground(...background);
-    engine.setGlobeColor(...globeColor);
-    this.loader ??= this.startLoader(engine);
-    if (this.loader) engine.setTileLoader(this.loader);
-
-    return engine;
+  /** Layers in drawing order (bottom first) */
+  private get layers(): readonly Layer[] {
+    return this.stack.layers;
   }
 
-  /** The decoding workers of 3D Tiles, with the engine that has them (they run its module) and unless turned off */
-  private startLoader(engine: Engine): TileLoader | undefined {
-    return this.tiles3dModule && startTileLoader(this.tiles3dModule, this.tiles3dOptions, engine);
+  /** Layers new layers go under */
+  private get onTop(): Set<Layer> {
+    return this.stack.onTop;
+  }
+
+  private createEngine(): Engine {
+    return this.engines.create(this.canvas, () => this.requestRender(), this.settings);
   }
 
   /** A 3D Tiles layer or a model on the core engine: loads the engine with 3D Tiles, then rebuilds the map on it
    * (camera, settings and layers kept, as after a context loss); the layer is created then */
   private upgrade(): void {
-    this.upgrading ??= loadFullEngineLater(engineUrl('full', this.tiles3dOptions)).then(
-      ({ module, Engine }) => {
-        this.upgrading = undefined;
-        if (this.gone) return;
-        this.engineClass = Engine;
-        this.tiles3dModule = module;
+    this.engines.upgrade(
+      () => {
         // A lost context: the engine is rebuilt on it once restored
         if (!this.lost) this.restore();
       },
-      (error: unknown) => {
+      (error) => {
         // The 3D Tiles layers stay empty; the next one added tries again
-        this.upgrading = undefined;
-        if (this.gone) return;
         report(error);
         this.requestRender();
       },
@@ -436,14 +289,11 @@ export class GeoMap {
   /** Downloads and compiles the engine with 3D Tiles once the map is idle (`tiles3d: 'preload'`), without running
    * it: the first 3D Tiles layer then only instantiates it */
   private preloadTiles3d(): void {
-    const url = engineUrl('full', this.tiles3dOptions);
-    const later = () => preloadFullEngine(url, () => !this.gone && !this.tiles3dModule);
-
-    if (this.settled) later();
+    if (this.frames.settled) this.engines.preload();
     else {
       const off = this.on('idle', () => {
         off();
-        later();
+        this.engines.preload();
       });
     }
   }
@@ -451,7 +301,7 @@ export class GeoMap {
   /** After a context loss: a new engine with the same camera, settings and layers (same handles, same order) */
   private restore(): void {
     if (this.gone) return;
-    this.cancelHoverPick();
+    this.hoverPick.cancel();
 
     const camera = this.getCamera();
 
@@ -459,34 +309,9 @@ export class GeoMap {
     this.#engine = this.createEngine();
     this.lost = false;
     this.setCamera(camera);
-    this.#glyphs?.attach(this.#engine);
-    this.#icons?.attach(this.#engine);
-
-    const engine = this.#engine;
-
-    // No layer refers to an id of the old engine while the others are created
-    this.layers.forEach((layer) => {
-      layer.forgetEngine();
-    });
-    this.layers.forEach((layer) => {
-      // Still waiting for the engine with 3D Tiles (loading, or failed): created with it
-      if (layer.needsFullEngine && !this.tiles3dModule) return;
-      // A layer that fails is reported and left out; the others are created
-      try {
-        layer.attach(engine);
-      } catch (error) {
-        report(error);
-      }
-    });
-    // Links between layers, once every layer has its new id (buildings colored by a network above them)
-    this.layers.forEach((layer) => {
-      if (layer.id < 0) return;
-      try {
-        layer.relink(engine);
-      } catch (error) {
-        report(error);
-      }
-    });
+    this.atlases.attach(this.#engine);
+    // Those still waiting for the engine with 3D Tiles (loading, or failed) are created with it
+    this.stack.reattach(this.#engine, (layer) => layer.needsFullEngine && !this.engines.tiles3d);
     this.applySwipe();
     // A street-level eye stays one in the new engine
     if (this.#firstPerson) this.setFirstPerson(this.#firstPerson);
@@ -563,34 +388,22 @@ export class GeoMap {
 
   /** @internal Forgets a removed layer */
   detach(layer: object): void {
-    this.unlist(layer);
-    this.onTop.delete(layer as Layer);
-    if (this.rasterCredits.delete(layer)) this.attributionChanged();
+    this.stack.forget(layer);
+    this.credits.forget(layer);
   }
 
   /** @internal The layer is on the map */
   hasLayer(layer: object): boolean {
-    return !this.gone && this.layers.includes(layer as Layer);
-  }
-
-  /** Takes a layer out of the drawing order (to put it back elsewhere, or for good) */
-  private unlist(layer: object): void {
-    const index = this.layers.indexOf(layer as Layer);
-
-    if (index >= 0) this.layers.splice(index, 1);
+    return !this.gone && this.stack.has(layer);
   }
 
   private addLayer<L extends Layer>(layer: L): L {
     // On the core engine, a 3D Tiles layer or a model waits for the engine with 3D Tiles: it is created with the
     // others on it
-    if (layer.needsFullEngine && !this.tiles3dModule) this.upgrade();
+    if (layer.needsFullEngine && !this.engines.tiles3d) this.upgrade();
     else layer.attach(this.engine);
-    this.layers.push(layer);
-
     // Under the layers kept on top (the basemap's labels)
-    const top = this.layers.find((l) => this.onTop.has(l) && l !== layer);
-
-    if (top) this.moveLayer(layer, top);
+    this.stack.add(layer);
     this.requestRender();
 
     return layer;
@@ -603,61 +416,25 @@ export class GeoMap {
 
   /** @internal Moves a layer under `before`, or on top of all */
   moveLayer(layer: object, before: object | undefined): void {
-    const handle = layer as Layer;
-
-    this.unlist(handle);
-
-    const index = before ? this.layers.indexOf(before as Layer) : -1;
-    const at = index < 0 ? this.layers.length : index;
-
-    this.layers.splice(at, 0, handle);
-    if (handle.id >= 0) this.engine.moveLayer(handle.id, this.engineIndex(at));
+    this.stack.move(layer, before);
     this.requestRender();
   }
 
   /** @internal See `LayerHost.replaceLayer` */
   replaceLayer(layer: object, old: number): void {
-    this.engine.removeLayer(old);
-
-    const index = this.layers.indexOf(layer as Layer);
-
-    if (index >= 0) this.engine.moveLayer((layer as Layer).id, this.engineIndex(index));
-  }
-
-  /** Index in the engine of the layer at `index`: the layers waiting for the engine with 3D Tiles are not in it yet */
-  private engineIndex(index: number): number {
-    return this.layers.slice(0, index).filter((layer) => layer.id >= 0).length;
-  }
-
-  /** Moves a layer under all the others */
-  private toBottom(layer: Layer): void {
-    this.engine.moveLayer(layer.id, 0);
-    this.unlist(layer);
-    this.layers.unshift(layer);
+    this.stack.replace(layer, old);
   }
 
   // ── Events ──
 
   /** Listens to an event; returns the function that stops listening */
   on<K extends keyof MapEvents>(type: K, listener: (event: MapEvents[K]) => void): () => void {
-    const listeners: Set<(event: MapEvents[K]) => void> = this.listeners[type];
-
-    listeners.add(listener);
-
-    return () => listeners.delete(listener);
+    return this.listeners.on(type, listener);
   }
 
   /** @internal Calls the listeners; one that throws is reported and does not stop the others nor the frame */
   emit<K extends keyof MapEvents>(type: K, event: MapEvents[K]): void {
-    const listeners: Set<(event: MapEvents[K]) => void> = this.listeners[type];
-
-    listeners.forEach((listener) => {
-      try {
-        listener(event);
-      } catch (error) {
-        report(error);
-      }
-    });
+    this.listeners.emit(type, event);
   }
 
   // ── Camera ──
@@ -698,7 +475,7 @@ export class GeoMap {
   } as const;
 
   getCamera(): Camera {
-    return this.frameCamera ?? this.engine.camera();
+    return this.frames.camera ?? this.engine.camera();
   }
 
   setCamera(camera: Partial<Camera>): void {
@@ -785,76 +562,39 @@ export class GeoMap {
     this.requestRender();
   }
 
+  /** The viewshed set, set again in a new engine */
+  private viewshed: ViewshedOptions | readonly ViewshedOptions[] | undefined;
+
   /** Tints what can be seen from a point and what is hidden from it, within a range, all around or within a cone
    * (`direction`): the relief, extrusions, 3D Tiles and models hide what lies behind them (only what the map has
    * loaded for its view). Several observers (16 at most): what any of them sees is seen, what is hidden from all those
    * that reach it is hidden, in the colors and opacity of the first. Undefined or none removes it */
-  /** The viewshed set, set again in a new engine */
-  private viewshed: ViewshedOptions | readonly ViewshedOptions[] | undefined;
-
   setViewshed(options: ViewshedOptions | readonly ViewshedOptions[] | undefined): void {
     this.viewshed = options;
-
-    const observers = observersOf(options);
-    const [first] = observers;
-
-    if (!first) {
-      this.engine.clearViewshed();
-
-      return;
-    }
-    this.engine.setViewshed(
-      new Float64Array(
-        observers.flatMap((o) => [
-          o.position[0],
-          o.position[1],
-          o.height ?? 1.7,
-          o.range ?? 1000,
-          ...(o.direction === undefined
-            ? [Number.NaN, 0, 0, 0]
-            : [o.direction, o.tilt ?? 0, o.fov ?? 60, o.verticalFov ?? 40]),
-        ]),
-      ),
-      new Float32Array(rgb(first.visibleColor ?? '#2f9e44')),
-      new Float32Array(rgb(first.hiddenColor ?? '#e03131')),
-      first.opacity ?? 0.7,
-      new Float32Array(first.coneColor ? rgb(first.coneColor) : []),
-    );
-    this.requestRender();
+    if (applyViewshed(this.engine, options)) this.requestRender();
   }
 
   /** Relief under the basemap: true for the body's terrain model (on the Earth the worldwide Terrain Tiles, NASA's
    * on the Moon and Mars), one of the Earth's models by name (`'ign'`), its options, or false; on another body, its
    * options with a `url` */
   setTerrain(terrain: boolean | TerrainModel | TerrainOptions): void {
-    this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius, this.terrainLoader);
+    this.settings.terrain = terrainSettings(terrain, this.body, this.settings.body.radius, this.workers.terrainLoader);
 
     const t = this.settings.terrain;
 
     this.engine.setTerrain(t?.url, t?.exaggeration ?? 1, t?.maxZoom, t?.geoid, t?.loader);
-    this.attributionChanged();
+    this.credits.changed();
     this.requestRender();
   }
 
   /** @internal The credits of the raster layers (the basemap first) and of the relief in use, each once */
   attributions(): string[] {
-    const layers = this.layers.map((layer) => this.rasterCredits.get(layer));
-    const credits = [...layers, this.settings.terrain?.attribution];
-
-    return [...new Set(credits.filter((c): c is string => c !== undefined))];
+    return this.credits.of(this.layers, this.settings.terrain?.attribution);
   }
 
   /** @internal Calls `listener` when the credits change; returns what stops it */
   onAttributionChange(listener: () => void): () => void {
-    this.attributionListeners.add(listener);
-
-    return () => this.attributionListeners.delete(listener);
-  }
-
-  private attributionChanged(): void {
-    this.attributionListeners.forEach((listener) => {
-      listener();
-    });
+    return this.credits.onChange(listener);
   }
 
   /** Color behind the map, a CSS color (its alpha ignored) */
@@ -905,47 +645,6 @@ export class GeoMap {
     return { layer, index: hit.index, feature };
   }
 
-  /** Asks the engine what is under the pointer; its answer, read without waiting for the GPU, comes on a later frame */
-  private requestHoverPick(point: Point): void {
-    const { radius = 0, layers } = this.hoverPicking;
-    const only = layers && Uint32Array.from(layers.map((l) => l.id));
-
-    // The engine cannot pick (no request in flight): the poll under way would wait for nothing
-    if (!this.engine.requestPick(point[0], point[1], radius, only)) {
-      this.cancelHoverPick();
-
-      return;
-    }
-    // A new request replaces the one in flight (in the engine too): one poll loop at most
-    this.hoverPolls = 0;
-    if (!this.hoverPoll) this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
-  }
-
-  private readonly pollHoverPick = (): void => {
-    this.hoverPoll = 0;
-    if (this.lost) return;
-
-    const result: PickResult | undefined = this.engine.pollPick();
-
-    if (!result) {
-      // The GPU is not done yet (usually a frame): asked again next frame, without drawing; given up at last
-      this.hoverPolls += 1;
-      if (this.hoverPolls < MAX_POLLS) this.hoverPoll = requestAnimationFrame(this.pollHoverPick);
-
-      return;
-    }
-    this.emit('hoverfeature', {
-      point: [result.x, result.y],
-      lonLat: result.lonLat,
-      hit: result.hit && this.featureHit(result.hit),
-    });
-  };
-
-  private cancelHoverPick(): void {
-    cancelAnimationFrame(this.hoverPoll);
-    this.hoverPoll = 0;
-  }
-
   /** Screen point (CSS pixels) of a position on the ground (the relief), or `height` metres above it, undefined
    * behind the camera */
   project(lonLat: LonLat, height = 0): Point | undefined {
@@ -963,43 +662,14 @@ export class GeoMap {
    */
   async addPanoramas(options: PanoramaOptions): Promise<Panoramas> {
     // Drawn by the engine with 3D Tiles: loaded first if needed
-    if (!this.tiles3dModule) {
+    if (!this.engines.tiles3d) {
       this.upgrade();
-      await this.upgrading;
-      if (!this.tiles3dModule) throw new Error('isard: panoramas need the engine with 3D Tiles, which failed to load');
+      await this.engines.upgrading;
+      if (!this.engines.tiles3d)
+        throw new Error('isard: panoramas need the engine with 3D Tiles, which failed to load');
     }
 
-    const host: PanoramaHost = {
-      setPanorama: (...args) => {
-        this.engine.setPanorama(...args);
-        this.requestRender();
-      },
-      setPanoramaImage: (index, image) => this.engine.setPanoramaImage(index, image),
-      clearPanorama: () => this.engine.clearPanorama(),
-      geoidHeight: (lon, lat) => this.engineClass.geoidHeight(lon, lat),
-      firstPerson: () => this.firstPerson,
-      setFirstPerson: (view) => this.setFirstPerson(view),
-      elevationAt: (lonLat) => this.elevationAt(lonLat),
-      listen: (click, key, wheel) => {
-        const off = this.on('click', ({ lonLat }) => click(lonLat));
-        const container = this.getContainer();
-        // Before the map's own wheel (its zoom, the eye's field of view)
-        const onWheel = (e: WheelEvent) => {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          wheel(e);
-        };
-
-        container.addEventListener('keydown', key);
-        container.addEventListener('wheel', onWheel, { capture: true, passive: false });
-
-        return () => {
-          off();
-          container.removeEventListener('keydown', key);
-          container.removeEventListener('wheel', onWheel, { capture: true });
-        };
-      },
-    };
+    const host = panoramaHost(this, (lon, lat) => this.engines.geoidHeight(lon, lat));
     const panoramas = await loadPanoramas(host, options);
 
     this.panoramaSets.add(panoramas);
@@ -1058,46 +728,30 @@ export class GeoMap {
 
   /** Adds a control in a corner of the map; controls stack from the corner inward */
   addControl(control: Control, position: ControlPosition = 'top-right'): this {
-    if (this.controls.has(control)) return this;
-
-    const element = control.onAdd(this);
-
-    element.classList.add('isard-ctrl');
-    // In the bottom corners the first control added stays lowest, as in MapLibre
-    if (position.startsWith('bottom')) this.corners[position].prepend(element);
-    else this.corners[position].append(element);
-    this.controls.set(control, element);
+    this.overlays.addControl(control, position);
 
     return this;
   }
 
   removeControl(control: Control): this {
-    const element = this.controls.get(control);
-
-    if (!element) return this;
-    this.controls.delete(control);
-    control.onRemove(this);
-    element.remove();
+    this.overlays.removeControl(control);
 
     return this;
   }
 
   /** @internal Shows a marker or popup, placed after every frame from now on */
   attachOverlay(item: Positioned, element: HTMLElement): void {
-    this.overlay.append(element);
-    this.positioned.add(item);
-    item.position(this.size);
+    this.overlays.attach(item, element);
   }
 
   /** @internal */
   detachOverlay(item: Positioned, element: HTMLElement): void {
-    this.positioned.delete(item);
-    element.remove();
+    this.overlays.detach(item, element);
   }
 
   /** @internal Places one overlay now (it moved), without drawing a frame */
   positionOverlay(item: Positioned): void {
-    if (this.positioned.has(item)) item.position(this.size);
+    this.overlays.position(item);
   }
 
   // ── Layers ──
@@ -1107,79 +761,25 @@ export class GeoMap {
   setBasemap(basemap: Basemap, hillshade = 0): void {
     const name = checkBasemap(basemap);
 
-    if (this.basemap && this.hasLayer(this.basemap)) this.basemap.remove();
-    if (this.hillshade && this.hasLayer(this.hillshade)) this.hillshade.remove();
-    // Its raster and labels go with it
-    this.vector?.tiles.destroy();
-    this.vector = undefined;
-
-    const vector = VECTOR_BASEMAPS[name as keyof typeof VECTOR_BASEMAPS];
-
-    if (vector) {
-      const tiles = new VectorTiles(this, {
-        style: vector,
-        ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
-      });
-
-      this.basemap = tiles.raster(this.basemapTileSize ? { size: this.basemapTileSize } : {});
-      this.vector = { tiles, labels: tiles.labels() as SymbolLayer<unknown> };
-    } else {
-      this.basemap = name === 'none' ? undefined : this.addRaster(BASEMAPS[name as keyof typeof BASEMAPS]);
-    }
+    this.basemaps.replace(name);
     // Off the Earth, the body's own color
     if (this.earth) this.settings.globeColor = SEA[name];
     this.engine.setGlobeColor(...this.settings.globeColor);
-    this.hillshade = hillshade > 0 ? this.addRaster({ ...HILLSHADE, opacity: hillshade }) : undefined;
-    if (this.hillshade) this.toBottom(this.hillshade);
-    if (this.basemap) this.toBottom(this.basemap);
-    this.attributionChanged();
+    this.basemaps.addHillshade(hillshade);
+    this.credits.changed();
   }
 
   /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from another `grid`: longitudes and latitudes,
    * Lambert-93, UTM…), over the layers already added */
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
     const { url, opacity = 1, saturation = 1, size, before } = options;
-    const { loader, minZoom, maxZoom } = this.rasterSource(options);
+    const { loader, minZoom, maxZoom } = rasterSource(options, this.workers.remoteReprojection);
     const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader });
 
     this.place(layer, before);
-    if (options.attribution) {
-      this.rasterCredits.set(layer, options.attribution);
-      this.attributionChanged();
-    }
+    if (options.attribution) this.credits.set(layer, options.attribution);
 
     return layer;
-  }
-
-  /** The loader of a raster layer's tiles and its zooms: a PMTiles archive, or tiles reprojected from another grid */
-  private rasterSource(options: RasterOptions) {
-    const { url, grid = 'mercator', size } = options;
-    const { minZoom = 0, maxZoom = 19 } = options;
-    // A PMTiles archive (`pmtiles://…`): its tiles read by range requests
-    const loader = options.loader ?? pmtilesRasterLoader(url, size ?? 256);
-
-    if (grid === 'mercator' || loader) return { loader, minZoom, maxZoom };
-    if (grid === 'equirectangular') {
-      // `minZoom` and `maxZoom` are levels of the source: its level n has the pixel size of Mercator level n + 1 at
-      // the equator
-      const reprojected = gridLoader(
-        url,
-        resolveGrid(equirectangularGrid(minZoom, maxZoom)),
-        size ?? 256,
-        this.remoteReprojection,
-      );
-
-      return { loader: reprojected, minZoom: minZoom + 1, maxZoom: maxZoom + 1 };
-    }
-
-    const resolved = resolveGrid(grid);
-    const zooms = gridZooms(resolved);
-
-    return {
-      loader: gridLoader(url, resolved, size ?? 256, this.remoteReprojection),
-      minZoom: options.minZoom ?? zooms.minZoom,
-      maxZoom: options.maxZoom ?? zooms.maxZoom,
-    };
   }
 
   /**
@@ -1209,32 +809,7 @@ export class GeoMap {
    * another layer. The layer's `ready` resolves once the map has drawn it
    */
   add<P = Record<string, unknown>>(spec: LayerSpec<P>): Layer {
-    switch (spec.type) {
-      case 'lines':
-        return this.addLines<P>(spec);
-      case 'circles':
-        return this.addCircles<P>(spec);
-      case 'fills':
-        return this.addFills<P>(spec);
-      case 'symbols':
-        return this.addSymbols<P>(spec);
-      case 'extrusions':
-        return this.addExtrusions<P>(spec);
-      case 'raster':
-        return this.addRaster(spec);
-      case 'ground':
-        return this.addGround(spec);
-      case 'network':
-        return this.addNetwork(spec);
-      case 'tiles3d':
-        return this.addTiles3d(spec);
-      case 'pointcloud':
-        return this.addPointCloud(spec);
-      case 'models':
-        return this.addModels(spec);
-      default:
-        throw new Error(`isard: no layer of type ${String((spec as { type?: unknown }).type)}`);
-    }
+    return addSpec<P>(this, spec);
   }
 
   /** @internal A layer made anew from its description, in the place of `old` in the drawing order (old removed) */
@@ -1295,29 +870,12 @@ export class GeoMap {
 
   /** @internal The glyphs of the symbol layers, loaded on first use */
   get glyphs(): Glyphs {
-    if (!this.#glyphs) {
-      // The engine's context: the atlas stays within its texture size limit
-      const gl = this.canvas.getContext('webgl2');
-      const max = gl?.getParameter(gl.MAX_TEXTURE_SIZE);
-
-      this.#glyphs = new Glyphs(this.glyphsUrl, typeof max === 'number' ? max : undefined);
-      this.#glyphs.attach(this.engine);
-    }
-
-    return this.#glyphs;
+    return this.atlases.glyphs;
   }
 
   /** @internal The icons of the symbol layers: the application's images and the vector basemaps' sprites */
   get icons(): Icons {
-    if (!this.#icons) {
-      const gl = this.canvas.getContext('webgl2');
-      const max = gl?.getParameter(gl.MAX_TEXTURE_SIZE);
-
-      this.#icons = new Icons(typeof max === 'number' ? max : undefined);
-      this.#icons.attach(this.engine);
-    }
-
-    return this.#icons;
+    return this.atlases.icons;
   }
 
   /**
@@ -1331,18 +889,15 @@ export class GeoMap {
     image: Pixels | (CanvasImageSource & { width: number; height: number }),
     options: ImageOptions = {},
   ): void {
-    const pixels = 'data' in image ? image : readPixels(image);
-
-    if (!pixels) throw new Error(`isard: the image ${name} has no pixels`);
-    this.icons.add(name, pixels, options);
+    this.atlases.addImage(name, image, options);
   }
 
   hasImage(name: string): boolean {
-    return this.#icons?.has(name) ?? false;
+    return this.atlases.hasImage(name);
   }
 
   removeImage(name: string): void {
-    this.#icons?.remove(name);
+    this.atlases.removeImage(name);
   }
 
   /**
@@ -1352,7 +907,7 @@ export class GeoMap {
    */
   vectorTiles(options: VectorTilesOptions = {}): VectorTiles {
     const tiles = new VectorTiles(this, {
-      ...(this.basemapWorkerUrl ? { workerUrl: this.basemapWorkerUrl } : {}),
+      ...(this.workers.url ? { workerUrl: this.workers.url } : {}),
       ...options,
     });
 
@@ -1372,52 +927,8 @@ export class GeoMap {
    * when it asks for another count or URL
    */
   basemapWorkers(count?: number, url?: string | URL): { pool: BasemapWorkers; own: boolean } {
-    const sharedUrl = this.basemapWorkerUrl;
-    const shared = defaultWorkerCount();
-    const workers = Math.max(1, count ?? shared);
-    const workerUrl = url ?? sharedUrl;
-
-    if (workers === shared && String(workerUrl) === String(sharedUrl)) {
-      this.basemapPool ??= new BasemapWorkers(shared, sharedUrl);
-
-      return { pool: this.basemapPool, own: false };
-    }
-
-    return { pool: new BasemapWorkers(workers, workerUrl), own: true };
+    return this.workers.pool(count, url);
   }
-
-  /**
-   * The workers decoding the relief and reprojecting rasters: the map's pool, unless the map has no workers
-   * (`workers: false` or 0, or none in this browser): that is done in the page then
-   */
-  private decodingPool(): BasemapWorkers | undefined {
-    const { workers } = this.tiles3dOptions;
-
-    if (this.gone || workers === false || (workers !== undefined && workers <= 0)) return undefined;
-    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return undefined;
-
-    return this.basemapWorkers().pool;
-  }
-
-  private readonly remoteHeights: RemoteHeights = (url, encoding, floor, tile, signal) =>
-    this.decodingPool()?.heights(url, encoding, floor, tile, signal, this);
-
-  private readonly remoteReprojection: RemoteReprojection = (job, tile, signal) =>
-    this.decodingPool()?.reproject(job, tile, signal, this);
-
-  /** The loader of the relief tiles of `url` in a PNG encoding (one per URL, encoding and floor) */
-  private readonly terrainLoader = (url: string, encoding: PngEncoding, floor?: number): TerrainLoader => {
-    const key = `${encoding} ${floor ?? ''} ${url}`;
-    const cached = this.terrainLoaders.get(key);
-
-    if (cached) return cached;
-
-    const loader = encodedTerrainLoader(url, encoding, floor, this.remoteHeights);
-
-    this.terrainLoaders.set(key, loader);
-
-    return loader;
-  };
 
   /** Adds a layer, under `before` if given */
   private place<L extends Layer>(layer: L, before: Layer | undefined): L {
@@ -1464,7 +975,7 @@ export class GeoMap {
       layer,
       this.canvas,
       this,
-      (lon, lat, altitude) => this.engineClass.customMatrix(lon, lat, altitude),
+      (lon, lat, altitude) => this.engines.customMatrix(lon, lat, altitude),
       () => this.getCamera(),
     );
 
@@ -1475,124 +986,26 @@ export class GeoMap {
 
   /** Asks for a frame; several calls before the next frame draw it once */
   requestRender(): void {
-    // Changes made by listeners during a frame are drawn by that frame; nothing is drawn without a context
-    if (this.inFrame || this.lost) return;
-    this.frameRequest ||= requestAnimationFrame((now) => this.frame(now));
+    this.frames.request();
   }
 
   /** @internal Runs `step` every frame until it returns false; replaces the running animation */
   animate(step: Step | undefined): void {
-    // A flight cut short no longer needs its destination
-    if (this.animation) this.engine.clearPreload();
-    this.animation = step;
-    this.requestRender();
+    this.frames.animate(step);
   }
 
   /** @internal The pointer moved over the map (undefined: it left). Without 'hover' and 'hoverfeature' listeners,
    * nothing is drawn: a still map stays idle under a moving mouse */
   hover(point: Point | undefined): void {
     if (!point) {
-      this.hoverPoint = undefined;
-      this.cancelHoverPick();
+      this.frames.hover(undefined);
+      this.hoverPick.cancel();
 
       return;
     }
-    if (this.listeners.hover.size === 0 && this.listeners.hoverfeature.size === 0) return;
-    this.hoverPoint = point;
+    if (!this.listeners.has('hover') && !this.listeners.has('hoverfeature')) return;
+    this.frames.hover(point);
     this.requestRender();
-  }
-
-  private frame(now: number): void {
-    this.frameRequest = 0;
-    try {
-      this.inFrame = true;
-      this.drawFrame(now);
-    } finally {
-      // Whatever throws in a frame, the next ones are still drawn
-      this.inFrame = false;
-    }
-  }
-
-  private drawFrame(now: number): void {
-    if (this.animation && !this.animation(now)) this.animation = undefined;
-
-    const camera = this.getCamera();
-    const key = `${camera.center}|${camera.zoom}|${camera.pitch}|${camera.bearing}`;
-    const moved = key !== this.lastCamera;
-
-    if (moved) {
-      // The first frame is no move
-      if (!this.moving && this.lastCamera !== '') {
-        this.moving = true;
-        this.emit('movestart', camera);
-      }
-      this.lastCamera = key;
-      this.emit('move', camera);
-    } else if (this.moving && !this.animation && !this.interaction?.active) {
-      this.moving = false;
-      this.emit('moveend', camera);
-    }
-
-    // Values for the pointer position are computed before drawing, in the same frame
-    const hovered = this.hoverPoint;
-
-    if (hovered) {
-      this.hoverPoint = undefined;
-      // The position under the pointer for its listeners only (a 'hoverfeature' alone does not need it)
-      if (this.listeners.hover.size > 0) this.emit('hover', { point: hovered, lonLat: this.unproject(hovered) });
-    }
-
-    const t0 = performance.now();
-
-    // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
-    this.inFrame = false;
-    // As the engine has it now (a listener may have moved it), for the custom layers drawn in the frame
-    this.frameCamera = this.layers.some((layer) => layer instanceof CustomLayer) ? this.engine.camera() : undefined;
-
-    const render = (): boolean => {
-      try {
-        return this.engine.render();
-      } finally {
-        this.frameCamera = undefined;
-      }
-    };
-    const loading = render();
-
-    this.inFrame = true;
-    // The picking pass sees the frame just drawn; its answer comes on a later frame
-    if (hovered && this.listeners.hoverfeature.size > 0) this.requestHoverPick(hovered);
-    // Overlays follow the frame just drawn (camera, relief altitudes): all in one pass, transforms only
-    this.positioned.forEach((item) => {
-      item.position(this.size);
-    });
-    this.emit('render', { ms: performance.now() - t0 });
-    this.inFrame = false;
-    // A move goes on until a frame finds the camera still: that frame sends 'moveend'
-    if (this.animation || (moved && this.moving)) this.requestRender();
-    // Idle: nothing loading (the engine with 3D Tiles neither), no animation, no frame asked for (uploads waiting,
-    // fades, listeners)
-    if (loading || this.upgrading || this.animation || this.frameRequest !== 0) {
-      this.settled = false;
-    } else if (!this.settled) {
-      this.settled = true;
-      this.emit('idle', {});
-    }
-  }
-
-  /** Resizes when the device pixel ratio changes (browser zoom, a window moved to another screen) */
-  private watchRatio(): void {
-    if (typeof matchMedia !== 'function') return;
-
-    const query = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
-    const changed = () => {
-      // A query for the new ratio
-      this.unwatchRatio?.();
-      this.watchRatio();
-      this.resize();
-    };
-
-    query.addEventListener('change', changed, { once: true });
-    this.unwatchRatio = () => query.removeEventListener('change', changed);
   }
 
   private resize(): void {
@@ -1604,11 +1017,10 @@ export class GeoMap {
     this.canvas.width = Math.round(width * ratio);
     this.canvas.height = Math.round(height * ratio);
     this.engine.resize(width, height, ratio);
-    this.size = [width, height];
+    this.overlays.size = [width, height];
     this.emit('resize', { width, height });
     // Draw at once: a resized canvas is cleared, waiting one frame would flash
-    cancelAnimationFrame(this.frameRequest);
-    this.frame(performance.now());
+    this.frames.drawNow();
   }
 
   destroy(): void {
@@ -1619,68 +1031,29 @@ export class GeoMap {
 
     const camera = this.getCamera();
 
-    cancelAnimationFrame(this.frameRequest);
-    this.cancelHoverPick();
-    this.vector?.tiles.destroy();
+    this.frames.stop();
+    this.hoverPick.cancel();
+    this.basemaps.destroy();
     [...this.vectorSets].forEach((tiles) => {
       tiles.destroy();
     });
     this.vectorSets.clear();
-    this.basemapPool?.terminate();
-    this.basemapPool = undefined;
-    this.unwatchRatio?.();
-    this.unwatchRatio = undefined;
+    this.workers.terminate();
+    this.unwatchRatio();
     this.unwatchHeaders();
     this.resizeObserver.disconnect();
     this.interaction?.destroy();
-    this.loader?.destroy();
+    this.engines.destroy();
     // Custom layers free their WebGL objects, models their data, while the context is there
-    this.layers.forEach((layer) => {
-      layer.dispose();
-    });
+    this.stack.dispose();
     this.engine.free();
     // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
     // that does nothing, and nothing is drawn again
     this.#engine = destroyedEngine(camera);
     // Glyph ranges still arriving upload to it, not to the freed engine
-    this.#glyphs?.attach(this.#engine);
-    this.#icons?.attach(this.#engine);
+    this.atlases.attach(this.#engine);
     this.lost = true;
-    [...this.controls.keys()].forEach((control) => {
-      this.removeControl(control);
-    });
-    this.positioned.clear();
-    this.canvas.remove();
-    this.overlay.remove();
-    CORNERS.forEach((position) => {
-      this.corners[position].remove();
-    });
-    this.container.classList.remove('isard-map');
-    Object.values(this.listeners).forEach((listeners) => {
-      listeners.clear();
-    });
+    this.overlays.destroy();
+    this.listeners.clear();
   }
 }
-
-/** The page's request headers to an engine (its own requests: raster tiles, tilesets, point clouds) */
-const sendHeaders = (engine: Engine, rules: HeaderRules): void => {
-  engine.setRequestHeaders(
-    rules.map(([prefix]) => prefix),
-    Uint32Array.from(rules, ([, headers]) => Object.keys(headers).length),
-    rules.flatMap(([, headers]) => Object.entries(headers).flat()),
-  );
-};
-
-/** A layer by its type and the options of its `add…` method (`GeoMap.add`) */
-export type LayerSpec<P = Record<string, unknown>> =
-  | ({ type: 'lines' } & LineOptions<P>)
-  | ({ type: 'circles' } & CircleOptions<P>)
-  | ({ type: 'fills' } & FillOptions<P>)
-  | ({ type: 'symbols' } & SymbolOptions<P>)
-  | ({ type: 'extrusions' } & ExtrusionOptions<P>)
-  | ({ type: 'raster' } & RasterOptions & { before?: Layer })
-  | ({ type: 'ground' } & GroundOptions & { before?: Layer })
-  | ({ type: 'network' } & NetworkOptions)
-  | ({ type: 'tiles3d' } & Tiles3dOptions)
-  | ({ type: 'pointcloud' } & PointCloudOptions & { before?: Layer })
-  | ({ type: 'models' } & ModelOptions & { before?: Layer });

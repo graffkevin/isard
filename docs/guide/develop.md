@@ -28,6 +28,7 @@ scripts/           build (and its size budget), dev server, release
 packages/isard/src/
   index.ts, formats.ts, projections.ts, geoplateforme.ts   the entry points (isard, isard/formats…)
   map.ts, settings.ts, types.ts                            GeoMap, its options and public types
+  map/         GeoMap's parts: the layers' order, overlays and controls, frame loop, hover picking, engines, workers
   engine-loader.ts                                         the engines and workers loaded (assetsUrl), at the root:
                                                            their URLs are next to it in dist and in bundles
   engine/      the decoding workers' pool and protocol, the decoders, the request headers
