@@ -337,13 +337,15 @@ for (const name of examples) {
   }
   const a = PNG.sync.read(readFileSync(baseline));
   const b = PNG.sync.read(shot);
-  let ratio = 1;
-  if (a.width === b.width && a.height === b.height) {
+  const compare = (): number => {
+    if (a.width !== b.width || a.height !== b.height) return 1;
     const diff = new PNG({ width: a.width, height: a.height });
     const count = pixelmatch(a.data, b.data, diff.data, a.width, a.height, { threshold: THRESHOLD });
-    ratio = count / (a.width * a.height);
+    const ratio = count / (a.width * a.height);
     if (ratio > 0) writeFileSync(join(out, `${name}.diff.png`), PNG.sync.write(diff));
-  }
+    return ratio;
+  };
+  const ratio = compare();
   const ok = ratio <= MAX_DIFF;
   // Shown on the run's summary in CI: fixtures to record if it keeps coming back
   if (missing.size && process.env.GITHUB_ACTIONS) {
@@ -358,12 +360,12 @@ for (const name of examples) {
 
 // Recording rewrites the set: fixtures of no request any more are removed
 if (record) {
-  for (const h of Object.keys(manifest)) {
+  Object.keys(manifest).forEach((h) => {
     if (only.length === 0 && !used.has(h)) {
       delete manifest[h];
       rmSync(bodyPath(h), { force: true });
     }
-  }
+  });
   const sorted = Object.fromEntries(Object.entries(manifest).sort(([, x], [, y]) => x.url.localeCompare(y.url)));
   writeFileSync(manifestPath, `${JSON.stringify(sorted, null, 2)}\n`);
 }

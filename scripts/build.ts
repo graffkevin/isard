@@ -89,9 +89,8 @@ const bundle = async (entries: string[], outdir: string, options: { split?: bool
           naming: '[name].[ext]',
         }),
       ];
-  for (const result of await Promise.all(builds)) {
-    if (!result.success) throw new AggregateError(result.logs, `bundling ${entries.join(', ')} failed`);
-  }
+  const failed = (await Promise.all(builds)).find((result) => !result.success);
+  if (failed) throw new AggregateError(failed.logs, `bundling ${entries.join(', ')} failed`);
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
   copyFileSync(join(root, coreWasm), join(root, outdir, 'isard_core_bg.wasm'));
@@ -105,12 +104,12 @@ const buildPackage = async (): Promise<void> => {
   rmSync(dist, { recursive: true, force: true });
   await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
   mkdirSync(join(dist, 'wasm'), { recursive: true });
-  for (const name of ['isard', 'isard_core', 'isard_points']) {
+  ['isard', 'isard_core', 'isard_points'].forEach((name) => {
     copyFileSync(join(root, bindings, `${name}.js`), join(dist, `wasm/${name}.js`));
     // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
     const declarations = readFileSync(join(root, bindings, `${name}.d.ts`), 'utf8');
     writeFileSync(join(dist, `wasm/${name}.d.ts`), declarations.replace(/^\s*\[Symbol\.dispose\]\(\): void;\n/gm, ''));
-  }
+  });
   // After tsc: the workers it emitted module by module (imported for their types) are replaced
   await bundle([], `${pkg}/dist`, { empty: false });
 };

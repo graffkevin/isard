@@ -64,7 +64,9 @@ beforeEach(() => {
   forgetEngines();
 });
 afterEach(() => {
-  for (const map of maps.splice(0)) map.destroy();
+  maps.splice(0).forEach((map) => {
+    map.destroy();
+  });
   frames.flush();
 });
 
@@ -299,10 +301,10 @@ describe('hover', () => {
     frames.flush();
     const engine = engineOf(map);
     const renders = engine.args('render').length;
-    for (let i = 0; i < 10; i += 1) {
+    Array.from({ length: 10 }, (_, i) => i).forEach((i) => {
       canvasOf(map).dispatch('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: i, clientY: i });
       frames.flush();
-    }
+    });
     expect(engine.args('render').length).toBe(renders);
     expect(engine.args('ground')).toEqual([]);
   });
@@ -328,10 +330,10 @@ describe('hover', () => {
     canvas.top = 50;
     const events: unknown[] = [];
     map.on('hover', (e) => events.push(e.point));
-    for (let i = 0; i < 5; i += 1) {
+    Array.from({ length: 5 }, (_, i) => i).forEach((i) => {
       canvas.dispatch('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: 110 + i, clientY: 60 });
       frames.flush();
-    }
+    });
     expect(canvas.rectReads).toBe(1);
     expect(events.at(-1)).toEqual([14, 10]);
     // Read again once the map is resized
@@ -509,7 +511,9 @@ describe('custom layers', () => {
   };
   /** Draws a frame of the engine, calling the custom layers it holds as the engine does */
   const draw = (engine: FakeEngine) => {
-    for (const [callback] of engine.args('addCustomLayer')) (callback as () => void)();
+    engine.args('addCustomLayer').forEach(([callback]) => {
+      (callback as () => void)();
+    });
   };
 
   test('added, drawn with the matrices of the frame, removed', async () => {

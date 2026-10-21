@@ -164,7 +164,9 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   setStyle(style: Partial<ExtrusionStyle<P>>): void {
     this.style = { ...this.style, ...style };
     const engine = this.map.engine;
-    for (const tile of this.tiles.values()) this.sendStyle(engine, this.id, tile);
+    this.tiles.forEach((tile) => {
+      this.sendStyle(engine, this.id, tile);
+    });
     this.sendLayer(engine, this.id);
     this.map.requestRender();
   }
@@ -175,7 +177,9 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
   setFilter(filter: ((properties: P, index: number) => boolean) | undefined): void {
     this.style = { ...this.style, filter };
-    for (const tile of this.tiles.values()) this.map.engine.setFeatureMask(this.id, this.mask(tile), tile.batch);
+    this.tiles.forEach((tile) => {
+      this.map.engine.setFeatureMask(this.id, this.mask(tile), tile.batch);
+    });
     this.map.requestRender();
   }
 
@@ -284,7 +288,9 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   protected create(engine: Engine): number {
     const id = engine.addExtrusions();
     this.sendLayer(engine, id);
-    for (const tile of this.tiles.values()) this.sendTile(engine, id, tile);
+    this.tiles.forEach((tile) => {
+      this.sendTile(engine, id, tile);
+    });
     // A network created before (on a new engine, the map relinks once every layer is there)
     if (!this.network || this.network.layer.id >= 0) this.sendLink(engine, id);
     return id;

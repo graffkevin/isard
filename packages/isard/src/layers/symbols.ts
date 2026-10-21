@@ -327,8 +327,7 @@ export class SymbolLayer<P = Properties> extends Layer {
     const keep = this.groups !== undefined;
     const glyphs = this.host.glyphs;
     const todo: { group: readonly Feature<P>[]; base: number; parts: TextPart[][] }[] = [];
-    let base = 0;
-    for (const group of groups) {
+    groups.reduce((base, group) => {
       const c = keep ? this.chunks.get(group) : undefined;
       const valid =
         c !== undefined &&
@@ -336,17 +335,19 @@ export class SymbolLayer<P = Properties> extends Layer {
         (c.base === base || this.indexFree) &&
         (c.complete || (c.glyphs === glyphs.version && c.icons === this.host.icons.version));
       if (!valid) todo.push({ group, base, parts: this.parts(group, base) });
-      base += group.length;
-    }
+      return base + group.length;
+    }, 0);
     const byFont = new Map<string, Set<number>>();
-    for (const { parts } of todo) {
-      for (const p of parts.flat()) {
+    todo.forEach(({ parts }) => {
+      parts.flat().forEach((p) => {
         const key = p.font ?? DEFAULT_FONT;
         const set = byFont.get(key) ?? new Set<number>();
-        for (const code of codes([p])) set.add(code);
+        codes([p]).forEach((code) => {
+          set.add(code);
+        });
         byFont.set(key, set);
-      }
-    }
+      });
+    });
     const loaded = new Map<string, Map<number, Glyph>>();
     await Promise.all(
       [...byFont].map(async ([f, set]) => {
@@ -355,11 +356,11 @@ export class SymbolLayer<P = Properties> extends Layer {
     );
     if (generation !== this.generation) return;
     const built = new Map<readonly Feature<P>[], Chunk>();
-    for (const { group, base: b, parts } of todo) {
+    todo.forEach(({ group, base: b, parts }) => {
       const chunk = this.build(group, b, parts, loaded);
       built.set(group, chunk);
       if (keep) this.chunks.set(group, chunk);
-    }
+    });
     this.labels = concat(groups.map((g) => built.get(g) ?? (this.chunks.get(g) as Chunk)));
     // The icons packed for them
     this.host.icons.flush();
@@ -405,36 +406,49 @@ export class SymbolLayer<P = Properties> extends Layer {
       const s0 = evaluate(size, p, i);
       const shaped = shapedAt(s0);
       const scale = scaleOf(s0, shaped);
-      let s: Shaping | undefined;
-      if (hasText && text) {
-        s = shape(text, (name) => loaded.get(name), {
-          font: evaluate(font, p, i),
-          size: shaped,
-          maxWidth: evaluate(maxWidth, p, i),
-          lineHeight: evaluate(lineHeight, p, i),
-          anchor: evaluate(anchor, p, i),
-          offset: evaluate(offset, p, i),
-        });
-        if (!s.quads.length) s = undefined;
-      }
+      const shaping =
+        hasText && text
+          ? shape(text, (name) => loaded.get(name), {
+              font: evaluate(font, p, i),
+              size: shaped,
+              maxWidth: evaluate(maxWidth, p, i),
+              lineHeight: evaluate(lineHeight, p, i),
+              anchor: evaluate(anchor, p, i),
+              offset: evaluate(offset, p, i),
+            })
+          : undefined;
+      const s: Shaping | undefined = shaping?.quads.length ? shaping : undefined;
       if (!s && !icon) return;
       const along = evaluate(placement, p, i) === 'line';
-      let flags = overlapFlags(evaluate(overlap, p, i), FLAG.textOverlap, FLAG.textIgnore);
-      if (evaluate(st.textOptional, p, i)) flags |= FLAG.textOptional;
-      if (s) flags |= FLAG.text;
+      const textFlags =
+        overlapFlags(evaluate(overlap, p, i), FLAG.textOverlap, FLAG.textIgnore) |
+        (evaluate(st.textOptional, p, i) ? FLAG.textOptional : 0) |
+        (s ? FLAG.text : 0);
       // The icon: beside its text, or stretched around it (then scaled and turned with it)
-      let iconScale: Size = 1;
-      let iconBox: [number, number, number, number] = [0, 0, 0, 0];
-      let iconColor: [number, number, number, number] = [0, 0, 0, 0];
-      let quads: number[][] = [];
-      let iconTurns = false;
-      let fitted = false;
-      if (icon) {
+      const { iconScale, iconBox, iconColor, quads, iconTurns, fitted, iconFlags } = ((): {
+        iconScale: Size;
+        iconBox: [number, number, number, number];
+        iconColor: [number, number, number, number];
+        quads: number[][];
+        iconTurns: boolean;
+        fitted: boolean;
+        iconFlags: number;
+      } => {
+        const none = {
+          iconScale: 1,
+          iconBox: [0, 0, 0, 0] as [number, number, number, number],
+          iconColor: [0, 0, 0, 0] as [number, number, number, number],
+          quads: [],
+          iconTurns: false,
+          fitted: false,
+          iconFlags: 0,
+        };
+        if (!icon) return none;
         const fit = evaluate(st.iconTextFit, p, i);
-        fitted = fit !== 'none' && s !== undefined;
+        const fitted = fit !== 'none' && s !== undefined;
         const i0 = evaluate(st.iconSize, p, i);
         const iconShaped = fitted ? 1 : shapedAt(i0);
-        iconScale = fitted ? scale : scaleOf(i0, iconShaped);
+        const iconScale = fitted ? scale : scaleOf(i0, iconShaped);
         const laid = layoutIcon(icon, {
           size: iconShaped,
           anchor: evaluate(st.iconAnchor, p, i),
@@ -444,23 +458,28 @@ export class SymbolLayer<P = Properties> extends Layer {
           padding: evaluate(st.iconTextFitPadding, p, i),
           text: s?.layout,
         });
-        quads = laid.quads;
-        if (quads.length) {
-          flags |= FLAG.icon | overlapFlags(evaluate(st.iconOverlap, p, i), FLAG.iconOverlap, FLAG.iconIgnore);
-          if (evaluate(st.iconOptional, p, i)) flags |= FLAG.iconOptional;
-          const alignment = evaluate(st.iconRotationAlignment, p, i);
-          if (fitted) flags |= FLAG.iconUpright;
-          iconTurns = alignment === 'map' || (alignment === 'auto' && along);
-          iconBox = [
+        const laidOut = { ...none, fitted, iconScale, quads: laid.quads };
+        if (!laid.quads.length) return laidOut;
+        const iconFlags =
+          FLAG.icon |
+          overlapFlags(evaluate(st.iconOverlap, p, i), FLAG.iconOverlap, FLAG.iconIgnore) |
+          (evaluate(st.iconOptional, p, i) ? FLAG.iconOptional : 0);
+        const alignment = evaluate(st.iconRotationAlignment, p, i);
+        const [r, g, b, a] = parseColor(evaluate(st.iconColor, p, i));
+        return {
+          ...laidOut,
+          iconFlags: iconFlags | (fitted ? FLAG.iconUpright : 0),
+          iconTurns: alignment === 'map' || (alignment === 'auto' && along),
+          iconBox: [
             laid.box[0] - ICON_PADDING,
             laid.box[1] - ICON_PADDING,
             laid.box[2] + ICON_PADDING,
             laid.box[3] + ICON_PADDING,
-          ];
-          const [r, g, b, a] = parseColor(evaluate(st.iconColor, p, i));
-          iconColor = [r, g, b, a * Math.max(0, Math.min(1, evaluate(st.iconOpacity, p, i)))];
-        }
-      }
+          ],
+          iconColor: [r, g, b, a * Math.max(0, Math.min(1, evaluate(st.iconOpacity, p, i)))],
+        };
+      })();
+      const flags = textFlags | iconFlags;
       if (!(flags & (FLAG.text | FLAG.icon))) return;
       const halo = s ? evaluate(haloWidth, p, i) : 0;
       const fill = parseColor(evaluate(color, p, i));
@@ -476,16 +495,11 @@ export class SymbolLayer<P = Properties> extends Layer {
         // point), or with its text when fitted to it
         const textAlong = along && line !== undefined && s !== undefined;
         const iconAlong = (flags & FLAG.icon) !== 0 && (fitted ? textAlong : iconTurns);
-        let labelFlags = flags | (textAlong ? FLAG.textAlong : 0) | (iconAlong ? FLAG.iconAlong : 0);
         // The direction of its line in Mercator (y towards the south)
-        let direction: [number, number] = [0, 0];
-        if (line && (textAlong || iconAlong)) {
-          const [x1, y1] = toMercator([at[0] + line[0], at[1] + line[1]]);
-          direction = [x1 - x, y1 - y];
-        } else if (iconAlong) {
-          direction = [1, 0];
-        }
-        if (direction[0] === 0 && direction[1] === 0) labelFlags &= ~(FLAG.textAlong | FLAG.iconAlong);
+        const end = line && (textAlong || iconAlong) ? toMercator([at[0] + line[0], at[1] + line[1]]) : undefined;
+        const direction: [number, number] = end ? [end[0] - x, end[1] - y] : [iconAlong ? 1 : 0, 0];
+        const alongFlags = (textAlong ? FLAG.textAlong : 0) | (iconAlong ? FLAG.iconAlong : 0);
+        const labelFlags = flags | (direction[0] === 0 && direction[1] === 0 ? 0 : alongFlags);
         boxes.push(...textBox);
         styles.push(
           ...fill,

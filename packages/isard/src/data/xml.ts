@@ -107,9 +107,9 @@ export const childText = (element: XmlElement | undefined, name: string): string
 
 /** Every element of a name under an element, in document order (not inside a match) */
 export const descendants = (element: XmlElement, name: string, out: XmlElement[] = []): XmlElement[] => {
-  for (const c of element.children) {
+  element.children.forEach((c) => {
     if (c.name === name) out.push(c);
     else descendants(c, name, out);
-  }
+  });
   return out;
 };

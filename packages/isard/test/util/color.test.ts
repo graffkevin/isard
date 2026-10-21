@@ -3,7 +3,9 @@ import { parseCssColor } from '../../src/util/color.ts';
 
 const close = (actual: number[] | undefined, expected: number[]) => {
   expect(actual).toBeDefined();
-  for (const [i, v] of expected.entries()) expect(actual?.[i]).toBeCloseTo(v, 3);
+  expected.forEach((v, i) => {
+    expect(actual?.[i]).toBeCloseTo(v, 3);
+  });
 };
 
 describe('parseCssColor', () => {

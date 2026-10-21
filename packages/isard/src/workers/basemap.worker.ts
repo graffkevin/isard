@@ -97,11 +97,9 @@ export interface Sprite {
 
 /** An image of the sprites and its sheet */
 const spriteIcon = (r: Renderer, name: string) => {
-  for (const sprite of r.sprites) {
-    const icon = sprite.icons[name];
-    if (icon) return { icon, image: sprite.image };
-  }
-  return undefined;
+  const sprite = r.sprites.find((sp) => Boolean(sp.icons[name]));
+  const icon = sprite?.icons[name];
+  return sprite && icon ? { icon, image: sprite.image } : undefined;
 };
 
 const renderers = new Map<string, Renderer>();
@@ -223,15 +221,17 @@ const shown = (layer: StyleLayer, zoom: number): boolean => {
 /** The image of a fill pattern, cut from the sprite on first use */
 const patternImage = (r: Renderer, name: string): OffscreenCanvas | undefined => {
   if (r.patterns.has(name)) return r.patterns.get(name);
-  const found = spriteIcon(r, name);
-  let image: OffscreenCanvas | undefined;
-  if (found && found.icon.width > 0 && found.icon.height > 0) {
+  const cut = (): OffscreenCanvas | undefined => {
+    const found = spriteIcon(r, name);
+    if (!found || !(found.icon.width > 0) || !(found.icon.height > 0)) return undefined;
     const { icon } = found;
-    image = new OffscreenCanvas(icon.width, icon.height);
-    image
+    const canvas = new OffscreenCanvas(icon.width, icon.height);
+    canvas
       .getContext('2d')
       ?.drawImage(found.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
-  }
+    return canvas;
+  };
+  const image = cut();
   r.patterns.set(name, image);
   return image;
 };
@@ -355,11 +355,9 @@ const draw = async (
     // Values that only depend on the zoom are evaluated once for the layer
     const dependent = new Map<string, boolean>();
     const get = (group: 'paint' | 'layout', key: string, ctx: Context, fallback: unknown) => {
-      let d = dependent.get(key);
-      if (d === undefined) {
-        d = isFeatureDependent(layer[group]?.[key]);
-        dependent.set(key, d);
-      }
+      const known = dependent.get(key);
+      const d = known ?? isFeatureDependent(layer[group]?.[key]);
+      if (known === undefined) dependent.set(key, d);
       return value(layer, group, key, d ? ctx : zctx, fallback);
     };
     for (const f of data.features) {
@@ -461,6 +459,13 @@ const sides = (v: unknown): [number, number, number, number] => {
   return [top, right, bottom, left];
 };
 
+/** A label's text in the case of its `text-transform` */
+const cased = (t: string, transform: unknown): string => {
+  if (transform === 'uppercase') return t.toUpperCase();
+  if (transform === 'lowercase') return t.toLowerCase();
+  return t;
+};
+
 /** Points every `spacing` along a line (tile units, x and y interleaved), the first half a spacing in (the middle of a
  * shorter line): each point and the segment it lies on (x, y, x0, y0, x1, y1) */
 export const lineAnchors = (line: readonly number[], spacing: number): number[][] => {
@@ -536,23 +541,21 @@ const labels = async (
   // The text size of a layer when it depends on the zoom only: legacy stops as they are, an expression as stops
   const sizes = new Map<StyleLayer, Json>();
   const sizeOf = (layer: StyleLayer): Json => {
-    let s = sizes.get(layer);
-    if (s === undefined) {
-      const v = layer.layout?.['text-size'] ?? 16;
-      s = isExpression(v) ? zoomStops(v) : v;
-      sizes.set(layer, s);
-    }
+    const known = sizes.get(layer);
+    if (known !== undefined) return known;
+    const v = layer.layout?.['text-size'] ?? 16;
+    const s = isExpression(v) ? zoomStops(v) : v;
+    sizes.set(layer, s);
     return s;
   };
   // The icon size of a layer when it depends on the zoom only, as the text size
   const iconSizes = new Map<StyleLayer, Json>();
   const iconSizeOf = (layer: StyleLayer): Json => {
-    let s = iconSizes.get(layer);
-    if (s === undefined) {
-      const v = layer.layout?.['icon-size'] ?? 1;
-      s = isExpression(v) ? zoomStops(v) : v;
-      iconSizes.set(layer, s);
-    }
+    const known = iconSizes.get(layer);
+    if (known !== undefined) return known;
+    const v = layer.layout?.['icon-size'] ?? 1;
+    const s = isExpression(v) ? zoomStops(v) : v;
+    iconSizes.set(layer, s);
     return s;
   };
   r.layers.forEach((layer, index) => {
@@ -568,12 +571,10 @@ const labels = async (
     for (const f of data.features) {
       const ctx = context(f, zoom);
       if (!filter(layer.filter, ctx)) continue;
-      let t = text(layout['text-field'], ctx).trim();
+      const field = text(layout['text-field'], ctx).trim();
       const image = text(layout['icon-image'], ctx).trim();
-      if (!t && !image) continue;
-      const transform = value(layer, 'layout', 'text-transform', ctx, 'none');
-      if (transform === 'uppercase') t = t.toUpperCase();
-      else if (transform === 'lowercase') t = t.toLowerCase();
+      if (!field && !image) continue;
+      const t = cased(field, value(layer, 'layout', 'text-transform', ctx, 'none'));
       const fonts = value(layer, 'layout', 'text-font', ctx, ['Noto Sans Regular']);
       const font = labelFont(Array.isArray(fonts) && typeof fonts[0] === 'string' ? fonts[0] : 'Noto Sans Regular');
       const offset = value(layer, 'layout', 'text-offset', ctx, [0, 0]);
@@ -679,7 +680,9 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   }
   if (data.type === 'drop') {
     // Its copy of the sprites
-    for (const sprite of renderers.get(data.key)?.sprites ?? []) sprite.image.close();
+    renderers.get(data.key)?.sprites.forEach((sprite) => {
+      sprite.image.close();
+    });
     renderers.delete(data.key);
     return;
   }

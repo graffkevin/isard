@@ -100,9 +100,9 @@ describe('workers', () => {
     });
     pool.broadcast({ type: 'init', key: 'v0:r0', tiles: 't', maxzoom: 14, layers: [] });
     pool.broadcast({ type: 'drop', key: 'v0:r0' });
-    for (const w of workers) {
+    workers.forEach((w) => {
       expect(w.messages[0]).toMatchObject({ type: 'init', workers: 3 });
       expect(w.messages[1]).toEqual({ type: 'drop', key: 'v0:r0' });
-    }
+    });
   });
 });

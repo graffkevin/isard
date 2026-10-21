@@ -68,11 +68,11 @@ describe('workers', () => {
     expect(FakeWorker.all.length).toBe(0);
     quiet(l.load(1, 'a.glb', transform, true, false));
     expect(FakeWorker.all.length).toBe(3);
-    for (const w of FakeWorker.all) {
+    FakeWorker.all.forEach((w) => {
       expect(w.url).toBe('decoder.js');
       expect(w.options).toEqual({ type: 'module' });
       expect(w.messages[0]).toEqual({ type: 'init', module, decoders, formats, points: 'points.wasm' });
-    }
+    });
     quiet(l.load(2, 'b.glb', transform, true, false));
     expect(FakeWorker.all.length).toBe(3);
     l.destroy();
@@ -93,7 +93,9 @@ describe('workers', () => {
 
   test('requests go to the least busy worker; an answer frees its worker', () => {
     const l = loader(2);
-    for (const id of [1, 2, 3]) quiet(l.load(id, `${id}.glb`, transform, true, false));
+    [1, 2, 3].forEach((id) => {
+      quiet(l.load(id, `${id}.glb`, transform, true, false));
+    });
     expect(worker(0).loads()).toEqual([1, 3]);
     expect(worker(1).loads()).toEqual([2]);
     // Worker 0 answers both: it is now the least busy

@@ -38,9 +38,13 @@ let named: Map<string, string> | undefined;
 
 const namedHex = (name: string): string | undefined => {
   if (!named) {
-    named = new Map();
     const words = NAMES.split(' ');
-    for (let i = 0; i + 1 < words.length; i += 2) named.set(words[i] as string, words[i + 1] as string);
+    named = new Map(
+      Array.from({ length: Math.floor(words.length / 2) }, (_, i) => [
+        words[2 * i] as string,
+        words[2 * i + 1] as string,
+      ]),
+    );
   }
   return named.get(name);
 };

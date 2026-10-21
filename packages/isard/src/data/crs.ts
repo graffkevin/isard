@@ -231,12 +231,11 @@ export const getCrs = (crs: CrsLike): Crs => {
   if (found) return found;
   const code = epsgCode(crs);
   if (code !== undefined) {
-    let c = made.get(code);
-    if (!c) {
-      c = builtin(code);
-      if (c) made.set(code, c);
+    const c = made.get(code) ?? builtin(code);
+    if (c) {
+      made.set(code, c);
+      return c;
     }
-    if (c) return c;
   }
   throw new Error(`isard: unknown CRS ${crs}: registerCrs('${crs}', proj4('${crs}')) names it`);
 };
@@ -274,8 +273,12 @@ const mapGeometry = (g: Geometry, f: (p: Position) => Position): Geometry => {
  * EPSG:2154)
  */
 export const reproject = <P>(data: FeatureData<P>, from?: CrsLike): FeatureCollection<P> => {
-  let features = Array.isArray(data) ? data : [data as Feature<P>];
-  if (!Array.isArray(data) && data.type === 'FeatureCollection') features = data.features;
+  const featuresOf = (): Feature<P>[] => {
+    if (Array.isArray(data)) return data;
+    if (data.type === 'FeatureCollection') return data.features;
+    return [data];
+  };
+  const features = featuresOf();
   const source = from ?? crsOf(data);
   if (source === undefined || (typeof source === 'string' && isGeographic(source))) {
     return { type: 'FeatureCollection', features };

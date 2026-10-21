@@ -17,7 +17,7 @@ const positions = (element: XmlElement | undefined): Position[] => {
 /** The geometries of an element (a Placemark, a MultiGeometry), in order */
 const geometries = (parent: XmlElement): Geometry[] => {
   const out: Geometry[] = [];
-  for (const g of parent.children) {
+  parent.children.forEach((g) => {
     if (g.name === 'Point') {
       const [p] = positions(child(g, 'coordinates'));
       if (p) out.push({ type: 'Point', coordinates: p });
@@ -38,7 +38,7 @@ const geometries = (parent: XmlElement): Geometry[] => {
     } else if (g.name === 'MultiGeometry' || g.name === 'MultiTrack') {
       out.push(...geometries(g));
     }
-  }
+  });
   return out;
 };
 
@@ -98,13 +98,15 @@ const styleProperties = (style: XmlElement | undefined): Properties => {
 export const parseKml = <P = Properties>(text: string): FeatureCollection<P> => {
   const root = parseXml(text);
   const styles = new Map<string, XmlElement>();
-  for (const s of descendants(root, 'Style')) if (s.attributes.id) styles.set(s.attributes.id, s);
+  descendants(root, 'Style').forEach((s) => {
+    if (s.attributes.id) styles.set(s.attributes.id, s);
+  });
   const maps = new Map<string, string>();
-  for (const m of descendants(root, 'StyleMap')) {
+  descendants(root, 'StyleMap').forEach((m) => {
     const normal = children(m, 'Pair').find((p) => childText(p, 'key') === 'normal');
     const url = childText(normal, 'styleUrl');
     if (m.attributes.id && url) maps.set(m.attributes.id, url);
-  }
+  });
   /** The style of a `styleUrl` in this document (`#id`, through a StyleMap) */
   const shared = (url: string | undefined, depth = 0): XmlElement | undefined => {
     const id = url?.slice(url.indexOf('#') + 1);
@@ -114,21 +116,21 @@ export const parseKml = <P = Properties>(text: string): FeatureCollection<P> => 
   const features = descendants(root, 'Placemark').map((placemark): Feature<P> => {
     const properties: Properties = { ...styleProperties(shared(childText(placemark, 'styleUrl'))) };
     Object.assign(properties, styleProperties(child(placemark, 'Style')));
-    for (const key of ['name', 'description', 'address', 'styleUrl']) {
+    ['name', 'description', 'address', 'styleUrl'].forEach((key) => {
       const value = childText(placemark, key);
       if (value !== undefined) properties[key] = value;
-    }
+    });
     const time = childText(child(placemark, 'TimeStamp'), 'when');
     if (time !== undefined) properties.time = time;
     const extended = child(placemark, 'ExtendedData');
-    for (const data of children(extended, 'Data')) {
+    children(extended, 'Data').forEach((data) => {
       if (data.attributes.name) properties[data.attributes.name] = childText(data, 'value') ?? '';
-    }
-    for (const schema of children(extended, 'SchemaData')) {
-      for (const data of children(schema, 'SimpleData')) {
+    });
+    children(extended, 'SchemaData')
+      .flatMap((schema) => children(schema, 'SimpleData'))
+      .forEach((data) => {
         if (data.attributes.name) properties[data.attributes.name] = data.text.trim();
-      }
-    }
+      });
     const id = placemark.attributes.id;
     return {
       type: 'Feature',

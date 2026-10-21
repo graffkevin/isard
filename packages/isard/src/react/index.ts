@@ -201,7 +201,9 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
       ),
     );
     return () => {
-      for (const off of offs) off();
+      offs.forEach((off) => {
+        off();
+      });
     };
   }, [map]);
 
@@ -212,13 +214,13 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
     const last = applied.current;
     applied.current = props;
     const done = new Set<(map: GeoMap, props: IsardMapProps) => void>();
-    for (const [key, apply] of Object.entries(LIVE_OPTIONS)) {
+    Object.entries(LIVE_OPTIONS).forEach(([key, apply]) => {
       if (!apply || done.has(apply) || Object.is(last[key as keyof IsardMapProps], props[key as keyof IsardMapProps])) {
-        continue;
+        return;
       }
       done.add(apply);
       apply(map, props);
-    }
+    });
   });
 
   const { camera } = props;
@@ -236,7 +238,9 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
 /** The props that are not options of the map */
 const stripProps = (props: Partial<IsardMapProps>): GeoMapOptions => {
   const options: Record<string, unknown> = { ...props };
-  for (const key of [...Object.keys(EVENT_PROPS), 'onLoad', 'onError', 'id', 'className', 'style']) delete options[key];
+  [...Object.keys(EVENT_PROPS), 'onLoad', 'onError', 'id', 'className', 'style'].forEach((key) => {
+    delete options[key];
+  });
   return options as GeoMapOptions;
 };
 
@@ -366,7 +370,9 @@ export const Marker = (props: MarkerProps): ReactNode => {
       marker.on('dragend', (e) => latest.current.onDragEnd?.(e.lonLat)),
     ];
     return () => {
-      for (const off of offs) off();
+      offs.forEach((off) => {
+        off();
+      });
       marker.remove();
     };
   }, [map, marker]);
@@ -427,7 +433,9 @@ export const Popup = (props: PopupProps): ReactNode => {
     ];
     if (marker) marker.setPopup(popup);
     return () => {
-      for (const off of offs) off();
+      offs.forEach((off) => {
+        off();
+      });
       if (marker?.getPopup() === popup) marker.setPopup(undefined);
       popup.remove();
     };

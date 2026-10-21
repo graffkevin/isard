@@ -150,15 +150,15 @@ export const stops = (size: Size): [number, number, number, number, number, numb
     return [0, 0, 0, 0, v, v, v, v];
   }
   // More than four: resampled at four zooms over their range
-  let s = size;
-  if (s.length > 4) {
-    const z0 = s[0]?.[0] ?? 0;
-    const z1 = s.at(-1)?.[0] ?? 0;
-    s = [0, 1, 2, 3].map((k): [number, number] => {
+  const resampled = (): [number, number][] => {
+    const z0 = size[0]?.[0] ?? 0;
+    const z1 = size.at(-1)?.[0] ?? 0;
+    return [0, 1, 2, 3].map((k): [number, number] => {
       const z = z0 + ((z1 - z0) * k) / 3;
       return [z, interpolate(size, z)];
     });
-  }
+  };
+  const s = size.length > 4 ? resampled() : size;
   const at = (k: number) => s[Math.min(k, s.length - 1)] ?? [0, 0];
   return [at(0)[0], at(1)[0], at(2)[0], at(3)[0], at(0)[1], at(1)[1], at(2)[1], at(3)[1]];
 };
@@ -169,12 +169,11 @@ export const interpolate = (size: Size, zoom: number): number => {
   const first = size[0];
   if (!first) return 0;
   if (zoom <= first[0]) return first[1];
-  for (let k = 1; k < size.length; k += 1) {
-    const [z0, v0] = size[k - 1] ?? first;
-    const [z1, v1] = size[k] ?? first;
-    if (zoom <= z1) return v0 + ((v1 - v0) * (zoom - z0)) / Math.max(z1 - z0, 1e-9);
-  }
-  return size.at(-1)?.[1] ?? 0;
+  const k = size.findIndex(([z], i) => i > 0 && zoom <= z);
+  if (k < 0) return size.at(-1)?.[1] ?? 0;
+  const [z0, v0] = size[k - 1] ?? first;
+  const [z1, v1] = size[k] ?? first;
+  return v0 + ((v1 - v0) * (zoom - z0)) / Math.max(z1 - z0, 1e-9);
 };
 
 export const evaluate = <T, P>(value: Styled<T, P>, properties: P, index: number): T => {
@@ -190,11 +189,10 @@ export const featuresOf = <P>(data: FeatureData<P>): Feature<P>[] => {
   if (Array.isArray(data)) return data;
   if (data.type !== 'FeatureCollection') return [data];
   if (crsOf(data) === undefined) return data.features;
-  let features = reprojected.get(data) as Feature<P>[] | undefined;
-  if (!features) {
-    features = reproject(data).features;
-    reprojected.set(data, features);
-  }
+  const cached = reprojected.get(data) as Feature<P>[] | undefined;
+  if (cached) return cached;
+  const features = reproject(data).features;
+  reprojected.set(data, features);
   return features;
 };
 

@@ -27,11 +27,11 @@ const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'ut
 if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`)) {
   fail(`CHANGELOG.md does not describe ${version}: add its "## [${version}] - <date>" section first`);
 }
-for (const crate of ['engine', 'geo', 'pointcloud', 'tiles3d']) {
+['engine', 'geo', 'pointcloud', 'tiles3d'].forEach((crate) => {
   const manifest = readFileSync(join(root, 'crates', crate, 'Cargo.toml'), 'utf8');
   const crateVersion = /^version = "([^"]+)"/m.exec(manifest)?.[1];
   if (crateVersion !== version) fail(`crates/${crate} is at ${crateVersion}, the package at ${version}: align them`);
-}
+});
 
 const published = (await $`npm view ${name}@${version} version`.nothrow().quiet().text()).trim() === version;
 
@@ -42,7 +42,9 @@ if (publish) {
     process.exit(0);
   }
   await $`bun run build`;
-  for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
+  ['README.md', 'CHANGELOG.md', 'LICENSE'].forEach((file) => {
+    copyFileSync(join(root, file), join(pkg, file));
+  });
   $.cwd(pkg);
   // npm ≥ 11.5: trusted publishing (OpenID Connect from the workflow), provenance attached
   await $`npx --yes npm@11 publish --access public --provenance`;
@@ -63,7 +65,9 @@ await $`bun run build`;
 await $`bun run lint`;
 await $`bun run typecheck`;
 await $`bun run test`;
-for (const file of ['README.md', 'CHANGELOG.md', 'LICENSE']) copyFileSync(join(root, file), join(pkg, file));
+['README.md', 'CHANGELOG.md', 'LICENSE'].forEach((file) => {
+  copyFileSync(join(root, file), join(pkg, file));
+});
 $.cwd(pkg);
 await $`npx --yes npm@11 pack --dry-run`;
 console.log(`${name}@${version} is ready: push it to main, the Release workflow publishes it once the checks pass`);

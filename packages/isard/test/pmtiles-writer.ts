@@ -34,13 +34,15 @@ interface Entry {
 
 const directory = (entries: Entry[]): number[] => {
   const out = [...varint(entries.length)];
-  let last = 0;
-  for (const e of entries) {
-    out.push(...varint(e.tileId - last));
-    last = e.tileId;
-  }
-  for (const e of entries) out.push(...varint(e.runLength));
-  for (const e of entries) out.push(...varint(e.length));
+  entries.forEach((e, i) => {
+    out.push(...varint(e.tileId - (entries[i - 1]?.tileId ?? 0)));
+  });
+  entries.forEach((e) => {
+    out.push(...varint(e.runLength));
+  });
+  entries.forEach((e) => {
+    out.push(...varint(e.length));
+  });
   entries.forEach((e, i) => {
     const previous = entries[i - 1];
     out.push(...varint(previous && e.offset === previous.offset + previous.length ? 0 : e.offset + 1));
@@ -70,8 +72,7 @@ export const writePmtiles = (
   // Tile data, identical consecutive tiles as one run
   const entries: Entry[] = [];
   const chunks: Uint8Array[] = [];
-  let offset = 0;
-  for (const t of sorted) {
+  sorted.forEach((t) => {
     const last = entries[entries.length - 1];
     const lastData = chunks[chunks.length - 1];
     if (
@@ -81,26 +82,23 @@ export const writePmtiles = (
       Buffer.compare(Buffer.from(lastData), Buffer.from(t.data)) === 0
     ) {
       last.runLength += 1;
-      continue;
+      return;
     }
-    entries.push({ tileId: t.id, offset, length: t.data.length, runLength: 1 });
+    entries.push({ tileId: t.id, offset: last ? last.offset + last.length : 0, length: t.data.length, runLength: 1 });
     chunks.push(t.data);
-    offset += t.data.length;
-  }
-  let root: number[];
+  });
+  const offset = chunks.reduce((sum, c) => sum + c.length, 0);
   const leaves: number[] = [];
-  if (leafSize) {
-    const rootEntries: Entry[] = [];
-    for (let i = 0; i < entries.length; i += leafSize) {
-      const part = entries.slice(i, i + leafSize);
-      const bytes = pack(new Uint8Array(directory(part)));
-      rootEntries.push({ tileId: part[0]?.tileId ?? 0, offset: leaves.length, length: bytes.length, runLength: 0 });
-      leaves.push(...bytes);
-    }
-    root = [...pack(new Uint8Array(directory(rootEntries)))];
-  } else {
-    root = [...pack(new Uint8Array(directory(entries)))];
-  }
+  const leafEntries = (size: number): Entry[] =>
+    Array.from({ length: Math.ceil(entries.length / size) }, (_, k) => entries.slice(k * size, k * size + size)).map(
+      (part) => {
+        const bytes = pack(new Uint8Array(directory(part)));
+        const entry = { tileId: part[0]?.tileId ?? 0, offset: leaves.length, length: bytes.length, runLength: 0 };
+        leaves.push(...bytes);
+        return entry;
+      },
+    );
+  const root = [...pack(new Uint8Array(directory(leafSize ? leafEntries(leafSize) : entries)))];
   const meta = pack(new TextEncoder().encode(JSON.stringify(metadata)));
   const header = new Uint8Array(127);
   const view = new DataView(header.buffer);
@@ -140,11 +138,10 @@ export const writePmtiles = (
   out.set(root, rootOffset);
   out.set(meta, metaOffset);
   out.set(leaves, leafOffset);
-  let at = dataOffset;
-  for (const c of chunks) {
+  chunks.reduce((at, c) => {
     out.set(c, at);
-    at += c.length;
-  }
+    return at + c.length;
+  }, dataOffset);
   return out;
 };
 
@@ -164,18 +161,17 @@ export const mvtLayer = (name: string, features: { type: 1 | 2; points: [number,
   let next = 0;
   const encoded = features.map(({ type, points, text }) => {
     const geometry: number[] = [];
-    let [x, y] = [0, 0];
-    points.forEach(([px, py], i) => {
-      if (type === 1 || i === 0) geometry.push(...command(1, 1));
-      else if (i === 1) geometry.push(...command(2, points.length - 1));
-      geometry.push(...varint(zigzag(px - x)), ...varint(zigzag(py - y)));
-      [x, y] = [px, py];
-    });
-    let tags: number[] = [];
-    if (text) {
-      tags = bytes(2, [0, next++]);
-      values.push(...bytes(4, string(1, text)));
-    }
+    points.reduce<[number, number]>(
+      ([x, y], [px, py], i) => {
+        if (type === 1 || i === 0) geometry.push(...command(1, 1));
+        else if (i === 1) geometry.push(...command(2, points.length - 1));
+        geometry.push(...varint(zigzag(px - x)), ...varint(zigzag(py - y)));
+        return [px, py];
+      },
+      [0, 0],
+    );
+    const tags = text ? bytes(2, [0, next++]) : [];
+    if (text) values.push(...bytes(4, string(1, text)));
     return bytes(2, [...tags, ...uint(3, type), ...bytes(4, geometry)]);
   });
   return bytes(3, [...string(1, name), ...encoded.flat(), ...keys, ...values, ...uint(5, 4096), ...uint(15, 2)]);
@@ -189,8 +185,7 @@ const PLACES: [string, number, number][] = [
 
 /** The fixture's tiles: levels 0 to 3, the tile over Paris at each level */
 const fixtureTiles = (): WrittenTile[] => {
-  const tiles: WrittenTile[] = [];
-  for (let z = 0; z <= 3; z += 1) {
+  return Array.from({ length: 4 }, (_, z) => {
     const n = 2 ** z;
     const tx = (lon: number) => ((lon + 180) / 360) * n;
     const ty = (lat: number) => ((1 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / Math.PI) / 2) * n;
@@ -204,9 +199,8 @@ const fixtureTiles = (): WrittenTile[] => {
       PLACES.map(([text, lon, lat]) => ({ type: 1 as const, points: [local(lon, lat)], text })),
     );
     const roads = mvtLayer('roads', [{ type: 2, points: PLACES.map(([, lon, lat]) => local(lon, lat)) }]);
-    tiles.push({ z, x, y, data: new Uint8Array([...places, ...roads]) });
-  }
-  return tiles;
+    return { z, x, y, data: new Uint8Array([...places, ...roads]) };
+  });
 };
 
 if (import.meta.main) {

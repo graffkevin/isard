@@ -172,22 +172,23 @@ export class NetworkLayer extends Layer {
   /** @internal */
   protected create(engine: Engine): number {
     const { nodes, edges, lines } = this.geometry;
-    let mercator: { nodes: Float64Array; lines: Float64Array | undefined };
-    if (this.kept) {
-      const { origin, nodes: n, lines: l } = this.kept;
-      mercator = { nodes: unpack(n, origin), lines: l && unpack(l, origin) };
-    } else {
+    const mercator = ((): { nodes: Float64Array; lines: Float64Array | undefined } => {
+      if (this.kept) {
+        const { origin, nodes: n, lines: l } = this.kept;
+        return { nodes: unpack(n, origin), lines: l && unpack(l, origin) };
+      }
       // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
-      mercator = { nodes: mercatorPoints(nodes), lines: lines && mercatorPoints(lines.points) };
-      const origin: [number, number] = [mercator.nodes[0] ?? 0, mercator.nodes[1] ?? 0];
+      const projected = { nodes: mercatorPoints(nodes), lines: lines && mercatorPoints(lines.points) };
+      const origin: [number, number] = [projected.nodes[0] ?? 0, projected.nodes[1] ?? 0];
       this.kept = {
         origin,
-        nodes: pack(mercator.nodes, origin),
-        lines: mercator.lines && pack(mercator.lines, origin),
+        nodes: pack(projected.nodes, origin),
+        lines: projected.lines && pack(projected.lines, origin),
       };
       // The degrees are not needed again: millions of points for a region
       this.geometry = { nodes: EMPTY, edges, lines: lines && { start: lines.start, points: EMPTY } };
-    }
+      return projected;
+    })();
     const id = engine.addNetwork(
       mercator.nodes,
       edges,
@@ -348,8 +349,12 @@ export class GroundLayer extends Layer {
     private readonly options: GroundOptions,
   ) {
     super(map);
-    for (const [name, texture] of Object.entries(options.textures ?? {})) this.textures.set(name, texture);
-    for (const [name, value] of Object.entries(options.uniforms ?? {})) this.uniforms.set(name, [value].flat());
+    Object.entries(options.textures ?? {}).forEach(([name, texture]) => {
+      this.textures.set(name, texture);
+    });
+    Object.entries(options.uniforms ?? {}).forEach(([name, value]) => {
+      this.uniforms.set(name, [value].flat());
+    });
   }
 
   /** Creates or replaces a texture of the code's sampler `name` */
@@ -407,8 +412,12 @@ export class GroundLayer extends Layer {
       ay,
       ...mercatorBox(this.options.bounds ?? [-180, -85.06, 180, 85.06]),
     );
-    for (const [name, texture] of this.textures) this.sendTexture(engine, id, name, texture);
-    for (const [name, values] of this.uniforms) engine.setGroundUniform(id, name, Float64Array.from(values));
+    this.textures.forEach((texture, name) => {
+      this.sendTexture(engine, id, name, texture);
+    });
+    this.uniforms.forEach((values, name) => {
+      engine.setGroundUniform(id, name, Float64Array.from(values));
+    });
     engine.setGroundVisible(id, this.visible);
     return id;
   }

@@ -77,24 +77,21 @@ const number = (tag: number, n: number) => [...varint(tag << 3), ...varint(n)];
 
 /** A glyph range file: `count` glyphs of `side` × `side` px from code point `first` */
 const rangeFile = (first: number, count: number, side: number): ArrayBuffer => {
-  const glyphs: number[] = [];
-  for (let i = 0; i < count; i += 1) {
+  const glyphs = Array.from({ length: count }, (_, i) => {
     const bitmap = new Array<number>((side + 6) * (side + 6)).fill(i + 1);
-    glyphs.push(
-      ...field(
-        3,
-        [
-          number(1, first + i),
-          field(2, bitmap),
-          number(3, side),
-          number(4, side),
-          number(5, 0),
-          number(6, 0),
-          number(7, side),
-        ].flat(),
-      ),
+    return field(
+      3,
+      [
+        number(1, first + i),
+        field(2, bitmap),
+        number(3, side),
+        number(4, side),
+        number(5, 0),
+        number(6, 0),
+        number(7, side),
+      ].flat(),
     );
-  }
+  }).flat();
   return new Uint8Array(field(1, glyphs)).buffer;
 };
 
@@ -118,22 +115,22 @@ describe('glyph atlas', () => {
       expect(calls.pages).toEqual([1, 2, 4]);
       const placed = [...glyphs.values()];
       expect(placed.length).toBe(40);
-      for (const g of placed) {
+      placed.forEach((g) => {
         expect(g.page).toBeDefined();
         // Rows of the pages before its own, then its place in it
         const local = (g.y ?? 0) - (g.page ?? 0) * 512;
         expect(local).toBeGreaterThanOrEqual(0);
         expect(local + 106).toBeLessThanOrEqual(512);
         expect((g.x ?? 0) + 106).toBeLessThanOrEqual(512);
-      }
+      });
       expect(new Set(placed.map((g) => g.page))).toEqual(new Set([0, 1, 2]));
       // No two glyphs at the same place
       expect(new Set(placed.map((g) => `${g.x},${g.y}`)).size).toBe(40);
       // Every upload inside an allocated page
-      for (const [page, y, h] of calls.updates) {
+      calls.updates.forEach(([page, y, h]) => {
         expect(page).toBeLessThan(4);
         expect(y + h).toBeLessThanOrEqual(512);
-      }
+      });
       // A glyph on the third page: its quad's atlas rows past the first two pages
       const last = glyphs.get(39);
       expect(last?.page).toBe(2);

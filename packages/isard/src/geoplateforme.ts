@@ -24,10 +24,10 @@ const FRANCE: [number, number, number, number] = [-5.5, 41, 10, 51.5];
  * France
  */
 export const lambert93Grid = (name: string, min: number, max: number): TileGrid => {
-  const matrices: TileMatrix[] = [];
-  for (let level = min; level <= max; level += 1) {
-    matrices.push({ id: level, resolution: 209715.2 / 2 ** level, origin: [0, 12000000] });
-  }
+  const matrices = Array.from({ length: Math.max(0, max - min + 1) }, (_, i): TileMatrix => {
+    const level = min + i;
+    return { id: level, resolution: 209715.2 / 2 ** level, origin: [0, 12000000] };
+  });
   return { crs: 'EPSG:2154', matrices, bounds: FRANCE, name };
 };
 
@@ -128,8 +128,10 @@ export const geoplateformeWfs = async <P = Properties>(
   const matched = Number(first.numberMatched);
   const total = Math.min(Number.isFinite(matched) ? matched : 0, limit);
   if (first.features.length < WFS_PAGE || total <= first.features.length) return first;
-  const starts: number[] = [];
-  for (let start = first.features.length; start < total; start += WFS_PAGE) starts.push(start);
+  const starts = Array.from(
+    { length: Math.ceil((total - first.features.length) / WFS_PAGE) },
+    (_, i) => first.features.length + i * WFS_PAGE,
+  );
   const rest = await Promise.all(starts.map((start) => page(start, Math.min(WFS_PAGE, total - start))));
   // Pages may overlap where the server's order shifts: each feature once, by its id
   const seen = new Set<unknown>();

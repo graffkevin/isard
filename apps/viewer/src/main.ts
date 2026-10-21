@@ -130,15 +130,16 @@ map.on('moveend', () => {
 map.on('click', ({ point, lonLat }) => {
   const picked = map.pickFeature(point, { radius: 4 });
   const entry = picked && layers.find(picked.layer);
-  let hit: Extract<ViewerMessage, { type: 'click' }>['hit'] = null;
-  if (picked && entry) {
+  const hitOf = (): Extract<ViewerMessage, { type: 'click' }>['hit'] => {
+    if (!picked || !entry) return null;
     const m = entry.message;
     const properties =
       m.type === 'addGeoJSON'
         ? (m.data.features[picked.index]?.properties ?? null)
         : ((picked.feature?.properties as Record<string, unknown> | undefined) ?? null);
-    hit = { id: entry.id, index: picked.index, properties };
-  }
+    return { id: entry.id, index: picked.index, properties };
+  };
+  const hit = hitOf();
   post({ type: 'click', lonLat: lonLat ? [lonLat[0], lonLat[1]] : null, hit });
 });
 
@@ -192,10 +193,12 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
       case 'kml':
       case 'gpx': {
         const body = await text();
-        let data: GeoJsonCollection;
-        if (kind === 'kml') data = parseKml(body) as unknown as GeoJsonCollection;
-        else if (kind === 'gpx') data = parseGpx(body) as unknown as GeoJsonCollection;
-        else data = collection(JSON.parse(body));
+        const parse = (): GeoJsonCollection => {
+          if (kind === 'kml') return parseKml(body) as unknown as GeoJsonCollection;
+          if (kind === 'gpx') return parseGpx(body) as unknown as GeoJsonCollection;
+          return collection(JSON.parse(body));
+        };
+        const data = parse();
         const entry = layers.add({ type: 'addGeoJSON', id, name, data });
         if (entry.bounds) fit(entry.bounds);
         break;
@@ -258,7 +261,9 @@ const flyToCloud = (id: string): void => {
 };
 
 const addFiles = (files: Iterable<File>, at?: LonLat) => {
-  for (const file of files) void addSource(file.name, file, at);
+  Array.from(files).forEach((file) => {
+    void addSource(file.name, file, at);
+  });
 };
 
 let depth = 0;
@@ -299,9 +304,9 @@ collapse.addEventListener('click', () => {
 
 const basemapSelect = element<HTMLSelectElement>('basemap');
 const initial = query.get('basemap') ?? 'osm-positron';
-for (const name of BASEMAPS.includes(initial) ? BASEMAPS : [...BASEMAPS, initial]) {
+(BASEMAPS.includes(initial) ? BASEMAPS : [...BASEMAPS, initial]).forEach((name) => {
   basemapSelect.append(new Option(name, name, name === initial, name === initial));
-}
+});
 basemapSelect.addEventListener('change', () => apply({ type: 'basemap', name: basemapSelect.value }));
 
 const KINDS: Record<AddMessage['type'], string> = {
@@ -350,6 +355,8 @@ layers.onChange = () => {
 };
 
 // URLs of the query (relative to the page)
-for (const url of query.getAll('data')) void addSource(url, url);
+query.getAll('data').forEach((url) => {
+  void addSource(url, url);
+});
 
 post({ type: 'ready', version: pkg.version });

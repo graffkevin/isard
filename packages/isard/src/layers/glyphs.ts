@@ -192,45 +192,45 @@ export class Glyphs {
 
   /** Loads these fonts from another glyph URL (a style's `glyphs`); a font keeps the first URL given for it */
   register(url: string, fonts: Iterable<string>): void {
-    for (const font of fonts) if (!this.sources.has(font)) this.sources.set(font, url);
+    [...fonts].forEach((font) => {
+      if (!this.sources.has(font)) this.sources.set(font, url);
+    });
   }
 
   /** Loads the glyphs of these code points in a font */
   async load(font: string, codes: Iterable<number>): Promise<Map<number, Glyph>> {
     const glyphs = this.fonts.get(font) ?? new Map<number, Glyph>();
     this.fonts.set(font, glyphs);
-    const starts = new Set<number>();
-    for (const code of codes) if (!glyphs.has(code)) starts.add(Math.floor(code / 256) * 256);
+    const starts = new Set([...codes].filter((code) => !glyphs.has(code)).map((code) => Math.floor(code / 256) * 256));
     await Promise.all([...starts].map((start) => this.range(font, start, glyphs)));
     return glyphs;
   }
 
   private range(font: string, start: number, glyphs: Map<number, Glyph>): Promise<void> {
     const key = `${font}/${start}`;
-    let pending = this.ranges.get(key);
-    if (!pending) {
-      const url = (this.sources.get(font) ?? this.url)
-        .replace('{fontstack}', encodeURIComponent(font))
-        .replace('{range}', `${start}-${start + 255}`);
-      pending = fetch(url, withHeaders(url))
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${url}: ${r.status}`))))
-        .then((buffer) => {
-          for (const [id, { glyph, bitmap }] of parse(buffer)) {
-            if (glyph.width > 0 && bitmap.length >= (glyph.width + 2 * BUFFER) * (glyph.height + 2 * BUFFER)) {
-              this.pack(glyph, bitmap);
-            }
-            glyphs.set(id, glyph);
+    const cached = this.ranges.get(key);
+    if (cached) return cached;
+    const url = (this.sources.get(font) ?? this.url)
+      .replace('{fontstack}', encodeURIComponent(font))
+      .replace('{range}', `${start}-${start + 255}`);
+    const pending = fetch(url, withHeaders(url))
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${url}: ${r.status}`))))
+      .then((buffer) => {
+        parse(buffer).forEach(({ glyph, bitmap }, id) => {
+          if (glyph.width > 0 && bitmap.length >= (glyph.width + 2 * BUFFER) * (glyph.height + 2 * BUFFER)) {
+            this.pack(glyph, bitmap);
           }
-          this.version += 1;
-          // One upload for the range
-          this.flush();
-        })
-        .catch((error: unknown) => {
-          // A missing range is not retried this session; its characters stay blank
-          console.warn('isard: glyphs', error);
+          glyphs.set(id, glyph);
         });
-      this.ranges.set(key, pending);
-    }
+        this.version += 1;
+        // One upload for the range
+        this.flush();
+      })
+      .catch((error: unknown) => {
+        // A missing range is not retried this session; its characters stay blank
+        console.warn('isard: glyphs', error);
+      });
+    this.ranges.set(key, pending);
     return pending;
   }
 
@@ -250,11 +250,11 @@ export class Glyphs {
 
   /** Sends the rows changed since the last upload to the engine */
   private flush(): void {
-    for (const [page, [y0, y1]] of this.dirty) {
+    this.dirty.forEach(([y0, y1], page) => {
       const data = this.pages[page];
       if (data)
         this.engine?.updateGlyphPage(page, 0, y0, this.size, y1 - y0, data.subarray(y0 * this.size, y1 * this.size));
-    }
+    });
     this.dirty.clear();
   }
 
@@ -350,9 +350,7 @@ export interface Shaping {
 
 /** Code points of a text, for loading */
 export const codes = (parts: readonly TextPart[]): Set<number> => {
-  const out = new Set<number>();
-  for (const p of parts) for (const ch of p.text) out.add(ch.codePointAt(0) ?? 32);
-  return out;
+  return new Set(parts.flatMap((p) => [...p.text].map((ch) => ch.codePointAt(0) ?? 32)));
 };
 
 /**

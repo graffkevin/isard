@@ -25,10 +25,10 @@ const ENGINE_TIMEOUT_MS = 4 * 60_000;
  */
 const freshFrame = async (): Promise<void> => {
   try {
-    for (const canvas of frame.contentDocument?.querySelectorAll('canvas') ?? []) {
+    frame.contentDocument?.querySelectorAll('canvas').forEach((canvas) => {
       const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
       gl?.getExtension('WEBGL_lose_context')?.loseContext();
-    }
+    });
   } catch {
     // Nothing to free (an empty or cross-origin frame)
   }
@@ -179,19 +179,18 @@ const summaryTable = (results: BenchResult[]): string => {
 
 const detailTable = (results: BenchResult[]): string => {
   const head = `<tr><th>phase / metric</th>${results.map((r) => `<th>${r.engine}</th>`).join('')}</tr>`;
-  const rows: string[] = [];
-  for (const name of results[0]?.phases.map((p) => p.phase) ?? []) {
-    for (const [key, label, higher] of METRICS) {
+  const rows = (results[0]?.phases.map((p) => p.phase) ?? []).flatMap((name) =>
+    METRICS.flatMap(([key, label, higher]) => {
       const values = results.map((r) => r.phases.find((p) => p.phase === name)?.[key]);
-      if (values.every((v) => v === undefined)) continue;
-      rows.push(
+      if (values.every((v) => v === undefined)) return [];
+      return [
         `<tr><td>${name}: ${label}</td>${cells(
           values.map((v) => (typeof v === 'number' ? v : undefined)),
           higher,
         )}</tr>`,
-      );
-    }
-  }
+      ];
+    }),
+  );
   return `<table>${head}${rows.join('')}</table>`;
 };
 

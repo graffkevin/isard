@@ -123,7 +123,9 @@ export class Layers {
   }
 
   clear(): void {
-    for (const id of [...this.entries.keys()]) this.remove(id);
+    [...this.entries.keys()].forEach((id) => {
+      this.remove(id);
+    });
   }
 
   setVisible(id: string, visible: boolean): void {
@@ -137,13 +139,14 @@ export class Layers {
 
   /** The layer and feature index of a handle picked */
   find(layer: Layer): Entry | undefined {
-    for (const entry of this.entries.values()) if (entry.handles.includes(layer)) return entry;
-    return undefined;
+    return [...this.entries.values()].find((entry) => entry.handles.includes(layer));
   }
 
   /** Highlights a feature of a GeoJSON layer (null: none) */
   select(id: string, index: number | null): void {
-    for (const h of this.highlight) this.removeHandle(h);
+    this.highlight.forEach((h) => {
+      this.removeHandle(h);
+    });
     this.highlight = [];
     const entry = this.entries.get(id);
     if (index === null || !entry || entry.message.type !== 'addGeoJSON') return;
@@ -170,7 +173,9 @@ export class Layers {
 
   private hide(entry: Entry): void {
     entry.generation += 1;
-    for (const h of entry.handles) this.removeHandle(h);
+    entry.handles.forEach((h) => {
+      this.removeHandle(h);
+    });
     entry.handles = [];
   }
 
@@ -185,7 +190,9 @@ export class Layers {
     const done = (handles: Handle[]) => {
       // Hidden or replaced meanwhile
       if (generation !== entry.generation || this.entries.get(entry.id) !== entry) {
-        for (const h of handles) this.removeHandle(h);
+        handles.forEach((h) => {
+          this.removeHandle(h);
+        });
         return;
       }
       entry.handles.push(...handles);
@@ -267,10 +274,15 @@ export class Layers {
     const types = new Set<string>();
     const scan = (g: GeoJsonCollection['features'][number]['geometry']): void => {
       if (!g) return;
-      if (g.type === 'GeometryCollection') for (const x of g.geometries ?? []) scan(x as typeof g);
-      else types.add(g.type.replace('Multi', ''));
+      if (g.type === 'GeometryCollection') {
+        (g.geometries ?? []).forEach((x) => {
+          scan(x as typeof g);
+        });
+      } else types.add(g.type.replace('Multi', ''));
     };
-    for (const f of data.features) scan(f.geometry);
+    data.features.forEach((f) => {
+      scan(f.geometry);
+    });
     const handles: Handle[] = [];
     const height = (p: Record<string, unknown> | null, key: string | number | undefined) => {
       if (typeof key === 'number') return key;
@@ -333,29 +345,28 @@ export class Layers {
   private async vectorTiles(m: Extract<HostMessage, { type: 'addVectorTiles' }>): Promise<Handle[]> {
     const url = absolute(m.url);
     const [minZoom, maxZoom] = [m.minZoom ?? 0, m.maxZoom ?? 14];
-    let style = m.style as Style | undefined;
-    if (!style) {
-      let names = m.layers ?? [];
-      if (names.length === 0) {
-        const camera = this.map.getCamera();
-        const z = Math.round(Math.max(minZoom, Math.min(maxZoom, camera.zoom)));
-        const n = 2 ** z;
-        const [lon, lat] = camera.center;
-        const x = Math.min(n - 1, Math.floor(lon2x(lon) * n));
-        const y = Math.min(n - 1, Math.floor(lat2y(lat) * n));
-        for (const [tz, tx, ty] of [
-          [z, x, y],
-          [minZoom, Math.floor(x / 2 ** (z - minZoom)), Math.floor(y / 2 ** (z - minZoom))],
-        ] as [number, number, number][]) {
-          const response = await fetch(url.replace('{z}', `${tz}`).replace('{x}', `${tx}`).replace('{y}', `${ty}`));
-          if (!response.ok || response.status === 204) continue;
-          names = tileLayerNames(new Uint8Array(await response.arrayBuffer()));
-          if (names.length) break;
-        }
-        if (names.length === 0) throw new Error('no vector tile here to read the layers from: give `layers`');
+    const layerNames = async (): Promise<string[]> => {
+      if (m.layers?.length) return m.layers;
+      const camera = this.map.getCamera();
+      const z = Math.round(Math.max(minZoom, Math.min(maxZoom, camera.zoom)));
+      const n = 2 ** z;
+      const [lon, lat] = camera.center;
+      const x = Math.min(n - 1, Math.floor(lon2x(lon) * n));
+      const y = Math.min(n - 1, Math.floor(lat2y(lat) * n));
+      for (const [tz, tx, ty] of [
+        [z, x, y],
+        [minZoom, Math.floor(x / 2 ** (z - minZoom)), Math.floor(y / 2 ** (z - minZoom))],
+      ] as [number, number, number][]) {
+        const response = await fetch(url.replace('{z}', `${tz}`).replace('{x}', `${tx}`).replace('{y}', `${ty}`));
+        if (!response.ok || response.status === 204) continue;
+        const names = tileLayerNames(new Uint8Array(await response.arrayBuffer()));
+        if (names.length) return names;
       }
-      style = basicStyle({ tiles: [url], minzoom: minZoom, maxzoom: maxZoom }, names);
-    }
+      throw new Error('no vector tile here to read the layers from: give `layers`');
+    };
+    const style =
+      (m.style as Style | undefined) ??
+      basicStyle({ tiles: [url], minzoom: minZoom, maxzoom: maxZoom }, await layerNames());
     const tiles = this.map.vectorTiles({ style, ...(m.attribution ? { attribution: m.attribution } : {}) });
     tiles.raster();
     tiles.labels();

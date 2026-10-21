@@ -107,7 +107,9 @@ describe('mvt', () => {
     const geometry = [...command(2, 1000000), ...varint(zigzag(1))];
     const feature = [...uint(3, 2), ...bytes(4, geometry)];
     const full = tile([...string(1, 'lines'), ...double(3, 0), ...bytes(2, feature)]);
-    for (let n = 0; n < full.length; n += 1) expect(() => decode(full.subarray(0, n))).not.toThrow();
+    Array.from({ length: full.length }, (_, n) => n).forEach((n) => {
+      expect(() => decode(full.subarray(0, n))).not.toThrow();
+    });
     // A length far past the end
     expect(() => decode(Uint8Array.from([...tag(3, 2), ...varint(2 ** 40), 1, 2]))).not.toThrow();
   });

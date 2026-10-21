@@ -258,14 +258,13 @@ export class PMTiles {
 
   private leaf(header: PmtilesHeader, entry: PmtilesEntry): Promise<PmtilesEntry[]> {
     const offset = header.leafDirectoryOffset + entry.offset;
-    let leaf = this.leaves.get(offset);
-    if (!leaf) {
-      leaf = this.range(offset, entry.length).then(async (raw) =>
-        parseDirectory(await decompress(raw, header.internalCompression)),
-      );
-      leaf.catch(() => this.leaves.delete(offset));
-      this.leaves.set(offset, leaf);
-    }
+    const cached = this.leaves.get(offset);
+    if (cached) return cached;
+    const leaf = this.range(offset, entry.length).then(async (raw) =>
+      parseDirectory(await decompress(raw, header.internalCompression)),
+    );
+    leaf.catch(() => this.leaves.delete(offset));
+    this.leaves.set(offset, leaf);
     return leaf;
   }
 
@@ -294,11 +293,10 @@ const archives = new Lru<string, PMTiles>(16);
 
 /** The reader of an archive URL (without `pmtiles://`), shared */
 export const pmtiles = (url: string): PMTiles => {
-  let archive = archives.get(url);
-  if (!archive) {
-    archive = new PMTiles(url);
-    archives.set(url, archive);
-  }
+  const cached = archives.get(url);
+  if (cached) return cached;
+  const archive = new PMTiles(url);
+  archives.set(url, archive);
   return archive;
 };
 

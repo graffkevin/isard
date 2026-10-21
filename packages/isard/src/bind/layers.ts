@@ -70,17 +70,18 @@ export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | und
   const styleKeys = STYLE_KEYS[next.type];
   const own = OWN_SETTERS[next.type];
   const change = { rebuild: false as const, style: {} as Record<string, unknown>, own: {} as Record<string, unknown> };
-  let changed = false;
-  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (key === 'type' || Object.is(before[key], after[key])) continue;
-    // A style or setting taken away: the layer goes back to its defaults, as made anew
-    if (!(key in after)) return { rebuild: true };
-    changed = true;
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
+    (key) => key !== 'type' && !Object.is(before[key], after[key]),
+  );
+  if (keys.length === 0) return undefined;
+  const isStyle = (key: string) => key !== 'before' && (styleKeys === 'all' || styleKeys.has(key));
+  // A style or setting taken away: the layer goes back to its defaults, as made anew
+  if (keys.some((key) => !(key in after) || !(own?.has(key) || isStyle(key)))) return { rebuild: true };
+  keys.forEach((key) => {
     if (own?.has(key)) change.own[key] = after[key];
-    else if (key !== 'before' && (styleKeys === 'all' || styleKeys.has(key))) change.style[key] = after[key];
-    else return { rebuild: true };
-  }
-  return changed ? change : undefined;
+    else change.style[key] = after[key];
+  });
+  return change;
 };
 
 interface Settable {
@@ -107,14 +108,14 @@ export const applyLayerChange = (
   if ('edgeWidths' in own) target.setEdgeWidths?.(own.edgeWidths);
   if ('instances' in own || 'altitudeReference' in own) target.setInstances?.(spec.instances, spec.altitudeReference);
   if ('uniforms' in own) {
-    for (const [name, value] of Object.entries((own.uniforms ?? {}) as Record<string, unknown>)) {
+    Object.entries((own.uniforms ?? {}) as Record<string, unknown>).forEach(([name, value]) => {
       target.setUniform?.(name, value);
-    }
+    });
   }
   if ('textures' in own) {
-    for (const [name, texture] of Object.entries((own.textures ?? {}) as Record<string, unknown>)) {
+    Object.entries((own.textures ?? {}) as Record<string, unknown>).forEach(([name, texture]) => {
       target.setTexture?.(name, texture);
-    }
+    });
   }
   if (Object.keys(change.style).length > 0) target.setStyle?.(change.style);
 };

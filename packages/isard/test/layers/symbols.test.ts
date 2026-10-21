@@ -11,10 +11,11 @@ import { SymbolLayer, type SymbolOptions, symbolStyle } from '../../src/layers/s
 function fakeGlyphs(missing = new Set<number>()) {
   const map = new Map<number, Glyph>();
   const fill = () => {
-    for (let c = 32; c < 128; c += 1) {
-      if (!missing.has(c))
+    Array.from({ length: 96 }, (_, k) => 32 + k)
+      .filter((c) => !missing.has(c))
+      .forEach((c) => {
         map.set(c, { width: 10, height: 14, left: 1, top: 12, advance: 12, x: c * 4, y: 0, page: 0 });
-    }
+      });
   };
   fill();
   const loads: number[][] = [];
@@ -59,6 +60,12 @@ const layer = (glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, ico
   return { symbols, glyphs, icons, next };
 };
 
+/** What `act` sends, `sent` asked for before it */
+const after = <T>(sent: Promise<T>, act: () => unknown): Promise<T> => {
+  act();
+  return sent;
+};
+
 const point = (text: string, lon: number, icon?: string): Feature<P> => ({
   type: 'Feature',
   properties: { text, ...(icon ? { icon } : {}) },
@@ -77,39 +84,31 @@ describe('symbol groups', () => {
     const b = [point('de', 3)];
     const c = [point('fgh', 4)];
     const plain = layer();
-    let sent = plain.next();
-    plain.symbols.setData([...a, ...b, ...c]);
-    const expected = await sent;
+    const expected = await after(plain.next(), () => plain.symbols.setData([...a, ...b, ...c]));
     const grouped = layer();
-    sent = grouped.next();
-    grouped.symbols.setGroups([a, b, c]);
-    const got = await sent;
-    for (let i = 1; i < 5; i += 1) expect([...(got[i] as Float32Array)]).toEqual([...(expected[i] as Float32Array)]);
+    const got = await after(grouped.next(), () => grouped.symbols.setGroups([a, b, c]));
+    [1, 2, 3, 4].forEach((i) => {
+      expect([...(got[i] as Float32Array)]).toEqual([...(expected[i] as Float32Array)]);
+    });
     expect(grouped.symbols.features).toEqual([...a, ...b, ...c]);
     // Another order, a new group: only the new group's glyphs are asked for
     grouped.glyphs.loads.length = 0;
     const d = [point('i', 5)];
-    sent = grouped.next();
-    grouped.symbols.setGroups([c, d, a]);
-    const moved = await sent;
+    const moved = await after(grouped.next(), () => grouped.symbols.setGroups([c, d, a]));
     expect(grouped.glyphs.loads).toEqual([['i'.charCodeAt(0)]]);
-    sent = plain.next();
-    plain.symbols.setData([...c, ...d, ...a]);
-    const again = await sent;
+    const again = await after(plain.next(), () => plain.symbols.setData([...c, ...d, ...a]));
     // The quads' label indices follow the new order
-    for (let i = 1; i < 5; i += 1) expect([...(moved[i] as Float32Array)]).toEqual([...(again[i] as Float32Array)]);
+    [1, 2, 3, 4].forEach((i) => {
+      expect([...(moved[i] as Float32Array)]).toEqual([...(again[i] as Float32Array)]);
+    });
   });
 
   test('a new style shapes the groups again', async () => {
     const { symbols, glyphs, next } = layer();
     const a = [point('ab', 1)];
-    let sent = next();
-    symbols.setGroups([a]);
-    await sent;
+    await after(next(), () => symbols.setGroups([a]));
     glyphs.loads.length = 0;
-    sent = next();
-    symbols.setStyle({ size: 20 });
-    await sent;
+    await after(next(), () => symbols.setStyle({ size: 20 }));
     expect(glyphs.loads.length).toBe(1);
   });
 
@@ -117,38 +116,26 @@ describe('symbol groups', () => {
     const glyphs = fakeGlyphs(new Set(['b'.charCodeAt(0)]));
     const { symbols, next } = layer(glyphs);
     const a = [point('ab', 1)];
-    let sent = next();
-    symbols.setGroups([a]);
-    const first = await sent;
+    const first = await after(next(), () => symbols.setGroups([a]));
     // One glyph: one quad
     expect(first[4].length).toBe(QUAD);
     glyphs.loads.length = 0;
-    sent = next();
-    symbols.setGroups([a]);
-    await sent;
+    await after(next(), () => symbols.setGroups([a]));
     expect(glyphs.loads.length).toBe(0);
     glyphs.arrive();
-    sent = next();
-    symbols.setGroups([a]);
-    const second = await sent;
+    const second = await after(next(), () => symbols.setGroups([a]));
     expect(glyphs.loads.length).toBe(1);
     expect(second[4].length).toBe(2 * QUAD);
   });
 
   test('a style reading the index of the features shapes groups that moved again', async () => {
     const { symbols, glyphs, next } = layer();
-    let sent = next();
-    symbols.setStyle({ text: (p, i) => `${p.text}${i}` });
-    await sent;
+    await after(next(), () => symbols.setStyle({ text: (p, i) => `${p.text}${i}` }));
     const a = [point('a', 1)];
     const b = [point('b', 2)];
-    sent = next();
-    symbols.setGroups([a, b]);
-    await sent;
+    await after(next(), () => symbols.setGroups([a, b]));
     glyphs.loads.length = 0;
-    sent = next();
-    symbols.setGroups([b, a]);
-    await sent;
+    await after(next(), () => symbols.setGroups([b, a]));
     expect(glyphs.loads.length).toBe(1);
   });
 });
@@ -186,8 +173,7 @@ describe('icons', () => {
     // The text box of the icon alone is empty
     expect([...boxes.slice(4, 8)]).toEqual([0, 0, 0, 0]);
     // Two icon quads first (scale -1), then the glyphs (three)
-    const kinds = [];
-    for (let q = 0; q < quads.length; q += QUAD) kinds.push(quads[q + 9]);
+    const kinds = Array.from({ length: Math.ceil(quads.length / QUAD) }, (_, k) => quads[k * QUAD + 9]);
     expect(kinds.map((k) => (k ?? 0) < 0)).toEqual([true, true, false, false, false]);
     expect([quads[0], quads[QUAD]]).toEqual([0, 1]);
   });
@@ -196,13 +182,9 @@ describe('icons', () => {
     const icons = new Icons();
     const { symbols, next } = layer(fakeGlyphs(), { icon: (p) => p.icon ?? '' }, icons);
     const a = [point('a', 1, 'pin')];
-    let sent = next();
-    symbols.setGroups([a]);
-    expect((await sent)[3][9]).toBe(64);
+    expect((await after(next(), () => symbols.setGroups([a])))[3][9]).toBe(64);
     icons.add('pin', image(8, 8));
-    sent = next();
-    symbols.setGroups([a]);
-    expect((await sent)[3][9]).toBe(192);
+    expect((await after(next(), () => symbols.setGroups([a])))[3][9]).toBe(192);
   });
 
   test('a shield stretched around its text, turning with it along its line; overlaps and optional parts', async () => {

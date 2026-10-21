@@ -122,6 +122,12 @@ const validateNetwork = (nodes: Float64Array, edges: Uint32Array): void => {
   }
 };
 
+/** The observers of a viewshed option: none, one, or several */
+const observersOf = (options: ViewshedOptions | readonly ViewshedOptions[] | undefined): readonly ViewshedOptions[] => {
+  if (!options) return [];
+  return 'position' in options ? [options] : options;
+};
+
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
 /** Frames the hover picking waits for its answer at most (usually one) */
@@ -426,32 +432,36 @@ export class GeoMap {
     this.#icons?.attach(this.#engine);
     const engine = this.#engine;
     // No layer refers to an id of the old engine while the others are created
-    for (const layer of this.layers) layer.forgetEngine();
-    for (const layer of this.layers) {
+    this.layers.forEach((layer) => {
+      layer.forgetEngine();
+    });
+    this.layers.forEach((layer) => {
       // Still waiting for the engine with 3D Tiles (loading, or failed): created with it
-      if (layer.needsFullEngine && !this.tiles3dModule) continue;
+      if (layer.needsFullEngine && !this.tiles3dModule) return;
       // A layer that fails is reported and left out; the others are created
       try {
         layer.attach(engine);
       } catch (error) {
         report(error);
       }
-    }
+    });
     // Links between layers, once every layer has its new id (buildings colored by a network above them)
-    for (const layer of this.layers) {
-      if (layer.id < 0) continue;
+    this.layers.forEach((layer) => {
+      if (layer.id < 0) return;
       try {
         layer.relink(engine);
       } catch (error) {
         report(error);
       }
-    }
+    });
     this.applySwipe();
     // A street-level eye stays one in the new engine
     if (this.#firstPerson) this.setFirstPerson(this.#firstPerson);
     // What the old engine drew over the scene: the viewshed, the panoramas shown
     if (this.viewshed) this.setViewshed(this.viewshed);
-    for (const set of this.panoramaSets) if (set.current) void set.show(set.current.index).catch(report);
+    this.panoramaSets.forEach((set) => {
+      if (set.current) void set.show(set.current.index).catch(report);
+    });
     this.resize();
   }
 
@@ -569,9 +579,7 @@ export class GeoMap {
 
   /** Index in the engine of the layer at `index`: the layers waiting for the engine with 3D Tiles are not in it yet */
   private engineIndex(index: number): number {
-    let count = 0;
-    for (let i = 0; i < index; i += 1) if ((this.layers[i]?.id ?? -1) >= 0) count += 1;
-    return count;
+    return this.layers.slice(0, index).filter((layer) => layer.id >= 0).length;
   }
 
   /** Moves a layer under all the others */
@@ -593,13 +601,13 @@ export class GeoMap {
   /** @internal Calls the listeners; one that throws is reported and does not stop the others nor the frame */
   emit<K extends keyof MapEvents>(type: K, event: MapEvents[K]): void {
     const listeners: Set<(event: MapEvents[K]) => void> = this.listeners[type];
-    for (const listener of listeners) {
+    listeners.forEach((listener) => {
       try {
         listener(event);
       } catch (error) {
         report(error);
       }
-    }
+    });
   }
 
   // ── Camera ──
@@ -732,8 +740,7 @@ export class GeoMap {
 
   setViewshed(options: ViewshedOptions | readonly ViewshedOptions[] | undefined): void {
     this.viewshed = options;
-    let observers: readonly ViewshedOptions[] = [];
-    if (options) observers = 'position' in options ? [options] : options;
+    const observers = observersOf(options);
     const [first] = observers;
     if (!first) {
       this.engine.clearViewshed();
@@ -784,7 +791,9 @@ export class GeoMap {
   }
 
   private attributionChanged(): void {
-    for (const listener of this.attributionListeners) listener();
+    this.attributionListeners.forEach((listener) => {
+      listener();
+    });
   }
 
   /** Color behind the map, a CSS color (its alpha ignored) */
@@ -1040,29 +1049,8 @@ export class GeoMap {
   /** Raster tiles ({z}, {x}, {y} URL; Web Mercator, or reprojected from another `grid`: longitudes and latitudes,
    * Lambert-93, UTM…), over the layers already added */
   addRaster(options: RasterOptions & { before?: Layer }): RasterLayer {
-    const { url, grid = 'mercator', opacity = 1, saturation = 1, size, before } = options;
-    let { minZoom = 0, maxZoom = 19 } = options;
-    // A PMTiles archive (`pmtiles://…`): its tiles read by range requests
-    let loader = options.loader ?? pmtilesRasterLoader(url, size ?? 256);
-    if (grid !== 'mercator' && !loader) {
-      if (grid === 'equirectangular') {
-        // `minZoom` and `maxZoom` are levels of the source: its level n has the pixel size of Mercator level n + 1 at
-        // the equator
-        loader = gridLoader(
-          url,
-          resolveGrid(equirectangularGrid(minZoom, maxZoom)),
-          size ?? 256,
-          this.remoteReprojection,
-        );
-        [minZoom, maxZoom] = [minZoom + 1, maxZoom + 1];
-      } else {
-        const resolved = resolveGrid(grid);
-        const zooms = gridZooms(resolved);
-        minZoom = options.minZoom ?? zooms.minZoom;
-        maxZoom = options.maxZoom ?? zooms.maxZoom;
-        loader = gridLoader(url, resolved, size ?? 256, this.remoteReprojection);
-      }
-    }
+    const { url, opacity = 1, saturation = 1, size, before } = options;
+    const { loader, minZoom, maxZoom } = this.rasterSource(options);
     const layer = new RasterLayer(this, { url, minZoom, maxZoom, opacity, saturation, size, loader });
     this.place(layer, before);
     if (options.attribution) {
@@ -1070,6 +1058,33 @@ export class GeoMap {
       this.attributionChanged();
     }
     return layer;
+  }
+
+  /** The loader of a raster layer's tiles and its zooms: a PMTiles archive, or tiles reprojected from another grid */
+  private rasterSource(options: RasterOptions) {
+    const { url, grid = 'mercator', size } = options;
+    const { minZoom = 0, maxZoom = 19 } = options;
+    // A PMTiles archive (`pmtiles://…`): its tiles read by range requests
+    const loader = options.loader ?? pmtilesRasterLoader(url, size ?? 256);
+    if (grid === 'mercator' || loader) return { loader, minZoom, maxZoom };
+    if (grid === 'equirectangular') {
+      // `minZoom` and `maxZoom` are levels of the source: its level n has the pixel size of Mercator level n + 1 at
+      // the equator
+      const reprojected = gridLoader(
+        url,
+        resolveGrid(equirectangularGrid(minZoom, maxZoom)),
+        size ?? 256,
+        this.remoteReprojection,
+      );
+      return { loader: reprojected, minZoom: minZoom + 1, maxZoom: maxZoom + 1 };
+    }
+    const resolved = resolveGrid(grid);
+    const zooms = gridZooms(resolved);
+    return {
+      loader: gridLoader(url, resolved, size ?? 256, this.remoteReprojection),
+      minZoom: options.minZoom ?? zooms.minZoom,
+      maxZoom: options.maxZoom ?? zooms.maxZoom,
+    };
   }
 
   /**
@@ -1280,11 +1295,10 @@ export class GeoMap {
   /** The loader of the relief tiles of `url` in a PNG encoding (one per URL, encoding and floor) */
   private readonly terrainLoader = (url: string, encoding: PngEncoding, floor?: number): TerrainLoader => {
     const key = `${encoding} ${floor ?? ''} ${url}`;
-    let loader = this.terrainLoaders.get(key);
-    if (!loader) {
-      loader = encodedTerrainLoader(url, encoding, floor, this.remoteHeights);
-      this.terrainLoaders.set(key, loader);
-    }
+    const cached = this.terrainLoaders.get(key);
+    if (cached) return cached;
+    const loader = encodedTerrainLoader(url, encoding, floor, this.remoteHeights);
+    this.terrainLoaders.set(key, loader);
     return loader;
   };
 
@@ -1396,30 +1410,32 @@ export class GeoMap {
       this.emit('moveend', camera);
     }
     // Values for the pointer position are computed before drawing, in the same frame
-    let hovered: Point | undefined;
-    if (this.hoverPoint) {
-      const point = this.hoverPoint;
-      hovered = point;
+    const hovered = this.hoverPoint;
+    if (hovered) {
       this.hoverPoint = undefined;
       // The position under the pointer for its listeners only (a 'hoverfeature' alone does not need it)
-      if (this.listeners.hover.size > 0) this.emit('hover', { point, lonLat: this.unproject(point) });
+      if (this.listeners.hover.size > 0) this.emit('hover', { point: hovered, lonLat: this.unproject(hovered) });
     }
     const t0 = performance.now();
     // The engine asks for the next frame while it draws (uploads past the frame budget, fades): not ignored
     this.inFrame = false;
     // As the engine has it now (a listener may have moved it), for the custom layers drawn in the frame
     this.frameCamera = this.layers.some((layer) => layer instanceof CustomLayer) ? this.engine.camera() : undefined;
-    let loading: boolean;
-    try {
-      loading = this.engine.render();
-    } finally {
-      this.frameCamera = undefined;
-    }
+    const render = (): boolean => {
+      try {
+        return this.engine.render();
+      } finally {
+        this.frameCamera = undefined;
+      }
+    };
+    const loading = render();
     this.inFrame = true;
     // The picking pass sees the frame just drawn; its answer comes on a later frame
     if (hovered && this.listeners.hoverfeature.size > 0) this.requestHoverPick(hovered);
     // Overlays follow the frame just drawn (camera, relief altitudes): all in one pass, transforms only
-    for (const item of this.positioned) item.position(this.size);
+    this.positioned.forEach((item) => {
+      item.position(this.size);
+    });
     this.emit('render', { ms: performance.now() - t0 });
     this.inFrame = false;
     // A move goes on until a frame finds the camera still: that frame sends 'moveend'
@@ -1471,7 +1487,9 @@ export class GeoMap {
     cancelAnimationFrame(this.frameRequest);
     this.cancelHoverPick();
     this.vector?.tiles.destroy();
-    for (const tiles of [...this.vectorSets]) tiles.destroy();
+    [...this.vectorSets].forEach((tiles) => {
+      tiles.destroy();
+    });
     this.vectorSets.clear();
     this.basemapPool?.terminate();
     this.basemapPool = undefined;
@@ -1482,7 +1500,9 @@ export class GeoMap {
     this.interaction?.destroy();
     this.loader?.destroy();
     // Custom layers free their WebGL objects, models their data, while the context is there
-    for (const layer of this.layers) layer.dispose();
+    this.layers.forEach((layer) => {
+      layer.dispose();
+    });
     this.engine.free();
     // Work still under way (labels being shaped, tiles arriving, timers) may call the engine after this: it finds one
     // that does nothing, and nothing is drawn again
@@ -1491,13 +1511,19 @@ export class GeoMap {
     this.#glyphs?.attach(this.#engine);
     this.#icons?.attach(this.#engine);
     this.lost = true;
-    for (const control of [...this.controls.keys()]) this.removeControl(control);
+    [...this.controls.keys()].forEach((control) => {
+      this.removeControl(control);
+    });
     this.positioned.clear();
     this.canvas.remove();
     this.overlay.remove();
-    for (const position of CORNERS) this.corners[position].remove();
+    CORNERS.forEach((position) => {
+      this.corners[position].remove();
+    });
     this.container.classList.remove('isard-map');
-    for (const listeners of Object.values(this.listeners)) listeners.clear();
+    Object.values(this.listeners).forEach((listeners) => {
+      listeners.clear();
+    });
   }
 }
 

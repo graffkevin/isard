@@ -96,31 +96,30 @@ export const resolveGrid = (grid: TileGrid): Resolved => {
       }),
     )
     .sort((a, b) => b.resolution - a.resolution);
-  let extent: Resolved['extent'];
-  if (grid.bounds) {
+  const projected = (bounds: [number, number, number, number]): Resolved['extent'] => {
     // Its outline and inside, projected: the box of the CRS around them, a little larger (curved edges)
-    const [w, s, e, n] = grid.bounds;
-    const points: number[] = [];
-    for (let i = 0; i <= 8; i += 1) {
-      for (let j = 0; j <= 8; j += 1) points.push(...crs.forward([w + ((e - w) * i) / 8, s + ((n - s) * j) / 8]));
-    }
+    const [w, s, e, n] = bounds;
+    const steps = Array.from({ length: 9 }, (_, i) => i);
+    const points = steps.flatMap((i) =>
+      steps.flatMap((j) => crs.forward([w + ((e - w) * i) / 8, s + ((n - s) * j) / 8])),
+    );
     const b = box(points);
-    if (b) {
-      const margin = 0.01 * Math.max(b[2] - b[0], b[3] - b[1]);
-      extent = [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
-    }
-  }
+    if (!b) return undefined;
+    const margin = 0.01 * Math.max(b[2] - b[0], b[3] - b[1]);
+    return [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
+  };
+  const extent = grid.bounds ? projected(grid.bounds) : undefined;
   return { crs, matrices, bounds: grid.bounds, extent };
 };
 
 /** The longitudes and latitudes of tiles in longitudes and latitudes, two 256 px tiles side by side at level 0, rows
  * from the north (NASA's Trek, WorldCRS84Quad), levels `minLevel` to `maxLevel` ({z} is the level) */
 export const equirectangularGrid = (minLevel: number, maxLevel: number): TileGrid => {
-  const matrices: TileMatrix[] = [];
-  for (let level = minLevel; level <= maxLevel; level += 1) {
+  const matrices = Array.from({ length: maxLevel - minLevel + 1 }, (_, i): TileMatrix => {
+    const level = minLevel + i;
     const n = 2 ** level;
-    matrices.push({ id: level, resolution: 180 / 256 / n, origin: [-180, 90], matrixWidth: 2 * n, matrixHeight: n });
-  }
+    return { id: level, resolution: 180 / 256 / n, origin: [-180, 90], matrixWidth: 2 * n, matrixHeight: n };
+  });
   return { crs: 'EPSG:4326', matrices };
 };
 
@@ -210,13 +209,13 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
       points[2 * (j * (N + 1) + i) + 1] = py;
     }
   }
-  let b = box(points);
-  if (!b) return null;
-  if (g.extent) {
-    const e = g.extent;
-    b = [Math.max(b[0], e[0]), Math.max(b[1], e[1]), Math.min(b[2], e[2]), Math.min(b[3], e[3])];
-    if (b[0] >= b[2] || b[1] >= b[3]) return null;
-  }
+  const outer = box(points);
+  if (!outer) return null;
+  const e = g.extent;
+  const b: [number, number, number, number] = e
+    ? [Math.max(outer[0], e[0]), Math.max(outer[1], e[1]), Math.min(outer[2], e[2]), Math.min(outer[3], e[3])]
+    : outer;
+  if (e && (b[0] >= b[2] || b[1] >= b[3])) return null;
   const mesh = new Float32Array(points.length);
   if (g.matrices.length === 0) {
     // One image of the tile's box, a pixel larger on each side
@@ -237,11 +236,10 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
   // Where the pixels of the tile are sampled: the centers of its edge pixels and the mesh, within the source's extent
   const centers = sampled(points, size, b);
   if (!centers) return null;
-  let best = 0;
-  g.matrices.forEach((m, i) => {
-    const r = g.matrices[best]?.resolution ?? m.resolution;
-    if (Math.abs(Math.log2(m.resolution / target)) < Math.abs(Math.log2(r / target))) best = i;
-  });
+  const best = g.matrices.reduce((found, m, i) => {
+    const r = g.matrices[found]?.resolution ?? m.resolution;
+    return Math.abs(Math.log2(m.resolution / target)) < Math.abs(Math.log2(r / target)) ? i : found;
+  }, 0);
   for (let level = best; level >= 0; level -= 1) {
     const m = g.matrices[level] as Matrix;
     const [ox, oy] = m.origin;
@@ -256,14 +254,14 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
     if (c0 > c1 || t0 > t1) return null;
     const [width, height] = [(c1 - c0 + 1) * tw, (t1 - t0 + 1) * th];
     if (width * height > MAX_MOSAIC) continue;
-    const sources: Placed[] = [];
-    for (let row = t0; row <= t1; row += 1) {
-      for (let col = c0; col <= c1; col += 1) {
+    const sources = Array.from({ length: t1 - t0 + 1 }, (_, r) => t0 + r).flatMap((row) =>
+      Array.from({ length: c1 - c0 + 1 }, (_, c): Placed => {
+        const col = c0 + c;
         const bbox = [ox + col * tw * res, oy - (row + 1) * th * res, ox + (col + 1) * tw * res, oy - row * th * res];
         const placed = { x: (col - c0) * tw, y: (row - t0) * th, w: tw, h: th };
-        sources.push({ url: sourceUrl(url, m.id, col, row, bbox, tw, th), ...placed });
-      }
-    }
+        return { url: sourceUrl(url, m.id, col, row, bbox, tw, th), ...placed };
+      }),
+    );
     for (let k = 0; k < points.length; k += 2) {
       mesh[k] = ((points[k] as number) - ox) / res - c0 * tw;
       mesh[k + 1] = (oy - (points[k + 1] as number)) / res - t0 * th;
@@ -281,14 +279,15 @@ export const gridZooms = (g: Resolved): { minZoom: number; maxZoom: number } => 
   const coarse = g.matrices[0];
   const fine = g.matrices.at(-1);
   if (!coarse || !fine) return { minZoom: 0, maxZoom: 19 };
-  let lonLat: readonly number[] = [0, 0];
-  if (g.bounds) lonLat = [(g.bounds[0] + g.bounds[2]) / 2, (g.bounds[1] + g.bounds[3]) / 2];
-  else {
+  const middle = (): readonly number[] => {
     const [l0, r0, l1, r1] = coarse.limits ?? [0, 0, coarse.matrixWidth - 1, coarse.matrixHeight - 1];
     const span = coarse.resolution * coarse.tileWidth;
     const [cx, cy] = [(l0 + l1 + 1) / 2, (r0 + r1 + 1) / 2];
-    if (Number.isFinite(cx + cy)) lonLat = g.crs.inverse([coarse.origin[0] + cx * span, coarse.origin[1] - cy * span]);
-  }
+    return Number.isFinite(cx + cy)
+      ? g.crs.inverse([coarse.origin[0] + cx * span, coarse.origin[1] - cy * span])
+      : [0, 0];
+  };
+  const lonLat = g.bounds ? [(g.bounds[0] + g.bounds[2]) / 2, (g.bounds[1] + g.bounds[3]) / 2] : middle();
   // CRS units per pixel of a 256 px tile at zoom 0 there
   const [mx, my] = [mercatorX(lonLat[0] ?? 0), mercatorY(lonLat[1] ?? 0)];
   const d = 1e-7;

@@ -73,15 +73,17 @@ beforeAll(async () => {
   const db = new Database(join(dir, 'tiles.mbtiles'));
   db.run('CREATE TABLE metadata (name TEXT, value TEXT)');
   db.run('CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB)');
-  for (const [name, value] of [
-    ['format', 'pbf'],
-    ['minzoom', '0'],
-    ['maxzoom', '5'],
-    ['bounds', '-10,-20,30,40'],
-    ['json', JSON.stringify({ vector_layers: [{ id: 'water' }, { id: 'roads' }] })],
-  ] as [string, string][]) {
+  (
+    [
+      ['format', 'pbf'],
+      ['minzoom', '0'],
+      ['maxzoom', '5'],
+      ['bounds', '-10,-20,30,40'],
+      ['json', JSON.stringify({ vector_layers: [{ id: 'water' }, { id: 'roads' }] })],
+    ] as [string, string][]
+  ).forEach(([name, value]) => {
     db.run('INSERT INTO metadata VALUES (?, ?)', [name, value]);
-  }
+  });
   db.run('INSERT INTO tiles VALUES (1, 1, 0, ?)', [Bun.gzipSync(new Uint8Array([1, 2, 3]))]);
   db.close();
   viewer = await createViewerServer({
@@ -98,9 +100,9 @@ beforeAll(async () => {
   });
   base = viewer.url;
   // The tokens, from the messages replayed
-  for (const m of (await events(`${base}bridge/events`, 4)) as { url?: string; name?: string }[]) {
+  ((await events(`${base}bridge/events`, 4)) as { url?: string; name?: string }[]).forEach((m) => {
     if (m.url && m.name) tokens[m.name] = m.url.split('/')[1] ?? '';
-  }
+  });
 });
 
 afterAll(() => viewer.stop());

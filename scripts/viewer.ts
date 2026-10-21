@@ -128,7 +128,9 @@ class Channel {
       start: (controller) => {
         self = controller;
         controller.enqueue(this.encoder.encode(': isard\n\n'));
-        for (const m of first) controller.enqueue(this.event(m));
+        first.forEach((m) => {
+          controller.enqueue(this.event(m));
+        });
         this.clients.add(controller);
         timer = setInterval(() => {
           try {
@@ -152,21 +154,21 @@ class Channel {
 
   publish(message: unknown): void {
     const bytes = this.event(message);
-    for (const c of this.clients) {
+    this.clients.forEach((c) => {
       try {
         c.enqueue(bytes);
       } catch {
         this.clients.delete(c);
       }
-    }
+    });
   }
 
   close(): void {
-    for (const c of this.clients) {
+    this.clients.forEach((c) => {
       try {
         c.close();
       } catch {}
-    }
+    });
     this.clients.clear();
   }
 }
@@ -182,17 +184,13 @@ export const rangeResponse = (path: string, request: Request): Response => {
     return new Response(head ? null : file, { headers: { ...headers, 'Content-Length': String(size) } });
   }
   const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-  let start = Number.NaN;
-  let end = size - 1;
-  if (match && (match[1] || match[2])) {
-    if (match[1] === '') {
-      // The last n bytes
-      start = Math.max(0, size - Number(match[2]));
-    } else {
-      start = Number(match[1]);
-      if (match[2]) end = Math.min(Number(match[2]), size - 1);
-    }
-  }
+  const requested = (): [number, number] => {
+    if (!match || !(match[1] || match[2])) return [Number.NaN, size - 1];
+    // The last n bytes
+    if (match[1] === '') return [Math.max(0, size - Number(match[2])), size - 1];
+    return [Number(match[1]), match[2] ? Math.min(Number(match[2]), size - 1) : size - 1];
+  };
+  const [start, end] = requested();
   if (!(start <= end) || start >= size) {
     return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
   }
@@ -227,8 +225,7 @@ export class MbTiles {
       'SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?',
     );
     const rows = this.db.query<{ name: string; value: string }, []>('SELECT name, value FROM metadata').all();
-    const metadata: Record<string, unknown> = {};
-    for (const { name, value } of rows) metadata[name] = value;
+    const metadata: Record<string, unknown> = Object.fromEntries(rows.map(({ name, value }) => [name, value]));
     // The vector layers in the `json` row
     if (typeof metadata.json === 'string') {
       try {
@@ -277,10 +274,10 @@ export class MbTiles {
 /** GeoJSON of any kind (a collection, a feature, a geometry) as a collection in longitudes and latitudes */
 export const featureCollection = async (json: unknown): Promise<GeoJsonCollection> => {
   const value = json as { type?: string };
-  let data: unknown = value;
-  if (value?.type !== 'FeatureCollection' && value?.type !== 'Feature') {
-    data = { type: 'Feature', geometry: value, properties: {} };
-  }
+  const data: unknown =
+    value?.type !== 'FeatureCollection' && value?.type !== 'Feature'
+      ? { type: 'Feature', geometry: value, properties: {} }
+      : value;
   return (await loadFormats()).reproject(data);
 };
 
@@ -310,14 +307,14 @@ export const fileMessages = async (
   if (ext === '.geojson' || ext === '.json' || ext === '.kml' || ext === '.gpx' || ext === '.topojson') {
     const text = await Bun.file(file.path).text();
     const { parseKml, parseGpx, parseTopoJson } = await loadFormats();
-    let data: GeoJsonCollection;
-    if (ext === '.kml') data = parseKml(text);
-    else if (ext === '.gpx') data = parseGpx(text);
-    else {
+    const parse = async (): Promise<GeoJsonCollection> => {
+      if (ext === '.kml') return parseKml(text);
+      if (ext === '.gpx') return parseGpx(text);
       const json = JSON.parse(text) as { type?: string; objects?: Record<string, unknown> };
-      if (json.type === 'Topology') data = parseTopoJson(json, Object.keys(json.objects ?? {})[0]);
-      else data = await featureCollection(json);
-    }
+      if (json.type === 'Topology') return parseTopoJson(json, Object.keys(json.objects ?? {})[0]);
+      return featureCollection(json);
+    };
+    const data = await parse();
     return { messages: [{ type: 'addGeoJSON', ...named, data }], bounds: collectionBounds(data) };
   }
   if (ext === '.laz' || ext === '.las') {
@@ -367,10 +364,10 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
   const files = new Map<string, Served>();
 
   const send = (message: HostMessage | HostMessage[]) => {
-    for (const m of Array.isArray(message) ? message : [message]) {
+    (Array.isArray(message) ? message : [message]).forEach((m) => {
       state.apply(m);
       toViewer.publish(m);
-    }
+    });
   };
 
   let port = options.port ?? 5190;
@@ -393,24 +390,16 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
       if (pathname === '/bridge/events') return toViewer.open(state.replay(), request.signal);
       if (pathname === '/bridge/host-events') return toHosts.open([], request.signal);
       if (pathname === '/bridge/message' && request.method === 'POST') {
-        let message: ViewerMessage;
-        try {
-          message = (await request.json()) as ViewerMessage;
-        } catch {
-          return new Response('Bad JSON', { status: 400 });
-        }
+        const message = (await request.json().catch(() => undefined)) as ViewerMessage | undefined;
+        if (message === undefined) return new Response('Bad JSON', { status: 400 });
         if (typeof message?.type !== 'string') return new Response('No type', { status: 400 });
         if (print) console.log(JSON.stringify(message));
         toHosts.publish(message);
         return new Response(null, { status: 204 });
       }
       if (pathname === '/bridge/send' && request.method === 'POST') {
-        let body: unknown;
-        try {
-          body = await request.json();
-        } catch {
-          return new Response('Bad JSON', { status: 400 });
-        }
+        const body: unknown = await request.json().catch(() => undefined);
+        if (body === undefined) return new Response('Bad JSON', { status: 400 });
         const messages = (Array.isArray(body) ? body : [body]) as HostMessage[];
         if (!messages.every((m) => typeof m?.type === 'string')) return new Response('No type', { status: 400 });
         send(messages);
@@ -478,7 +467,9 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
       toViewer.close();
       toHosts.close();
       server.stop(true);
-      for (const f of files.values()) f.mbtiles?.close();
+      files.forEach((f) => {
+        f.mbtiles?.close();
+      });
     },
   };
 };

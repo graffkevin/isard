@@ -20,8 +20,14 @@ export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined =>
   const geometry = (g: Geometry | null | undefined): void => {
     if (!g) return;
     if ('coordinates' in g) visit(g.coordinates);
-    if ('geometries' in g && Array.isArray(g.geometries)) for (const x of g.geometries) geometry(x as Geometry);
+    if ('geometries' in g && Array.isArray(g.geometries)) {
+      g.geometries.forEach((x) => {
+        geometry(x as Geometry);
+      });
+    }
   };
-  for (const f of data.features ?? []) geometry(f.geometry);
+  (data.features ?? []).forEach((f) => {
+    geometry(f.geometry);
+  });
   return Number.isFinite(b[0]) ? b : undefined;
 };

@@ -41,7 +41,9 @@ export class FakeEngine {
     readonly onRequest: () => void,
   ) {
     FakeEngine.instances.push(this);
-    for (const name of FakeEngine.failNext) this.failing.add(name);
+    FakeEngine.failNext.forEach((name) => {
+      this.failing.add(name);
+    });
     FakeEngine.failNext.clear();
     const own: Record<string, (...args: never[]) => unknown> = {
       camera: () => ({ ...this.cam, center: [...this.cam.center] }),
@@ -107,7 +109,9 @@ export class CoreFakeEngine extends FakeEngine {
   ];
   constructor(canvas: unknown, onRequest: () => void) {
     super(canvas, onRequest);
-    for (const name of CoreFakeEngine.TILES3D) this.hidden.add(name);
+    CoreFakeEngine.TILES3D.forEach((name) => {
+      this.hidden.add(name);
+    });
   }
 }
 
@@ -186,19 +190,19 @@ export class FakeElement {
   }
 
   append(...children: FakeElement[]): void {
-    for (const child of children) {
+    children.forEach((child) => {
       child.remove();
       child.parent = this;
       this.children.push(child);
-    }
+    });
   }
 
   prepend(...children: FakeElement[]): void {
-    for (const child of children.reverse()) {
+    children.reverse().forEach((child) => {
       child.remove();
       child.parent = this;
       this.children.unshift(child);
-    }
+    });
   }
 
   remove(): void {
@@ -226,7 +230,9 @@ export class FakeElement {
   }
 
   dispatch(type: string, fields: Record<string, unknown> = {}): void {
-    for (const handler of [...(this.listeners.get(type) ?? [])]) handler({ type, preventDefault() {}, ...fields });
+    [...(this.listeners.get(type) ?? [])].forEach((handler) => {
+      handler({ type, preventDefault() {}, ...fields });
+    });
   }
 
   querySelectorAll(): FakeElement[] {
@@ -284,7 +290,9 @@ export class Frames {
   run(now = performance.now()): void {
     const callbacks = [...this.queue.values()];
     this.queue.clear();
-    for (const callback of callbacks) callback(now);
+    callbacks.forEach((callback) => {
+      callback(now);
+    });
   }
   /** Runs frames until none is asked for (at most `max`) */
   flush(max = 50, now = performance.now()): void {
@@ -296,14 +304,14 @@ export class Frames {
 export const setGlobals = (values: Record<string, unknown>): (() => void) => {
   const g = globalThis as Record<string, unknown>;
   const saved = Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(g, key)] as const);
-  for (const [key, value] of Object.entries(values)) {
+  Object.entries(values).forEach(([key, value]) => {
     Object.defineProperty(g, key, { value, configurable: true, writable: true });
-  }
+  });
   return () => {
-    for (const [key, descriptor] of saved) {
+    saved.forEach(([key, descriptor]) => {
       if (descriptor) Object.defineProperty(g, key, descriptor);
       else delete g[key];
-    }
+    });
   };
 };
 

@@ -55,11 +55,11 @@ export const parseTopoJson = <P = Properties>(topology: Topology, name?: string)
   /** A line from arcs, each after the first without its first point (the last of the one before) */
   const stitch = (indices: number[]): Position[] => {
     const out: Position[] = [];
-    for (const i of indices) {
+    indices.forEach((i) => {
       const arc = arcs[i < 0 ? ~i : i] ?? [];
       const points = i < 0 ? [...arc].reverse() : arc;
       out.push(...(out.length > 0 ? points.slice(1) : points));
-    }
+    });
     return out;
   };
   const geometry = (g: TopoGeometry): Geometry | null => {

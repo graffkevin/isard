@@ -73,16 +73,14 @@ const BUDGETS = {
 const root = join(import.meta.dir, '..');
 const dist = join(root, 'packages/isard/dist');
 
-const measure = (files: string[]): { raw: number; gzip: number } => {
-  let raw = 0;
-  let gzip = 0;
-  for (const file of files) {
-    const bytes = readFileSync(join(dist, file));
-    raw += bytes.length;
-    gzip += Bun.gzipSync(bytes, { level: 9 }).length;
-  }
-  return { raw, gzip };
-};
+const measure = (files: string[]): { raw: number; gzip: number } =>
+  files.reduce(
+    ({ raw, gzip }, file) => {
+      const bytes = readFileSync(join(dist, file));
+      return { raw: raw + bytes.length, gzip: gzip + Bun.gzipSync(bytes, { level: 9 }).length };
+    },
+    { raw: 0, gzip: 0 },
+  );
 
 /** Prints the sizes against their budgets; false if one is over */
 export const checkSizes = (): boolean => {
@@ -97,18 +95,18 @@ export const checkSizes = (): boolean => {
     'basemap.worker.js': ['basemap.worker.js'],
   };
   const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
-  let ok = true;
   console.log('size (gzipped, budget)');
-  for (const [name, files] of Object.entries(groups) as [keyof typeof BUDGETS, string[]][]) {
+  const overs = (Object.entries(groups) as [keyof typeof BUDGETS, string[]][]).map(([name, files]) => {
     const { raw, gzip } = measure(files);
     const budget = BUDGETS[name] * 1024;
     const over = gzip > budget;
-    if (over) ok = false;
     const label = name === 'modules' ? `${files.length} modules` : name;
     console.log(
       `  ${label.padEnd(20)} ${kb(raw).padStart(10)} raw ${kb(gzip).padStart(10)} gzip / ${kb(budget)}${over ? '  OVER BUDGET' : ''}`,
     );
-  }
+    return over;
+  });
+  const ok = overs.every((over) => !over);
   if (!ok) console.error('A size is over its budget: see scripts/size.ts to raise it deliberately');
   return ok;
 };

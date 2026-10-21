@@ -88,17 +88,11 @@ interface Attitude {
 const RAD = Math.PI / 180;
 
 /** 3 × 3 product, row-major */
-const times = (a: number[], b: number[]): number[] => {
-  const out: number[] = [];
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      let sum = 0;
-      for (let k = 0; k < 3; k++) sum += (a[r * 3 + k] ?? 0) * (b[k * 3 + c] ?? 0);
-      out.push(sum);
-    }
-  }
-  return out;
-};
+const times = (a: number[], b: number[]): number[] =>
+  Array.from({ length: 9 }, (_, i) => {
+    const [r, c] = [Math.floor(i / 3), i % 3];
+    return [0, 1, 2].reduce((sum, k) => sum + (a[r * 3 + k] ?? 0) * (b[k * 3 + c] ?? 0), 0);
+  });
 
 const rotX = (t: number) => [1, 0, 0, 0, Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos(t)];
 const rotY = (t: number) => [Math.cos(t), 0, Math.sin(t), 0, 1, 0, -Math.sin(t), 0, Math.cos(t)];
@@ -157,13 +151,13 @@ export class Panoramas {
   /** The panorama nearest to a position */
   nearest(lonLat: LonLat): Panorama | undefined {
     const cos = Math.cos(lonLat[1] * RAD);
-    let best: Panorama | undefined;
-    let distance = Number.POSITIVE_INFINITY;
-    for (const p of this.list) {
-      const d = ((p.lonLat[0] - lonLat[0]) * cos) ** 2 + (p.lonLat[1] - lonLat[1]) ** 2;
-      if (d < distance) [best, distance] = [p, d];
-    }
-    return best;
+    return this.list.reduce<{ best?: Panorama; distance: number }>(
+      (nearest, p) => {
+        const d = ((p.lonLat[0] - lonLat[0]) * cos) ** 2 + (p.lonLat[1] - lonLat[1]) ** 2;
+        return d < nearest.distance ? { best: p, distance: d } : nearest;
+      },
+      { distance: Number.POSITIVE_INFINITY },
+    ).best;
   }
 
   /** Shows a panorama (its index in `list`): projected as soon as its first image arrives, the others after */
@@ -252,16 +246,16 @@ export class Panoramas {
     if (!eye || !here) return undefined;
     const cos = Math.cos(here.lonLat[1] * RAD);
     const look = (eye.bearing + (forward ? 0 : 180)) * RAD;
-    let best: Panorama | undefined;
-    let distance = Number.POSITIVE_INFINITY;
-    for (const p of this.list) {
-      if (p === here) continue;
-      const [east, north] = [(p.lonLat[0] - here.lonLat[0]) * cos, p.lonLat[1] - here.lonLat[1]];
-      const d = Math.hypot(east, north);
-      const off = Math.acos(Math.max(-1, Math.min(1, (east * Math.sin(look) + north * Math.cos(look)) / (d || 1))));
-      if (off < 60 * RAD && d < distance) [best, distance] = [p, d];
-    }
-    return best;
+    return this.list.reduce<{ best?: Panorama; distance: number }>(
+      (nearest, p) => {
+        if (p === here) return nearest;
+        const [east, north] = [(p.lonLat[0] - here.lonLat[0]) * cos, p.lonLat[1] - here.lonLat[1]];
+        const d = Math.hypot(east, north);
+        const off = Math.acos(Math.max(-1, Math.min(1, (east * Math.sin(look) + north * Math.cos(look)) / (d || 1))));
+        return off < 60 * RAD && d < nearest.distance ? { best: p, distance: d } : nearest;
+      },
+      { distance: Number.POSITIVE_INFINITY },
+    ).best;
   }
 
   /** Goes to a panorama during the walk, the eye looking the same way (or `bearing`) */
@@ -309,7 +303,7 @@ export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions
   const geoid = options.geoid ?? lambert93;
   const list: Panorama[] = [];
   const attitudes: Attitude[] = [];
-  for (const feature of orientations.features) {
+  orientations.features.forEach((feature) => {
     const [x = 0, y = 0, z = 0] = feature.geometry.coordinates;
     const [lon = 0, lat = 0] = crs.inverse([x, y]);
     const p = feature.properties;
@@ -322,7 +316,7 @@ export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions
       height: z + (geoid ? host.geoidHeight(lon, lat) : 0),
       heading: number('heading'),
     });
-  }
+  });
   return new Panoramas(
     host,
     {

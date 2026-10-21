@@ -31,14 +31,16 @@ describe('tile ids', () => {
   });
 
   test('round trips up to level 26, past 32 bits', () => {
-    for (const [z, x, y] of [
-      [3, 5, 2],
-      [17, 66_000, 45_000],
-      [26, 2 ** 26 - 1, 12_345_678],
-      [26, 0, 2 ** 26 - 1],
-    ] as [number, number, number][]) {
+    (
+      [
+        [3, 5, 2],
+        [17, 66_000, 45_000],
+        [26, 2 ** 26 - 1, 12_345_678],
+        [26, 0, 2 ** 26 - 1],
+      ] as [number, number, number][]
+    ).forEach(([z, x, y]) => {
       expect(tileIdToZxy(zxyToTileId(z, x, y))).toEqual([z, x, y]);
-    }
+    });
     expect(() => zxyToTileId(27, 0, 0)).toThrow();
     expect(() => zxyToTileId(2, 4, 0)).toThrow();
   });
@@ -117,8 +119,9 @@ describe('archives written here', () => {
   });
 
   test('many tiles across leaf directories', async () => {
-    const tiles = [];
-    for (let x = 0; x < 16; x += 1) for (let y = 0; y < 16; y += 1) tiles.push({ z: 4, x, y, data: png(x * 16 + y) });
+    const tiles = Array.from({ length: 16 }, (_, x) => x).flatMap((x) =>
+      Array.from({ length: 16 }, (_, y) => ({ z: 4, x, y, data: png(x * 16 + y) })),
+    );
     const archive = new PMTiles(new Blob([writePmtiles(tiles, { tileType: 'png', gzip: true, leafSize: 10 })]));
     for (const t of tiles) expect(await archive.tile(t.z, t.x, t.y)).toEqual(t.data);
   });

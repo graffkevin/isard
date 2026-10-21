@@ -86,6 +86,12 @@ export const haloSettings = (atmosphere: boolean | string): Float32Array | undef
  * Terrarium PNGs decoded by `terrainLoader`) or the IGN terrain model (France, raised by the geoid); NASA's on the Moon
  * and Mars; an ArcGIS image service asked for in the body's Mercator. `terrainLoader`: the loader of PNG tiles in an
  * encoding, the same for the same tiles (the engine keeps its tiles when only the exaggeration changes) */
+/** The relief options of the option on */
+const terrainOptions = (terrain: true | TerrainModel | TerrainOptions): TerrainOptions => {
+  if (typeof terrain === 'string') return { model: terrain };
+  return terrain === true ? {} : terrain;
+};
+
 export const terrainSettings = (
   terrain: boolean | TerrainModel | TerrainOptions | undefined,
   body: CelestialBody | undefined,
@@ -93,9 +99,7 @@ export const terrainSettings = (
   terrainLoader: (url: string, encoding: PngEncoding, floor?: number) => TerrainLoader,
 ): Settings['terrain'] => {
   if (!terrain) return undefined;
-  let options: TerrainOptions = {};
-  if (typeof terrain === 'string') options = { model: terrain };
-  else if (terrain !== true) options = terrain;
+  const options = terrainOptions(terrain);
   const earth = (body ?? 'earth') === 'earth';
   const exaggeration = options.exaggeration ?? 1;
   if (options.url === undefined && earth) {

@@ -35,10 +35,10 @@ const modules: { core?: Promise<WebAssembly.Module>; full?: Promise<WebAssembly.
 
 /** @internal Forgets the engines loaded (tests) */
 export const forgetEngines = (): void => {
-  for (const kind of ['core', 'full'] as const) {
+  (['core', 'full'] as const).forEach((kind) => {
     delete engines[kind];
     delete modules[kind];
-  }
+  });
 };
 
 /** The files a map loads at run time, next to the module unless given elsewhere */

@@ -93,7 +93,9 @@ const longTasks: { start: number; duration: number }[] = [];
 const longTasksReported = PerformanceObserver.supportedEntryTypes.includes('longtask');
 if (longTasksReported) {
   new PerformanceObserver((list) => {
-    for (const e of list.getEntries()) longTasks.push({ start: e.startTime, duration: e.duration });
+    list.getEntries().forEach((e) => {
+      longTasks.push({ start: e.startTime, duration: e.duration });
+    });
   }).observe({ type: 'longtask', buffered: true });
 }
 

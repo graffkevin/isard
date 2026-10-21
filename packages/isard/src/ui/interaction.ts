@@ -155,7 +155,9 @@ export class Interaction {
   }
 
   destroy(): void {
-    for (const off of this.cleanup) off();
+    this.cleanup.forEach((off) => {
+      off();
+    });
   }
 
   /** A gesture holds the map (pointers down): the camera has not stopped moving */

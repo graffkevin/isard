@@ -53,16 +53,18 @@ describe('built-in CRSs', () => {
   test('round trips across France and a UTM zone, to the micrometre', () => {
     const l93 = getCrs('EPSG:2154');
     const utm = getCrs('EPSG:32632');
-    for (let lon = -5; lon <= 10; lon += 1.5) {
-      for (let lat = 41; lat <= 51; lat += 1) {
+    const lons = Array.from({ length: 11 }, (_, k) => -5 + 1.5 * k);
+    const lats = Array.from({ length: 11 }, (_, k) => 41 + k);
+    lons.forEach((lon) => {
+      lats.forEach((lat) => {
         const [x = 0, y = 0] = l93.forward([lon, lat]);
         const [a = 0, b = 0] = l93.inverse([x, y]);
         expect(Math.hypot(a - lon, b - lat)).toBeLessThan(1e-11);
         const [u = 0, v = 0] = utm.forward([lon + 4, lat]);
         const [c = 0, d = 0] = utm.inverse([u, v]);
         expect(Math.hypot(c - lon - 4, d - lat)).toBeLessThan(1e-11);
-      }
-    }
+      });
+    });
   });
 
   test('Web Mercator in metres, longitudes and latitudes as they are', () => {

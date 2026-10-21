@@ -21,7 +21,9 @@ export const setRequestHeaders = (prefix: string, headers?: Record<string, strin
   if (headers && Object.keys(headers).length > 0) kept.push([prefix, { ...headers }]);
   kept.sort(([p], [q]) => p.length - q.length);
   setHeaderRules(kept);
-  for (const listener of listeners) listener(rules);
+  listeners.forEach((listener) => {
+    listener(rules);
+  });
 };
 
 /** @internal The rules now */
@@ -46,6 +48,10 @@ export const withHeaders = <T extends RequestInit>(url: string | URL, init?: T):
   const matching = rules.filter(([prefix]) => href.startsWith(prefix));
   if (matching.length === 0) return init ?? ({} as T);
   const headers = new Headers(init?.headers);
-  for (const [, set] of matching) for (const [name, value] of Object.entries(set)) headers.set(name, value);
+  matching.forEach(([, set]) => {
+    Object.entries(set).forEach(([name, value]) => {
+      headers.set(name, value);
+    });
+  });
   return { ...(init ?? ({} as T)), headers };
 };

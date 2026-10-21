@@ -49,11 +49,11 @@ mesh.addEventListener('load-model', ({ scene }) => {
     }
   });
 });
-for (const tiles of [ground, mesh]) {
+[ground, mesh].forEach((tiles) => {
   tiles.setCamera(camera);
   tiles.setResolutionFromRenderer(camera, renderer);
   scene.add(tiles.group);
-}
+});
 
 const east = new Vector3();
 const north = new Vector3();

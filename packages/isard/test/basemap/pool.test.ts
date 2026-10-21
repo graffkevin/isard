@@ -57,16 +57,18 @@ describe('pool keys and workers', () => {
   });
 
   test('a vector tile always goes to the same worker, within the pool', () => {
-    for (const [z, x, y] of [
-      [3, 4, 5],
-      [14, 8300, 5600],
-      [0, 0, 0],
-    ] as const) {
+    (
+      [
+        [3, 4, 5],
+        [14, 8300, 5600],
+        [0, 0, 0],
+      ] as const
+    ).forEach(([z, x, y]) => {
       const i = workerIndex(z, x, y, 3);
       expect(i).toBe(workerIndex(z, x, y, 3));
       expect(i).toBeGreaterThanOrEqual(0);
       expect(i).toBeLessThan(3);
-    }
+    });
   });
 });
 
@@ -131,11 +133,15 @@ describe('pool requests', () => {
   test('broadcast reaches every worker; terminate stops them and fails what is pending', async () => {
     const { p, workers } = pool(3);
     p.broadcast({ type: 'drop', key: 'v0:r0' });
-    for (const w of workers) expect(w.messages).toEqual([{ type: 'drop', key: 'v0:r0' }]);
+    workers.forEach((w) => {
+      expect(w.messages).toEqual([{ type: 'drop', key: 'v0:r0' }]);
+    });
     const a = p.request(workers[0] as unknown as PoolWorker, work, {});
     p.terminate();
     await expect(a).rejects.toThrow('destroyed');
-    for (const w of workers) expect(w.terminated).toBe(true);
+    workers.forEach((w) => {
+      expect(w.terminated).toBe(true);
+    });
     await expect(p.request(workers[0] as unknown as PoolWorker, work, {})).rejects.toThrow('destroyed');
   });
 });

@@ -158,8 +158,7 @@ const lastUnit = (part: string | undefined): number | undefined => {
 export const wktCrs = (wkt: string): { code: number | undefined; verticalScale: number | undefined } => {
   const projected = section(wkt, ['PROJCS', 'PROJCRS']);
   const geographic = section(wkt, ['GEOGCS', 'GEOGCRS']);
-  let code = lastCode(projected ?? geographic ?? '');
-  if (code === undefined && /Lambert[- ]93/i.test(wkt)) code = 2154;
+  const code = lastCode(projected ?? geographic ?? '') ?? (/Lambert[- ]93/i.test(wkt) ? 2154 : undefined);
   const vertical = section(wkt, ['VERT_CS', 'VERTCRS']);
   const verticalScale = lastUnit(vertical ?? projected);
   return { code, verticalScale };
@@ -174,20 +173,17 @@ export const pointCloudCrs = (
   options: Pick<PointCloudOptions, 'crs' | 'geoid' | 'verticalScale'>,
 ): PointCloudCrs => {
   const parsed = wkt ? wktCrs(wkt) : { code: undefined, verticalScale: undefined };
-  let crs: Crs;
-  let code = parsed.code;
-  if (options.crs !== undefined) {
-    crs = getCrs(options.crs);
-    if (typeof options.crs === 'string') code = epsgCode(options.crs) ?? code;
-  } else if (code !== undefined) {
+  const crs = ((): Crs => {
+    if (options.crs !== undefined) return getCrs(options.crs);
+    const code = parsed.code;
+    if (code === undefined) throw new Error('the file names no CRS: give it as `crs`');
     try {
-      crs = getCrs(`EPSG:${code}`);
+      return getCrs(`EPSG:${code}`);
     } catch {
       throw new Error(`the CRS of the file, EPSG:${code}, is not built in: give it as \`crs\` (proj4('EPSG:${code}'))`);
     }
-  } else {
-    throw new Error('the file names no CRS: give it as `crs`');
-  }
+  })();
+  const code = typeof options.crs === 'string' ? (epsgCode(options.crs) ?? parsed.code) : parsed.code;
   const inverse = (xy: Float64Array) => {
     const out = new Float64Array(xy.length);
     for (let i = 0; i + 1 < xy.length; i += 2) {
@@ -207,8 +203,7 @@ export const pointCloudCrs = (
 /** The style numbers of the engine (`setPointCloudStyle`) */
 const styleNumbers = (s: PointCloudStyle, rate: number): Float64Array => {
   const colors: PointColor[] = ['rgb', 'classification', 'elevation', 'intensity'];
-  let edl: { strength?: number; radius?: number } | undefined;
-  if (s.edl) edl = s.edl === true ? {} : s.edl;
+  const edl: { strength?: number; radius?: number } | undefined = s.edl === true ? {} : s.edl || undefined;
   const [emin = Number.NaN, emax = Number.NaN] = s.elevationRange ?? [];
   const [imin = Number.NaN, imax = Number.NaN] = s.intensityRange ?? [];
   return Float64Array.of(

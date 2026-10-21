@@ -9,10 +9,10 @@ const FIELDS = ['name', 'cmt', 'desc', 'src', 'sym', 'type', 'number'];
 
 const properties = (element: XmlElement): Properties => {
   const out: Properties = {};
-  for (const key of FIELDS) {
+  FIELDS.forEach((key) => {
     const value = childText(element, key);
     if (value !== undefined) out[key] = key === 'number' ? Number(value) : value;
-  }
+  });
   const link = child(element, 'link')?.attributes.href;
   if (link !== undefined) out.link = link;
   return out;
@@ -49,22 +49,22 @@ export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => 
   const features: Feature<P>[] = [];
   const add = (geometry: Geometry, props: Properties) =>
     features.push({ type: 'Feature', geometry, properties: props as P });
-  for (const wpt of children(root, 'wpt')) {
+  children(root, 'wpt').forEach((wpt) => {
     const p = point(wpt);
-    if (!p) continue;
+    if (!p) return;
     add({ type: 'Point', coordinates: p.position }, { ...properties(wpt), ...(p.time ? { time: p.time } : {}) });
-  }
-  for (const rte of children(root, 'rte')) {
+  });
+  children(root, 'rte').forEach((rte) => {
     const { coordinates, times } = line(children(rte, 'rtept'));
     if (coordinates.length >= 2)
       add({ type: 'LineString', coordinates }, { ...properties(rte), ...(times ? { times } : {}) });
-  }
-  for (const trk of children(root, 'trk')) {
+  });
+  children(root, 'trk').forEach((trk) => {
     const segments = children(trk, 'trkseg')
       .map((s) => line(children(s, 'trkpt')))
       .filter((s) => s.coordinates.length >= 2);
     const [first] = segments;
-    if (!first) continue;
+    if (!first) return;
     const props = properties(trk);
     if (segments.length === 1) {
       add(
@@ -75,6 +75,6 @@ export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => 
       const times = segments.every((s) => s.times) ? { times: segments.map((s) => s.times) } : {};
       add({ type: 'MultiLineString', coordinates: segments.map((s) => s.coordinates) }, { ...props, ...times });
     }
-  }
+  });
   return { type: 'FeatureCollection', features };
 };

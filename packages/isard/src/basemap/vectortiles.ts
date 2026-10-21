@@ -142,8 +142,8 @@ export const tilePriority = (z: number, x: number, y: number, camera: Pick<Camer
   const cx = mercatorX(lon) * n;
   const cy = mercatorY(lat) * n;
   // Across the antimeridian, the short way
-  let dx = Math.abs(x + 0.5 - cx) % n;
-  dx = Math.min(dx, n - dx);
+  const along = Math.abs(x + 0.5 - cx) % n;
+  const dx = Math.min(along, n - along);
   const d = Math.hypot(dx, y + 0.5 - cy);
   if (d <= 1.5) return 'high';
   return d >= 4 ? 'low' : 'auto';
@@ -205,7 +205,9 @@ export class BasemapWorkers {
       return worker;
     });
     this.unfollow = onHeaderRules((rules) => {
-      for (const w of this.workers) w.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
+      this.workers.forEach((w) => {
+        w.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
+      });
     });
   }
 
@@ -224,11 +226,11 @@ export class BasemapWorkers {
     const error = new Error(
       `isard: ${message}. If a bundler moves the worker, give its URL in the \`basemapWorkerUrl\` option (see "With a bundler" in the guide)`,
     );
-    for (const [id, p] of this.pending) {
-      if (p.worker !== worker) continue;
+    this.pending.forEach((p, id) => {
+      if (p.worker !== worker) return;
       this.pending.delete(id);
       p.reject(error);
-    }
+    });
   }
 
   /** The worker of a vector tile */
@@ -242,7 +244,9 @@ export class BasemapWorkers {
     // A renderer tells the workers how many they are: they share the decoded tiles' budget
     const sent = message.type === 'init' ? { ...message, workers: this.workers.length } : message;
     // A sprite image is copied to each worker (structured clone)
-    for (const w of this.workers) w.postMessage(sent);
+    this.workers.forEach((w) => {
+      w.postMessage(sent);
+    });
   }
 
   /** Asks a worker for a tile's image or labels, on behalf of `owner` */
@@ -304,12 +308,12 @@ export class BasemapWorkers {
 
   /** Cancels the requests of an owner (the workers stop them) */
   cancel(owner: object): void {
-    for (const [id, p] of this.pending) {
-      if (p.owner !== owner) continue;
+    this.pending.forEach((p, id) => {
+      if (p.owner !== owner) return;
       this.pending.delete(id);
       p.worker.postMessage({ type: 'abort', id } satisfies BasemapRequest);
       p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
-    }
+    });
   }
 
   /** Stops the workers; their requests fail */
@@ -317,10 +321,14 @@ export class BasemapWorkers {
     if (this.terminated) return;
     this.terminated = true;
     this.unfollow();
-    for (const w of this.workers) w.terminate();
+    this.workers.forEach((w) => {
+      w.terminate();
+    });
     const pending = [...this.pending.values()];
     this.pending.clear();
-    for (const p of pending) p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+    pending.forEach((p) => {
+      p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+    });
   }
 }
 
@@ -330,7 +338,7 @@ type TileLabels = [layer: number, features: Feature<LabelCandidate>[]][];
 /** A tile's label candidates as features, by style layer */
 export const tileLabels = (candidates: readonly LabelCandidate[]): TileLabels => {
   const byLayer = new Map<number, Feature<LabelCandidate>[]>();
-  for (const p of candidates) {
+  candidates.forEach((p) => {
     const feature: Feature<LabelCandidate> = {
       type: 'Feature',
       properties: p,
@@ -347,7 +355,7 @@ export const tileLabels = (candidates: readonly LabelCandidate[]): TileLabels =>
     const list = byLayer.get(p.layer);
     if (list) list.push(feature);
     else byLayer.set(p.layer, [feature]);
-  }
+  });
   return [...byLayer].sort((a, b) => b[0] - a[0]);
 };
 
@@ -396,12 +404,11 @@ export class VectorTiles {
     const style = typeof input === 'string' ? await json<Style>(input) : input;
     const [name, source] = Object.entries(style.sources).find(([, s]) => s.type === 'vector') ?? [];
     if (!name || !source) throw new Error('the style has no vector source');
-    let { tiles, maxzoom } = await resolveSource(source);
-    if (!tiles && source.url) {
-      const tilejson = await json<{ tiles: string[]; maxzoom?: number }>(source.url);
-      tiles = tilejson.tiles;
-      maxzoom ??= tilejson.maxzoom;
-    }
+    const resolved = await resolveSource(source);
+    const tilejson =
+      !resolved.tiles && source.url ? await json<{ tiles: string[]; maxzoom?: number }>(source.url) : undefined;
+    const tiles = tilejson === undefined ? resolved.tiles : tilejson.tiles;
+    const maxzoom = resolved.maxzoom ?? tilejson?.maxzoom;
     const template = tiles?.[0];
     if (!template) throw new Error(`source ${name} has no tiles`);
     // Its raster sources of tiles, drawn into the same images (the shaded relief of a style at low zoom)
@@ -426,10 +433,10 @@ export class VectorTiles {
   /** The fonts of the style's labels, for its glyphs (the first of each `text-font`, as the workers take it) */
   private static fonts(style: Style): string[] {
     const fonts = new Set<string>();
-    for (const layer of style.layers) {
+    style.layers.forEach((layer) => {
       const font = layer.layout?.['text-font'];
       if (layer.type === 'symbol' && Array.isArray(font) && typeof font[0] === 'string') fonts.add(labelFont(font[0]));
-    }
+    });
     return [...fonts];
   }
 
@@ -560,9 +567,9 @@ export class VectorTiles {
       // Its icons from its sprites, before the first labels
       const icons = style.layers.some((l) => l.type === 'symbol' && l.layout?.['icon-image'] !== undefined);
       if (icons && style.sprite) {
-        for (const sprite of await this.loadSprites(style.sprite)) {
+        (await this.loadSprites(style.sprite)).forEach((sprite) => {
           if (!this.destroyed) this.map.icons.addSprite(this.iconPrefix, sprite.icons, () => readPixels(sprite.image));
-        }
+        });
       }
       return this.renderer((l) => l.type === 'symbol' && layers(l), []);
     });
@@ -586,16 +593,19 @@ export class VectorTiles {
       if (ground.length > 0) {
         // The ground's tiles, the nearest first: a tile so many levels coarser than the finest in view has its
         // labels of a zoom as many under the view's, past the source's deepest level those of that level at the zoom
-        let top = 0;
-        for (let i = 0; i < ground.length; i += 3) top = Math.max(top, ground[i] as number);
-        for (let i = 0; i < ground.length && keys.length < maxTiles; i += 3) {
-          const [z, x, y] = [ground[i], ground[i + 1], ground[i + 2]] as [number, number, number];
+        const groundTiles = Array.from(
+          { length: Math.ceil(ground.length / 3) },
+          (_, k) => [ground[3 * k], ground[3 * k + 1], ground[3 * k + 2]] as [number, number, number],
+        );
+        const top = groundTiles.reduce((t, [z]) => Math.max(t, z), 0);
+        groundTiles.forEach(([z, x, y]) => {
+          if (keys.length >= maxTiles) return;
           const at = Math.max(0, zoom - (top - z));
           const tz = Math.min(at, maxzoom, z);
           const shift = 2 ** (z - tz);
           const key = `${tz}/${Math.floor(x / shift)}/${Math.floor(y / shift)}${at > tz ? `@${at}` : ''}`;
           if (!keys.includes(key)) keys.push(key);
-        }
+        });
       } else {
         const z = Math.min(zoom, maxzoom);
         const n = 2 ** z;
@@ -614,22 +624,23 @@ export class VectorTiles {
           Math.max(0, ty(north), Math.floor(cy) - reach),
           Math.min(n - 1, ty(south), Math.floor(cy) + reach),
         ];
-        const wanted: [number, number][] = [];
-        for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) wanted.push([x, y]);
+        const wanted = Array.from({ length: y1 - y0 + 1 }, (_, j) => y0 + j).flatMap((y) =>
+          Array.from({ length: x1 - x0 + 1 }, (_, i): [number, number] => [x0 + i, y]),
+        );
         // Nearest to the center first, at most `maxTiles` (tilted views reach far)
         wanted.sort(
           (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
         );
         // Past the source's deepest level, its tiles' labels at the zoom of the view (the layers of the deeper zooms)
-        for (const [x, y] of wanted.slice(0, maxTiles)) keys.push(`${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`);
+        keys.push(...wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`));
       }
       // The same tiles as the labels shown: nothing to do
       const set = keys.join(' ');
       if (set === shown) return;
       const lists = await Promise.all(
         keys.map((k, index) => {
-          let p = tiles.get(k);
-          if (p) return p;
+          const cached = tiles.get(k);
+          if (cached) return cached;
           const [tile, deeper] = k.split('@');
           const [tz, x, y] = (tile ?? '').split('/').map(Number) as [number, number, number];
           // The nearest tiles first: the others wait for the raster tiles
@@ -643,7 +654,7 @@ export class VectorTiles {
             priority,
             ...(deeper === undefined ? {} : { zoom: Number(deeper) }),
           };
-          p = this.request(tz, x, y, work).then(
+          const p = this.request(tz, x, y, work).then(
             (r) => tileLabels('labels' in r ? r.labels : []),
             () => {
               // A network error is not kept: the tile is asked for again on the next update
@@ -668,13 +679,9 @@ export class VectorTiles {
       // The labels of the higher style layers first: they win the collisions; for each style layer, the tiles nearest
       // to the center first
       const layerIds = [...new Set(lists.flatMap((list) => list.map(([layer]) => layer)))].sort((a, b) => b - a);
-      const groups: Feature<LabelCandidate>[][] = [];
-      for (const layer of layerIds) {
-        for (const list of lists) {
-          const group = list.find(([l]) => l === layer)?.[1];
-          if (group) groups.push(group);
-        }
-      }
+      const groups = layerIds.flatMap((layer) =>
+        lists.map((list) => list.find(([l]) => l === layer)?.[1]).filter((group) => group !== undefined),
+      );
       symbol.setGroups(groups);
     };
     // The style failed to load: reported by `ready`
@@ -701,15 +708,21 @@ export class VectorTiles {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    for (const off of this.cleanup) off();
+    this.cleanup.forEach((off) => {
+      off();
+    });
     this.cleanup.length = 0;
-    for (const layer of this.layers) if (this.map.hasLayer(layer)) layer.remove();
+    this.layers.forEach((layer) => {
+      if (this.map.hasLayer(layer)) layer.remove();
+    });
     this.layers.length = 0;
     this.map.dropVectorTiles(this);
     // The page's copy of the sprites (the workers have theirs), and their icons
     this.sprites
       ?.then((sprites) => {
-        for (const sprite of sprites) sprite.image.close();
+        sprites.forEach((sprite) => {
+          sprite.image.close();
+        });
         this.map.icons.remove(this.iconPrefix, true);
       })
       .catch(() => undefined);
@@ -718,7 +731,9 @@ export class VectorTiles {
     } else {
       // Shared workers: only its requests stop and its renderers go
       this.pool.cancel(this);
-      for (const key of this.renderers) this.pool.broadcast({ type: 'drop', key });
+      this.renderers.forEach((key) => {
+        this.pool.broadcast({ type: 'drop', key });
+      });
     }
     this.renderers.length = 0;
   }

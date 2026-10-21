@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { headerRules, onHeaderRules, setRequestHeaders, withHeaders } from '../../src/engine/requests.ts';
 
 afterEach(() => {
-  for (const [prefix] of headerRules()) setRequestHeaders(prefix);
+  headerRules().forEach(([prefix]) => {
+    setRequestHeaders(prefix);
+  });
 });
 
 describe('setRequestHeaders', () => {

@@ -114,10 +114,10 @@ export class AttributionControl implements Control {
     const custom = this.options.customAttribution ?? [];
     const render = () => {
       inner.innerHTML = [...map.attributions(), ...(typeof custom === 'string' ? [custom] : custom)].join(' | ');
-      for (const link of inner.querySelectorAll('a')) {
+      inner.querySelectorAll('a').forEach((link) => {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-      }
+      });
     };
     render();
     this.stopListening = map.onAttributionChange(render);

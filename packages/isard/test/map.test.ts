@@ -50,7 +50,9 @@ type Map = Awaited<ReturnType<typeof GeoMap.create>>;
 /** Maps made by a test, destroyed after it: they share the frame scheduler */
 const maps: Map[] = [];
 afterEach(() => {
-  for (const map of maps.splice(0)) map.destroy();
+  maps.splice(0).forEach((map) => {
+    map.destroy();
+  });
 });
 
 /** A map with no basemap, no controls and no workers unless asked */
@@ -546,7 +548,9 @@ describe('events', () => {
   test('movestart, move and moveend around a camera change; idle once settled', async () => {
     const { map } = await create();
     const seen: string[] = [];
-    for (const type of ['movestart', 'move', 'moveend', 'idle'] as const) map.on(type, () => seen.push(type));
+    (['movestart', 'move', 'moveend', 'idle'] as const).forEach((type) => {
+      map.on(type, () => seen.push(type));
+    });
     map.setCamera({ zoom: 5 });
     frames.flush();
     expect(seen).toEqual(['movestart', 'move', 'moveend', 'idle']);
@@ -810,11 +814,11 @@ describe('camera', () => {
     const { map } = await create({ center: [170, 0], zoom: 4 });
     map.flyTo({ center: [-170, 0] }, { duration: 1000 });
     const start = performance.now();
-    for (const t of [100, 300, 500, 700, 900]) {
+    [100, 300, 500, 700, 900].forEach((t) => {
       frames.run(start + t);
       const lon = map.getCamera().center[0];
       expect(Math.abs(lon)).toBeGreaterThan(165);
-    }
+    });
     frames.flush(50, start + 2000);
     expect(map.getCamera().center[0]).toBeCloseTo(-170, 6);
   });
@@ -844,12 +848,11 @@ describe('defaultEasing', () => {
   test("CSS's ease curve: fast then slow, increasing", () => {
     // cubic-bezier(0.25, 0.1, 0.25, 1) at 0.5
     expect(defaultEasing(0.5)).toBeCloseTo(0.8024, 3);
-    let previous = 0;
-    for (let i = 1; i <= 100; i += 1) {
+    Array.from({ length: 100 }, (_, i) => i + 1).reduce((previous, i) => {
       const v = defaultEasing(i / 100);
       expect(v).toBeGreaterThanOrEqual(previous);
-      previous = v;
-    }
+      return v;
+    }, 0);
   });
 });
 

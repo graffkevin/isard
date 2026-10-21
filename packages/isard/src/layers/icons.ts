@@ -97,8 +97,9 @@ export const loadSprites = async (
     ]);
     if (!json.ok || !png.ok) return r > 1 ? one({ id, url }, 1) : undefined;
     const index = (await json.json()) as SpriteIndex;
-    const icons: SpriteIndex = {};
-    for (const [name, icon] of Object.entries(index)) icons[spriteName(id, name)] = icon;
+    const icons: SpriteIndex = Object.fromEntries(
+      Object.entries(index).map(([name, icon]) => [spriteName(id, name), icon]),
+    );
     return { icons, image: await createImageBitmap(await png.blob()) };
   };
   const loaded = await Promise.all(spriteSources(sprite).map((s) => one(s, ratio).catch(() => undefined)));
@@ -185,11 +186,11 @@ export class Icons {
       }
       return pixels;
     };
-    for (const [name, icon] of Object.entries(index)) {
-      if (!icon || typeof icon !== 'object') continue;
+    Object.entries(index).forEach(([name, icon]) => {
+      if (!icon || typeof icon !== 'object') return;
       const { x, y, width, height, ...options } = icon;
       this.define(`${prefix}${name}`, { pixels: once, x, y, width, height, options }, false);
-    }
+    });
     this.version += 1;
   }
 
@@ -206,12 +207,12 @@ export class Icons {
 
   /** Forgets an image, or every image whose name starts with `prefix` (a sprite's) */
   remove(name: string, prefix = false): void {
-    for (const key of [...this.sources.keys()]) {
-      if (prefix ? key.startsWith(name) : key === name) {
+    [...this.sources.keys()]
+      .filter((key) => (prefix ? key.startsWith(name) : key === name))
+      .forEach((key) => {
         this.sources.delete(key);
         this.packed.delete(key);
-      }
-    }
+      });
     this.version += 1;
   }
 
@@ -389,35 +390,33 @@ const align = (start: boolean, end: boolean): number => {
 export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout => {
   const { size, anchor, offset, rotate, fit, padding, text } = options;
   const { width: w, height: h, pixelRatio } = icon;
-  let xs: Pieces;
-  let ys: Pieces;
-  if (fit !== 'none' && text) {
-    const [top, right, bottom, left] = padding;
-    const [x0, y0, x1, y1] = [text[0] - left, text[1] - top, text[2] + right, text[3] + bottom];
-    // The fixed parts at the image's own size; an axis not fitted at the icon's size, centered on the text
-    const own = 1 / pixelRatio;
-    const scaled = size / pixelRatio;
-    const centered = (length: number, lo: number, hi: number): Pieces => {
-      const c = (lo + hi) / 2;
-      return [[0, length, c - (length * scaled) / 2, c + (length * scaled) / 2]];
-    };
-    const content = icon.content;
-    xs =
-      fit === 'height'
-        ? centered(w, x0, x1)
-        : stretch(w, icon.stretchX, content && [content[0], content[2]], x0, x1, own);
-    ys =
-      fit === 'width'
-        ? centered(h, y0, y1)
-        : stretch(h, icon.stretchY, content && [content[1], content[3]], y0, y1, own);
-  } else {
+  const [xs, ys] = ((): [Pieces, Pieces] => {
+    if (fit !== 'none' && text) {
+      const [top, right, bottom, left] = padding;
+      const [x0, y0, x1, y1] = [text[0] - left, text[1] - top, text[2] + right, text[3] + bottom];
+      // The fixed parts at the image's own size; an axis not fitted at the icon's size, centered on the text
+      const own = 1 / pixelRatio;
+      const scaled = size / pixelRatio;
+      const centered = (length: number, lo: number, hi: number): Pieces => {
+        const c = (lo + hi) / 2;
+        return [[0, length, c - (length * scaled) / 2, c + (length * scaled) / 2]];
+      };
+      const content = icon.content;
+      return [
+        fit === 'height'
+          ? centered(w, x0, x1)
+          : stretch(w, icon.stretchX, content && [content[0], content[2]], x0, x1, own),
+        fit === 'width'
+          ? centered(h, y0, y1)
+          : stretch(h, icon.stretchY, content && [content[1], content[3]], y0, y1, own),
+      ];
+    }
     const [dw, dh] = [(w / pixelRatio) * size, (h / pixelRatio) * size];
     const ax = align(anchor.includes('left'), anchor.includes('right'));
     const ay = align(anchor.startsWith('top'), anchor.startsWith('bottom'));
     const [left, top] = [offset[0] * size - dw * ax, offset[1] * size - dh * ay];
-    xs = [[0, w, left, left + dw]];
-    ys = [[0, h, top, top + dh]];
-  }
+    return [[[0, w, left, left + dw]], [[0, h, top, top + dh]]];
+  })();
   const angle = ((Number(rotate) || 0) * Math.PI) / 180;
   const kind = icon.sdf ? -2 : -1;
   const quads: number[][] = [];
@@ -428,9 +427,9 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
     Number.NEGATIVE_INFINITY,
     Number.NEGATIVE_INFINITY,
   ];
-  for (const [v0, v1, top, bottom] of ys) {
-    for (const [u0, u1, left, right] of xs) {
-      if (right <= left || bottom <= top) continue;
+  ys.forEach(([v0, v1, top, bottom]) => {
+    xs.forEach(([u0, u1, left, right]) => {
+      if (right <= left || bottom <= top) return;
       quads.push([
         left,
         top,
@@ -444,19 +443,20 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
         angle,
       ]);
       // The box of the turned corners
-      for (const [px, py] of [
+      const corners: [number, number][] = [
         [left, top],
         [right, top],
         [left, bottom],
         [right, bottom],
-      ] as const) {
+      ];
+      corners.forEach(([px, py]) => {
         const [rx, ry] = [px * cs - py * sn, px * sn + py * cs];
         box[0] = Math.min(box[0], rx);
         box[1] = Math.min(box[1], ry);
         box[2] = Math.max(box[2], rx);
         box[3] = Math.max(box[3], ry);
-      }
-    }
-  }
+      });
+    });
+  });
   return { quads, box: quads.length ? box : [0, 0, 0, 0] };
 };

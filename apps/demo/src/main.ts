@@ -67,17 +67,19 @@ const buttons = <T extends string>(
   pick: (option: T) => void,
 ): void => {
   const row = element(parent);
-  for (const option of options) {
+  options.forEach((option) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = option;
     button.classList.toggle('on', option === initial);
     button.onclick = () => {
-      for (const other of row.children) other.classList.toggle('on', other === button);
+      Array.from(row.children).forEach((other) => {
+        other.classList.toggle('on', other === button);
+      });
       pick(option);
     };
     row.append(button);
-  }
+  });
 };
 
 const projections: readonly Projection[] = ['globe', 'mercator'];
@@ -112,7 +114,9 @@ relief.onclick = () => {
 element('montblanc').onclick = () => {
   if (!terrain) relief.click();
   map.setBasemap('ign-ortho');
-  for (const button of element('basemaps').children) button.classList.toggle('on', button.textContent === 'ign-ortho');
+  Array.from(element('basemaps').children).forEach((button) => {
+    button.classList.toggle('on', button.textContent === 'ign-ortho');
+  });
   map.easeTo({ center: [6.87, 45.9], zoom: 12.5, pitch: 72, bearing: 160 }, 3000);
 };
 

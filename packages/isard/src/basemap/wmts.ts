@@ -33,12 +33,12 @@ export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): T
   const latFirst = geographic && epsgCode(crs) === 4326 && /EPSG/i.test(crs);
   const unit = geographic ? METRES_PER_DEGREE : 1;
   const limits = new Map<string, TileMatrix['limits']>();
-  for (const l of children(child(link, 'TileMatrixSetLimits'), 'TileMatrixLimits')) {
+  children(child(link, 'TileMatrixSetLimits'), 'TileMatrixLimits').forEach((l) => {
     const [minRow, maxRow, minCol, maxCol] = ['MinTileRow', 'MaxTileRow', 'MinTileCol', 'MaxTileCol'].map((k) =>
       Number(childText(l, k)),
     ) as [number, number, number, number];
     limits.set(childText(l, 'TileMatrix') ?? '', [minCol, minRow, maxCol, maxRow]);
-  }
+  });
   const matrices = children(set, 'TileMatrix').map((m): TileMatrix => {
     const id = childText(m, 'Identifier') ?? '';
     const [a = 0, b = 0] = numbers(childText(m, 'TopLeftCorner'));

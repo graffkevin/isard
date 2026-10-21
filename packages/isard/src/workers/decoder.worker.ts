@@ -75,16 +75,15 @@ const load = async (
     type Image = NonNullable<(typeof tile.primitives)[number]['image']>;
     const decoded = new Map<Image, Promise<Pick<DecodedPrimitive, 'bitmap' | 'texture'>>>();
     const decode = (image: Image, mime: string | undefined) => {
-      let pending = decoded.get(image);
-      if (!pending) {
-        pending =
-          mime === 'image/ktx2'
-            ? transcodeKtx2(decoders, formats, image).then((texture) => ({ bitmap: null, texture }))
-            : createImageBitmap(new Blob([image], { type: mime ?? '' }), { premultiplyAlpha: 'none' }).then(
-                (bitmap) => ({ bitmap }),
-              );
-        decoded.set(image, pending);
-      }
+      const cached = decoded.get(image);
+      if (cached) return cached;
+      const pending =
+        mime === 'image/ktx2'
+          ? transcodeKtx2(decoders, formats, image).then((texture) => ({ bitmap: null, texture }))
+          : createImageBitmap(new Blob([image], { type: mime ?? '' }), { premultiplyAlpha: 'none' }).then((bitmap) => ({
+              bitmap,
+            }));
+      decoded.set(image, pending);
       return pending;
     };
     const vertices = tile.points ?? [];
@@ -101,15 +100,19 @@ const load = async (
     );
     // Each object once: a buffer or bitmap listed twice makes the transfer throw
     const transfer = new Set<Transferable>();
-    for (const p of primitives) {
+    primitives.forEach((p) => {
       transfer.add(p.vertices.buffer);
       transfer.add(p.indices.buffer);
       if (p.color) transfer.add(p.color.buffer);
       if (p.features) transfer.add(p.features.buffer);
       if (p.bitmap) transfer.add(p.bitmap);
-      for (const level of p.texture?.levels ?? []) transfer.add(level.data.buffer);
-    }
-    for (const v of vertices) transfer.add(v.buffer);
+      p.texture?.levels.forEach((level) => {
+        transfer.add(level.data.buffer);
+      });
+    });
+    vertices.forEach((v) => {
+      transfer.add(v.buffer);
+    });
     const decodedTile = {
       anchor: tile.anchor,
       primitives,

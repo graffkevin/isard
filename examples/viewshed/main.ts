@@ -27,12 +27,13 @@ map.addExtrusions({ data: buildings, height: roofHeight, color: '#e4e1d8' });
 
 // The buildings' outlines and bounding boxes, to find the roof under a pin
 type Ring = LonLat[];
+const polygonsOf = (g: (typeof buildings.features)[number]['geometry']): Ring[][] => {
+  if (g?.type === 'Polygon') return [g.coordinates as Ring[]];
+  if (g?.type === 'MultiPolygon') return g.coordinates as Ring[][];
+  return [];
+};
 const footprints = buildings.features.flatMap((f) => {
-  const g = f.geometry;
-  let polygons: Ring[][] = [];
-  if (g?.type === 'Polygon') polygons = [g.coordinates as Ring[]];
-  else if (g?.type === 'MultiPolygon') polygons = g.coordinates as Ring[][];
-  return polygons.map((rings) => {
+  return polygonsOf(f.geometry).map((rings) => {
     const outer = rings[0] ?? [];
     const lons = outer.map((c) => c[0]);
     const lats = outer.map((c) => c[1]);

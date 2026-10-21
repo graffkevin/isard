@@ -146,18 +146,19 @@ export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
     }
   };
   const fetchImage = (url: string): Image => {
-    let image = cache.get(url);
-    if (!image) {
-      image = (async () => {
+    const load = (): Image => {
+      const loading = (async () => {
         const response = await fetch(url, withHeaders(url));
         if (response.status === 404 || response.status === 204 || response.status === 410) return null;
         if (!response.ok) throw new Error(`isard: ${response.status} for a raster to reproject`);
         return createImageBitmap(await response.blob());
       })();
       // A failure is not kept: the engine's retry fetches again
-      image.catch(() => cache.delete(url));
-      cache.set(url, image);
-    }
+      loading.catch(() => cache.delete(url));
+      cache.set(url, loading);
+      return loading;
+    };
+    const image = cache.get(url) ?? load();
     users.set(image, (users.get(image) ?? 0) + 1);
     return image;
   };
@@ -170,19 +171,23 @@ export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
       const canvas = new OffscreenCanvas(job.width, job.height);
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (!context) throw new Error('isard: no 2D canvas to reproject the tiles');
-      for (const [s, image] of images) if (image) context.drawImage(image, s.x, s.y, s.w, s.h);
+      images.forEach(([s, image]) => {
+        if (image) context.drawImage(image, s.x, s.y, s.w, s.h);
+      });
       const mosaic = context.getImageData(0, 0, job.width, job.height).data;
       const pixels = resample(mosaic, job.width, job.height, job.mesh, job.n, job.size);
       return createImageBitmap(new ImageData(pixels, job.size, job.size), { premultiplyAlpha: 'none' });
     } finally {
-      for (const [, image] of pending) release(image);
+      pending.forEach(([, image]) => {
+        release(image);
+      });
     }
   };
   return {
     draw,
     cache,
     close: () => {
-      for (const image of cache.values()) drop(image);
+      [...cache.values()].forEach(drop);
       cache.clear();
     },
   };

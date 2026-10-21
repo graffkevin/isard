@@ -67,7 +67,9 @@ class Emitter<E> {
   }
 
   emit<K extends keyof E>(type: K, event: E[K]): void {
-    for (const listener of this.listeners[type] ?? []) listener(event);
+    this.listeners[type]?.forEach((listener) => {
+      listener(event);
+    });
   }
 }
 
@@ -511,17 +513,11 @@ export interface PanelOptions {
 }
 
 /** `a × b`, 4 × 4 column-major */
-const multiply = (a: ArrayLike<number>, b: ArrayLike<number>): number[] => {
-  const out = new Array<number>(16).fill(0);
-  for (let c = 0; c < 4; c++) {
-    for (let r = 0; r < 4; r++) {
-      let sum = 0;
-      for (let k = 0; k < 4; k++) sum += (a[k * 4 + r] ?? 0) * (b[c * 4 + k] ?? 0);
-      out[c * 4 + r] = sum;
-    }
-  }
-  return out;
-};
+const multiply = (a: ArrayLike<number>, b: ArrayLike<number>): number[] =>
+  Array.from({ length: 16 }, (_, i) => {
+    const [c, r] = [Math.floor(i / 4), i % 4];
+    return [0, 1, 2, 3].reduce((sum, k) => sum + (a[k * 4 + r] ?? 0) * (b[c * 4 + k] ?? 0), 0);
+  });
 
 /**
  * An element standing in 3D at a position: a video, a web page, a sign, `width` metres wide on the ground, facing
@@ -630,7 +626,9 @@ export class Panel {
     // inverted is not drawn
     const m = multiply(toScreen, clip);
     m.splice(8, 4, 0, 0, 1, 0);
-    for (const k of [2, 6, 14]) m[k] = 0;
+    [2, 6, 14].forEach((k) => {
+      m[k] = 0;
+    });
     this.element.style.transform = `matrix3d(${m.join(',')})`;
   }
 }

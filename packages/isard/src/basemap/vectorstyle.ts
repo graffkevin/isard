@@ -166,15 +166,11 @@ const legacy = (f: LegacyFunction, ctx: Context): unknown => {
   const first = stops[0];
   if (!first) return f.default;
   if (input <= key(first)) return first[1];
-  for (let i = 1; i < stops.length; i += 1) {
-    const [s0, s1] = [stops[i - 1], stops[i]];
-    if (!s0 || !s1) continue;
-    if (input < key(s1)) {
-      if (type === 'interval') return s0[1];
-      return mix(s0[1], s1[1], factor(input, key(s0), key(s1), f.base ?? 1));
-    }
-  }
-  return stops.at(-1)?.[1];
+  const at = stops.findIndex((s1, i) => i > 0 && Boolean(stops[i - 1]) && Boolean(s1) && input < key(s1));
+  const [s0, s1] = [stops[at - 1], stops[at]];
+  if (at < 0 || !s0 || !s1) return stops.at(-1)?.[1];
+  if (type === 'interval') return s0[1];
+  return mix(s0[1], s1[1], factor(input, key(s0), key(s1), f.base ?? 1));
 };
 
 // ── Expressions ──
@@ -383,16 +379,18 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
       return Array.isArray(haystack) && haystack.includes(needle as Json);
     }
     case 'case': {
-      for (let i = 0; i + 1 < args.length; i += 2) if (ev(i)) return ev(i + 1);
-      return ev(args.length - 1);
+      const hit = args.findIndex((_, i) => i % 2 === 0 && i + 1 < args.length && Boolean(ev(i)));
+      return hit < 0 ? ev(args.length - 1) : ev(hit + 1);
     }
     case 'match': {
       const input = ev(0);
-      for (let i = 1; i + 1 < args.length; i += 2) {
-        const label = args[i];
-        if (Array.isArray(label) ? label.includes(input as Json) : label === input) return ev(i + 1);
-      }
-      return ev(args.length - 1);
+      const hit = args.findIndex(
+        (label, i) =>
+          i % 2 === 1 &&
+          i + 1 < args.length &&
+          (Array.isArray(label) ? label.includes(input as Json) : label === input),
+      );
+      return hit < 0 ? ev(args.length - 1) : ev(hit + 1);
     }
     case 'step': {
       const input = num(0);
@@ -409,17 +407,17 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
       const kind = args[0];
       const input = num(1);
       const base = Array.isArray(kind) && kind[0] === 'exponential' ? Number(kind[1]) : 1;
-      const stops: [number, Json][] = [];
-      for (let i = 2; i + 1 < args.length; i += 2) stops.push([Number(args[i]), args[i + 1] ?? null]);
+      const stops = Array.from({ length: Math.floor((args.length - 2) / 2) }, (_, k): [number, Json] => [
+        Number(args[2 + 2 * k]),
+        args[3 + 2 * k] ?? null,
+      ]);
       const first = stops[0];
       if (!first) return null;
       if (input <= first[0]) return evaluate(first[1], ctx);
-      for (let i = 1; i < stops.length; i += 1) {
-        const [s0, s1] = [stops[i - 1], stops[i]];
-        if (s0 && s1 && input < s1[0])
-          return mix(evaluate(s0[1], ctx), evaluate(s1[1], ctx), factor(input, s0[0], s1[0], base));
-      }
-      return evaluate(stops.at(-1)?.[1] ?? null, ctx);
+      const at = stops.findIndex((s1, i) => i > 0 && input < s1[0]);
+      const [s0, s1] = [stops[at - 1], stops[at]];
+      if (at < 0 || !s0 || !s1) return evaluate(stops.at(-1)?.[1] ?? null, ctx);
+      return mix(evaluate(s0[1], ctx), evaluate(s1[1], ctx), factor(input, s0[0], s1[0], base));
     }
     case 'rgb':
     case 'rgba':
@@ -524,18 +522,18 @@ const compile = (f: Json): Test => {
   if (!Array.isArray(f)) return () => Boolean(f);
   const hit = compiled.get(f);
   if (hit) return hit;
-  let test: Test;
-  const op = f[0];
-  if (op === 'all' || op === 'any' || op === 'none') {
-    const parts = f.slice(1).map(compile);
-    if (op === 'all') test = (ctx) => parts.every((p) => p(ctx));
-    else if (op === 'any') test = (ctx) => parts.some((p) => p(ctx));
-    else test = (ctx) => !parts.some((p) => p(ctx));
-  } else if (isLegacyLeaf(f)) {
-    test = (ctx) => legacyFilter(f, ctx);
-  } else {
-    test = (ctx) => Boolean(evaluate(f, ctx));
-  }
+  const make = (): Test => {
+    const op = f[0];
+    if (op === 'all' || op === 'any' || op === 'none') {
+      const parts = f.slice(1).map(compile);
+      if (op === 'all') return (ctx) => parts.every((p) => p(ctx));
+      if (op === 'any') return (ctx) => parts.some((p) => p(ctx));
+      return (ctx) => !parts.some((p) => p(ctx));
+    }
+    if (isLegacyLeaf(f)) return (ctx) => legacyFilter(f, ctx);
+    return (ctx) => Boolean(evaluate(f, ctx));
+  };
+  const test = make();
   compiled.set(f, test);
   return test;
 };
@@ -582,25 +580,28 @@ export const labelFont = (font: string): string => {
  */
 export const zoomStops = (e: Json): [number, number][] => {
   const zooms = new Set<number>();
+  // The inputs of the stops of an `interpolate` or a `step` (from its fourth argument, one in two)
+  const stopInputs = (x: Json[]) => x.filter((_, i) => i >= 3 && i % 2 === 1).map(Number);
   const walk = (x: Json) => {
     if (!Array.isArray(x)) return;
     const zoomInput = (input: Json | undefined) => Array.isArray(input) && input[0] === 'zoom';
     if ((x[0] === 'interpolate' || x[0] === 'interpolate-hcl' || x[0] === 'interpolate-lab') && zoomInput(x[2])) {
-      for (let i = 3; i < x.length; i += 2) zooms.add(Number(x[i]));
+      stopInputs(x).forEach((t) => {
+        zooms.add(t);
+      });
     } else if (x[0] === 'step' && zoomInput(x[1])) {
-      for (let i = 3; i < x.length; i += 2) {
-        const t = Number(x[i]);
+      stopInputs(x).forEach((t) => {
         zooms.add(t);
         zooms.add(t - 0.01);
-      }
+      });
     }
-    for (const y of x) walk(y);
+    x.forEach(walk);
   };
   walk(e);
   const finite = [...zooms].filter(Number.isFinite);
   if (finite.length === 0) finite.push(0);
   const [lo, hi] = [Math.min(...finite), Math.max(...finite)];
-  for (let z = Math.ceil(lo); z <= Math.floor(hi); z += 1) finite.push(z);
+  finite.push(...Array.from({ length: Math.floor(hi) - Math.ceil(lo) + 1 }, (_, i) => Math.ceil(lo) + i));
   return [...new Set(finite)]
     .sort((a, b) => a - b)
     .map((zoom) => [zoom, Number(evaluate(e, { zoom, properties: {}, type: 'Unknown' }))]);

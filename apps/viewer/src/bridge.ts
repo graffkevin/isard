@@ -39,11 +39,8 @@ export class Bridge {
       protocol: 1,
       send: (message) => this.receive(message),
       on: (type, listener) => {
-        let set = this.listeners.get(type);
-        if (!set) {
-          set = new Set();
-          this.listeners.set(type, set);
-        }
+        const set = this.listeners.get(type) ?? new Set<Listener>();
+        this.listeners.set(type, set);
         set.add(listener);
         return () => set.delete(listener);
       },
@@ -65,7 +62,9 @@ export class Bridge {
     this.events.onmessage = (event: MessageEvent<string>) => {
       try {
         const message = JSON.parse(event.data) as HostMessage | HostMessage[];
-        for (const m of Array.isArray(message) ? message : [message]) this.receive(m);
+        (Array.isArray(message) ? message : [message]).forEach((m) => {
+          this.receive(m);
+        });
       } catch (error) {
         this.send({ type: 'error', message: `unreadable bridge event: ${String(error)}` });
       }
@@ -90,14 +89,14 @@ export class Bridge {
     if (window.parent !== window) window.parent.postMessage({ isard: 1, ...message } satisfies PostedMessage, '*');
     else if (window.opener)
       (window.opener as Window).postMessage({ isard: 1, ...message } satisfies PostedMessage, '*');
-    for (const type of [message.type, '*']) {
-      for (const listener of this.listeners.get(type) ?? []) {
+    [message.type, '*'].forEach((type) => {
+      this.listeners.get(type)?.forEach((listener) => {
         try {
           listener(message);
         } catch (error) {
           console.error('isard viewer: a listener failed', error);
         }
-      }
-    }
+      });
+    });
   }
 }

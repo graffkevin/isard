@@ -43,7 +43,9 @@ describe('Lru', () => {
 
   test('a capacity lowered applies at the next write', () => {
     const lru = new Lru<number, number>(4);
-    for (let i = 0; i < 4; i += 1) lru.set(i, i);
+    [0, 1, 2, 3].forEach((i) => {
+      lru.set(i, i);
+    });
     lru.capacity = 2;
     expect(lru.size).toBe(4);
     lru.set(4, 4);

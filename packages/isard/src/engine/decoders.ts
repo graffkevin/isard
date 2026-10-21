@@ -166,15 +166,17 @@ export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): 
         if (request.normal !== undefined) geometry.normals = floats(request.normal);
         return geometry;
       }
-      const count = mesh.num_faces() * 3;
-      const pointer = module._malloc(count * 4);
-      let indices: Uint32Array;
-      try {
-        decoder.GetTrianglesUInt32Array(mesh, count * 4, pointer);
-        indices = module.HEAPU32.slice(pointer / 4, pointer / 4 + count);
-      } finally {
-        module._free(pointer);
-      }
+      const triangles = (): Uint32Array => {
+        const count = mesh.num_faces() * 3;
+        const pointer = module._malloc(count * 4);
+        try {
+          decoder.GetTrianglesUInt32Array(mesh, count * 4, pointer);
+          return module.HEAPU32.slice(pointer / 4, pointer / 4 + count);
+        } finally {
+          module._free(pointer);
+        }
+      };
+      const indices = triangles();
       const geometry: DracoGeometry = {
         mesh: request.mesh,
         primitive: request.primitive,
@@ -214,13 +216,12 @@ export const transcodeKtx2 = async (
   try {
     if (!file.isValid() || !file.startTranscoding()) throw new Error('KTX2: invalid file');
     const { basis: format, gl } = target(formats, file.getHasAlpha());
-    const levels: CompressedTexture['levels'] = [];
-    for (let level = 0; level < file.getLevels(); level++) {
+    const levels: CompressedTexture['levels'] = Array.from({ length: file.getLevels() }, (_, level) => {
       const { origWidth: width, origHeight: height } = file.getImageLevelInfo(level, 0, 0);
       const data = new Uint8Array(file.getImageTranscodedSizeInBytes(level, 0, 0, format));
       if (!file.transcodeImage(data, level, 0, 0, format, 0, -1, -1)) throw new Error('KTX2: transcoding failed');
-      levels.push({ width, height, data });
-    }
+      return { width, height, data };
+    });
     return { format: gl, levels };
   } finally {
     file.close();

@@ -23,12 +23,11 @@ const index = new Map<string, number>();
 const nodes: number[] = [];
 const node = ([lon, lat]: number[]) => {
   const key = `${lon?.toFixed(7)},${lat?.toFixed(7)}`;
-  let i = index.get(key);
-  if (i === undefined) {
-    i = nodes.length / 2;
-    index.set(key, i);
-    nodes.push(lon ?? 0, lat ?? 0);
-  }
+  const known = index.get(key);
+  if (known !== undefined) return known;
+  const i = nodes.length / 2;
+  index.set(key, i);
+  nodes.push(lon ?? 0, lat ?? 0);
   return i;
 };
 const edges: number[] = [];

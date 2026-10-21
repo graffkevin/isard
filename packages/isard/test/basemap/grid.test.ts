@@ -22,28 +22,29 @@ const meshError = (g: ReturnType<typeof resolveGrid>, z: number, x: number, y: n
   if (!m) throw new Error('no matrix');
   const { n, mesh } = job;
   const at = (i: number, j: number, k: number) => mesh[2 * (j * (n + 1) + i) + k] as number;
-  let worst = 0;
-  for (let row = 0; row < 256; row += 3) {
-    for (let col = 0; col < 256; col += 3) {
-      const [fx, fy] = [((col + 0.5) / 256) * n, ((row + 0.5) / 256) * n];
-      const [i, j] = [Math.min(n - 1, Math.floor(fx)), Math.min(n - 1, Math.floor(fy))];
-      const [tx, ty] = [fx - i, fy - j];
-      const lerp = (k: number) =>
-        (1 - tx) * (1 - ty) * at(i, j, k) +
-        tx * (1 - ty) * at(i + 1, j, k) +
-        (1 - tx) * ty * at(i, j + 1, k) +
-        tx * ty * at(i + 1, j + 1, k);
-      const tiles = 2 ** z;
-      const [X = 0, Y = 0] = g.crs.forward([
-        longitude((x + (col + 0.5) / 256) / tiles),
-        latitude((y + (row + 0.5) / 256) / tiles),
-      ]);
-      const u = (X - m.origin[0]) / m.resolution - (col0 as number) * m.tileWidth;
-      const v = (m.origin[1] - Y) / m.resolution - (row0 as number) * m.tileHeight;
-      worst = Math.max(worst, Math.hypot(u - lerp(0), v - lerp(1)));
-    }
-  }
-  return worst;
+  const steps = Array.from({ length: Math.ceil(256 / 3) }, (_, k) => k * 3);
+  return steps
+    .flatMap((row) =>
+      steps.map((col) => {
+        const [fx, fy] = [((col + 0.5) / 256) * n, ((row + 0.5) / 256) * n];
+        const [i, j] = [Math.min(n - 1, Math.floor(fx)), Math.min(n - 1, Math.floor(fy))];
+        const [tx, ty] = [fx - i, fy - j];
+        const lerp = (k: number) =>
+          (1 - tx) * (1 - ty) * at(i, j, k) +
+          tx * (1 - ty) * at(i + 1, j, k) +
+          (1 - tx) * ty * at(i, j + 1, k) +
+          tx * ty * at(i + 1, j + 1, k);
+        const tiles = 2 ** z;
+        const [X = 0, Y = 0] = g.crs.forward([
+          longitude((x + (col + 0.5) / 256) / tiles),
+          latitude((y + (row + 0.5) / 256) / tiles),
+        ]);
+        const u = (X - m.origin[0]) / m.resolution - (col0 as number) * m.tileWidth;
+        const v = (m.origin[1] - Y) / m.resolution - (row0 as number) * m.tileHeight;
+        return Math.hypot(u - lerp(0), v - lerp(1));
+      }),
+    )
+    .reduce((worst, error) => Math.max(worst, error), 0);
 };
 
 describe('planTile in Lambert-93', () => {

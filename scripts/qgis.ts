@@ -50,11 +50,10 @@ const files = (dir: string): string[] => {
 const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
-  let offset = 0;
   // 1980-01-01 00:00: archives identical from one run to the next
   const time = 0;
   const date = (1 << 5) | 1;
-  for (const { name, data } of entries) {
+  const offset = entries.reduce((offset, { name, data }) => {
     const nameBytes = new TextEncoder().encode(name);
     const deflated = deflateRawSync(data, { level: 9 });
     const stored = deflated.length >= data.length;
@@ -92,8 +91,8 @@ const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
     central.set(nameBytes, 46);
     locals.push(local, body);
     centrals.push(central);
-    offset += local.length + body.length;
-  }
+    return offset + local.length + body.length;
+  }, 0);
   const centralSize = centrals.reduce((n, c) => n + c.length, 0);
   const end = new Uint8Array(22);
   const ev = new DataView(end.buffer);
@@ -104,11 +103,10 @@ const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
   ev.setUint32(16, offset, true);
   const parts = [...locals, ...centrals, end];
   const result = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const part of parts) {
+  parts.reduce((at, part) => {
     result.set(part, at);
-    at += part.length;
-  }
+    return at + part.length;
+  }, 0);
   return result;
 };
 
