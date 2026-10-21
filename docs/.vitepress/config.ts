@@ -5,6 +5,11 @@ import { defineConfig } from 'vitepress';
 const referenceSidebar = new URL('../reference/typedoc-sidebar.json', import.meta.url);
 const reference = existsSync(referenceSidebar) ? JSON.parse(readFileSync(referenceSidebar, 'utf8')) : [];
 
+/** The version of the package, shown at the right of the navigation */
+const { version } = JSON.parse(readFileSync(new URL('../../packages/isard/package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
+
 const examples = [
   ['The globe', 'globe'],
   ['A map', 'basic'],
@@ -54,6 +59,14 @@ export default defineConfig({
         ],
       },
       { text: 'Changelog', link: '/changelog' },
+      {
+        text: `v${version}`,
+        items: [
+          { text: 'Changelog', link: '/changelog' },
+          { text: 'npm', link: `https://www.npmjs.com/package/isard/v/${version}` },
+          { text: 'Release notes', link: `https://github.com/graffkevin/isard/releases/tag/v${version}` },
+        ],
+      },
     ],
     sidebar: {
       '/guide/': [
