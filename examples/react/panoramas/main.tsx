@@ -17,6 +17,7 @@ const SAMPLE = 'https://raw.githubusercontent.com/iTowns/iTowns2-sample-data/mas
 const Street = ({ onReady, onKey }: { onReady: (panoramas: Panoramas) => void; onKey: () => void }) => {
   const map = useMap();
 
+  // The keys that walk (Z, S) listened to on the map's element while mounted
   useEffect(() => {
     const container = map?.getContainer();
 
@@ -24,6 +25,7 @@ const Street = ({ onReady, onKey }: { onReady: (panoramas: Panoramas) => void; o
 
     return () => container?.removeEventListener('keyup', onKey);
   }, [map, onKey]);
+  // The panoramas added once the map is there, the view entering the first one; ignored if unmounted before they load
   useEffect(() => {
     if (!map) return;
 
@@ -54,6 +56,7 @@ const Street = ({ onReady, onKey }: { onReady: (panoramas: Panoramas) => void; o
 const App = () => {
   const [buildings, setBuildings] = useState<ExtrusionOptions<BdTopoBuilding>>();
 
+  // The BD TOPO buildings the panoramas are projected onto, fetched once
   useEffect(() => {
     bdtopoBuildings([2.331, 48.847, 2.338, 48.853], { defaultHeight: 10 }).then(setBuildings, console.error);
   }, []);

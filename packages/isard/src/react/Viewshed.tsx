@@ -11,6 +11,7 @@ export const Viewshed = (props: ViewshedOptions): ReactNode => {
   // Numbers, strings and the position: compared by value
   const options = JSON.stringify(props);
 
+  // Its observer taken off the map's viewsheds when unmounted
   useEffect(() => {
     if (!binding) return;
 
@@ -20,6 +21,7 @@ export const Viewshed = (props: ViewshedOptions): ReactNode => {
     };
   }, [binding, key]);
 
+  // Its observer set among the map's viewsheds when its options change (compared by value)
   useEffect(() => {
     if (!binding) return;
     binding.viewsheds.set(key, JSON.parse(options) as ViewshedOptions);

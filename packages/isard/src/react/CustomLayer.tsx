@@ -17,6 +17,7 @@ export const CustomLayer = ({ layer, order = 0 }: CustomLayerProps): ReactNode =
   const initialOrder = useRef(order);
   const handle = useRef<LayerHandle>(undefined);
 
+  // Added once the map is there, in the declared order; removed when unmounted, made anew when the layer object changes
   useEffect(() => {
     if (!binding) return;
 
@@ -32,6 +33,7 @@ export const CustomLayer = ({ layer, order = 0 }: CustomLayerProps): ReactNode =
     };
   }, [binding, layer]);
 
+  // A new `order`: moved to its new place among the layers of the components
   useEffect(() => {
     if (binding && handle.current) binding.order.place(handle.current, order, handle.current);
   }, [binding, order]);

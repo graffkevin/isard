@@ -38,6 +38,7 @@ export const useMapEvent = <K extends keyof MapEvents>(type: K, listener: (event
   const latest = useRef(listener);
 
   latest.current = listener;
+  // Listening while mounted, to the listener of the last render; stops when unmounted or the map changes
   useEffect(() => map?.on(type, (event) => latest.current(event)), [map, type]);
 };
 

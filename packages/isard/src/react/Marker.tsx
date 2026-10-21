@@ -40,6 +40,7 @@ export const Marker = (props: MarkerProps): ReactNode => {
 
   latest.current = props;
 
+  // On the map once it is there, its drag events forwarded to the latest props; off the map when unmounted
   useEffect(() => {
     if (!map) return;
 
@@ -59,15 +60,19 @@ export const Marker = (props: MarkerProps): ReactNode => {
     };
   }, [map, marker]);
 
+  // Its position, before the browser paints (no frame at the old place)
   useLayoutEffect(() => {
     marker.setLonLat(lonLat);
   }, [marker, lonLat[0], lonLat[1]]);
+  // Its height above what it stands on
   useLayoutEffect(() => {
     marker.setHeight(height, base);
   }, [marker, height, base]);
+  // Draggable or not
   useLayoutEffect(() => {
     marker.setDraggable(draggable);
   }, [marker, draggable]);
+  // Its shift from the anchor
   useLayoutEffect(() => {
     if (offset) marker.setOffset(offset);
   }, [marker, offset?.[0], offset?.[1]]);

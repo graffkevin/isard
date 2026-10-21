@@ -40,9 +40,11 @@ export const Swipe = (props: SwipeProps): ReactNode => {
     };
   }, [map, layers]);
 
+  // The line's position and side sent to the map when they change (the layers in it come and go through the group)
   useEffect(() => {
     if (map && layers.size > 0) map.setSwipe({ position, layers: [...layers], ...defined({ side }) });
   }, [map, layers, position, side]);
+  // The swipe taken off the map when unmounted
   useEffect(
     () => () => {
       map?.setSwipe(undefined);

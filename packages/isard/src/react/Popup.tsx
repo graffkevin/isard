@@ -36,6 +36,7 @@ export const Popup = (props: PopupProps): ReactNode => {
 
   latest.current = props;
 
+  // Its open and close events forwarded to the latest props, and tied to the marker around (its click opens it); removed when unmounted
   useEffect(() => {
     if (!map) return;
 
@@ -55,9 +56,11 @@ export const Popup = (props: PopupProps): ReactNode => {
     };
   }, [map, marker, popup]);
 
+  // Its shift from the anchor
   useLayoutEffect(() => {
     if (offset) popup.setOffset(offset);
   }, [popup, offset?.[0], offset?.[1]]);
+  // Its position, height and, when `open` decides or it stands alone, open or closed; before the browser paints
   useLayoutEffect(() => {
     if (!map) return;
     if (lonLat) popup.setLonLat(lonLat);

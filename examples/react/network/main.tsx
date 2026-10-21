@@ -178,6 +178,7 @@ const App = () => {
   const [roads, setRoads] = useState<Roads>();
   const [ms, setMs] = useState<number>();
 
+  // The road sections of the box, fetched once
   useEffect(() => {
     geoplateformeWfs<{ nature: string }>('BDTOPO_V3:troncon_de_route', BOX).then(setRoads);
   }, []);

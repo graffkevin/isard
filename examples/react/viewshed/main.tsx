@@ -68,6 +68,7 @@ const roofFinder = (buildings: FeatureCollection<Building>) => {
 const App = () => {
   const [buildings, setBuildings] = useState<FeatureCollection<Building>>();
 
+  // The BD TOPO buildings around Montmartre, fetched once
   useEffect(() => {
     geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.332, 48.877, 2.356, 48.893]).then(setBuildings, console.error);
   }, []);

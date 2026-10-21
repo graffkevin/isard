@@ -59,6 +59,7 @@ const Spin = ({ zoom }: { zoom: number }) => {
   const map = useMap();
   const turning = useRef(true);
 
+  // The slow turn of the globe, each frame until the first press on the map; stopped when unmounted
   useEffect(() => {
     if (!map) return;
 

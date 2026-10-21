@@ -24,6 +24,7 @@ export const Panel = (props: PanelProps): ReactNode => {
     [element, className],
   );
 
+  // On the map once it is there; off it when unmounted
   useEffect(() => {
     if (!map) return;
     panel.addTo(map);
@@ -33,9 +34,11 @@ export const Panel = (props: PanelProps): ReactNode => {
     };
   }, [map, panel]);
 
+  // Its position, before the browser paints
   useLayoutEffect(() => {
     panel.setLonLat(lonLat);
   }, [panel, lonLat[0], lonLat[1]]);
+  // Its size and orientation: width, heading, pitch, height
   useLayoutEffect(() => {
     panel.setPlacement(defined({ width, heading, pitch, height }));
   }, [panel, width, heading, pitch, height]);

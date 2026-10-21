@@ -17,6 +17,7 @@ const Rivers = ({ shown }: { shown: boolean }) => {
   const map = useMap();
   const [rivers, setRivers] = useState<RasterLayer>();
 
+  // The rivers' layer drawn from the basemap's vector tiles once the map is there; its tiles freed when unmounted
   useEffect(() => {
     if (!map) return;
 
@@ -56,6 +57,7 @@ const Rivers = ({ shown }: { shown: boolean }) => {
       tiles.destroy();
     };
   }, [map]);
+  // The rivers shown or hidden with the checkbox
   useEffect(() => {
     rivers?.setStyle({ opacity: shown ? 1 : 0 });
   }, [rivers, shown]);

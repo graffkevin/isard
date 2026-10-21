@@ -107,6 +107,7 @@ export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from 
 export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './layers/pointclouds.ts';
 export type { Overlap, SymbolOptions, SymbolStyle } from './layers/symbols.ts';
 export { SymbolLayer } from './layers/symbols.ts';
+export type { HoverPicking } from './map/hover-pick.ts';
 export { GeoMap, type LayerSpec } from './map.ts';
 export type {
   AnimationOptions,

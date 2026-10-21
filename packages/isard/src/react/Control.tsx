@@ -15,6 +15,7 @@ export interface ControlProps {
 export const Control = ({ control, position = 'top-right' }: ControlProps): ReactNode => {
   const map = useMap();
 
+  // Added to its corner once the map is there; removed when unmounted, or replaced when the control or its corner change
   useEffect(() => {
     if (!map) return;
     map.addControl(control, position);

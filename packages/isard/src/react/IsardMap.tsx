@@ -199,10 +199,12 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
       });
   });
 
+  // What `onHoverFeature` picks, given to the map whenever the prop changes
   useEffect(() => {
     if (map && hoverPicking) map.hoverPicking = hoverPicking;
   }, [map, hoverPicking]);
 
+  // A controlled camera: set when the prop changes, unless the map is already there (a gesture reported by `onMove`)
   useEffect(() => {
     if (map && camera && !sameCamera(map.getCamera(), camera)) map.setCamera(camera);
   }, [map, camera]);

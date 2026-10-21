@@ -110,6 +110,7 @@ const THREE_LAYER = threeLayer();
 const Animate = () => {
   const map = useMap();
 
+  // A frame asked each frame while mounted, for the scene's animation (unless `?still`)
   useEffect(() => {
     if (!map || still) return;
 
@@ -130,6 +131,7 @@ const Animate = () => {
 const App = () => {
   const [buildings, setBuildings] = useState<FeatureCollection<Building>>();
 
+  // The BD TOPO buildings of the box, fetched once
   useEffect(() => {
     geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.414, 48.84, 2.432, 48.851]).then(setBuildings);
   }, []);

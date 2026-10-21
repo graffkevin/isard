@@ -36,6 +36,7 @@ const App = () => {
   // The layer 'hoverfeature' picks among
   const hoverPicking = useMemo(() => ({ layers: layer ? [layer] : [] }), [layer]);
 
+  // The BD TOPO buildings of the box, fetched once
   useEffect(() => {
     geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.414, 48.84, 2.432, 48.851]).then(setBuildings);
   }, []);

@@ -77,6 +77,7 @@ const App = () => {
   // The fills picked, without stalling the GPU: a frame after the pointer moved
   const hoverPicking = useMemo(() => ({ layers: fills ? [fills] : [] }), [fills]);
 
+  // The communes around Paris, fetched once; the request dropped when unmounted
   useEffect(() => {
     const controller = new AbortController();
 
