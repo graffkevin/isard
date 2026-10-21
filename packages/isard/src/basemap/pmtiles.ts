@@ -6,6 +6,7 @@
  */
 
 import { withHeaders } from '../engine/requests.ts';
+import { isRecord } from '../util/guards.ts';
 import { Lru } from '../util/lru.ts';
 
 /** What a PMTiles archive's tiles are */
@@ -153,8 +154,9 @@ export const findEntry = (entries: readonly PmtilesEntry[], id: number): Pmtiles
 
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    const e = entries[mid] as PmtilesEntry;
+    const e = entries[mid];
 
+    if (!e) break;
     if (e.tileId === id) return e;
     if (e.tileId < id) lo = mid + 1;
     else hi = mid - 1;
@@ -199,13 +201,16 @@ export const parseHeader = (bytes: Uint8Array): PmtilesHeader => {
 };
 
 /** Bytes as they are stored, decompressed (1: none, 2: gzip; 0, unknown, is read as none) */
-export const decompress = async (bytes: Uint8Array, compression: number): Promise<Uint8Array> => {
+export const decompress = async (
+  bytes: Uint8Array<ArrayBuffer>,
+  compression: number,
+): Promise<Uint8Array<ArrayBuffer>> => {
   if (compression === 0 || compression === 1) return bytes;
   if (compression !== 2) {
     throw new Error(`isard: PMTiles compression ${compression === 3 ? 'brotli' : 'zstd'} is not read (gzip only)`);
   }
 
-  const stream = new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
 
   return new Uint8Array(await new Response(stream).arrayBuffer());
 };
@@ -219,12 +224,12 @@ export class PMTiles {
   /** The leaf directories read, by offset */
   private readonly leaves = new Lru<number, Promise<PmtilesEntry[]>>(64);
   /** The whole file, when the server answered a range request with it (small files, `blob:` URLs) */
-  private whole: Promise<Uint8Array> | undefined;
+  private whole: Promise<Uint8Array<ArrayBuffer>> | undefined;
 
   constructor(readonly source: string | Blob) {}
 
   /** `length` bytes from `offset` */
-  private async range(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+  private async range(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
     if (typeof this.source !== 'string') {
       return new Uint8Array(await this.source.slice(offset, offset + length).arrayBuffer());
     }
@@ -292,7 +297,7 @@ export class PMTiles {
     const text = new TextDecoder().decode(await decompress(raw, header.internalCompression));
     const value: unknown = JSON.parse(text);
 
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+    return isRecord(value) ? value : {};
   }
 
   private leaf(header: PmtilesHeader, entry: PmtilesEntry): Promise<PmtilesEntry[]> {
@@ -312,7 +317,7 @@ export class PMTiles {
   }
 
   /** The bytes of tile z/x/y, decompressed (a vector tile ungzipped); undefined where the archive has none */
-  async tile(z: number, x: number, y: number, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+  async tile(z: number, x: number, y: number, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer> | undefined> {
     const { header, root } = await this.load();
 
     if (z < header.minZoom || z > header.maxZoom) return undefined;
@@ -352,12 +357,19 @@ export const pmtiles = (url: string): PMTiles => {
   return archive;
 };
 
+/** The URL of the page (or of the worker); undefined out of a browser */
+const pageUrl = (): string | undefined => {
+  const location: unknown = Reflect.get(globalThis, 'location');
+
+  return isRecord(location) && typeof location.href === 'string' ? location.href : undefined;
+};
+
 /** The archive URL of a `pmtiles://` URL, absolute (relative to the page), or undefined for another URL */
 export const pmtilesUrl = (url: string, base?: string): string | undefined => {
   if (!url.startsWith('pmtiles://')) return undefined;
 
   const inner = url.slice('pmtiles://'.length);
-  const from = base ?? (globalThis as { location?: { href: string } }).location?.href;
+  const from = base ?? pageUrl();
 
   try {
     return from ? new URL(inner, from).href : inner;
@@ -368,7 +380,10 @@ export const pmtilesUrl = (url: string, base?: string): string | undefined => {
 
 /** A tile URL `pmtiles://<archive>/{z}/{x}/{y}` (with its numbers in) read from its archive: its bytes, undefined
  * where there is none; undefined too (`false`) for a URL that is not one */
-export const pmtilesTile = (url: string, signal?: AbortSignal): Promise<Uint8Array | undefined> | false => {
+export const pmtilesTile = (
+  url: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer> | undefined> | false => {
   const match = /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url);
 
   if (!match) return false;

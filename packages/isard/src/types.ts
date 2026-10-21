@@ -407,11 +407,11 @@ export interface LayerHost {
   readonly engine: Engine;
   requestRender(): void;
   /** Forgets a removed layer */
-  detach(layer: object): void;
+  detach(layer: Layer): void;
   /** Moves a layer under `before`, or on top */
-  moveLayer(layer: object, before: object | undefined): void;
+  moveLayer(layer: Layer, before: Layer | undefined): void;
   /** A layer created again in the engine (new id): put at the place of its old id, which is removed */
-  replaceLayer(layer: object, old: number): void;
+  replaceLayer(layer: Layer, old: number): void;
   /** Resolves once the map is idle (everything in view loaded and drawn) */
   whenIdle(): Promise<void>;
 }

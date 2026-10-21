@@ -51,7 +51,7 @@ export type AssetFile =
 
 /** The folder the assets are served from for the whole page, as `isard/vite` sets it; undefined: next to the module */
 const pageAssets = (): string | undefined => {
-  const url = (globalThis as { isardAssetsUrl?: unknown }).isardAssetsUrl;
+  const url: unknown = Reflect.get(globalThis, 'isardAssetsUrl');
 
   return typeof url === 'string' ? url : undefined;
 };

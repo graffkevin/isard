@@ -2,7 +2,7 @@
  * The viewer's bridge protocol (v1), as docs/guide/viewer.md describes it: the messages a host (the local server, the
  * QGIS plugin, a Tauri or any other app) sends the viewer, and those the viewer sends back. Plain JSON, the same over
  * every transport: Server-Sent Events and POST (`?bridge=1`), `postMessage` (`{ isard: 1, ...message }`), or
- * `window.isardViewer`. Types only: imported by the viewer and by scripts/viewer.ts.
+ * `window.isardViewer`. Types and their guards, no dependency: imported by the viewer and by scripts/viewer.ts.
  */
 
 export const PROTOCOL_VERSION = 1;
@@ -135,3 +135,15 @@ export type ViewerMessage =
 
 /** A message over `postMessage`: tagged, so that other messages of the page are left alone */
 export type PostedMessage = (HostMessage | ViewerMessage) & { isard: 1 };
+
+/** An object, its members still to check */
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+/** A host message, by its type: the members of each type are checked as the viewer applies it */
+export const isHostMessage = (value: unknown): value is HostMessage =>
+  isRecord(value) && typeof value.type === 'string';
+
+/** A viewer message, by its type */
+export const isViewerMessage = (value: unknown): value is ViewerMessage =>
+  isRecord(value) && typeof value.type === 'string';

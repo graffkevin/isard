@@ -10,6 +10,7 @@
  * `proj4('EPSG:27572')`, directly or by name through `registerCrs`.
  */
 import type { Feature, FeatureCollection, FeatureData, Geometry, Position } from '../layers/features.ts';
+import { isRecord } from '../util/guards.ts';
 
 /** A CRS: longitudes and latitudes (degrees) to its coordinates (x east, y north), and back. A converter of proj4
  * (`proj4('EPSG:2154')`) is one */
@@ -271,8 +272,9 @@ export const getCrs = (crs: CrsLike): Crs => {
 
 /** The name in the legacy `crs` member of GeoJSON (`{ type: 'name', properties: { name } }`), if any */
 export const crsOf = (data: unknown): string | undefined => {
-  const member = (data as { crs?: { properties?: { name?: unknown } } } | null)?.crs;
-  const name = member?.properties?.name;
+  const member = isRecord(data) ? data.crs : undefined;
+  const properties = isRecord(member) ? member.properties : undefined;
+  const name = isRecord(properties) ? properties.name : undefined;
 
   return typeof name === 'string' ? name : undefined;
 };

@@ -8,6 +8,7 @@
 
 import { withHeaders } from '../engine/requests.ts';
 import type { Anchor } from '../ui/overlay.ts';
+import { isNumbers, isRecord } from '../util/guards.ts';
 import type { Engine } from '../wasm/isard.js';
 
 /** An image of a sprite's index: its place in the sheet (pixels) and how it is drawn */
@@ -28,6 +29,19 @@ export interface SpriteIcon {
 }
 
 export type SpriteIndex = Record<string, SpriteIcon>;
+
+const isPairs = (value: unknown): value is [number, number][] =>
+  Array.isArray(value) && value.every((pair) => isNumbers(pair) && pair.length === 2);
+
+/** An icon of a sprite index: its place, and what is drawn from the rest */
+const isSpriteIcon = (value: unknown): value is SpriteIcon =>
+  isRecord(value) &&
+  [value.x, value.y, value.width, value.height].every((v) => typeof v === 'number') &&
+  (value.pixelRatio === undefined || typeof value.pixelRatio === 'number') &&
+  (value.sdf === undefined || typeof value.sdf === 'boolean') &&
+  (value.stretchX === undefined || isPairs(value.stretchX)) &&
+  (value.stretchY === undefined || isPairs(value.stretchY)) &&
+  (value.content === undefined || (isNumbers(value.content) && value.content.length === 4));
 
 /** RGBA pixels, straight alpha, row after row */
 export interface Pixels {
@@ -100,9 +114,12 @@ export const loadSprites = async (
 
     if (!json.ok || !png.ok) return r > 1 ? one({ id, url }, 1) : undefined;
 
-    const index = (await json.json()) as SpriteIndex;
+    const index: unknown = await json.json();
+
+    if (!isRecord(index)) return r > 1 ? one({ id, url }, 1) : undefined;
+
     const icons: SpriteIndex = Object.fromEntries(
-      Object.entries(index).map(([name, icon]) => [spriteName(id, name), icon]),
+      Object.entries(index).flatMap(([name, icon]) => (isSpriteIcon(icon) ? [[spriteName(id, name), icon]] : [])),
     );
 
     return { icons, image: await createImageBitmap(await png.blob()) };
@@ -118,11 +135,10 @@ export const readPixels = (image: CanvasImageSource & { width: number; height: n
 
   if (!(width > 0 && height > 0)) return undefined;
 
-  const canvas =
+  const g =
     typeof OffscreenCanvas === 'function'
-      ? new OffscreenCanvas(width, height)
-      : Object.assign(document.createElement('canvas'), { width, height });
-  const g = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+      ? new OffscreenCanvas(width, height).getContext('2d')
+      : Object.assign(document.createElement('canvas'), { width, height }).getContext('2d');
 
   if (!g) return undefined;
   g.drawImage(image, 0, 0);
@@ -403,7 +419,8 @@ export const stretch = (
   scale: number,
 ): Pieces => {
   const clamp = (v: number) => Math.max(0, Math.min(length, Number(v) || 0));
-  const spans = (zones?.length ? zones : [[0, length] as [number, number]])
+  const whole: [number, number][] = [[0, length]];
+  const spans = (zones?.length ? zones : whole)
     .map(([a, b]): [number, number] => [clamp(Math.min(a, b)), clamp(Math.max(a, b))])
     .filter(([a, b]) => b > a);
   const cuts = [...new Set([0, length, ...spans.flat()])].sort((a, b) => a - b);

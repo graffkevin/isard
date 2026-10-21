@@ -28,7 +28,7 @@ const panoramas = await map.addPanoramas({
 // Straight in the street, at the first panorama
 await panoramas.enter({ index: 0 });
 
-const walk = element<HTMLButtonElement>('walk');
+const walk = element('walk', HTMLButtonElement);
 let walking = true;
 walk.textContent = 'Leave';
 const where = () => {

@@ -12,9 +12,7 @@ describe('setRequestHeaders', () => {
     setRequestHeaders('https://data.geopf.fr/private/', { Authorization: 'Bearer b' });
     setRequestHeaders('https://data.geopf.fr/', { 'X-Client': 'junn', Authorization: 'Bearer a' });
 
-    const headers = new Headers(
-      withHeaders<RequestInit>('https://data.geopf.fr/private/wmts?x=1', { cache: 'reload' }).headers,
-    );
+    const headers = new Headers(withHeaders('https://data.geopf.fr/private/wmts?x=1', { cache: 'reload' }).headers);
 
     expect(headers.get('Authorization')).toBe('Bearer b');
     expect(headers.get('X-Client')).toBe('junn');

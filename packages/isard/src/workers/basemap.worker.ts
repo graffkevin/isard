@@ -148,7 +148,7 @@ const image = (url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
     if (archived) {
       const bytes = await archived;
 
-      return bytes && createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]));
+      return bytes && createImageBitmap(new Blob([bytes]));
     }
 
     const init: PriorityInit = { priority };
@@ -240,6 +240,18 @@ const shown = (layer: StyleLayer, zoom: number): boolean => {
 
   return zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24);
 };
+
+const LINE_CAPS: ReadonlySet<unknown> = new Set<CanvasLineCap>(['butt', 'round', 'square']);
+const LINE_JOINS: ReadonlySet<unknown> = new Set<CanvasLineJoin>(['bevel', 'miter', 'round']);
+
+const isLineCap = (value: unknown): value is CanvasLineCap => LINE_CAPS.has(value);
+const isLineJoin = (value: unknown): value is CanvasLineJoin => LINE_JOINS.has(value);
+
+/** A style's `line-cap` for the canvas: `butt` if it is none */
+const lineCap = (value: unknown): CanvasLineCap => (isLineCap(value) ? value : 'butt');
+
+/** A style's `line-join` for the canvas: `miter` if it is none */
+const lineJoin = (value: unknown): CanvasLineJoin => (isLineJoin(value) ? value : 'miter');
 
 /** The image of a fill pattern, cut from the sprite on first use */
 const patternImage = (r: Renderer, name: string): OffscreenCanvas | undefined => {
@@ -433,7 +445,7 @@ const draw = async (
         path(f, true);
 
         const icon = typeof pattern === 'string' ? spriteIcon(r, pattern)?.icon : undefined;
-        const image = icon && patternImage(r, pattern as string);
+        const image = icon && typeof pattern === 'string' && patternImage(r, pattern);
 
         if (icon && image) {
           const p = g.createPattern(image, 'repeat');
@@ -469,8 +481,8 @@ const draw = async (
 
         g.strokeStyle = paint(get('paint', 'line-color', ctx, '#000'), Number(get('paint', 'line-opacity', ctx, 1)));
         g.lineWidth = (gap > 0 ? gap + 2 * width : width) * px;
-        g.lineCap = String(get('layout', 'line-cap', ctx, 'butt')) as CanvasLineCap;
-        g.lineJoin = String(get('layout', 'line-join', ctx, 'miter')) as CanvasLineJoin;
+        g.lineCap = lineCap(get('layout', 'line-cap', ctx, 'butt'));
+        g.lineJoin = lineJoin(get('layout', 'line-join', ctx, 'miter'));
 
         const dash = get('paint', 'line-dasharray', ctx, undefined);
 
@@ -680,7 +692,6 @@ const labels = async (
       const t = cased(field, value(layer, 'layout', 'text-transform', ctx, 'none'));
       const fonts = value(layer, 'layout', 'text-font', ctx, ['Noto Sans Regular']);
       const font = labelFont(Array.isArray(fonts) && typeof fonts[0] === 'string' ? fonts[0] : 'Noto Sans Regular');
-      const offset = value(layer, 'layout', 'text-offset', ctx, [0, 0]);
       const base = {
         layer: index,
         text: t,
@@ -693,7 +704,7 @@ const labels = async (
         haloColor: String(value(layer, 'paint', 'text-halo-color', ctx, 'rgba(0,0,0,0)')),
         haloWidth: Number(value(layer, 'paint', 'text-halo-width', ctx, 0)),
         anchor: String(value(layer, 'layout', 'text-anchor', ctx, 'center')),
-        offset: (Array.isArray(offset) ? [Number(offset[0] ?? 0), Number(offset[1] ?? 0)] : [0, 0]) as [number, number],
+        offset: pair(value(layer, 'layout', 'text-offset', ctx, [0, 0]), [0, 0]),
         maxWidth: Number(value(layer, 'layout', 'text-max-width', ctx, 10)),
         lineHeight: Number(value(layer, 'layout', 'text-line-height', ctx, 1.2)),
         overlap: overlapOf(layer, 'text', ctx),

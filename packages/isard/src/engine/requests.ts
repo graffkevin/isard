@@ -45,13 +45,13 @@ export const onHeaderRules = (listener: (rules: HeaderRules) => void): (() => vo
 };
 
 /** @internal `init` with the headers of the rules matching `url` (unchanged when none does) */
-export const withHeaders = <T extends RequestInit>(url: string | URL, init?: T): T => {
+export const withHeaders = (url: string | URL, init: RequestInit = {}): RequestInit => {
   const href = String(url);
   const matching = rules.filter(([prefix]) => href.startsWith(prefix));
 
-  if (matching.length === 0) return init ?? ({} as T);
+  if (matching.length === 0) return init;
 
-  const headers = new Headers(init?.headers);
+  const headers = new Headers(init.headers);
 
   matching.forEach(([, set]) => {
     Object.entries(set).forEach(([name, value]) => {
@@ -59,5 +59,5 @@ export const withHeaders = <T extends RequestInit>(url: string | URL, init?: T):
     });
   });
 
-  return { ...(init ?? ({} as T)), headers };
+  return { ...init, headers };
 };

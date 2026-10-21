@@ -43,7 +43,7 @@ const START = /<([^\s/>]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>
 export const parseXml = (source: string): XmlElement => {
   const root: XmlElement = { name: '#document', attributes: {}, children: [], text: '' };
   const stack = [root];
-  const top = () => stack[stack.length - 1] as XmlElement;
+  const top = () => stack.at(-1) ?? root;
   let i = 0;
 
   while (i < source.length) {
@@ -88,13 +88,14 @@ export const parseXml = (source: string): XmlElement => {
         continue;
       }
 
-      const element: XmlElement = { name: local(tag[1] as string), attributes: {}, children: [], text: '' };
+      const [, name = '', attributes = '', closes] = tag;
+      const element: XmlElement = { name: local(name), attributes: {}, children: [], text: '' };
 
-      for (const [, key, double, single] of (tag[2] as string).matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
-        element.attributes[local(key as string)] = decode(double ?? single ?? '');
+      for (const [, key = '', double, single] of attributes.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+        element.attributes[local(key)] = decode(double ?? single ?? '');
       }
       top().children.push(element);
-      if (!tag[3]) stack.push(element);
+      if (!closes) stack.push(element);
       i = START.lastIndex;
     }
   }

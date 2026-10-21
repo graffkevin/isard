@@ -4,6 +4,9 @@
 import type { Feature, FeatureCollection, Geometry, Position, Properties } from '../layers/features.ts';
 import { child, children, childText, descendants, parseXml, type XmlElement } from './xml.ts';
 
+/** Longitude, latitude and maybe more, all finite */
+const isPosition = (values: number[]): values is Position => values.length >= 2 && values.every(Number.isFinite);
+
 /** Positions of a `coordinates` element: `lon,lat[,alt]` tuples separated by spaces */
 const positions = (element: XmlElement | undefined): Position[] => {
   const out: Position[] = [];
@@ -11,7 +14,7 @@ const positions = (element: XmlElement | undefined): Position[] => {
   for (const tuple of (element?.text ?? '').trim().split(/\s+/)) {
     const values = tuple.split(',').map(Number);
 
-    if (values.length >= 2 && values.every(Number.isFinite)) out.push(values as Position);
+    if (isPosition(values)) out.push(values);
   }
 
   return out;
@@ -40,7 +43,7 @@ const geometries = (parent: XmlElement): Geometry[] => {
       // gx:Track: its gx:coord, `lon lat alt`
       const line = children(g, 'coord')
         .map((c) => c.text.trim().split(/\s+/).map(Number))
-        .filter((p) => p.length >= 2 && p.every(Number.isFinite)) as Position[];
+        .filter(isPosition);
 
       if (line.length >= 2) out.push({ type: 'LineString', coordinates: line });
     } else if (g.name === 'MultiGeometry' || g.name === 'MultiTrack') {
@@ -58,16 +61,14 @@ const merge = (list: Geometry[]): Geometry | null => {
   if (!first) return null;
   if (list.length === 1) return first;
 
-  const same = list.every((g) => g.type === first.type);
+  const points = list.filter((g) => g.type === 'Point');
+  const lines = list.filter((g) => g.type === 'LineString');
+  const polygons = list.filter((g) => g.type === 'Polygon');
 
-  if (same && first.type === 'Point') {
-    return { type: 'MultiPoint', coordinates: list.map((g) => (g as { coordinates: Position }).coordinates) };
-  }
-  if (same && first.type === 'LineString') {
-    return { type: 'MultiLineString', coordinates: list.map((g) => (g as { coordinates: Position[] }).coordinates) };
-  }
-  if (same && first.type === 'Polygon') {
-    return { type: 'MultiPolygon', coordinates: list.map((g) => (g as { coordinates: Position[][] }).coordinates) };
+  if (points.length === list.length) return { type: 'MultiPoint', coordinates: points.map((g) => g.coordinates) };
+  if (lines.length === list.length) return { type: 'MultiLineString', coordinates: lines.map((g) => g.coordinates) };
+  if (polygons.length === list.length) {
+    return { type: 'MultiPolygon', coordinates: polygons.map((g) => g.coordinates) };
   }
 
   return { type: 'GeometryCollection', geometries: list };
@@ -79,9 +80,9 @@ const color = (element: XmlElement | undefined): [css: string, opacity: number] 
 
   if (!value || !/^[\da-f]{8}$/i.test(value)) return undefined;
 
-  const [a, b, g, r] = [0, 2, 4, 6].map((i) => value.slice(i, i + 2));
+  const [a = '', b, g, r] = [0, 2, 4, 6].map((i) => value.slice(i, i + 2));
 
-  return [`#${r}${g}${b}`.toLowerCase(), Math.round((Number.parseInt(a as string, 16) / 255) * 1000) / 1000];
+  return [`#${r}${g}${b}`.toLowerCase(), Math.round((Number.parseInt(a, 16) / 255) * 1000) / 1000];
 };
 
 /** The properties of a style (simplestyle's names, as togeojson): stroke, stroke-opacity, stroke-width, fill,

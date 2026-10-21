@@ -3,7 +3,7 @@
  * (an iframe's parent, a webview) or `window.isardViewer.send`; messages to the host by POST, `postMessage` and the
  * listeners of `window.isardViewer.on`.
  */
-import type { HostMessage, PostedMessage, ViewerMessage } from './protocol.ts';
+import { type HostMessage, isHostMessage, isRecord, type PostedMessage, type ViewerMessage } from './protocol.ts';
 
 type Listener = (message: ViewerMessage) => void;
 
@@ -51,13 +51,13 @@ export class Bridge {
     window.addEventListener('message', (event: MessageEvent<unknown>) => {
       if (event.source !== window.parent && event.source !== window.opener) return;
 
-      const data = event.data as Partial<PostedMessage> | null;
+      const data = event.data;
 
-      if (!data || typeof data !== 'object' || data.isard !== 1 || typeof data.type !== 'string') return;
+      if (!isRecord(data) || data.isard !== 1) return;
 
       const { isard: _, ...message } = data;
 
-      this.receive(message as HostMessage);
+      this.receive(message);
     });
     if (this.http) this.connect();
   }
@@ -67,9 +67,9 @@ export class Bridge {
     this.events = new EventSource('bridge/events');
     this.events.onmessage = (event: MessageEvent<string>) => {
       try {
-        const message = JSON.parse(event.data) as HostMessage | HostMessage[];
+        const message: unknown = JSON.parse(event.data);
 
-        (Array.isArray(message) ? message : [message]).forEach((m) => {
+        (Array.isArray(message) ? message : [message]).forEach((m: unknown) => {
           this.receive(m);
         });
       } catch (error) {
@@ -78,9 +78,9 @@ export class Bridge {
     };
   }
 
-  private receive(message: HostMessage): void {
-    if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
-    this.apply(message);
+  /** A host message from any transport, anything else ignored */
+  private receive(message: unknown): void {
+    if (isHostMessage(message)) this.apply(message);
   }
 
   /** A message to the host, by every transport there is */
@@ -93,9 +93,10 @@ export class Bridge {
         keepalive: true,
       }).catch(() => undefined);
     }
+    const opener: Window | null = window.opener;
+
     if (window.parent !== window) window.parent.postMessage({ isard: 1, ...message } satisfies PostedMessage, '*');
-    else if (window.opener)
-      (window.opener as Window).postMessage({ isard: 1, ...message } satisfies PostedMessage, '*');
+    else opener?.postMessage({ isard: 1, ...message } satisfies PostedMessage, '*');
     [message.type, '*'].forEach((type) => {
       this.listeners.get(type)?.forEach((listener) => {
         try {

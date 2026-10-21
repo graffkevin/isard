@@ -134,10 +134,7 @@ export class TileLoader implements TileLoaderLike {
 
     const load = (worker: Worker) => this.busy.get(worker) ?? 0;
 
-    return this.workers.reduce(
-      (best, worker) => (load(worker) < load(best) ? worker : best),
-      this.workers[0] as Worker,
-    );
+    return this.workers.reduce((best, worker) => (load(worker) < load(best) ? worker : best));
   }
 
   private send(worker: Worker, message: WorkerRequest): void {

@@ -13,6 +13,7 @@
 import { getCrs } from '../data/crs.ts';
 import { withHeaders } from '../engine/requests.ts';
 import type { FirstPersonView, LonLat } from '../types.ts';
+import { isNumbers, isRecord } from '../util/guards.ts';
 
 export interface PanoramaOptions {
   /** URL of an image: `{cameraId}` and `{panoId}` replaced by a camera's id and a panorama's */
@@ -78,6 +79,40 @@ interface Calibration {
   size: number[];
   distortion?: { pps: number[]; poly357: number[]; limit?: number };
 }
+
+interface Orientations {
+  crs?: { properties?: { name?: string } };
+  features: { geometry: { coordinates: number[] }; properties: Record<string, unknown> }[];
+}
+
+const isOrientation = (value: unknown): value is Orientations['features'][number] =>
+  isRecord(value) && isRecord(value.geometry) && isNumbers(value.geometry.coordinates) && isRecord(value.properties);
+
+const isCrs = (value: unknown): value is Orientations['crs'] =>
+  isRecord(value) &&
+  (value.properties === undefined ||
+    (isRecord(value.properties) && (value.properties.name === undefined || typeof value.properties.name === 'string')));
+
+const isOrientations = (value: unknown): value is Orientations =>
+  isRecord(value) &&
+  (value.crs === undefined || isCrs(value.crs)) &&
+  Array.isArray(value.features) &&
+  value.features.every(isOrientation);
+
+const isCalibration = (value: unknown): value is Calibration =>
+  isRecord(value) &&
+  (typeof value.id === 'number' || typeof value.id === 'string') &&
+  isNumbers(value.rotation) &&
+  isNumbers(value.position) &&
+  isNumbers(value.projection) &&
+  isNumbers(value.size) &&
+  (value.distortion === undefined ||
+    (isRecord(value.distortion) &&
+      isNumbers(value.distortion.pps) &&
+      isNumbers(value.distortion.poly357) &&
+      (value.distortion.limit === undefined || typeof value.distortion.limit === 'number')));
+
+const isCalibrations = (value: unknown): value is Calibration[] => Array.isArray(value) && value.every(isCalibration);
 
 interface Attitude {
   heading: number;
@@ -311,19 +346,20 @@ export class Panoramas {
 
 /** Loads a set of panoramas: their positions and attitudes, the calibration of their cameras */
 export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions): Promise<Panoramas> => {
-  const json = async <T>(src: string) => {
+  const json = async <T>(src: string, is: (value: unknown) => value is T): Promise<T> => {
     const response = await fetch(src, withHeaders(src));
 
     if (!response.ok) throw new Error(`isard: ${src}: ${response.status}`);
 
-    return (await response.json()) as T;
+    const value: unknown = await response.json();
+
+    if (!is(value)) throw new Error(`isard: ${src}: unexpected content`);
+
+    return value;
   };
   const [orientations, cameras] = await Promise.all([
-    json<{
-      crs?: { properties?: { name?: string } };
-      features: { geometry: { coordinates: number[] }; properties: Record<string, unknown> }[];
-    }>(options.orientationsUrl),
-    json<Calibration[]>(options.calibrationUrl),
+    json(options.orientationsUrl, isOrientations),
+    json(options.calibrationUrl, isCalibrations),
   ]);
   const crsName = options.crs ?? orientations.crs?.properties?.name ?? 'EPSG:2154';
   const lambert93 = /2154/.test(crsName);
@@ -336,12 +372,16 @@ export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions
     const [x = 0, y = 0, z = 0] = feature.geometry.coordinates;
     const [lon = 0, lat = 0] = crs.inverse([x, y]);
     const p = feature.properties;
-    const number = (key: string) => (typeof p[key] === 'number' ? (p[key] as number) : 0);
+    const number = (key: string) => {
+      const value = p[key];
+
+      return typeof value === 'number' ? value : 0;
+    };
 
     attitudes.push({ heading: number('heading'), pitch: number('pitch'), roll: number('roll') });
     list.push({
       index: list.length,
-      id: (p.id as number | string | undefined) ?? list.length,
+      id: typeof p.id === 'number' || typeof p.id === 'string' ? p.id : list.length,
       lonLat: [lon, lat],
       height: z + (geoid ? host.geoidHeight(lon, lat) : 0),
       heading: number('heading'),

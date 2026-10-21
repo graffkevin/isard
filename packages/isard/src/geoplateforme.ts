@@ -96,6 +96,12 @@ export const geoplateformeWms = (
 /** Features the Géoplateforme's WFS returns per request at most */
 const WFS_PAGE = 5000;
 
+/** A page of WFS features in GeoJSON, with the number of features matched (a string from some servers) */
+type WfsPage<P> = FeatureCollection<P> & { numberMatched?: number | string };
+
+const isWfsPage = <P>(value: unknown): value is WfsPage<P> =>
+  typeof value === 'object' && value !== null && 'features' in value && Array.isArray(value.features);
+
 /**
  * Features of the Géoplateforme's WFS in a box (west, south, east, north, degrees), as GeoJSON in longitudes and
  * latitudes: `await geoplateformeWfs('BDTOPO_V3:batiment', [2.41, 48.84, 2.43, 48.85])`. At most `count` features
@@ -131,7 +137,11 @@ export const geoplateformeWfs = async <P = Properties>(
 
     if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);
 
-    return response.json() as Promise<FeatureCollection<P> & { numberMatched?: number | string }>;
+    const json: unknown = await response.json();
+
+    if (!isWfsPage<P>(json)) throw new Error(`isard: ${typeName}: not a GeoJSON feature collection`);
+
+    return json;
   };
   const first = await page(0, Math.min(WFS_PAGE, limit));
   const matched = Number(first.numberMatched);

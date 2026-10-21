@@ -21,6 +21,7 @@ const GRIDS = {
   '2154_10cm_6_20': ['GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2.L93', 'image/jpeg'],
   PM: ['GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png'],
 } as const;
+const isGrid = (key: string): key is keyof typeof GRIDS => key in GRIDS;
 
 /** PLAN IGN in a grid: Lambert-93 (reprojected) or Web Mercator (as the engine draws it) */
 const plan = (matrixSet: keyof typeof GRIDS) => {
@@ -59,18 +60,18 @@ map.addSymbols({
   overlap: true,
 });
 
-(Object.keys(GRIDS) as (keyof typeof GRIDS)[]).forEach((id) => {
-  element(id).onclick = () => {
-    const opacity = Number(element<HTMLInputElement>('opacity').value);
-
-    raster.remove();
-    raster = plan(id);
-    raster.setStyle({ opacity });
-    raster.moveBefore(boundaries);
-    Object.keys(GRIDS).forEach((other) => {
-      element(other).classList.toggle('on', other === id);
-    });
-  };
-});
-element<HTMLInputElement>('opacity').oninput = (e) =>
-  raster.setStyle({ opacity: Number((e.target as HTMLInputElement).value) });
+const opacity = element('opacity', HTMLInputElement);
+Object.keys(GRIDS)
+  .filter(isGrid)
+  .forEach((id) => {
+    element(id).onclick = () => {
+      raster.remove();
+      raster = plan(id);
+      raster.setStyle({ opacity: Number(opacity.value) });
+      raster.moveBefore(boundaries);
+      Object.keys(GRIDS).forEach((other) => {
+        element(other).classList.toggle('on', other === id);
+      });
+    };
+  });
+opacity.oninput = () => raster.setStyle({ opacity: Number(opacity.value) });

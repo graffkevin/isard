@@ -3,7 +3,7 @@
  * schema), and a subset of a style on its own raster layer, restyled: the rivers and water areas in a strong blue, over
  * the basemap (they could go over a flood layer of the application).
  */
-import type { Basemap, RasterLayer } from 'isard';
+import type { RasterLayer } from 'isard';
 import { IsardMap, useMap } from 'isard/react';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -69,7 +69,7 @@ const App = () => {
 
   return (
     <>
-      <IsardMap id="map" center={[1.909, 47.902]} zoom={13} basemap={`osm-${style}` as Basemap} projection="mercator">
+      <IsardMap id="map" center={[1.909, 47.902]} zoom={13} basemap={`osm-${style}`} projection="mercator">
         <Rivers shown={rivers} />
       </IsardMap>
       <div className="panel">

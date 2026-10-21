@@ -41,10 +41,7 @@ const namedHex = (name: string): string | undefined => {
     const words = NAMES.split(' ');
 
     named = new Map(
-      Array.from({ length: Math.floor(words.length / 2) }, (_, i) => [
-        words[2 * i] as string,
-        words[2 * i + 1] as string,
-      ]),
+      Array.from({ length: Math.floor(words.length / 2) }, (_, i) => [words[2 * i] ?? '', words[2 * i + 1] ?? '']),
     );
   }
 
@@ -111,14 +108,14 @@ export const parseCssColor = (value: unknown): Rgba | undefined => {
   if (match[1].startsWith('rgb')) {
     const channel = (p: string) => clamp(p.endsWith('%') ? Number.parseFloat(p) / 100 : Number.parseFloat(p) / 255);
 
-    return [channel(parts[0] as string), channel(parts[1] as string), channel(parts[2] as string), a];
+    return [channel(parts[0] ?? ''), channel(parts[1] ?? ''), channel(parts[2] ?? ''), a];
   }
 
-  const h = Number.parseFloat(parts[0] as string) / 360;
+  const h = Number.parseFloat(parts[0] ?? '') / 360;
   const [r, g, b] = hsl(
     h,
-    clamp(Number.parseFloat(parts[1] as string) / 100),
-    clamp(Number.parseFloat(parts[2] as string) / 100),
+    clamp(Number.parseFloat(parts[1] ?? '') / 100),
+    clamp(Number.parseFloat(parts[2] ?? '') / 100),
   );
 
   return [r, g, b, a];

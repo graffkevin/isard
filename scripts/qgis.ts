@@ -29,7 +29,16 @@ rmSync(viewer, { recursive: true, force: true });
 cpSync(viewerDist, viewer, { recursive: true, filter: (src) => !src.endsWith('.map') });
 
 // The plugin's version is the package's
-const { version } = JSON.parse(readFileSync(join(root, 'packages/isard/package.json'), 'utf8')) as { version: string };
+const manifest: unknown = JSON.parse(readFileSync(join(root, 'packages/isard/package.json'), 'utf8'));
+const version =
+  typeof manifest === 'object' && manifest !== null && 'version' in manifest && typeof manifest.version === 'string'
+    ? manifest.version
+    : undefined;
+
+if (!version) {
+  console.error('packages/isard/package.json has no version');
+  process.exit(1);
+}
 const metadataPath = join(plugin, 'metadata.txt');
 const metadata = readFileSync(metadataPath, 'utf8');
 const updated = metadata.replace(/^version=.*$/m, `version=${version}`);

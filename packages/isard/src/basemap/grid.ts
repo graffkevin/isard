@@ -156,7 +156,10 @@ const pixelSize = (points: Float64Array, size: number): [number, number] => {
   const c = N / 2;
   const at = (i: number, j: number) => 2 * (j * (N + 1) + i);
   const d = (p: number, q: number) =>
-    Math.hypot((points[q] as number) - (points[p] as number), (points[q + 1] as number) - (points[p + 1] as number));
+    Math.hypot(
+      (points[q] ?? Number.NaN) - (points[p] ?? Number.NaN),
+      (points[q + 1] ?? Number.NaN) - (points[p + 1] ?? Number.NaN),
+    );
   const step = (2 * size) / N;
 
   return [d(at(c - 1, c), at(c + 1, c)) / step, d(at(c, c - 1), at(c, c + 1)) / step];
@@ -166,7 +169,11 @@ const pixelSize = (points: Float64Array, size: number): [number, number] => {
  * The box (CRS) of the points a tile samples: the centers of its edge pixels, interpolated in the mesh as `resample`
  * does, and the inner points of the mesh (should the projection bend); within `clip`. Undefined if none is
  */
-const sampled = (points: Float64Array, size: number, clip: number[]): [number, number, number, number] | undefined => {
+const sampled = (
+  points: Float64Array,
+  size: number,
+  clip: [number, number, number, number],
+): [number, number, number, number] | undefined => {
   const at = (i: number, j: number, k: number) => points[2 * (j * (N + 1) + i) + k] as number;
   const centers: number[] = [];
 
@@ -198,10 +205,10 @@ const sampled = (points: Float64Array, size: number, clip: number[]): [number, n
   if (!b) return undefined;
 
   const out: [number, number, number, number] = [
-    Math.max(b[0], clip[0] as number),
-    Math.max(b[1], clip[1] as number),
-    Math.min(b[2], clip[2] as number),
-    Math.min(b[3], clip[3] as number),
+    Math.max(b[0], clip[0]),
+    Math.max(b[1], clip[1]),
+    Math.min(b[2], clip[2]),
+    Math.min(b[3], clip[3]),
   ];
 
   return out[0] <= out[2] && out[1] <= out[3] ? out : undefined;
@@ -280,7 +287,10 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
   }, 0);
 
   for (let level = best; level >= 0; level -= 1) {
-    const m = g.matrices[level] as Matrix;
+    const m = g.matrices[level];
+
+    if (!m) continue;
+
     const [ox, oy] = m.origin;
     const [tw, th, res] = [m.tileWidth, m.tileHeight, m.resolution];
     const [l0, r0, l1, r1] = m.limits ?? [0, 0, Infinity, Infinity];

@@ -14,7 +14,14 @@ import {
   VectorTiles,
 } from 'isard';
 import { collectionBounds } from './bounds.ts';
-import type { AddMessage, Bounds, GeoJsonCollection, GeoJsonStyle, HostMessage } from './protocol.ts';
+import {
+  type AddMessage,
+  type Bounds,
+  type GeoJsonCollection,
+  type GeoJsonStyle,
+  type HostMessage,
+  isRecord,
+} from './protocol.ts';
 
 type Handle = Layer | VectorTiles;
 
@@ -31,6 +38,10 @@ export interface Entry {
   /** A `blob:` URL of a dropped file, revoked with the layer */
   blob?: string;
 }
+
+/** A MapLibre style given by a host, as far as the package reads it first: its sources and its layers */
+const isStyle = (value: unknown): value is Style =>
+  isRecord(value) && isRecord(value.sources) && Array.isArray(value.layers);
 
 const COLOR = '#2f6fd1';
 const HIGHLIGHT = '#ff8c00';
@@ -259,7 +270,7 @@ export class Layers {
         ];
       case 'addPmtiles':
         return map
-          .addPmtiles(m.url, { ...(m.kind ? { kind: m.kind } : {}), ...(m.style ? { style: m.style as Style } : {}) })
+          .addPmtiles(m.url, { ...(m.kind ? { kind: m.kind } : {}), ...(isStyle(m.style) ? { style: m.style } : {}) })
           .then(async (handle) => {
             const header = await new PMTiles(absolute(m.url.replace(/^pmtiles:\/\//, '')))
               .header()
@@ -276,7 +287,7 @@ export class Layers {
       case 'addTiles3d':
         return [map.addTiles3d({ url: m.url })];
       case 'addModels': {
-        const center = map.getCamera().center as LonLat;
+        const { center } = map.getCamera();
         const instances = m.instances.length > 0 ? m.instances : [{ lonLat: center }];
 
         if (m.instances.length === 0) m.instances = instances;
@@ -306,13 +317,10 @@ export class Layers {
       : undefined;
     const fillColor = style.fill ?? color;
     const types = new Set<string>();
-    const scan = (g: GeoJsonCollection['features'][number]['geometry']): void => {
-      if (!g) return;
-      if (g.type === 'GeometryCollection') {
-        (g.geometries ?? []).forEach((x) => {
-          scan(x as typeof g);
-        });
-      } else types.add(g.type.replace('Multi', ''));
+    const scan = (g: unknown): void => {
+      if (!isRecord(g) || typeof g.type !== 'string') return;
+      if (g.type !== 'GeometryCollection') types.add(g.type.replace('Multi', ''));
+      else if (Array.isArray(g.geometries)) g.geometries.forEach(scan);
     };
 
     data.features.forEach((f) => {
@@ -399,10 +407,12 @@ export class Layers {
       const x = Math.min(n - 1, Math.floor(lon2x(lon) * n));
       const y = Math.min(n - 1, Math.floor(lat2y(lat) * n));
 
-      for (const [tz, tx, ty] of [
+      const candidates: [z: number, x: number, y: number][] = [
         [z, x, y],
         [minZoom, Math.floor(x / 2 ** (z - minZoom)), Math.floor(y / 2 ** (z - minZoom))],
-      ] as [number, number, number][]) {
+      ];
+
+      for (const [tz, tx, ty] of candidates) {
         const response = await fetch(url.replace('{z}', `${tz}`).replace('{x}', `${tx}`).replace('{y}', `${ty}`));
 
         if (!response.ok || response.status === 204) continue;
@@ -413,9 +423,11 @@ export class Layers {
       }
       throw new Error('no vector tile here to read the layers from: give `layers`');
     };
-    const style =
-      (m.style as Style | undefined) ??
-      basicStyle({ tiles: [url], minzoom: minZoom, maxzoom: maxZoom }, await layerNames());
+    if (m.style !== undefined && typeof m.style !== 'string' && !isStyle(m.style)) {
+      throw new Error('style: not a MapLibre style');
+    }
+
+    const style = m.style ?? basicStyle({ tiles: [url], minzoom: minZoom, maxzoom: maxZoom }, await layerNames());
     const tiles = this.map.vectorTiles({ style, ...(m.attribution ? { attribution: m.attribution } : {}) });
 
     tiles.raster();

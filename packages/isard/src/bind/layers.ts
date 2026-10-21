@@ -11,8 +11,6 @@ import type { GeoMap, LayerSpec } from '../map.ts';
  * (`setValues`: what colors them by a ramp) */
 export type BoundLayerSpec<P = Record<string, unknown>> = LayerSpec<P> & { values?: Float32Array };
 
-type Spec = BoundLayerSpec & Record<string, unknown>;
-
 /** The keys `setStyle` takes, by layer type; `'all'`: every key but the data (the feature layers) */
 const STYLE_KEYS: Record<LayerSpec['type'], 'all' | ReadonlySet<string>> = {
   lines: 'all',
@@ -53,6 +51,9 @@ const OWN_SETTERS: Partial<Record<LayerSpec['type'], ReadonlySet<string>>> = {
   ground: new Set(['uniforms', 'textures']),
 };
 
+/** The keys of a description and their values */
+const fields = (spec: BoundLayerSpec): Map<string, unknown> => new Map(Object.entries(spec));
+
 /** What to do with a layer whose description went from `prev` to `next` */
 export type LayerChange =
   | { rebuild: true }
@@ -70,13 +71,13 @@ export type LayerChange =
 export const layerChange = (prev: BoundLayerSpec, next: BoundLayerSpec): LayerChange | undefined => {
   if (prev.type !== next.type) return { rebuild: true };
 
-  const before = prev as Spec;
-  const after = next as Spec;
+  const before = fields(prev);
+  const after = fields(next);
   const styleKeys = STYLE_KEYS[next.type];
   const own = OWN_SETTERS[next.type];
-  const change = { rebuild: false as const, style: {} as Record<string, unknown>, own: {} as Record<string, unknown> };
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
-    (key) => key !== 'type' && !Object.is(before[key], after[key]),
+  const change: Extract<LayerChange, { rebuild: false }> = { rebuild: false, style: {}, own: {} };
+  const keys = [...new Set([...before.keys(), ...after.keys()])].filter(
+    (key) => key !== 'type' && !Object.is(before.get(key), after.get(key)),
   );
 
   if (keys.length === 0) return undefined;
@@ -84,26 +85,33 @@ export const layerChange = (prev: BoundLayerSpec, next: BoundLayerSpec): LayerCh
   const isStyle = (key: string) => key !== 'before' && (styleKeys === 'all' || styleKeys.has(key));
 
   // A style or setting taken away: the layer goes back to its defaults, as made anew
-  if (keys.some((key) => !(key in after) || !(own?.has(key) || isStyle(key)))) return { rebuild: true };
+  if (keys.some((key) => !after.has(key) || !(own?.has(key) || isStyle(key)))) return { rebuild: true };
   keys.forEach((key) => {
-    if (own?.has(key)) change.own[key] = after[key];
-    else change.style[key] = after[key];
+    if (own?.has(key)) change.own[key] = after.get(key);
+    else change.style[key] = after.get(key);
   });
 
   return change;
 };
 
-interface Settable {
-  setStyle?(style: Record<string, unknown>): void;
-  setData?(data: unknown): void;
-  setFilter?(filter: unknown): void;
-  setValues?(values: unknown): void;
-  setCosts?(costs: unknown): void;
-  setEdgeWidths?(widths: unknown): void;
-  setInstances?(instances: unknown, altitudeReference?: unknown): void;
-  setUniform?(name: string, value: unknown): void;
-  setTexture?(name: string, texture: unknown): void;
-}
+/** The methods a change calls on a layer, those of its type */
+type Setter =
+  | 'setStyle'
+  | 'setData'
+  | 'setFilter'
+  | 'setValues'
+  | 'setCosts'
+  | 'setEdgeWidths'
+  | 'setInstances'
+  | 'setUniform'
+  | 'setTexture';
+
+/** Calls a setter of the layer, if its type has it */
+const set = (layer: Layer, setter: Setter, ...args: unknown[]): void => {
+  const method: unknown = Reflect.get(layer, setter);
+
+  if (typeof method === 'function') method.apply(layer, args);
+};
 
 /** Applies a change that keeps the layer (`rebuild: false`) */
 export const applyLayerChange = (
@@ -111,34 +119,35 @@ export const applyLayerChange = (
   next: BoundLayerSpec,
   change: Extract<LayerChange, { rebuild: false }>,
 ): void => {
-  const target = layer as unknown as Settable;
-  const spec = next as Spec;
+  const spec = fields(next);
   const own = change.own;
 
-  if ('data' in own) target.setData?.(own.data);
-  if ('filter' in own) target.setFilter?.(own.filter);
-  if ('values' in own) target.setValues?.(own.values);
-  if ('costs' in own) target.setCosts?.(own.costs);
-  if ('edgeWidths' in own) target.setEdgeWidths?.(own.edgeWidths);
-  if ('instances' in own || 'altitudeReference' in own) target.setInstances?.(spec.instances, spec.altitudeReference);
+  if ('data' in own) set(layer, 'setData', own.data);
+  if ('filter' in own) set(layer, 'setFilter', own.filter);
+  if ('values' in own) set(layer, 'setValues', own.values);
+  if ('costs' in own) set(layer, 'setCosts', own.costs);
+  if ('edgeWidths' in own) set(layer, 'setEdgeWidths', own.edgeWidths);
+  if ('instances' in own || 'altitudeReference' in own) {
+    set(layer, 'setInstances', spec.get('instances'), spec.get('altitudeReference'));
+  }
   if ('uniforms' in own) {
-    Object.entries((own.uniforms ?? {}) as Record<string, unknown>).forEach(([name, value]) => {
-      target.setUniform?.(name, value);
+    Object.entries(own.uniforms ?? {}).forEach(([name, value]) => {
+      set(layer, 'setUniform', name, value);
     });
   }
   if ('textures' in own) {
-    Object.entries((own.textures ?? {}) as Record<string, unknown>).forEach(([name, texture]) => {
-      target.setTexture?.(name, texture);
+    Object.entries(own.textures ?? {}).forEach(([name, texture]) => {
+      set(layer, 'setTexture', name, texture);
     });
   }
-  if (Object.keys(change.style).length > 0) target.setStyle?.(change.style);
+  if (Object.keys(change.style).length > 0) set(layer, 'setStyle', change.style);
 };
 
 /** Adds a layer from its description, its values set */
 export const addBoundLayer = (map: GeoMap, { values, ...spec }: BoundLayerSpec): Layer => {
   const layer = map.add(spec as LayerSpec);
 
-  if (values) (layer as unknown as Settable).setValues?.(values);
+  if (values) set(layer, 'setValues', values);
 
   return layer;
 };
@@ -147,7 +156,7 @@ export const addBoundLayer = (map: GeoMap, { values, ...spec }: BoundLayerSpec):
 export const rebuildBoundLayer = (map: GeoMap, old: Layer, { values, ...spec }: BoundLayerSpec): Layer => {
   const layer = map.rebuildLayer(old, spec as LayerSpec);
 
-  if (values) (layer as unknown as Settable).setValues?.(values);
+  if (values) set(layer, 'setValues', values);
 
   return layer;
 };

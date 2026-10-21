@@ -95,7 +95,7 @@ interface Pointer {
 export class Interaction {
   private readonly pointers = new Map<number, Pointer>();
   private readonly cleanup: (() => void)[] = [];
-  private wheel = { pending: 0, at: [0, 0] as Point };
+  private wheel: { pending: number; at: Point } = { pending: 0, at: [0, 0] };
   /** Recent pan moves, for the release speed: [time, dx, dy] */
   private trail: [number, number, number][] = [];
   private moved = false;

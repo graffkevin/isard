@@ -66,6 +66,8 @@ export interface IsardMapProps extends Omit<GeoMapOptions, keyof Camera>, MapEve
 /** The props that are not options of the map */
 const NOT_OPTIONS = [...Object.keys(EVENT_PROPS), 'onLoad', 'onError', 'hoverPicking', 'id', 'className', 'style'];
 
+const isEventProp = (key: string): key is keyof typeof EVENT_PROPS => key in EVENT_PROPS;
+
 /** Options the map takes again after its creation, and how */
 const LIVE_OPTIONS: { [K in keyof GeoMapOptions]?: (map: GeoMap, props: IsardMapProps) => void } = {
   basemap: (map, p) => {
@@ -86,6 +88,8 @@ const LIVE_OPTIONS: { [K in keyof GeoMapOptions]?: (map: GeoMap, props: IsardMap
     if (p.background) map.setBackground(p.background);
   },
 };
+
+const isLiveOption = (key: string): key is keyof typeof LIVE_OPTIONS => key in LIVE_OPTIONS;
 
 const optionsOf = (props: Partial<IsardMapProps>): GeoMapOptions =>
   Object.fromEntries(Object.entries(props).filter(([key]) => !NOT_OPTIONS.includes(key))) as GeoMapOptions;
@@ -162,11 +166,11 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
   useEffect(() => {
     if (!map) return;
 
-    const offs = Object.entries(EVENT_PROPS).map(([prop, type]) =>
-      map.on(type, (event) =>
-        (latest.current[prop as keyof MapEventProps] as ((e: unknown) => void) | undefined)?.(event),
-      ),
-    );
+    const offs = Object.keys(EVENT_PROPS)
+      .filter(isEventProp)
+      .map((prop) =>
+        map.on(EVENT_PROPS[prop], (event) => (latest.current[prop] as ((e: unknown) => void) | undefined)?.(event)),
+      );
 
     return () => {
       offs.forEach((off) => {
@@ -183,13 +187,16 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
     const done = new Set<(map: GeoMap, props: IsardMapProps) => void>();
 
     applied.current = props;
-    Object.entries(LIVE_OPTIONS).forEach(([key, apply]) => {
-      const changed = !Object.is(last[key as keyof IsardMapProps], props[key as keyof IsardMapProps]);
+    Object.keys(LIVE_OPTIONS)
+      .filter(isLiveOption)
+      .forEach((key) => {
+        const apply = LIVE_OPTIONS[key];
+        const changed = !Object.is(last[key], props[key]);
 
-      if (!apply || done.has(apply) || !changed) return;
-      done.add(apply);
-      apply(map, props);
-    });
+        if (!apply || done.has(apply) || !changed) return;
+        done.add(apply);
+        apply(map, props);
+      });
   });
 
   useEffect(() => {

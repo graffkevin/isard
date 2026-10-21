@@ -20,6 +20,7 @@ import type { GeoMap } from '../map.ts';
 import type { RasterOptions } from '../types.ts';
 import type { Anchor } from '../ui/overlay.ts';
 import { mercatorX, mercatorY } from '../util/geo.ts';
+import { isRecord } from '../util/guards.ts';
 import { Lru } from '../util/lru.ts';
 import type { Camera } from '../wasm/isard.js';
 import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } from '../workers/basemap.worker.ts';
@@ -28,6 +29,7 @@ import { pmtiles, pmtilesUrl } from './pmtiles.ts';
 import { type Job, SOURCE_CACHE } from './resample.ts';
 import type { PngEncoding } from './terrain.ts';
 import {
+  isStyle,
   type Json,
   type LabelCandidate,
   labelFont,
@@ -75,8 +77,8 @@ export interface VectorTilesOptions {
 /** The credits of a known style: OpenFreeMap's, PLAN.IGN's */
 export const styleAttribution = (style: string | Style): string | undefined => {
   if (typeof style !== 'string') return undefined;
-  if ((Object.values(OPENFREEMAP_STYLES) as string[]).includes(style)) return OPENFREEMAP_ATTRIBUTION;
-  if ((Object.values(PLAN_STYLES) as string[]).includes(style)) return IGN_ATTRIBUTION;
+  if (Object.values(OPENFREEMAP_STYLES).some((s) => s === style)) return OPENFREEMAP_ATTRIBUTION;
+  if (Object.values(PLAN_STYLES).some((s) => s === style)) return IGN_ATTRIBUTION;
 
   return undefined;
 };
@@ -84,28 +86,74 @@ export const styleAttribution = (style: string | Style): string | undefined => {
 /** Text or icon size of a style (a number, legacy stops, or the stops of a zoom expression made by the worker) as a
  * size for the symbol layer */
 export const size = (value: Json, fallback = 16): Size => {
-  if (typeof value === 'number') return value;
-  if (Array.isArray(value) && value.length > 0 && value.every(Array.isArray)) {
-    return value.map((s) => [Number((s as Json[])[0]), Number((s as Json[])[1])] as [number, number]);
-  }
-  if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.stops)) {
-    return (value.stops as Json[]).map((s) => {
-      const [z, v] = s as [number, number];
+  const stop = (s: Json): [number, number] => {
+    const [z, v] = Array.isArray(s) ? s : [];
 
-      return [Number(z), Number(v)] as [number, number];
-    });
-  }
+    return [Number(z), Number(v)];
+  };
+
+  if (typeof value === 'number') return value;
+  if (Array.isArray(value) && value.length > 0 && value.every(Array.isArray)) return value.map(stop);
+  if (isRecord(value) && Array.isArray(value.stops)) return value.stops.map(stop);
 
   return fallback;
 };
 
+/** The anchors of the symbol layer */
+const ANCHORS: ReadonlySet<string> = new Set<Anchor>([
+  'center',
+  'top',
+  'bottom',
+  'left',
+  'right',
+  'top-left',
+  'top-right',
+  'bottom-left',
+  'bottom-right',
+]);
+
+const isAnchor = (value: string | undefined): value is Anchor => value !== undefined && ANCHORS.has(value);
+
+/** A style's anchor (`text-anchor`, `icon-anchor`) for the symbol layer: `center` if it is none */
+const anchor = (value: string | undefined): Anchor => (isAnchor(value) ? value : 'center');
+
 /** Fetches a JSON document (a style, a TileJSON) */
-const json = async <T>(url: string): Promise<T> => {
+const json = async (url: string): Promise<unknown> => {
   const response = await fetch(url, withHeaders(url));
 
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
 
-  return (await response.json()) as T;
+  return response.json();
+};
+
+/** A style fetched: a MapLibre style, or an error */
+const fetchStyle = async (url: string): Promise<Style> => {
+  const style = await json(url);
+
+  if (!isStyle(style)) throw new Error(`${url}: not a MapLibre style`);
+
+  return style;
+};
+
+/** What a basemap reads of a TileJSON */
+interface TileJson {
+  tiles: string[];
+  maxzoom?: number;
+}
+
+const isTileJson = (value: unknown): value is TileJson =>
+  isRecord(value) &&
+  Array.isArray(value.tiles) &&
+  value.tiles.every((t) => typeof t === 'string') &&
+  (value.maxzoom === undefined || typeof value.maxzoom === 'number');
+
+/** A TileJSON fetched, or an error */
+const fetchTileJson = async (url: string): Promise<TileJson> => {
+  const tilejson = await json(url);
+
+  if (!isTileJson(tilejson)) throw new Error(`${url}: not a TileJSON`);
+
+  return tilejson;
 };
 
 /**
@@ -180,7 +228,7 @@ export type PoolWorker = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' 
  * owner, so that one `VectorTiles` going away cancels its own requests only.
  */
 export class BasemapWorkers {
-  private readonly workers: PoolWorker[];
+  private readonly workers: [PoolWorker, ...PoolWorker[]];
   private readonly pending = new Map<
     number,
     { resolve: (r: BasemapResponse) => void; reject: (e: Error) => void; worker: PoolWorker; owner: object }
@@ -196,7 +244,7 @@ export class BasemapWorkers {
     readonly url: string | URL,
     create: (url: string | URL) => PoolWorker = (u) => new Worker(u, { type: 'module' }),
   ) {
-    this.workers = Array.from({ length: Math.max(1, count) }, () => {
+    const start = (): PoolWorker => {
       const worker = create(url);
 
       worker.onmessage = ({ data }: MessageEvent<BasemapResponse>) => {
@@ -219,7 +267,9 @@ export class BasemapWorkers {
       if (rules.length > 0) worker.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
 
       return worker;
-    });
+    };
+
+    this.workers = [start(), ...Array.from({ length: Math.max(1, count) - 1 }, start)];
     this.unfollow = onHeaderRules((rules) => {
       this.workers.forEach((w) => {
         w.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
@@ -252,7 +302,7 @@ export class BasemapWorkers {
 
   /** The worker of a vector tile */
   worker(vz: number, vx: number, vy: number): PoolWorker {
-    return this.workers[workerIndex(vz, vx, vy, this.workers.length)] ?? (this.workers[0] as PoolWorker);
+    return this.workers[workerIndex(vz, vx, vy, this.workers.length)] ?? this.workers[0];
   }
 
   /** Sends a message to every worker (a renderer, or its removal) */
@@ -432,14 +482,13 @@ export class VectorTiles {
   }
 
   private async load(input: string | Style) {
-    const style = typeof input === 'string' ? await json<Style>(input) : input;
+    const style = typeof input === 'string' ? await fetchStyle(input) : input;
     const [name, source] = Object.entries(style.sources).find(([, s]) => s.type === 'vector') ?? [];
 
     if (!name || !source) throw new Error('the style has no vector source');
 
     const resolved = await resolveSource(source);
-    const tilejson =
-      !resolved.tiles && source.url ? await json<{ tiles: string[]; maxzoom?: number }>(source.url) : undefined;
+    const tilejson = !resolved.tiles && source.url ? await fetchTileJson(source.url) : undefined;
     const tiles = tilejson === undefined ? resolved.tiles : tilejson.tiles;
     const maxzoom = resolved.maxzoom ?? tilejson?.maxzoom;
     const template = tiles?.[0];
@@ -591,7 +640,7 @@ export class VectorTiles {
       color: (p) => p.color,
       haloColor: (p) => p.haloColor,
       haloWidth: (p) => p.haloWidth,
-      anchor: (p) => p.anchor as Anchor,
+      anchor: (p) => anchor(p.anchor),
       offset: (p) => p.offset,
       maxWidth: (p) => p.maxWidth,
       lineHeight: (p) => p.lineHeight,
@@ -600,7 +649,7 @@ export class VectorTiles {
       textOptional: (p) => p.textOptional === true,
       icon: (p) => (p.icon ? this.iconPrefix + p.icon.image : ''),
       iconSize: (p) => size(p.icon?.size ?? 1, 1),
-      iconAnchor: (p) => (p.icon?.anchor ?? 'center') as Anchor,
+      iconAnchor: (p) => anchor(p.icon?.anchor),
       iconOffset: (p) => p.icon?.offset ?? [0, 0],
       iconRotate: (p) => p.icon?.rotate ?? 0,
       iconRotationAlignment: (p) => p.icon?.alignment ?? 'viewport',
@@ -654,10 +703,11 @@ export class VectorTiles {
       if (ground.length > 0) {
         // The ground's tiles, the nearest first: a tile so many levels coarser than the finest in view has its
         // labels of a zoom as many under the view's, past the source's deepest level those of that level at the zoom
-        const groundTiles = Array.from(
-          { length: Math.ceil(ground.length / 3) },
-          (_, k) => [ground[3 * k], ground[3 * k + 1], ground[3 * k + 2]] as [number, number, number],
-        );
+        const groundTiles = Array.from({ length: Math.ceil(ground.length / 3) }, (_, k): [number, number, number] => [
+          ground[3 * k] ?? 0,
+          ground[3 * k + 1] ?? 0,
+          ground[3 * k + 2] ?? 0,
+        ]);
         const top = groundTiles.reduce((t, [z]) => Math.max(t, z), 0);
 
         groundTiles.forEach(([z, x, y]) => {
@@ -712,7 +762,7 @@ export class VectorTiles {
           if (cached) return cached;
 
           const [tile, deeper] = k.split('@');
-          const [tz, x, y] = (tile ?? '').split('/').map(Number) as [number, number, number];
+          const [tz = 0, x = 0, y = 0] = (tile ?? '').split('/').map(Number);
           // The nearest tiles first: the others wait for the raster tiles
           const priority: Priority = index < 4 ? 'auto' : 'low';
           const work: BasemapWork = {
@@ -833,7 +883,7 @@ export const basicStyle = (
   const out: StyleLayer[] = [];
 
   layers.forEach((name, i) => {
-    const color = BASIC_COLORS[i % BASIC_COLORS.length] as string;
+    const color = BASIC_COLORS[i % BASIC_COLORS.length] ?? '#2f6fd1';
     const base = { source: 'data', 'source-layer': name };
 
     out.push(
@@ -892,10 +942,13 @@ export const pmtilesLayer = async (
   url: string,
   options: PmtilesOptions,
 ): Promise<RasterLayer | VectorTiles> => {
-  const archiveUrl = pmtilesUrl(url.startsWith('pmtiles://') ? url : `pmtiles://${url}`) as string;
+  const archiveUrl = pmtilesUrl(url.startsWith('pmtiles://') ? url : `pmtiles://${url}`) ?? url;
   const archive = pmtiles(archiveUrl);
-  const [header, metadata] = await Promise.all([archive.header(), archive.metadata().catch(() => ({}))]);
-  const credit = (metadata as { attribution?: unknown }).attribution;
+  const [header, metadata] = await Promise.all([
+    archive.header(),
+    archive.metadata().catch((): Record<string, unknown> => ({})),
+  ]);
+  const credit = metadata.attribution;
   const attribution = options.attribution ?? (typeof credit === 'string' && credit ? plainText(credit) : undefined);
   const kind = options.kind ?? (header.tileType === 'mvt' ? 'vector' : 'raster');
   const credits = attribution ? { attribution } : {};
@@ -912,8 +965,10 @@ export const pmtilesLayer = async (
     });
   }
 
-  const layers = (metadata as { vector_layers?: { id?: unknown }[] }).vector_layers;
-  const names = Array.isArray(layers) ? layers.map((l) => l?.id).filter((id) => typeof id === 'string') : [];
+  const layers = metadata.vector_layers;
+  const names = Array.isArray(layers)
+    ? layers.map((l) => (isRecord(l) ? l.id : undefined)).filter((id) => typeof id === 'string')
+    : [];
   const style = options.style ?? basicStyle({ url: `pmtiles://${archiveUrl}` }, names);
   const tiles = map.vectorTiles({ style, ...credits });
 
@@ -940,6 +995,6 @@ export const pmtilesRasterLoader = (url: string, size: number): RasterOptions['l
 
     if (!bytes) return null;
 
-    return createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), { resizeWidth: size, resizeHeight: size });
+    return createImageBitmap(new Blob([bytes]), { resizeWidth: size, resizeHeight: size });
   };
 };

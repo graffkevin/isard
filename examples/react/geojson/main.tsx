@@ -101,7 +101,7 @@ const App = () => {
         attributionControl={ATTRIBUTION}
         hoverPicking={hoverPicking}
         onHoverFeature={({ hit }) =>
-          setHovered({ index: hit?.index, commune: hit?.feature?.properties as Commune | undefined })
+          setHovered({ index: hit?.index, commune: hit && fills?.featureAt(hit.index)?.properties })
         }
       >
         {communes && <Communes communes={communes} hovered={hovered?.index} onFills={setFills} />}

@@ -17,6 +17,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 - Arrow functions, array methods and `const` across the TypeScript sources (loops kept where they are hot); blank
   lines around declarations and before returns, in TypeScript and Rust.
+- Type guards in place of type assertions: the data read from outside (MapLibre styles, TileJSON, sprite indexes,
+  panoramas' orientations and calibrations, WFS pages, TopoJSON, the viewer's messages) checked at run time, a clear
+  error when it is not what it should be; `GeoMap`'s internals in `src/map/`.
 
 ### Fixed
 

@@ -107,14 +107,14 @@ export interface FillOptions<P = Properties> extends Partial<FillStyle<P>>, Plac
   data: FeatureData<P>;
 }
 
-const BASE: FeatureLayerStyle = {
+const BASE = {
   opacity: 1,
   minZoom: 0,
   maxZoom: 24,
   visible: true,
   filter: undefined,
   ramp: undefined,
-};
+} satisfies FeatureLayerStyle;
 
 // ── Colors ──
 
@@ -540,14 +540,14 @@ export class FillLayer<P = Properties> extends FeatureLayer<P, FillStyle<P>> {
 export const lineStyle = <P>(options: LineOptions<P>): LineStyle<P> => {
   const { data: _, before: __, ...rest } = options;
 
-  return { ...(BASE as FeatureLayerStyle<P>), color: '#000', width: 1, dash: undefined, ...rest };
+  return { ...BASE, color: '#000', width: 1, dash: undefined, ...rest };
 };
 
 export const circleStyle = <P>(options: CircleOptions<P>): CircleStyle<P> => {
   const { data: _, before: __, ...rest } = options;
 
   return {
-    ...(BASE as FeatureLayerStyle<P>),
+    ...BASE,
     color: '#000',
     radius: 5,
     strokeColor: '#fff',
@@ -560,5 +560,5 @@ export const circleStyle = <P>(options: CircleOptions<P>): CircleStyle<P> => {
 export const fillStyle = <P>(options: FillOptions<P>): FillStyle<P> => {
   const { data: _, before: __, ...rest } = options;
 
-  return { ...(BASE as FeatureLayerStyle<P>), color: '#000', ...rest };
+  return { ...BASE, color: '#000', ...rest };
 };

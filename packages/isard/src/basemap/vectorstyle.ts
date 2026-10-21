@@ -7,6 +7,7 @@
  * interpolated in RGBA, `{token}` text fields.
  */
 import { parseCssColor } from '../util/color.ts';
+import { isRecord } from '../util/guards.ts';
 import type { TileFeature, Value } from './mvt.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -34,6 +35,14 @@ export interface Style {
   /** One sprite's URL (without extension), or several with their ids (`id:name` names their images) */
   sprite?: string | { id: string; url: string }[];
 }
+
+/** A MapLibre style, as far as the basemap reads it: its sources and its layers (an id and a type each) */
+export const isStyle = (value: unknown): value is Style =>
+  isRecord(value) &&
+  isRecord(value.sources) &&
+  Object.values(value.sources).every((s) => isRecord(s) && typeof s.type === 'string') &&
+  Array.isArray(value.layers) &&
+  value.layers.every((l) => isRecord(l) && typeof l.id === 'string' && typeof l.type === 'string');
 
 /** A raster source of a style: its tile URL, its deepest level and the CSS pixels of its tiles (MapLibre's
  * `tileSize`: 512 by default) */
@@ -135,10 +144,11 @@ const mix = (a: unknown, b: unknown, t: number): unknown => {
   const ca = color(a);
   const cb = color(b);
 
-  if (ca && cb)
-    return css(
-      [0, 1, 2, 3].map((i) => (ca[i] ?? 0) + ((cb[i] ?? 0) - (ca[i] ?? 0)) * t) as [number, number, number, number],
-    );
+  if (ca && cb) {
+    const lerp = (i: 0 | 1 | 2 | 3) => ca[i] + (cb[i] - ca[i]) * t;
+
+    return css([lerp(0), lerp(1), lerp(2), lerp(3)]);
+  }
   if (Array.isArray(a) && Array.isArray(b)) return a.map((v, i) => mix(v, b[i], t));
 
   return t < 0.5 ? a : b;
@@ -155,7 +165,7 @@ interface LegacyFunction {
 }
 
 const isFunction = (v: Json): v is { [key: string]: Json } & LegacyFunction => {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) && Array.isArray((v as { stops?: Json }).stops);
+  return typeof v === 'object' && v !== null && !Array.isArray(v) && Array.isArray(v.stops);
 };
 
 const legacy = (f: LegacyFunction, ctx: Context): unknown => {
@@ -169,8 +179,11 @@ const legacy = (f: LegacyFunction, ctx: Context): unknown => {
   if (typeof input !== 'number' || !stops.length) return f.default ?? stops[0]?.[1];
 
   // Zoom-and-property stops ({ zoom, value } keys) are taken at their zoom only
-  const key = (s: [Json, Json]) =>
-    typeof s[0] === 'object' && s[0] !== null ? Number((s[0] as { zoom?: number }).zoom) : Number(s[0]);
+  const key = ([k]: [Json, Json]) => {
+    if (Array.isArray(k)) return Number.NaN;
+
+    return isRecord(k) ? Number(k.zoom) : Number(k);
+  };
   const first = stops[0];
 
   if (!first) return f.default;
@@ -186,6 +199,27 @@ const legacy = (f: LegacyFunction, ctx: Context): unknown => {
 };
 
 // ── Expressions ──
+
+/** A list of values to look a value up in (any value: `includes` compares with `===`) */
+const labels = (values: readonly Json[]): readonly unknown[] => values;
+
+type Comparison = '<' | '<=' | '>' | '>=';
+
+const ORDERS: Record<Comparison, (a: number | string, b: number | string) => boolean> = {
+  '<': (a, b) => a < b,
+  '<=': (a, b) => a <= b,
+  '>': (a, b) => a > b,
+  '>=': (a, b) => a >= b,
+};
+
+/** A comparison of any two values the way JavaScript's operators make it: two strings (lists and objects as their
+ * text) in text order, anything else as numbers */
+const compare = (op: Comparison, a: unknown, b: unknown): boolean => {
+  const text = (v: unknown) => (typeof v === 'object' && v !== null ? String(v) : v);
+  const [x, y] = [text(a), text(b)];
+
+  return typeof x === 'string' && typeof y === 'string' ? ORDERS[op](x, y) : ORDERS[op](Number(x), Number(y));
+};
 
 const get = (ctx: Context, key: unknown): unknown => {
   if (key === '$type') return ctx.type;
@@ -305,18 +339,19 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
     case 'image':
       return ev(0);
     case 'number-format': {
-      const options = (args[1] ?? {}) as {
-        locale?: string;
-        'min-fraction-digits'?: number;
-        'max-fraction-digits'?: number;
+      const options = isRecord(args[1]) ? args[1] : {};
+      const option = (key: string) => {
+        const v = options[key];
+
+        return typeof v === 'number' ? v : undefined;
       };
       const n = num(0);
 
       if (!Number.isFinite(n)) return '';
 
-      return n.toLocaleString(options.locale, {
-        minimumFractionDigits: options['min-fraction-digits'],
-        maximumFractionDigits: options['max-fraction-digits'],
+      return n.toLocaleString(typeof options.locale === 'string' ? options.locale : undefined, {
+        minimumFractionDigits: option('min-fraction-digits'),
+        maximumFractionDigits: option('max-fraction-digits'),
       });
     }
     case 'to-number': {
@@ -396,20 +431,17 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
     case '!=':
       return ev(0) !== ev(1);
     case '<':
-      return (ev(0) as number) < (ev(1) as number);
     case '<=':
-      return (ev(0) as number) <= (ev(1) as number);
     case '>':
-      return (ev(0) as number) > (ev(1) as number);
     case '>=':
-      return (ev(0) as number) >= (ev(1) as number);
+      return compare(op, ev(0), ev(1));
     case 'in': {
       const haystack = ev(1);
       const needle = ev(0);
 
       if (typeof haystack === 'string') return haystack.includes(String(needle));
 
-      return Array.isArray(haystack) && haystack.includes(needle as Json);
+      return Array.isArray(haystack) && haystack.includes(needle);
     }
     case 'case': {
       const hit = args.findIndex((_, i) => i % 2 === 0 && i + 1 < args.length && Boolean(ev(i)));
@@ -422,7 +454,7 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
         (label, i) =>
           i % 2 === 1 &&
           i + 1 < args.length &&
-          (Array.isArray(label) ? label.includes(input as Json) : label === input),
+          (Array.isArray(label) ? labels(label).includes(input) : label === input),
       );
 
       return hit < 0 ? ev(args.length - 1) : ev(hit + 1);
@@ -537,17 +569,14 @@ const legacyFilter = (f: Json[], ctx: Context): boolean => {
     case '!=':
       return v !== rest[0];
     case '<':
-      return (v as number) < (rest[0] as number);
     case '<=':
-      return (v as number) <= (rest[0] as number);
     case '>':
-      return (v as number) > (rest[0] as number);
     case '>=':
-      return (v as number) >= (rest[0] as number);
+      return compare(op, v, rest[0]);
     case 'in':
-      return rest.includes(v as Json);
+      return labels(rest).includes(v);
     case '!in':
-      return !rest.includes(v as Json);
+      return !labels(rest).includes(v);
     case 'has':
       return v !== undefined;
     case '!has':
@@ -598,11 +627,14 @@ export const filter = (f: Json | undefined, ctx: Context): boolean => {
   return compile(f)(ctx);
 };
 
+/** The operators that read the feature */
+const FEATURE_OPERATORS: ReadonlySet<unknown> = new Set(['get', 'has', '!has', 'geometry-type', 'properties', 'id']);
+
 /** Whether a value depends on the feature (else only on the zoom, evaluated once per tile) */
 export const isFeatureDependent = (e: Json | undefined): boolean => {
   if (e !== undefined && isFunction(e)) return e.property !== undefined;
   if (!Array.isArray(e)) return false;
-  if (['get', 'has', '!has', 'geometry-type', 'properties', 'id'].includes(e[0] as string)) return true;
+  if (FEATURE_OPERATORS.has(e[0])) return true;
 
   return e.some((x) => isFeatureDependent(x));
 };

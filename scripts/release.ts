@@ -20,10 +20,15 @@ const fail = (message: string): never => {
   process.exit(1);
 };
 
-const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')) as {
-  name: string;
-  version: string;
-};
+const isManifest = (value: unknown): value is { name: string; version: string } =>
+  typeof value === 'object' &&
+  value !== null &&
+  'name' in value &&
+  typeof value.name === 'string' &&
+  'version' in value &&
+  typeof value.version === 'string';
+const manifest: unknown = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8'));
+const { name, version } = isManifest(manifest) ? manifest : fail(`${pkg}/package.json: no name or version`);
 if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`)) {
   fail(`CHANGELOG.md does not describe ${version}: add its "## [${version}] - <date>" section first`);
 }

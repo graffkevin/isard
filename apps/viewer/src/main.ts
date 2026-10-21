@@ -18,18 +18,36 @@ import {
 import pkg from 'isard/package.json' with { type: 'json' };
 import { Bridge } from './bridge.ts';
 import { boundsCamera, Layers } from './layers.ts';
-import type { AddMessage, Bounds, GeoJsonCollection, HostMessage, LonLat, ViewerMessage } from './protocol.ts';
+import {
+  type AddMessage,
+  type Bounds,
+  type GeoJsonCollection,
+  type GeoJsonFeature,
+  type HostMessage,
+  isRecord,
+  type LonLat,
+  type ViewerMessage,
+} from './protocol.ts';
 
 const BASEMAPS = ['osm-positron', 'osm-liberty', 'osm-bright', 'ign-plan', 'ign-plan-grey', 'ign-ortho', 'none'];
 
 const query = new URLSearchParams(location.search);
-const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+/** The element of an id, checked to be of a type */
+const element = <T extends HTMLElement>(id: string, type: abstract new () => T): T => {
+  const found = document.getElementById(id);
+
+  if (!(found instanceof type)) throw new Error(`#${id}: no ${type.name} in the page`);
+
+  return found;
+};
+
+const isLonLat = (values: number[]): values is LonLat => values.length === 2 && values.every(Number.isFinite);
 
 const center = query.get('center')?.split(',').map(Number);
 const zoom = Number(query.get('zoom'));
-const map = await GeoMap.create(element('map'), {
+const map = await GeoMap.create(element('map', HTMLElement), {
   basemap: (query.get('basemap') ?? 'osm-positron') as Basemap,
-  ...(center?.length === 2 && center.every(Number.isFinite) ? { center: center as LonLat } : { center: [2.35, 48.85] }),
+  center: center && isLonLat(center) ? center : [2.35, 48.85],
   zoom: Number.isFinite(zoom) && query.has('zoom') ? zoom : 3,
   attributionControl: { compact: true },
 });
@@ -39,7 +57,7 @@ map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
 
 let bridge: Bridge | undefined;
 const post = (message: ViewerMessage) => bridge?.send(message);
-const toast = element<HTMLDivElement>('toast');
+const toast = element('toast', HTMLDivElement);
 let toastTimer = 0;
 const report = (message: string, id?: string): void => {
   console.warn('isard viewer:', id ?? '', message);
@@ -105,7 +123,7 @@ const apply = (message: HostMessage): void => {
       default:
         if (typeof message.type === 'string' && message.type.startsWith('add') && 'id' in message) {
           if (typeof message.id !== 'string' || !message.id) throw new Error(`${message.type} without an id`);
-          layers.add(message as AddMessage);
+          layers.add(message);
         }
       // Other types are ignored: later versions of the protocol
     }
@@ -141,7 +159,7 @@ map.on('click', ({ point, lonLat }) => {
     const properties =
       m.type === 'addGeoJSON'
         ? (m.data.features[picked.index]?.properties ?? null)
-        : ((picked.feature?.properties as Record<string, unknown> | undefined) ?? null);
+        : (picked.feature?.properties ?? null);
 
     return { id: entry.id, index: picked.index, properties };
   };
@@ -161,22 +179,44 @@ const idOf = (name: string): string => {
   return id;
 };
 
+type Geometry = NonNullable<GeoJsonFeature['geometry']>;
+
+const isGeometry = (value: unknown): value is Geometry =>
+  isRecord(value) &&
+  typeof value.type === 'string' &&
+  (value.geometries === undefined || Array.isArray(value.geometries));
+/** A feature: its geometry null (or left out), or a geometry */
+const isFeature = (value: unknown): value is GeoJsonFeature =>
+  isRecord(value) &&
+  value.type === 'Feature' &&
+  (value.geometry === undefined || value.geometry === null || isGeometry(value.geometry));
+/** A collection, kept whole (a `crs` member reprojects it) */
+const isCollection = (value: Record<string, unknown>): value is Record<string, unknown> & GeoJsonCollection =>
+  value.type === 'FeatureCollection' && Array.isArray(value.features) && value.features.every(isFeature);
+const isTopology = (value: Record<string, unknown>): value is Record<string, unknown> & Topology =>
+  value.type === 'Topology' && isRecord(value.objects) && Array.isArray(value.arcs);
+
 /** A feature collection from parsed JSON: a collection, a feature, a geometry, or TopoJSON */
 const collection = (json: unknown): GeoJsonCollection => {
-  const value = json as { type?: string; objects?: Record<string, unknown> };
+  if (!isRecord(json)) throw new Error('not GeoJSON');
+  if (json.type === 'Topology') {
+    if (!isTopology(json)) throw new Error('not TopoJSON');
 
-  if (value?.type === 'Topology' && value.objects) {
-    const name = Object.keys(value.objects)[0];
+    return parseTopoJson(json, Object.keys(json.objects)[0]);
+  }
+  if (json.type === 'FeatureCollection') {
+    if (!isCollection(json)) throw new Error('not GeoJSON: its features');
 
-    return parseTopoJson(value as Topology, name) as unknown as GeoJsonCollection;
+    return json;
   }
-  if (value?.type === 'FeatureCollection') return value as GeoJsonCollection;
-  if (value?.type === 'Feature')
-    return { type: 'FeatureCollection', features: [value as GeoJsonCollection['features'][number]] };
-  if (typeof value?.type === 'string') {
-    return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: value as never, properties: {} }] };
+  if (json.type === 'Feature') {
+    if (!isFeature(json)) throw new Error('not GeoJSON: a feature');
+
+    return { type: 'FeatureCollection', features: [json] };
   }
-  throw new Error('not GeoJSON');
+  if (!isGeometry(json)) throw new Error('not GeoJSON');
+
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: json, properties: {} }] };
 };
 
 const kindOf = (name: string) => {
@@ -198,8 +238,7 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
   const id = idOf(name.replace(/^.*\//, '').replace(/[?#].*$/, ''));
   const kind = kindOf(name);
   const text = async () => (typeof source === 'string' ? (await fetchOk(source)).text() : source.text());
-  const blobUrl = () => (typeof source === 'string' ? undefined : URL.createObjectURL(source));
-  const url = () => (typeof source === 'string' ? source : (blobUrl() as string));
+  const url = () => (typeof source === 'string' ? source : URL.createObjectURL(source));
 
   try {
     switch (kind) {
@@ -208,8 +247,8 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
       case 'gpx': {
         const body = await text();
         const parse = (): GeoJsonCollection => {
-          if (kind === 'kml') return parseKml(body) as unknown as GeoJsonCollection;
-          if (kind === 'gpx') return parseGpx(body) as unknown as GeoJsonCollection;
+          if (kind === 'kml') return parseKml(body);
+          if (kind === 'gpx') return parseGpx(body);
 
           return collection(JSON.parse(body));
         };
@@ -236,7 +275,7 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
       }
       case 'model': {
         const u = url();
-        const lonLat = at ?? (map.getCamera().center as LonLat);
+        const lonLat = at ?? map.getCamera().center;
 
         layers.add(
           { type: 'addModels', id, name, url: u, instances: [{ lonLat }] },
@@ -313,7 +352,7 @@ window.addEventListener('drop', (event) => {
 
   addFiles(event.dataTransfer?.files ?? [], at ? [at[0], at[1]] : undefined);
 });
-const open = element<HTMLInputElement>('open');
+const open = element('open', HTMLInputElement);
 open.addEventListener('change', () => {
   addFiles(open.files ?? []);
   open.value = '';
@@ -321,8 +360,8 @@ open.addEventListener('change', () => {
 
 // ── Panel ──
 
-const panel = element<HTMLElement>('panel');
-const collapse = element<HTMLButtonElement>('collapse');
+const panel = element('panel', HTMLElement);
+const collapse = element('collapse', HTMLButtonElement);
 collapse.addEventListener('click', () => {
   const collapsed = panel.classList.toggle('collapsed');
 
@@ -331,7 +370,7 @@ collapse.addEventListener('click', () => {
   collapse.setAttribute('aria-label', collapsed ? 'Expand the panel' : 'Collapse the panel');
 });
 
-const basemapSelect = element<HTMLSelectElement>('basemap');
+const basemapSelect = element('basemap', HTMLSelectElement);
 const initial = query.get('basemap') ?? 'osm-positron';
 (BASEMAPS.includes(initial) ? BASEMAPS : [...BASEMAPS, initial]).forEach((name) => {
   basemapSelect.append(new Option(name, name, name === initial, name === initial));
@@ -348,8 +387,8 @@ const KINDS: Record<AddMessage['type'], string> = {
   addModels: 'model',
 };
 
-const list = element<HTMLUListElement>('layers');
-const empty = element<HTMLParagraphElement>('empty');
+const list = element('layers', HTMLUListElement);
+const empty = element('empty', HTMLParagraphElement);
 layers.onChange = () => {
   list.replaceChildren(
     ...[...layers.entries.values()].reverse().map((entry) => {

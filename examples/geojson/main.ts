@@ -58,7 +58,7 @@ map.on('hoverfeature', ({ hit }) => {
 
   hovered.setFilter((_, i) => i === index);
 
-  const p = hit?.feature?.properties as Commune | undefined;
+  const p = hit && fills.featureAt(hit.index)?.properties;
 
   element('info').textContent = p ? `${p.nom_officiel}: ${p.population.toLocaleString('en')} inhabitants` : ' ';
 });

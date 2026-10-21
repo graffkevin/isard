@@ -6,7 +6,7 @@
  * on the map adds an observer; a click on its pin opens its settings (one popup open at a time), and the pin drags. On
  * a building, the observer stands on its roof.
  */
-import { type FeatureCollection, geoplateformeWfs, type LonLat } from 'isard';
+import { type FeatureCollection, geoplateformeWfs, type LonLat, type Position } from 'isard';
 import { IsardMap, Layer } from 'isard/react';
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -14,13 +14,13 @@ import { element } from '../../shared/page.ts';
 import { ObserverPins, ObserversPanel, useObservers } from './observers.tsx';
 
 type Building = { hauteur: number | null };
-type Ring = LonLat[];
+type Ring = Position[];
 
 const roofHeight = (p: Building) => p.hauteur ?? 6;
 
 const polygonsOf = (g: FeatureCollection<Building>['features'][number]['geometry']): Ring[][] => {
-  if (g?.type === 'Polygon') return [g.coordinates as Ring[]];
-  if (g?.type === 'MultiPolygon') return g.coordinates as Ring[][];
+  if (g?.type === 'Polygon') return [g.coordinates];
+  if (g?.type === 'MultiPolygon') return g.coordinates;
 
   return [];
 };
@@ -28,8 +28,8 @@ const inside = ([x, y]: LonLat, ring: Ring) => {
   let within = false;
 
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i] as LonLat;
-    const [xj, yj] = ring[j] as LonLat;
+    const [xi, yi] = ring[i] as Position;
+    const [xj, yj] = ring[j] as Position;
 
     if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) within = !within;
   }

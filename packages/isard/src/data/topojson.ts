@@ -2,6 +2,7 @@
  * TopoJSON to GeoJSON, for the feature layers: `map.addFills({ data: parseTopoJson(topology, 'counties') })`.
  */
 import type { Feature, FeatureCollection, Geometry, Position, Properties } from '../layers/features.ts';
+import { isNumbers } from '../util/guards.ts';
 
 /** A TopoJSON geometry object (arcs by index, `~i` for arc i reversed; positions quantized with a transform) */
 export interface TopoGeometry {
@@ -29,6 +30,10 @@ export interface Topology {
   arcs: number[][][];
   objects: Record<string, TopoGeometry>;
 }
+
+/** The members of a geometry, checked: the topology is JSON from elsewhere */
+const isLists = (value: unknown): value is number[][] => Array.isArray(value) && value.every(isNumbers);
+const isListsOfLists = (value: unknown): value is number[][][] => Array.isArray(value) && value.every(isLists);
 
 /**
  * The features of object `name` of a TopoJSON topology (default its first object): a GeometryCollection gives one
@@ -70,19 +75,21 @@ export const parseTopoJson = <P = Properties>(topology: Topology, name?: string)
     return out;
   };
   const geometry = (g: TopoGeometry): Geometry | null => {
+    const { coordinates, arcs } = g;
+
     switch (g.type) {
       case 'Point':
-        return { type: 'Point', coordinates: position(g.coordinates as number[]) };
+        return isNumbers(coordinates) ? { type: 'Point', coordinates: position(coordinates) } : null;
       case 'MultiPoint':
-        return { type: 'MultiPoint', coordinates: (g.coordinates as number[][]).map(position) };
+        return isLists(coordinates) ? { type: 'MultiPoint', coordinates: coordinates.map(position) } : null;
       case 'LineString':
-        return { type: 'LineString', coordinates: stitch(g.arcs as number[]) };
+        return isNumbers(arcs) ? { type: 'LineString', coordinates: stitch(arcs) } : null;
       case 'MultiLineString':
-        return { type: 'MultiLineString', coordinates: (g.arcs as number[][]).map(stitch) };
+        return isLists(arcs) ? { type: 'MultiLineString', coordinates: arcs.map(stitch) } : null;
       case 'Polygon':
-        return { type: 'Polygon', coordinates: (g.arcs as number[][]).map(stitch) };
+        return isLists(arcs) ? { type: 'Polygon', coordinates: arcs.map(stitch) } : null;
       case 'MultiPolygon':
-        return { type: 'MultiPolygon', coordinates: (g.arcs as number[][][]).map((p) => p.map(stitch)) };
+        return isListsOfLists(arcs) ? { type: 'MultiPolygon', coordinates: arcs.map((p) => p.map(stitch)) } : null;
       case 'GeometryCollection':
         return {
           type: 'GeometryCollection',

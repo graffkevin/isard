@@ -53,8 +53,9 @@ modes.forEach((mode) => {
     });
   });
 });
-element<HTMLInputElement>('edl').addEventListener('change', (e) => {
-  cloud.setStyle({ edl: (e.target as HTMLInputElement).checked });
+const edl = element('edl', HTMLInputElement);
+edl.addEventListener('change', () => {
+  cloud.setStyle({ edl: edl.checked });
 });
 
 map.on('render', () => {
@@ -67,7 +68,7 @@ map.on('render', () => {
 
 map.hoverPicking = { layers: [cloud], radius: 3 };
 map.on('hoverfeature', ({ hit }) => {
-  const p = hit?.feature?.properties as { classification: number; altitude: number } | undefined;
+  const p = hit && cloud.featureAt(hit.index)?.properties;
 
   element('info').textContent = p
     ? `${names[p.classification] ?? `class ${p.classification}`}, ${p.altitude.toFixed(1)} m (IGN69)`

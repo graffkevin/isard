@@ -15,7 +15,7 @@ const map = await GeoMap.create(element('map'), {
   projection: 'mercator',
   tiles3d: true,
 });
-const color = element<HTMLInputElement>('color');
+const color = element('color', HTMLInputElement);
 const city = map.addTiles3d({
   url: 'https://raw.githubusercontent.com/CesiumGS/3d-tiles-samples/main/1.0/TilesetWithRequestVolume/city/tileset.json',
   color: color.value,

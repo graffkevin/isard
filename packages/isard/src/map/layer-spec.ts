@@ -47,7 +47,11 @@ export const addSpec = <P = Record<string, unknown>>(map: GeoMap, spec: LayerSpe
       return map.addPointCloud(spec);
     case 'models':
       return map.addModels(spec);
-    default:
-      throw new Error(`isard: no layer of type ${String((spec as { type?: unknown }).type)}`);
+    default: {
+      // Only from an application's configuration, untyped: the cases above cover every type
+      const { type }: { type?: unknown } = spec;
+
+      throw new Error(`isard: no layer of type ${String(type)}`);
+    }
   }
 };

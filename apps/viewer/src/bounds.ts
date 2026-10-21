@@ -1,8 +1,6 @@
 /** The bounds of GeoJSON, shared by the viewer and its server (scripts/viewer.ts): no dependency */
 import type { Bounds, GeoJsonCollection } from './protocol.ts';
 
-type Geometry = GeoJsonCollection['features'][number]['geometry'];
-
 /** The bounds of a feature collection's coordinates (west, south, east, north), undefined if it has no position */
 export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined => {
   const b: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
@@ -18,14 +16,10 @@ export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined =>
     }
     for (const x of c) visit(x);
   };
-  const geometry = (g: Geometry | null | undefined): void => {
-    if (!g) return;
+  const geometry = (g: unknown): void => {
+    if (typeof g !== 'object' || g === null) return;
     if ('coordinates' in g) visit(g.coordinates);
-    if ('geometries' in g && Array.isArray(g.geometries)) {
-      g.geometries.forEach((x) => {
-        geometry(x as Geometry);
-      });
-    }
+    if ('geometries' in g && Array.isArray(g.geometries)) g.geometries.forEach(geometry);
   };
 
   (data.features ?? []).forEach((f) => {

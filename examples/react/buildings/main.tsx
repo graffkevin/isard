@@ -51,7 +51,7 @@ const App = () => {
         basemap="ign-plan-grey-vector"
         projection="mercator"
         hoverPicking={hoverPicking}
-        onHoverFeature={({ hit }) => setInfo(describe(hit?.feature?.properties as Building | undefined))}
+        onHoverFeature={({ hit }) => setInfo(describe(hit && layer?.featureAt(hit.index)?.properties))}
       >
         {buildings && heights && (
           <Layer

@@ -26,7 +26,10 @@ interface Observer extends ObserverSettings {
   base: number;
 }
 
-const SLIDERS: [keyof ObserverSettings, string, number, number, number, string][] = [
+type Slider = [keyof Omit<ObserverSettings, 'oneWay'>, string, number, number, number, string];
+
+/** The height first, the cone after the one-way box */
+const SLIDERS: [Slider, ...Slider[]] = [
   ['height', 'Height above it', 0, 60, 0.1, ' m'],
   ['direction', 'Direction', 0, 359, 1, '°'],
   ['tilt', 'Tilt', -60, 30, 1, '°'],
@@ -58,7 +61,7 @@ export const observers = (
 ): ((at: LonLat, settings?: Partial<ObserverSettings>, standing?: number) => void) => {
   const all: Observer[] = [];
   let named = 0;
-  const opacity = element<HTMLInputElement>('opacity');
+  const opacity = element('opacity', HTMLInputElement);
   /** What an observer stands on, if anything above the relief */
   const under = (o: Observer) => {
     if (!options.surfaces) return options.standOn?.(o.pin.getLonLat());
@@ -86,7 +89,7 @@ export const observers = (
     );
     element('opacity-value').textContent = `${opacity.value} %`;
     element('count').textContent = `${all.length} observer${all.length > 1 ? 's' : ''}`;
-    element<HTMLButtonElement>('clear').disabled = all.length === 0;
+    element('clear', HTMLButtonElement).disabled = all.length === 0;
   };
 
   const add = (at: LonLat, settings: Partial<ObserverSettings> = {}, standing = 0) => {
@@ -122,14 +125,14 @@ export const observers = (
 
     form.append(line(name, where));
 
-    const slider = ([key, label, min, max, step, unit]: (typeof SLIDERS)[number]) => {
+    const slider = ([key, label, min, max, step, unit]: Slider) => {
       const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step });
 
       input.value = String(observer[key]);
 
       const value = document.createElement('span');
       const read = () => {
-        (observer[key] as number) = Number(input.value);
+        observer[key] = Number(input.value);
         value.textContent = `${input.value}${unit}`;
       };
 
@@ -166,7 +169,7 @@ export const observers = (
 
     const [height, ...cone] = SLIDERS;
 
-    form.append(slider(height as (typeof SLIDERS)[number]), line(oneWayLabel), ...cone.map(slider), line(remove));
+    form.append(slider(height), line(oneWayLabel), ...cone.map(slider), line(remove));
 
     // One popup open at a time
     popup.on('open', () => {

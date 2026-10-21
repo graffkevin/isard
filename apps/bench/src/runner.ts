@@ -2,8 +2,16 @@
 import { type BenchResult, LILLE_MESH, type PhaseResult } from './scenario.ts';
 
 const ENGINES = ['isard', 'itowns', 'tiles-renderer'] as const;
+type Engine = (typeof ENGINES)[number];
 /** Column names, in the order of `ENGINES` (a result's engine name starts with one) */
 const NAMES = ['isard', 'iTowns', '3DTilesRendererJS'];
+
+declare global {
+  interface Window {
+    /** The results of each round, for a script driving the page */
+    benchResults?: BenchResult[][];
+  }
+}
 
 const element = <T extends HTMLElement>(id: string, type: new () => T): T => {
   const found = document.getElementById(id);
@@ -59,7 +67,7 @@ const warmUp = async (): Promise<void> => {
   }
 };
 
-const once = async (page: string): Promise<BenchResult> => {
+const once = async (page: Engine): Promise<BenchResult> => {
   await freshFrame();
   await warmUp();
 
@@ -72,7 +80,7 @@ const once = async (page: string): Promise<BenchResult> => {
     const listener = (event: MessageEvent<{ type?: string; result?: BenchResult }>) => {
       if (event.data.type === 'bench-result' && event.data.result) finish(event.data.result);
     };
-    const name = NAMES[ENGINES.indexOf(page as (typeof ENGINES)[number])] ?? page;
+    const name = NAMES[ENGINES.indexOf(page)] ?? page;
     const timer = setTimeout(() => finish({ engine: `${name} (timed out)`, phases: [], info: '' }), ENGINE_TIMEOUT_MS);
 
     addEventListener('message', listener);
@@ -217,7 +225,7 @@ const detailTable = (results: BenchResult[]): string => {
 button.onclick = async () => {
   button.disabled = true;
 
-  const rounds: { title: string; order: readonly string[]; results: BenchResult[] }[] = [
+  const rounds: { title: string; order: readonly Engine[]; results: BenchResult[] }[] = [
     { title: 'Round 2, warm caches (reference)', order: [...ENGINES].reverse(), results: [] },
     { title: 'Round 1, cold caches (first visit)', order: ENGINES, results: [] },
   ];
@@ -245,7 +253,7 @@ button.onclick = async () => {
   await freshFrame();
   status.textContent = 'done';
   button.disabled = false;
-  (window as Window & { benchResults?: BenchResult[][] }).benchResults = rounds.map((r) => r.results);
+  window.benchResults = rounds.map((r) => r.results);
 };
 
 // The tables are there from the start, filled in as the engines run

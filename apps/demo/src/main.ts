@@ -22,7 +22,7 @@ declare global {
 }
 
 const PARIS: LonLat = [2.3376, 48.8606];
-const WORLD = { center: [2.5, 46.6] as LonLat, zoom: 2.2, pitch: 0, bearing: 0 };
+const WORLD = { center: [2.5, 46.6] satisfies LonLat, zoom: 2.2, pitch: 0, bearing: 0 };
 /** The worldwide relief, raised by the French geoid: the photomesh's ellipsoidal heights sit on it in France */
 const RELIEF = { geoid: true };
 /** Photomesh of the Métropole Européenne de Lille (2020, 5 cm, open data): a heavy textured 3D Tiles dataset */
@@ -31,12 +31,12 @@ const LILLE_MESH = 'https://webimaging.lillemetropole.fr/externe/maillage/2020_m
 const params = new URLSearchParams(location.search);
 const projection: Projection = params.get('projection') === 'mercator' ? 'mercator' : 'globe';
 
-const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
+const element = (id: string) => {
   const found = document.getElementById(id);
 
   if (!found) throw new Error(`#${id} missing from the page`);
 
-  return found as T;
+  return found;
 };
 
 const map = await GeoMap.create(element('map'), {

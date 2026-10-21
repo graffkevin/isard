@@ -141,7 +141,10 @@ export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): 
   const [forMeshes, forPoints] = await Promise.all([meshes ? draco : undefined, dracoPoints]);
 
   return requests.map((request) => {
-    const module = (request.points ? forPoints : forMeshes) as DracoModule;
+    const module = request.points ? forPoints : forMeshes;
+
+    if (!module) throw new Error('isard: the Draco decoder is not loaded');
+
     const decoder = new module.Decoder();
     const mesh = request.points ? new module.PointCloud() : new module.Mesh();
 

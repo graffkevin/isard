@@ -39,11 +39,11 @@ const point = (element: XmlElement): { position: Position; time: string | undefi
 /** The positions of a line of points, and their times when every point has one */
 const line = (points: XmlElement[]): { coordinates: Position[]; times: string[] | undefined } => {
   const read = points.map(point).filter((p) => p !== undefined);
-  const times = read.map((p) => p.time);
+  const times = read.map((p) => p.time).filter((t) => t !== undefined);
 
   return {
     coordinates: read.map((p) => p.position),
-    times: read.length > 0 && times.every((t) => t !== undefined) ? (times as string[]) : undefined,
+    times: read.length > 0 && times.length === read.length ? times : undefined,
   };
 };
 

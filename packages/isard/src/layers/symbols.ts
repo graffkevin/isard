@@ -96,6 +96,17 @@ const anchors = (geometry: Geometry | null): { at: Position; along?: [number, nu
   return points(geometry).map((p) => (p.length > 2 ? { at: [p[0], p[1]], along: [p[2] ?? 0, p[3] ?? 0] } : { at: p }));
 };
 
+/** The icon of a label as packed: its scale, box, color, quads and flags */
+interface LaidIcon {
+  iconScale: Size;
+  iconBox: [number, number, number, number];
+  iconColor: [number, number, number, number];
+  quads: number[][];
+  iconTurns: boolean;
+  fitted: boolean;
+  iconFlags: number;
+}
+
 /** Anchors as positions, a line's carrying the direction (lon, lat, dlon, dlat) */
 const points = (geometry: Geometry | null): Position[] => {
   if (!geometry) return [];
@@ -307,7 +318,7 @@ export class SymbolLayer<P = Properties> extends Layer {
   }
 
   setFilter(filter: ((properties: P, index: number) => boolean) | undefined): void {
-    this.setStyle({ filter } as Partial<SymbolStyle<P>>);
+    this.setStyle({ filter });
   }
 
   setVisible(visible: boolean): void {
@@ -391,7 +402,9 @@ export class SymbolLayer<P = Properties> extends Layer {
       built.set(group, chunk);
       if (keep) this.chunks.set(group, chunk);
     });
-    this.labels = concat(groups.map((g) => built.get(g) ?? (this.chunks.get(g) as Chunk)));
+    this.labels = concat(
+      groups.map((g) => built.get(g) ?? this.chunks.get(g)).filter((c): c is Chunk => c !== undefined),
+    );
     // The icons packed for them
     this.host.icons.flush();
     this.send(this.map.engine, this.id);
@@ -460,19 +473,11 @@ export class SymbolLayer<P = Properties> extends Layer {
         (evaluate(st.textOptional, p, i) ? FLAG.textOptional : 0) |
         (s ? FLAG.text : 0);
       // The icon: beside its text, or stretched around it (then scaled and turned with it)
-      const { iconScale, iconBox, iconColor, quads, iconTurns, fitted, iconFlags } = ((): {
-        iconScale: Size;
-        iconBox: [number, number, number, number];
-        iconColor: [number, number, number, number];
-        quads: number[][];
-        iconTurns: boolean;
-        fitted: boolean;
-        iconFlags: number;
-      } => {
-        const none = {
+      const { iconScale, iconBox, iconColor, quads, iconTurns, fitted, iconFlags } = ((): LaidIcon => {
+        const none: LaidIcon = {
           iconScale: 1,
-          iconBox: [0, 0, 0, 0] as [number, number, number, number],
-          iconColor: [0, 0, 0, 0] as [number, number, number, number],
+          iconBox: [0, 0, 0, 0],
+          iconColor: [0, 0, 0, 0],
           quads: [],
           iconTurns: false,
           fitted: false,

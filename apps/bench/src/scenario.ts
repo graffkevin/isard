@@ -55,6 +55,13 @@ export interface BenchResult {
   info: string;
 }
 
+declare global {
+  interface Window {
+    /** The result of the run, for a script driving the page */
+    benchResult?: BenchResult;
+  }
+}
+
 /** Field of view shared by both engines (vertical, degrees) */
 export const FOV = 36.87;
 /** Screen-space error target of the 3D Tiles, the same for both engines */
@@ -186,6 +193,18 @@ const settle = async (engine: BenchEngine, phase: string, maxMs: number): Promis
   return result;
 };
 
+/** The bytes of the JavaScript heap: Chrome's `performance.memory`, non-standard (undefined elsewhere) */
+const usedHeap = (): number | undefined => {
+  const memory: unknown = 'memory' in performance ? performance.memory : undefined;
+
+  return typeof memory === 'object' &&
+    memory !== null &&
+    'usedJSHeapSize' in memory &&
+    typeof memory.usedJSHeapSize === 'number'
+    ? memory.usedJSHeapSize
+    : undefined;
+};
+
 export const run = async (engine: BenchEngine): Promise<BenchResult> => {
   const phases: PhaseResult[] = [];
 
@@ -200,10 +219,10 @@ export const run = async (engine: BenchEngine): Promise<BenchResult> => {
   engine.setPose(VIEUX_LILLE);
   phases.push(await settle(engine, '7 jump to Vieux-Lille', 40_000));
 
-  const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
   const result: BenchResult = { engine: engine.name, phases, info: engine.info() };
+  const heap = usedHeap();
 
-  if (memory) result.heapMb = Math.round(memory.usedJSHeapSize / 1048576);
+  if (heap !== undefined) result.heapMb = Math.round(heap / 1048576);
 
   return result;
 };
@@ -222,5 +241,5 @@ export const benchmark = async (engine: BenchEngine): Promise<void> => {
   const result = await run(engine);
 
   parent.postMessage({ type: 'bench-result', result }, '*');
-  (window as Window & { benchResult?: BenchResult }).benchResult = result;
+  window.benchResult = result;
 };

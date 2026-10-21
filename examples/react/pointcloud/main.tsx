@@ -64,7 +64,7 @@ const App = () => {
           }
         }}
         onHoverFeature={({ hit }) => {
-          const p = hit?.feature?.properties as { classification: number; altitude: number } | undefined;
+          const p = hit && cloud?.featureAt(hit.index)?.properties;
 
           setInfo(
             p ? `${names[p.classification] ?? `class ${p.classification}`}, ${p.altitude.toFixed(1)} m (IGN69)` : ' ',

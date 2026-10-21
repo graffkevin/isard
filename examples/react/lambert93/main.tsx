@@ -18,16 +18,19 @@ const GRIDS = {
   PM: ['GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png'],
 } as const;
 type Grid = keyof typeof GRIDS;
+const isGrid = (key: string): key is Grid => key in GRIDS;
 const LABELS: Record<Grid, string> = { '2154_10cm_6_20': 'Lambert-93', PM: 'Web Mercator' };
 
 /** PLAN IGN in a grid: Lambert-93 (reprojected) or Web Mercator (as the engine draws it); made once, by identity */
-const PLANS = Object.fromEntries(
-  (Object.keys(GRIDS) as Grid[]).map((matrixSet) => {
-    const [layer, format] = GRIDS[matrixSet];
+const plan = (matrixSet: Grid) => {
+  const [layer, format] = GRIDS[matrixSet];
 
-    return [matrixSet, geoplateformeWmts(layer, { matrixSet, format })];
-  }),
-) as Record<Grid, ReturnType<typeof geoplateformeWmts>>;
+  return geoplateformeWmts(layer, { matrixSet, format });
+};
+const PLANS: Record<Grid, ReturnType<typeof geoplateformeWmts>> = {
+  '2154_10cm_6_20': plan('2154_10cm_6_20'),
+  PM: plan('PM'),
+};
 
 const ATTRIBUTION = { customAttribution: IGN_ATTRIBUTION };
 const DASH: [number, number] = [2, 1.5];
@@ -108,11 +111,13 @@ const App = () => {
           EPSG:2154; a GPX trip down the Seine.
         </p>
         <p>
-          {(Object.keys(GRIDS) as Grid[]).map((id) => (
-            <button key={id} type="button" className={id === grid ? 'on' : ''} onClick={() => setGrid(id)}>
-              {LABELS[id]}
-            </button>
-          ))}
+          {Object.keys(GRIDS)
+            .filter(isGrid)
+            .map((id) => (
+              <button key={id} type="button" className={id === grid ? 'on' : ''} onClick={() => setGrid(id)}>
+                {LABELS[id]}
+              </button>
+            ))}
         </p>
         <p>
           <input

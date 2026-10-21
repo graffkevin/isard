@@ -96,6 +96,10 @@ import type { Camera, Engine, PickHit, RasterLayerStats } from './wasm/isard.js'
 
 export type { LayerSpec } from './map/layer-spec.ts';
 
+/** A layer whose picked features come back with their properties (lines, circles, fills, extrusions, 3D Tiles…) */
+const hasFeatures = (layer: Layer): layer is Layer & { featureAt(index: number): Feature | undefined } =>
+  'featureAt' in layer && typeof layer.featureAt === 'function';
+
 /** A map (see `GeoMap.create`); layers take it as their host */
 export class GeoMap {
   readonly canvas: HTMLCanvasElement;
@@ -346,13 +350,8 @@ export class GeoMap {
       return;
     }
 
-    const eye = {
-      height: 1.7,
-      pitch: 90,
-      fov: 75,
-      ...view,
-      lonLat: [view.lonLat[0], view.lonLat[1]] as LonLat,
-    };
+    const lonLat: LonLat = [view.lonLat[0], view.lonLat[1]];
+    const eye = { height: 1.7, pitch: 90, fov: 75, ...view, lonLat };
 
     eye.pitch = Math.max(1, Math.min(179, eye.pitch));
     eye.fov = Math.max(10, Math.min(140, eye.fov));
@@ -387,13 +386,13 @@ export class GeoMap {
   }
 
   /** @internal Forgets a removed layer */
-  detach(layer: object): void {
+  detach(layer: Layer): void {
     this.stack.forget(layer);
     this.credits.forget(layer);
   }
 
   /** @internal The layer is on the map */
-  hasLayer(layer: object): boolean {
+  hasLayer(layer: Layer): boolean {
     return !this.gone && this.stack.has(layer);
   }
 
@@ -415,13 +414,13 @@ export class GeoMap {
   }
 
   /** @internal Moves a layer under `before`, or on top of all */
-  moveLayer(layer: object, before: object | undefined): void {
+  moveLayer(layer: Layer, before: Layer | undefined): void {
     this.stack.move(layer, before);
     this.requestRender();
   }
 
   /** @internal See `LayerHost.replaceLayer` */
-  replaceLayer(layer: object, old: number): void {
+  replaceLayer(layer: Layer, old: number): void {
     this.stack.replace(layer, old);
   }
 
@@ -637,10 +636,7 @@ export class GeoMap {
 
     if (!layer) return undefined;
 
-    const feature =
-      'featureAt' in layer && typeof layer.featureAt === 'function'
-        ? (layer.featureAt(hit.index) as Feature | undefined)
-        : undefined;
+    const feature = hasFeatures(layer) ? layer.featureAt(hit.index) : undefined;
 
     return { layer, index: hit.index, feature };
   }

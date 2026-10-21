@@ -149,7 +149,9 @@ export class ExtrusionLayer<P = Properties> extends Layer {
       const n = tile.properties.length;
 
       if (rest < n) {
-        const properties = tile.properties[rest] as P;
+        const properties = tile.properties[rest];
+
+        if (properties === undefined) return undefined;
 
         return tile.features?.[rest] ?? { type: 'Feature', properties, geometry: null };
       }
@@ -184,7 +186,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 
   setVisible(visible: boolean): void {
-    this.setStyle({ visible } as Partial<ExtrusionStyle<P>>);
+    this.setStyle({ visible });
   }
 
   setFilter(filter: ((properties: P, index: number) => boolean) | undefined): void {

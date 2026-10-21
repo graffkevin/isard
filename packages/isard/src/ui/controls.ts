@@ -75,8 +75,10 @@ export class NavigationControl implements Control {
       const compass = button('isard-ctrl-compass', 'Reset bearing to north', COMPASS, () =>
         map.easeTo({ bearing: 0, pitch: 0 }, 300),
       );
-      const needle = compass.firstElementChild as SVGElement;
+      const needle = compass.firstElementChild;
       const turn = () => {
+        if (!(needle instanceof SVGElement)) return;
+
         const { bearing, pitch } = map.getCamera();
 
         // Seen from above when tilted: the needle lies back with the ground, squashed by cos(pitch)

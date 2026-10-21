@@ -32,7 +32,7 @@ layer.setValues(Float32Array.from(buildings.features, (f) => f.properties.hauteu
 
 map.hoverPicking = { layers: [layer] };
 map.on('hoverfeature', ({ hit }) => {
-  const p = hit?.feature?.properties as Building | undefined;
+  const p = hit && layer.featureAt(hit.index)?.properties;
 
   element('info').textContent = p
     ? `${p.usage_1 ?? 'Building'}, ${p.hauteur ?? '?'} m${p.nombre_de_logements ? `, ${p.nombre_de_logements} homes` : ''}`

@@ -19,7 +19,15 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { basename, extname, join, normalize, resolve } from 'node:path';
 import { collectionBounds } from '../apps/viewer/src/bounds.ts';
-import type { AddMessage, Bounds, GeoJsonCollection, HostMessage, ViewerMessage } from '../apps/viewer/src/protocol.ts';
+import {
+  type AddMessage,
+  type Bounds,
+  type GeoJsonCollection,
+  type HostMessage,
+  isHostMessage,
+  isRecord,
+  isViewerMessage,
+} from '../apps/viewer/src/protocol.ts';
 import { parseHeader } from '../packages/isard/src/basemap/pmtiles.ts';
 
 const root = join(import.meta.dir, '..');
@@ -34,15 +42,22 @@ interface Formats {
   parseTopoJson(topology: unknown, name?: string): GeoJsonCollection;
   reproject(data: unknown): GeoJsonCollection;
 }
+const isFormats = (value: unknown): value is Formats =>
+  isRecord(value) &&
+  ['parseKml', 'parseGpx', 'parseTopoJson', 'reproject'].every((name) => typeof value[name] === 'function');
 let formats: Promise<Formats> | undefined;
 const loadFormats = (): Promise<Formats> => {
   const src = join(root, 'packages/isard/src');
 
   formats ??= Promise.all(
-    ['data/kml.ts', 'data/gpx.ts', 'data/topojson.ts', 'data/crs.ts'].map(
-      (m) => import(join(src, m)) as Promise<Partial<Formats>>,
-    ),
-  ).then((modules) => Object.assign({}, ...modules) as Formats);
+    ['data/kml.ts', 'data/gpx.ts', 'data/topojson.ts', 'data/crs.ts'].map((m) => import(join(src, m))),
+  ).then((modules) => {
+    const all: unknown = Object.assign({}, ...modules);
+
+    if (!isFormats(all)) throw new Error('isard viewer: the package lacks its readers of KML, GPX or TopoJSON');
+
+    return all;
+  });
 
   return formats;
 };
@@ -100,12 +115,11 @@ export class BridgeState {
       default: {
         if (!message.type.startsWith('add')) break;
 
-        const add = message as AddMessage;
-        const i = this.layers.findIndex((l) => l.id === add.id);
+        const i = this.layers.findIndex((l) => l.id === message.id);
 
         // The same id replaces the layer at its place
-        if (i >= 0) this.layers[i] = add;
-        else this.layers.push(add);
+        if (i >= 0) this.layers[i] = message;
+        else this.layers.push(message);
       }
     }
   }
@@ -226,6 +240,8 @@ const TILE_TYPES: Record<string, string> = {
   mvt: 'application/x-protobuf',
 };
 
+const isBounds = (values: number[]): values is Bounds => values.length === 4 && values.every(Number.isFinite);
+
 /** An MBTiles file: its metadata, its tiles by XYZ */
 export class MbTiles {
   private readonly db: Database;
@@ -283,7 +299,7 @@ export class MbTiles {
       .split(',')
       .map(Number);
 
-    return b.length === 4 && b.every(Number.isFinite) ? (b as Bounds) : undefined;
+    return isBounds(b) ? b : undefined;
   }
 
   close(): void {
@@ -293,11 +309,9 @@ export class MbTiles {
 
 /** GeoJSON of any kind (a collection, a feature, a geometry) as a collection in longitudes and latitudes */
 export const featureCollection = async (json: unknown): Promise<GeoJsonCollection> => {
-  const value = json as { type?: string };
+  const type = isRecord(json) ? json.type : undefined;
   const data: unknown =
-    value?.type !== 'FeatureCollection' && value?.type !== 'Feature'
-      ? { type: 'Feature', geometry: value, properties: {} }
-      : value;
+    type !== 'FeatureCollection' && type !== 'Feature' ? { type: 'Feature', geometry: json, properties: {} } : json;
 
   return (await loadFormats()).reproject(data);
 };
@@ -334,9 +348,11 @@ export const fileMessages = async (
       if (ext === '.kml') return parseKml(text);
       if (ext === '.gpx') return parseGpx(text);
 
-      const json = JSON.parse(text) as { type?: string; objects?: Record<string, unknown> };
+      const json: unknown = JSON.parse(text);
 
-      if (json.type === 'Topology') return parseTopoJson(json, Object.keys(json.objects ?? {})[0]);
+      if (!isRecord(json)) throw new Error(`${file.name}: not GeoJSON`);
+      if (json.type === 'Topology')
+        return parseTopoJson(json, Object.keys(isRecord(json.objects) ? json.objects : {})[0]);
 
       return featureCollection(json);
     };
@@ -364,7 +380,7 @@ export const fileMessages = async (
 
     if (m.vector) {
       const layers = Array.isArray(m.metadata.vector_layers)
-        ? (m.metadata.vector_layers as { id?: unknown }[]).map((l) => l?.id).filter((l) => typeof l === 'string')
+        ? m.metadata.vector_layers.map((l) => (isRecord(l) ? l.id : undefined)).filter((l) => typeof l === 'string')
         : [];
 
       return {
@@ -427,10 +443,10 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
       if (pathname === '/bridge/events') return toViewer.open(state.replay(), request.signal);
       if (pathname === '/bridge/host-events') return toHosts.open([], request.signal);
       if (pathname === '/bridge/message' && request.method === 'POST') {
-        const message = (await request.json().catch(() => undefined)) as ViewerMessage | undefined;
+        const message: unknown = await request.json().catch(() => undefined);
 
         if (message === undefined) return new Response('Bad JSON', { status: 400 });
-        if (typeof message?.type !== 'string') return new Response('No type', { status: 400 });
+        if (!isViewerMessage(message)) return new Response('No type', { status: 400 });
         if (print) console.log(JSON.stringify(message));
         toHosts.publish(message);
 
@@ -441,9 +457,9 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
 
         if (body === undefined) return new Response('Bad JSON', { status: 400 });
 
-        const messages = (Array.isArray(body) ? body : [body]) as HostMessage[];
+        const messages: unknown[] = Array.isArray(body) ? body : [body];
 
-        if (!messages.every((m) => typeof m?.type === 'string')) return new Response('No type', { status: 400 });
+        if (!messages.every(isHostMessage)) return new Response('No type', { status: 400 });
         send(messages);
 
         return new Response(null, { status: 204 });
@@ -546,7 +562,7 @@ if (import.meta.main) {
   let open = false;
 
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] as string;
+    const arg = args[i] ?? '';
 
     if (arg === '--port') port = Number(args[++i]);
     else if (arg.startsWith('--port=')) port = Number(arg.slice('--port='.length));
@@ -562,7 +578,8 @@ if (import.meta.main) {
 
   console.error(`isard viewer: ${viewer.url}?bridge=1`);
   if (open) {
-    const command = { darwin: ['open'], win32: ['cmd', '/c', 'start', ''] }[process.platform as string] ?? ['xdg-open'];
+    const openers: Partial<Record<NodeJS.Platform, string[]>> = { darwin: ['open'], win32: ['cmd', '/c', 'start', ''] };
+    const command = openers[process.platform] ?? ['xdg-open'];
 
     Bun.spawn([...command, `${viewer.url}?bridge=1`], { stdout: 'ignore', stderr: 'ignore' });
   }

@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isRecord } from '../apps/viewer/src/protocol.ts';
 import { createViewerServer, type ViewerServer } from './viewer.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'isard-viewer-'));
@@ -12,15 +13,21 @@ const root = join(dir, 'dist');
 const bytes = new Uint8Array(1000).map((_, i) => i % 251);
 
 /** The events of a Server-Sent Events stream, `count` of them */
-const events = async (url: string, count: number, after?: () => Promise<unknown>): Promise<unknown[]> => {
+const events = async (
+  url: string,
+  count: number,
+  after?: () => Promise<unknown>,
+): Promise<Record<string, unknown>[]> => {
   const controller = new AbortController();
   const response = await fetch(url, { signal: controller.signal });
 
   expect(response.headers.get('Content-Type')).toBe('text/event-stream');
 
-  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  if (!response.body) throw new Error(`${url}: no stream`);
+
+  const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const out: unknown[] = [];
+  const out: Record<string, unknown>[] = [];
   let text = '';
   let started = false;
 
@@ -38,7 +45,9 @@ const events = async (url: string, count: number, after?: () => Promise<unknown>
       const block = text.slice(0, end);
 
       text = text.slice(end + 2);
-      if (block.startsWith('data: ')) out.push(JSON.parse(block.slice(6)));
+      const message: unknown = block.startsWith('data: ') ? JSON.parse(block.slice(6)) : undefined;
+
+      if (isRecord(message)) out.push(message);
     }
   }
   controller.abort();
@@ -81,15 +90,15 @@ beforeAll(async () => {
 
   db.run('CREATE TABLE metadata (name TEXT, value TEXT)');
   db.run('CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB)');
-  (
-    [
-      ['format', 'pbf'],
-      ['minzoom', '0'],
-      ['maxzoom', '5'],
-      ['bounds', '-10,-20,30,40'],
-      ['json', JSON.stringify({ vector_layers: [{ id: 'water' }, { id: 'roads' }] })],
-    ] as [string, string][]
-  ).forEach(([name, value]) => {
+  const metadata: [name: string, value: string][] = [
+    ['format', 'pbf'],
+    ['minzoom', '0'],
+    ['maxzoom', '5'],
+    ['bounds', '-10,-20,30,40'],
+    ['json', JSON.stringify({ vector_layers: [{ id: 'water' }, { id: 'roads' }] })],
+  ];
+
+  metadata.forEach(([name, value]) => {
     db.run('INSERT INTO metadata VALUES (?, ?)', [name, value]);
   });
   db.run('INSERT INTO tiles VALUES (1, 1, 0, ?)', [Bun.gzipSync(new Uint8Array([1, 2, 3]))]);
@@ -108,8 +117,8 @@ beforeAll(async () => {
   });
   base = viewer.url;
   // The tokens, from the messages replayed
-  ((await events(`${base}bridge/events`, 4)) as { url?: string; name?: string }[]).forEach((m) => {
-    if (m.url && m.name) tokens[m.name] = m.url.split('/')[1] ?? '';
+  (await events(`${base}bridge/events`, 4)).forEach(({ url, name }) => {
+    if (typeof url === 'string' && url && typeof name === 'string' && name) tokens[name] = url.split('/')[1] ?? '';
   });
 });
 
@@ -188,16 +197,16 @@ describe('MBTiles', () => {
     // TMS row 0 is XYZ row 1: row 0 has nothing
     expect((await fetch(`${base}mbtiles/${token}/1/1/0`)).status).toBe(204);
 
-    const metadata = (await (await fetch(`${base}mbtiles/${token}/metadata.json`)).json()) as Record<string, unknown>;
+    const metadata: unknown = await (await fetch(`${base}mbtiles/${token}/metadata.json`)).json();
 
-    expect(metadata.format).toBe('pbf');
-    expect(metadata.vector_layers).toEqual([{ id: 'water' }, { id: 'roads' }]);
+    expect(metadata).toHaveProperty('format', 'pbf');
+    expect(metadata).toHaveProperty('vector_layers', [{ id: 'water' }, { id: 'roads' }]);
   });
 });
 
 describe('the bridge', () => {
   test('the startup files replayed, the view fitted to them', async () => {
-    const replay = (await events(`${base}bridge/events`, 4)) as Record<string, unknown>[];
+    const replay = await events(`${base}bridge/events`, 4);
     const [fit, cloud, geojson, tiles] = replay;
 
     expect(cloud).toEqual({
@@ -234,7 +243,7 @@ describe('the bridge', () => {
     expect(await post({ nope: 1 })).toBe(400);
     expect((await fetch(`${base}bridge/send`, { method: 'POST', body: '{' })).status).toBe(400);
 
-    const replay = (await events(`${base}bridge/events`, 6)) as Record<string, unknown>[];
+    const replay = await events(`${base}bridge/events`, 6);
 
     expect(replay.map((m) => m.type)).toEqual([
       'basemap',

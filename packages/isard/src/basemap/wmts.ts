@@ -39,11 +39,14 @@ export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): T
   const limits = new Map<string, TileMatrix['limits']>();
 
   children(child(link, 'TileMatrixSetLimits'), 'TileMatrixLimits').forEach((l) => {
-    const [minRow, maxRow, minCol, maxCol] = ['MinTileRow', 'MaxTileRow', 'MinTileCol', 'MaxTileCol'].map((k) =>
-      Number(childText(l, k)),
-    ) as [number, number, number, number];
+    const limit = (k: string) => Number(childText(l, k));
 
-    limits.set(childText(l, 'TileMatrix') ?? '', [minCol, minRow, maxCol, maxRow]);
+    limits.set(childText(l, 'TileMatrix') ?? '', [
+      limit('MinTileCol'),
+      limit('MinTileRow'),
+      limit('MaxTileCol'),
+      limit('MaxTileRow'),
+    ]);
   });
 
   const matrices = children(set, 'TileMatrix').map((m): TileMatrix => {
@@ -65,15 +68,15 @@ export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): T
   // A layer's limits leave out the matrices it does not have
   const served = limits.size > 0 ? matrices.filter((m) => limits.has(String(m.id))) : matrices;
   const box = child(entry, 'WGS84BoundingBox');
-  const [west, south] = numbers(childText(box, 'LowerCorner'));
-  const [east, north] = numbers(childText(box, 'UpperCorner'));
-  const bounds = [west, south, east, north];
+  const [west = Number.NaN, south = Number.NaN] = numbers(childText(box, 'LowerCorner'));
+  const [east = Number.NaN, north = Number.NaN] = numbers(childText(box, 'UpperCorner'));
+  const bounds: [number, number, number, number] = [west, south, east, north];
 
   return {
     crs,
     matrices: served,
     name,
-    ...(bounds.every(Number.isFinite) ? { bounds: bounds as [number, number, number, number] } : {}),
+    ...(bounds.every(Number.isFinite) ? { bounds } : {}),
   };
 };
 

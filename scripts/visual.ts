@@ -323,13 +323,13 @@ for (const name of examples) {
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
 
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second
-  let frames = -1;
+  let frames: unknown = -1;
   let still = 0;
 
   while (Date.now() - start < TIMEOUT_MS) {
     await sleep(250);
 
-    const now = (await page.evaluate('window.__frames')) as number;
+    const now: unknown = await page.evaluate('window.__frames');
 
     still = now === frames ? still + 250 : 0;
     frames = now;

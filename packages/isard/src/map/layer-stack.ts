@@ -20,8 +20,8 @@ export class LayerStack {
     this.engine = engine;
   }
 
-  has(layer: object): boolean {
-    return this.layers.includes(layer as Layer);
+  has(layer: Layer): boolean {
+    return this.layers.includes(layer);
   }
 
   /** Puts a new layer on top, under the layers kept on top (the basemap's labels) */
@@ -34,33 +34,31 @@ export class LayerStack {
   }
 
   /** Forgets a removed layer */
-  forget(layer: object): void {
+  forget(layer: Layer): void {
     this.unlist(layer);
-    this.onTop.delete(layer as Layer);
+    this.onTop.delete(layer);
   }
 
   /** Moves a layer under `before`, or on top of all */
-  move(layer: object, before: object | undefined): void {
-    const handle = layer as Layer;
+  move(layer: Layer, before: Layer | undefined): void {
+    this.unlist(layer);
 
-    this.unlist(handle);
-
-    const index = before ? this.layers.indexOf(before as Layer) : -1;
+    const index = before ? this.layers.indexOf(before) : -1;
     const at = index < 0 ? this.layers.length : index;
 
-    this.layers.splice(at, 0, handle);
-    if (handle.id >= 0) this.engine().moveLayer(handle.id, this.engineIndex(at));
+    this.layers.splice(at, 0, layer);
+    if (layer.id >= 0) this.engine().moveLayer(layer.id, this.engineIndex(at));
   }
 
   /** A layer made again in the engine under a new id: `old` removed, the new one moved to the layer's place */
-  replace(layer: object, old: number): void {
+  replace(layer: Layer, old: number): void {
     const engine = this.engine();
 
     engine.removeLayer(old);
 
-    const index = this.layers.indexOf(layer as Layer);
+    const index = this.layers.indexOf(layer);
 
-    if (index >= 0) engine.moveLayer((layer as Layer).id, this.engineIndex(index));
+    if (index >= 0) engine.moveLayer(layer.id, this.engineIndex(index));
   }
 
   /** Moves a layer under all the others */
@@ -104,8 +102,8 @@ export class LayerStack {
   }
 
   /** Takes a layer out of the drawing order (to put it back elsewhere, or for good) */
-  private unlist(layer: object): void {
-    const index = this.layers.indexOf(layer as Layer);
+  private unlist(layer: Layer): void {
+    const index = this.layers.indexOf(layer);
 
     if (index >= 0) this.layers.splice(index, 1);
   }

@@ -3,7 +3,7 @@
  * a subset of a style on its own raster layer, restyled: the rivers and water areas in a strong blue, over the basemap
  * (they could go over a flood layer of the application).
  */
-import { type Basemap, GeoMap } from 'isard';
+import { GeoMap } from 'isard';
 import { element } from '../shared/page.ts';
 
 const map = await GeoMap.create(element('map'), {
@@ -42,14 +42,14 @@ const rivers = tiles.raster({
   ],
 });
 
-const styles = ['positron', 'liberty', 'bright'];
+const styles = ['positron', 'liberty', 'bright'] as const;
 styles.forEach((id) => {
   element(id).onclick = () => {
-    map.setBasemap(`osm-${id}` as Basemap);
+    map.setBasemap(`osm-${id}`);
     styles.forEach((other) => {
       element(other).classList.toggle('on', other === id);
     });
   };
 });
-element<HTMLInputElement>('rivers').onchange = (e) =>
-  rivers.setStyle({ opacity: (e.target as HTMLInputElement).checked ? 1 : 0 });
+const shown = element('rivers', HTMLInputElement);
+shown.onchange = () => rivers.setStyle({ opacity: shown.checked ? 1 : 0 });
