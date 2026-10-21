@@ -3,6 +3,15 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- `isard/vite`, a Vite plugin: nothing else to configure for a Vite application (the package kept out of the
+  dependency pre-bundling and allowed to the development server; in a build, the engines and workers copied to
+  `dist/isard/` and the maps of the page told where they are, the engines not copied twice).
+- `assetsUrl`: the one folder isard's five files are served from, instead of five URLs.
+
 ## [0.8.0] - 2026-10-21
 
 ### Added

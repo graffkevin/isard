@@ -23,7 +23,8 @@ declarations.
 | `keyboard` | true | arrows, `+`, `-`, `0` once the map has the focus ([keys](./guide/events#keyboard)) |
 | `ariaLabel` | `'Map'` | accessible name of the map |
 | `attributionControl` | true | the credits of the data shown; `false`, or `{ compact, customAttribution }` |
-| `coreWasmUrl`, `wasmUrl`, `pointsWasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | for bundlers; `wasmUrl` alone: the full engine from the start; `pointsWasmUrl`: the point cloud module of the workers |
+| `assetsUrl` | next to the module | the folder isard's five files are served from (`isard/vite` sets it: [with a bundler](./guide/getting-started#with-a-bundler)) |
+| `coreWasmUrl`, `wasmUrl`, `pointsWasmUrl`, `workerUrl`, `basemapWorkerUrl` | next to the module | each file on its own, over `assetsUrl`; `wasmUrl` alone: the full engine from the start; `pointsWasmUrl`: the point cloud module of the workers |
 | `tiles3d` | false | `true`: the engine with 3D Tiles from the start (else loaded with the first 3D Tiles layer, model or point cloud, a short stall); `'preload'`: downloaded and compiled once the map is idle ([3D Tiles](./layers/tiles3d#the-engine-with-3d-tiles)) |
 | `workers` | cores - 1 (1 to 4) | 3D Tiles decoding workers, `false` for the main thread (the PNG relief and the reprojected rasters too) |
 | `basemapTileSize` | 512 | texture size of the vector basemap's tiles; 256: a quarter of the work and memory, lines a little softer |

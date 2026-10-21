@@ -144,7 +144,7 @@ export class GeoMap {
   /** The vector basemap, if any: its tiles' workers and its labels */
   private vector: { tiles: VectorTiles; labels: SymbolLayer<unknown> } | undefined;
   private readonly glyphsUrl: string | undefined;
-  private readonly basemapWorkerUrl: string | URL | undefined;
+  private readonly basemapWorkerUrl: string | URL;
   /** Texture size of the vector basemap's tiles */
   private readonly basemapTileSize: number | undefined;
   private readonly container: HTMLElement;
@@ -185,7 +185,7 @@ export class GeoMap {
   /** What loading the engine with 3D Tiles and its workers needs */
   private readonly tiles3dOptions: Pick<
     GeoMapOptions,
-    'wasmUrl' | 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl'
+    'wasmUrl' | 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl' | 'assetsUrl'
   >;
   private gone = false;
   /** The map is of the Earth: a basemap by default */
@@ -253,7 +253,7 @@ export class GeoMap {
     this.tiles3dModule = tiles3dModule;
     this.tiles3dOptions = { ...options };
     this.glyphsUrl = options.glyphs;
-    this.basemapWorkerUrl = options.basemapWorkerUrl;
+    this.basemapWorkerUrl = options.basemapWorkerUrl ?? defaultWorkerUrl(options.assetsUrl);
     this.basemapTileSize = options.basemapTileSize;
     this.container = container;
     this.canvas = document.createElement('canvas');
@@ -1153,7 +1153,7 @@ export class GeoMap {
    * when it asks for another count or URL
    */
   basemapWorkers(count?: number, url?: string | URL): { pool: BasemapWorkers; own: boolean } {
-    const sharedUrl = this.basemapWorkerUrl ?? defaultWorkerUrl();
+    const sharedUrl = this.basemapWorkerUrl;
     const shared = defaultWorkerCount();
     const workers = Math.max(1, count ?? shared);
     const workerUrl = url ?? sharedUrl;

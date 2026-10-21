@@ -47,6 +47,10 @@
       "types": "./dist/geoplateforme.d.ts",
       "default": "./dist/geoplateforme.js"
     },
+    "./vite": {
+      "types": "./vite.d.ts",
+      "default": "./vite.js"
+    },
     "./decoder.worker.js": "./dist/decoder.worker.js",
     "./basemap.worker.js": "./dist/basemap.worker.js",
     "./isard_bg.wasm": "./dist/isard_bg.wasm",
@@ -58,7 +62,9 @@
     "dist",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "vite.js",
+    "vite.d.ts"
   ],
   "sideEffects": false,
   "publishConfig": {

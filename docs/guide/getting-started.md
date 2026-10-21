@@ -49,33 +49,27 @@ wheel, double click, right drag (turn and tilt) and two-finger gestures move the
 ## With a bundler
 
 By default the engines and the workers are looked up next to the module (`new URL('./isard_core_bg.wasm',
-import.meta.url)`). A bundler that moves files around is given their URLs instead. With Vite:
-
-```ts
-import { GeoMap } from 'isard';
-import basemapWorkerUrl from 'isard/basemap.worker.js?url';
-import decoderWorkerUrl from 'isard/decoder.worker.js?url';
-import wasmUrl from 'isard/isard_bg.wasm?url';
-import coreWasmUrl from 'isard/isard_core_bg.wasm?url';
-import pointsWasmUrl from 'isard/isard_points_bg.wasm?url';
-
-const map = await GeoMap.create(container, {
-  coreWasmUrl,
-  wasmUrl,
-  pointsWasmUrl,
-  workerUrl: decoderWorkerUrl,
-  basemapWorkerUrl,
-});
-```
-
-Given `wasmUrl` without `coreWasmUrl`, the map loads the full engine from the start.
+import.meta.url)`). A bundler that moves files around needs to be told where they are. With Vite, the plugin does it:
 
 ```ts [vite.config.ts]
-export default defineConfig({
-  // The engine is loaded by URL: kept out of the dependency pre-bundling
-  optimizeDeps: { exclude: ['isard'] },
-});
+import isard from 'isard/vite';
+
+export default defineConfig({ plugins: [isard()] });
 ```
+
+In development it keeps the package out of Vite's dependency pre-bundling (its files are found next to it, linked
+outside the project too); in a build it copies the five files (the engines `isard_core_bg.wasm`, `isard_bg.wasm`,
+`isard_points_bg.wasm` and the workers `decoder.worker.js`, `basemap.worker.js`) to `dist/isard/` and tells the maps
+of the page (`isard({ folder })` for another folder).
+
+Elsewhere, serve those five files from one folder and give it:
+
+```ts
+const map = await GeoMap.create(container, { assetsUrl: '/static/isard/' });
+```
+
+Each file also has its own option (`coreWasmUrl`, `wasmUrl`, `pointsWasmUrl`, `workerUrl`, `basemapWorkerUrl`),
+which wins over `assetsUrl`; given `wasmUrl` without `coreWasmUrl`, the map loads the full engine from the start.
 
 ## In React
 

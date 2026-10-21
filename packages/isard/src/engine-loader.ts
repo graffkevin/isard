@@ -40,11 +40,54 @@ export function forgetEngines(): void {
   }
 }
 
-/** Where a build of the engine is loaded from: the option, or next to the module */
-export function engineUrl(kind: EngineKind, options: Pick<GeoMapOptions, 'wasmUrl' | 'coreWasmUrl'>): string | URL {
+/** The files a map loads at run time, next to the module unless given elsewhere */
+export type AssetFile =
+  | 'isard_bg.wasm'
+  | 'isard_core_bg.wasm'
+  | 'isard_points_bg.wasm'
+  | 'decoder.worker.js'
+  | 'basemap.worker.js';
+
+/** The folder the assets are served from for the whole page, as `isard/vite` sets it; undefined: next to the module */
+function pageAssets(): string | undefined {
+  const url = (globalThis as { isardAssetsUrl?: unknown }).isardAssetsUrl;
+  return typeof url === 'string' ? url : undefined;
+}
+
+/**
+ * Where a file of isard is loaded from: its own option, else in the folder `assetsUrl` (the option, or the page's
+ * as `isard/vite` sets it), else next to the module (`import.meta.url`)
+ */
+export function assetUrl(file: AssetFile, explicit: string | URL | undefined, assetsUrl?: string | URL): string | URL {
+  if (explicit) return explicit;
+  const folder = assetsUrl ?? pageAssets();
+  if (folder) {
+    const base = typeof document === 'undefined' ? undefined : document.baseURI;
+    const dir = String(folder).endsWith('/') ? String(folder) : `${String(folder)}/`;
+    return new URL(file, base ? new URL(dir, base) : dir);
+  }
+  switch (file) {
+    case 'isard_bg.wasm':
+      return new URL('./isard_bg.wasm', import.meta.url);
+    case 'isard_core_bg.wasm':
+      return new URL('./isard_core_bg.wasm', import.meta.url);
+    case 'isard_points_bg.wasm':
+      return new URL('./isard_points_bg.wasm', import.meta.url);
+    case 'decoder.worker.js':
+      return new URL('./decoder.worker.js', import.meta.url);
+    default:
+      return new URL('./basemap.worker.js', import.meta.url);
+  }
+}
+
+/** Where a build of the engine is loaded from: the option, the assets' folder, or next to the module */
+export function engineUrl(
+  kind: EngineKind,
+  options: Pick<GeoMapOptions, 'wasmUrl' | 'coreWasmUrl' | 'assetsUrl'>,
+): string | URL {
   return kind === 'full'
-    ? (options.wasmUrl ?? new URL('./isard_bg.wasm', import.meta.url))
-    : (options.coreWasmUrl ?? new URL('./isard_core_bg.wasm', import.meta.url));
+    ? assetUrl('isard_bg.wasm', options.wasmUrl, options.assetsUrl)
+    : assetUrl('isard_core_bg.wasm', options.coreWasmUrl, options.assetsUrl);
 }
 
 /** Downloads and compiles a build (once per page, unless it failed: a later call tries again) */
@@ -111,8 +154,8 @@ async function compile(url: string | URL): Promise<WebAssembly.Module> {
 
 /** Where the workers load the point cloud module from (`isard_points_bg.wasm`, the LAZ decoder): the option, or next
  * to the module; absolute, the workers being elsewhere */
-export function pointsUrl(options: Pick<GeoMapOptions, 'pointsWasmUrl'>): string {
-  const url = options.pointsWasmUrl ?? new URL('./isard_points_bg.wasm', import.meta.url);
+export function pointsUrl(options: Pick<GeoMapOptions, 'pointsWasmUrl' | 'assetsUrl'>): string {
+  const url = assetUrl('isard_points_bg.wasm', options.pointsWasmUrl, options.assetsUrl);
   const base = typeof document === 'undefined' ? undefined : document.baseURI;
   return base ? new URL(url, base).href : String(url);
 }
@@ -121,7 +164,7 @@ export function pointsUrl(options: Pick<GeoMapOptions, 'pointsWasmUrl'>): string
  * false` or 0, or no workers in this environment) */
 export function startTileLoader(
   module: WebAssembly.Module,
-  options: Pick<GeoMapOptions, 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl'>,
+  options: Pick<GeoMapOptions, 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl' | 'assetsUrl'>,
   engine: Engine,
 ): TileLoader | undefined {
   const { workers: count, workerUrl, decoders } = options;
@@ -129,7 +172,7 @@ export function startTileLoader(
   if (workers === false || workers <= 0 || typeof Worker === 'undefined') return undefined;
   return new TileLoader(
     module,
-    workerUrl ?? new URL('./decoder.worker.js', import.meta.url),
+    assetUrl('decoder.worker.js', workerUrl, options.assetsUrl),
     workers,
     { ...DEFAULT_DECODERS, ...decoders },
     engine.textureFormats(),

@@ -10,6 +10,7 @@
  */
 import type { BasemapRequest, BasemapResponse, BasemapWork, Priority, Sprite } from './basemap.worker.ts';
 import { OPENFREEMAP_ATTRIBUTION } from './basemaps.ts';
+import { assetUrl } from './engine-loader.ts';
 import type { Feature, Size } from './features.ts';
 import { mercatorX, mercatorY } from './geo.ts';
 import { IGN_ATTRIBUTION } from './geoplateforme.ts';
@@ -125,9 +126,9 @@ export function defaultWorkerCount(): number {
   return Math.min(4, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2) - 1));
 }
 
-/** Default URL of the basemap worker, next to the module */
-export function defaultWorkerUrl(): URL {
-  return new URL('./basemap.worker.js', import.meta.url);
+/** Default URL of the basemap worker: in the page's assets folder (`isard/vite`), else next to the module */
+export function defaultWorkerUrl(assetsUrl?: string | URL): string | URL {
+  return assetUrl('basemap.worker.js', undefined, assetsUrl);
 }
 
 /** Fetch priority of a raster tile drawn by the workers: 'high' near the center of the view, at the current zoom or

@@ -118,6 +118,11 @@ export interface GeoMapOptions extends Partial<Camera> {
   keyboard?: boolean;
   /** Accessible name of the map, read by screen readers (default 'Map') */
   ariaLabel?: string;
+  /** The folder isard's files are served from (its engines, `isard_bg.wasm`, `isard_core_bg.wasm`,
+   * `isard_points_bg.wasm`, and its workers, `decoder.worker.js`, `basemap.worker.js`): one option for a bundler that
+   * moves them, the `…Url` options below for each one. `isard/vite` sets it for the whole page; default next to the
+   * module */
+  assetsUrl?: string | URL;
   /** Where to load the engine with 3D Tiles from (`isard_bg.wasm`), when a bundler does not resolve the default URL.
    * Given without `coreWasmUrl`, maps load this engine from the start */
   wasmUrl?: string | URL;
