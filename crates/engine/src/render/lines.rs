@@ -147,7 +147,10 @@ fn build(geometry: &Polylines) -> (pieces::Pieces, Vec<f32>, DVec2) {
     (pieces::build(&nodes, &edges, Some(&lines), origin), table, origin)
 }
 
+/// A line layer: its polylines cut into pieces sorted by grid square, one instanced quad each, and the table of their
+/// lines (feature, length) that the dashes and styles read
 pub struct LineLayer {
+    /// Per-feature style (color, width stops, values) and visibility
     pub features: Features,
     /// Dash and gap lengths, in line widths; 0: solid
     pub dash: [f32; 2],
@@ -167,6 +170,7 @@ pub struct LineLayer {
 }
 
 impl LineLayer {
+    /// Cuts the polylines (Mercator 0-1) into pieces and uploads them with the line table; `feature_count` features
     pub fn new(gl: &glow::Context, geometry: &Polylines, feature_count: usize) -> Result<Self, String> {
         overlay::pick_ids_fit(feature_count, "line layer");
 
@@ -370,6 +374,11 @@ impl Layer for LineLayer {
 impl Engine {
     /// Line layer of `feature_count` features: polylines given by their points (Mercator [0, 1], interleaved), the
     /// first point of each (`start`, one more entry than lines) and the feature each one belongs to
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log), or when the features or the lines need a table texture past the GPU's `MAX_TEXTURE_SIZE`
     #[wasm_bindgen(js_name = addLines)]
     pub fn add_lines(
         &mut self,
@@ -385,6 +394,11 @@ impl Engine {
     }
 
     /// New lines for a line layer (same arguments as `addLines`, the same features)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the lines need a table texture past the GPU's `MAX_TEXTURE_SIZE`, or
+    /// when it cannot be created; the layer then keeps its lines
     #[wasm_bindgen(js_name = setLines)]
     pub fn set_lines(&mut self, id: u32, points: &[f64], start: &[u32], feature: &[u32]) -> Result<(), JsValue> {
         if let Some((layer, gl)) = self.layer_mut::<LineLayer>(id) {

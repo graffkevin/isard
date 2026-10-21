@@ -60,6 +60,7 @@ pub(super) struct Outline {
 }
 
 impl Outline {
+    /// Compiles the outline's program and lays out its vertex array (the buffer is filled when drawn)
     pub(super) fn new(gl: &glow::Context) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
         let program = objects.program(VERTEX, FRAGMENT)?;
@@ -93,6 +94,7 @@ impl Outline {
         })
     }
 
+    /// Frees the GPU objects of the outline
     pub(super) fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by the outline, not used afterwards
         unsafe {

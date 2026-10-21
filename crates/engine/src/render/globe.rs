@@ -44,15 +44,18 @@ pub fn depth(view: &View, exaggeration: Option<f32>) -> f64 {
     })
 }
 
+/// The globe base: `LON × LAT` patches of the shared `Grid` mesh, drawn instanced as one sphere of a plain color
 pub struct GlobeBase {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 7],
     vao: glow::VertexArray,
     patches: glow::Buffer,
+    /// Its color, RGB 0-1 (the alpha follows the globe factor, fading with it)
     pub color: [f32; 3],
 }
 
 impl GlobeBase {
+    /// Builds the program and the patch buffer; the mesh is the raster pass's `Grid`
     pub fn new(gl: &glow::Context, grid: &Grid) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = gl::Objects::new(gl);
@@ -102,6 +105,7 @@ impl GlobeBase {
         }
     }
 
+    /// Deletes the program, vertex array and patch buffer (not the shared grid)
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by the base, not used afterwards
         unsafe {

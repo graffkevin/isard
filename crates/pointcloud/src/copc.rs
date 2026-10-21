@@ -12,23 +12,29 @@ use std::collections::HashMap;
 pub struct Info {
     /// Center of the octree's cube and half its side (CRS units)
     pub center: [f64; 3],
+    /// Half the side of the octree's cube (CRS units)
     pub halfsize: f64,
     /// Distance between the points of the root node (CRS units), halved at each level
     pub spacing: f64,
+    /// Where the root hierarchy page is
     pub root_page: Page,
 }
 
 /// Where a hierarchy page is in the file
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Page {
+    /// Byte offset in the file
     pub offset: u64,
+    /// Bytes (at most `MAX_PAGE` to be fetched)
     pub size: u64,
 }
 
 /// The head of a COPC file: its header, the COPC info, the LAZ items, the CRS
 #[derive(Clone, Debug, PartialEq)]
 pub struct Copc {
+    /// The LAS 1.4 header (point format 6 to 8)
     pub header: Header,
+    /// The COPC info VLR
     pub info: Info,
     /// Data of the LAZ VLR (user `laszip encoded`, record 22204): how the chunks are compressed
     pub laz: Vec<u8>,
@@ -46,6 +52,7 @@ pub const MAX_DEPTH: u32 = 20;
 /// What `Copc::parse` found in the first bytes of a file
 #[derive(Debug, PartialEq)]
 pub enum Head {
+    /// The head is complete
     Ready(Box<Copc>),
     /// The VLRs run past the bytes given: the first `n` bytes are needed
     More(usize),
@@ -54,6 +61,12 @@ pub enum Head {
 impl Copc {
     /// Reads the head of a COPC file from its first bytes: the header and the VLRs, which end at
     /// `point_data_offset` (`Head::More` when the bytes stop before)
+    ///
+    /// # Errors
+    ///
+    /// Errors on a malformed LAS header (see `Header::parse`), a point format other than 6 to 8, a
+    /// truncated VLR, no COPC info VLR (not a COPC file), a truncated or bad COPC info (center, halfsize, spacing not
+    /// finite, or not positive) or no LAZ VLR
     pub fn parse(bytes: &[u8]) -> Result<Head, String> {
         let header = Header::parse(bytes)?;
 
@@ -105,13 +118,18 @@ impl Copc {
 /// A node of the octree: its depth and position along each axis at that depth (0 to 2^depth - 1)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Key {
+    /// Level in the octree, 0 at the root
     pub depth: u32,
+    /// Position along x at that depth
     pub x: u32,
+    /// Position along y at that depth
     pub y: u32,
+    /// Position along z at that depth
     pub z: u32,
 }
 
 impl Key {
+    /// The root node: depth 0, the whole cube
     pub const ROOT: Self = Self {
         depth: 0,
         x: 0,
@@ -119,6 +137,7 @@ impl Key {
         z: 0,
     };
 
+    /// The node one level up, None for the root
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
         (self.depth > 0).then(|| Self {
@@ -153,9 +172,11 @@ impl Key {
 /// An entry of a hierarchy page
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
+    /// The node it describes
     pub key: Key,
     /// Where its chunk is in the file (or its page, `count` -1), and its size
     pub offset: u64,
+    /// Bytes of its chunk (or of its page)
     pub size: u32,
     /// Points of its chunk; -1: the entry is a page
     pub count: i32,
@@ -165,6 +186,11 @@ pub struct Entry {
 const ENTRY: usize = 32;
 
 /// The entries of a hierarchy page; a malformed entry (a key out of its level, a negative size) is an error
+///
+/// # Errors
+///
+/// Errors when `bytes` is not a whole number of 32-byte entries, or on an entry with a negative key, a key
+/// out of its level (or deeper than `MAX_DEPTH`), a negative size or a count below -1
 pub fn parse_page(bytes: &[u8]) -> Result<Vec<Entry>, String> {
     if !bytes.len().is_multiple_of(ENTRY) {
         return Err("hierarchy page of a wrong size".into());
@@ -211,28 +237,44 @@ pub fn parse_page(bytes: &[u8]) -> Result<Vec<Entry>, String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Content {
     /// A LAZ chunk of `count` points at `offset`, `size` bytes
-    Points { offset: u64, size: u32, count: u32 },
+    Points {
+        /// Byte offset of the chunk in the file
+        offset: u64,
+        /// Bytes of the chunk
+        size: u32,
+        /// Points of the chunk
+        count: u32,
+    },
     /// Its page, not loaded yet: the node and those below it are in there
     Page(Page),
     /// No point (a node of no points, or one missing between a node and its parent)
     Empty,
 }
 
+/// A node of the octree, as far as the hierarchy knows it
 pub struct Node {
+    /// Its place in the octree
     pub key: Key,
+    /// Its chunk, its page to load, or nothing
     pub content: Content,
+    /// Its child nodes, indices in `Hierarchy::nodes`
     pub children: Vec<usize>,
     /// Where it is, set by the reader (`Hierarchy::place`): longitude, latitude (degrees) and ellipsoidal height of
     /// its center, the radius of its bounding sphere and the spacing of its points (metres)
     pub geodetic: DVec3,
+    /// Radius of its bounding sphere (metres), set by `Hierarchy::place`
     pub radius: f64,
+    /// Spacing of its points (metres), set by `Hierarchy::place`
     pub spacing: f64,
 }
 
 /// The octree of a COPC file, as far as its pages are loaded
 pub struct Hierarchy {
+    /// The COPC info of the file
     pub info: Info,
+    /// All the nodes known, the root first; indices never change (nodes are only appended)
     pub nodes: Vec<Node>,
+    /// The index in `nodes` of each key
     index: HashMap<Key, usize>,
     /// `MAX_NODES` (fewer in the tests)
     max_nodes: usize,
@@ -271,6 +313,11 @@ impl Hierarchy {
     /// Adds the entries of the page of `node`: the node itself and those below it (an entry outside its subtree is
     /// left out). Nodes missing between an entry and its parent are added empty. Returns the nodes added, to place.
     /// A page past `MAX_NODES` is refused whole; the node is then empty
+    ///
+    /// # Errors
+    ///
+    /// Errors when `node` is not in the tree ("no such node"), or when its entries would take the tree past
+    /// `MAX_NODES` ("point cloud: more than … nodes"); the node is emptied either way
     pub fn add_page(&mut self, node: usize, mut entries: Vec<Entry>) -> Result<Vec<usize>, String> {
         let Some(top) = self.nodes.get(node).map(|n| n.key) else {
             return Err("no such node".into());

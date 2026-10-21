@@ -85,6 +85,7 @@ export default defineConfig({
             { text: 'Performance', link: '/guide/performance' },
             { text: 'The viewer', link: '/guide/viewer' },
             { text: 'QGIS plugin', link: '/guide/qgis' },
+            { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Develop and release', link: '/guide/develop' },
           ],
         },

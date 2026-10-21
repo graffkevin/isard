@@ -123,7 +123,10 @@ fn picks_of(polygons: &Polygons, feature: &[u32]) -> Vec<Pick> {
         .collect()
 }
 
+/// A fill layer: its triangles sorted by grid square (the top cap, then the prism's bottom cap and walls once in relief)
+/// and the GL objects that draw them
 pub struct FillLayer {
+    /// Per-feature style (color, values) and visibility
     pub features: Features,
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 5],
@@ -152,6 +155,8 @@ pub struct FillLayer {
 }
 
 impl FillLayer {
+    /// Triangulates and uploads the polygons (Mercator 0-1) and the feature of each (index below `feature_count`); the
+    /// prism waits for the first frame in relief
     pub fn new(gl: &glow::Context, polygons: &Polygons, feature: &[u32], feature_count: usize) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
@@ -281,6 +286,56 @@ impl FillLayer {
     }
 }
 
+/// Draws ranges of the index buffer (first index, end), the vertex array bound by `FillLayer::set_uniforms`
+fn draw_ranges(gl: &glow::Context, ranges: &[&[(u32, u32)]]) {
+    for &(first, end) in ranges.iter().copied().flatten() {
+        // SAFETY: a draw of indices inside the index buffer, the vertex array bound by `set_uniforms`
+        unsafe {
+            gl.draw_elements(
+                glow::TRIANGLES,
+                (end - first) as i32,
+                glow::UNSIGNED_INT,
+                first as i32 * 4,
+            );
+        }
+    }
+}
+
+/// The shadow volume: the faces of the prisms behind the ground counted in the stencil (z-fail, back faces add,
+/// front faces subtract), then the counted ground colored once per pixel, the count cleared on the way. The
+/// stencil and depth state set back after
+fn draw_volume(gl: &glow::Context, ranges: &[&[(u32, u32)]]) {
+    // SAFETY: state changes on the live context, set back at the end
+    unsafe {
+        // Count the faces behind the ground
+        gl.clear_stencil(0);
+        gl.clear(glow::STENCIL_BUFFER_BIT);
+        gl.enable(glow::STENCIL_TEST);
+        gl.stencil_func(glow::ALWAYS, 0, 0xff);
+        gl.stencil_op_separate(glow::BACK, glow::KEEP, glow::INCR_WRAP, glow::KEEP);
+        gl.stencil_op_separate(glow::FRONT, glow::KEEP, glow::DECR_WRAP, glow::KEEP);
+        gl.color_mask(false, false, false, false);
+        gl.enable(glow::DEPTH_TEST);
+        gl.depth_func(glow::LESS);
+        gl.depth_mask(false);
+    }
+    draw_ranges(gl, ranges);
+    // SAFETY: as above
+    unsafe {
+        // Color the counted ground, once per pixel
+        gl.color_mask(true, true, true, true);
+        gl.disable(glow::DEPTH_TEST);
+        gl.stencil_func(glow::NOTEQUAL, 0, 0xff);
+        gl.stencil_op(glow::ZERO, glow::ZERO, glow::ZERO);
+    }
+    draw_ranges(gl, ranges);
+    // SAFETY: as above
+    unsafe {
+        gl.disable(glow::STENCIL_TEST);
+        gl.depth_mask(true);
+    }
+}
+
 impl Layer for FillLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
         if self.all == 0 || !self.features.layer.shows(frame.camera.zoom) {
@@ -322,49 +377,18 @@ impl Layer for FillLayer {
             rest.clear();
         }
 
-        let draw = |ranges: &[&[(u32, u32)]]| {
-            for &(first, end) in ranges.iter().copied().flatten() {
-                // SAFETY: a draw of indices inside the index buffer, the vertex array bound by `set_uniforms`
-                unsafe {
-                    frame.gl.draw_elements(
-                        glow::TRIANGLES,
-                        (end - first) as i32,
-                        glow::UNSIGNED_INT,
-                        first as i32 * 4,
-                    );
-                }
-            }
-        };
         let gl = frame.gl;
 
         self.set_uniforms(frame, volume);
-        // SAFETY: state changes and draws on the live context, set back at the end
+        // SAFETY: state changes on the live context, set back at the end
+        unsafe { gl.disable(glow::CULL_FACE) };
+        if volume {
+            draw_volume(gl, &[top, &rest]);
+        } else {
+            draw_ranges(gl, &[top]);
+        }
+        // SAFETY: as above
         unsafe {
-            gl.disable(glow::CULL_FACE);
-            if volume {
-                // Count the faces behind the ground
-                gl.clear_stencil(0);
-                gl.clear(glow::STENCIL_BUFFER_BIT);
-                gl.enable(glow::STENCIL_TEST);
-                gl.stencil_func(glow::ALWAYS, 0, 0xff);
-                gl.stencil_op_separate(glow::BACK, glow::KEEP, glow::INCR_WRAP, glow::KEEP);
-                gl.stencil_op_separate(glow::FRONT, glow::KEEP, glow::DECR_WRAP, glow::KEEP);
-                gl.color_mask(false, false, false, false);
-                gl.enable(glow::DEPTH_TEST);
-                gl.depth_func(glow::LESS);
-                gl.depth_mask(false);
-                draw(&[top, &rest]);
-                // Color the counted ground, once per pixel
-                gl.color_mask(true, true, true, true);
-                gl.disable(glow::DEPTH_TEST);
-                gl.stencil_func(glow::NOTEQUAL, 0, 0xff);
-                gl.stencil_op(glow::ZERO, glow::ZERO, glow::ZERO);
-                draw(&[top, &rest]);
-                gl.disable(glow::STENCIL_TEST);
-                gl.depth_mask(true);
-            } else {
-                draw(&[top]);
-            }
             gl.bind_vertex_array(None);
             gl.enable(glow::CULL_FACE);
         }
@@ -411,6 +435,11 @@ impl Engine {
     /// Fill layer of `feature_count` features: polygons given by their points (Mercator [0, 1], interleaved), the first
     /// point of each ring (`ring_start`, one more entry than rings), the first ring of each polygon (`polygon_start`,
     /// one more entry than polygons; the first ring is the outer one, the others holes) and the feature of each polygon
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log), or when `feature_count` features need a table texture past the GPU's `MAX_TEXTURE_SIZE`
     #[wasm_bindgen(js_name = addFills)]
     pub fn add_fills(
         &mut self,

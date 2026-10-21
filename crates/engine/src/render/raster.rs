@@ -95,13 +95,18 @@ fn stands_in_for(tile: TileId, wanted: &HashSet<TileId>) -> bool {
     false
 }
 
+/// What a raster source loads and how it is shown, from the page (`addRaster`, `addRelief`…)
 pub struct RasterOptions {
     /// Template: `{z}`, `{x}`, `{y}` (WMTS, XYZ) or `{bbox}` (WMS `GetMap` in EPSG:3857, `ArcGIS` `exportImage`: west,
     /// south, east, north in Mercator metres of the body)
     pub url: String,
+    /// Shallowest zoom of its tiles
     pub min_z: u8,
+    /// Deepest zoom of its tiles (at most `MAX_Z`): a deeper view shows these stretched
     pub max_z: u8,
+    /// 0 to 1
     pub opacity: f32,
+    /// 0 (grey) to 1 (as served)
     pub saturation: f32,
     /// Raw altitudes (`image/x-bil;bits=32`) rather than images: the relief
     pub elevation: bool,
@@ -130,13 +135,17 @@ impl RasterOptions {
 
 /// What a raster layer needs to load a frame's tiles
 pub struct DrawContext<'a> {
+    /// The frame's view
     pub view: &'a View,
+    /// The frame number, for the least recently used order
     pub frame: u64,
+    /// Asks for a frame (tiles arrived, a deferred one due)
     pub redraw: &'a Rc<dyn Fn()>,
     /// The camera moved during the last frames
     pub moving: bool,
     /// Destination of a camera flight (generation, view), to load in advance
     pub preload: Option<(u64, &'a View)>,
+    /// The page's loading settings
     pub loading: Loading,
     /// The time (ms)
     pub now: f64,
@@ -150,9 +159,13 @@ type Inbox = Rc<RefCell<Vec<(TileId, Result<Pixels, Fetch>)>>>;
 /// Counters of the last frame, for diagnostics
 #[derive(Default, Clone, Copy)]
 pub struct RasterStats {
+    /// Tiles of the plan (stand-ins included)
     pub drawn: usize,
+    /// Tiles in the pool
     pub loaded: usize,
+    /// Requests in flight
     pub in_flight: usize,
+    /// Arrived, waiting for their upload
     pub queued: usize,
     /// Drawn with an ancestor's texture (the tile itself is not loaded yet)
     pub stand_ins: usize,
@@ -165,7 +178,10 @@ pub struct RasterStats {
 /// Columns of the canvas a raster layer shows in when it is not cut by a swipe (device pixels)
 pub const UNCLIPPED: [f32; 2] = [-1e9, 1e9];
 
+/// A raster source: its tiles in a texture-array pool (`Cache`), their requests and uploads; drawn by the raster
+/// pass, or read as the relief
 pub struct RasterSource {
+    /// What it loads and how it shows (zoom range clamped by `new`)
     pub options: RasterOptions,
     /// The columns of the canvas it shows in (device pixels, from the left): `UNCLIPPED`, or one side of a swipe
     pub clip: [f32; 2],
@@ -190,6 +206,7 @@ pub struct RasterSource {
     preload: (u64, Vec<TileId>),
     /// Changes whenever a tile enters the pool (unique across sources): what reads the pool knows when to look again
     generation: u64,
+    /// Counters of the last frame
     pub stats: RasterStats,
 }
 
@@ -201,6 +218,7 @@ fn next_generation() -> u64 {
 }
 
 impl RasterSource {
+    /// Makes the pool (an empty texture array of `slots` tiles) and the cache; nothing is requested before the first frame
     pub fn new(gl: &glow::Context, mut options: RasterOptions) -> Result<Self, String> {
         options.max_z = options.max_z.min(MAX_Z);
         options.min_z = options.min_z.min(options.max_z);
@@ -256,6 +274,13 @@ impl RasterSource {
 
     /// Takes the tiles that arrived, uploads a few of them (those of `wanted_set` first)
     fn receive(&mut self, gl: &glow::Context, frame: u64, now: f64, budget_ms: f64) {
+        self.take_arrivals(now);
+        self.drop_unneeded();
+        self.upload_queued(gl, frame, now, budget_ms);
+    }
+
+    /// Queues the tiles that arrived; failures go to the cache (missing for good, or cooling down from `now`, ms)
+    fn take_arrivals(&mut self, now: f64) {
         for (tile, pixels) in self.inbox.borrow_mut().drain(..) {
             self.in_flight.remove(&tile);
 
@@ -273,9 +298,12 @@ impl RasterSource {
                 Err(Fetch::Transient) => self.cache.failed(tile, now),
             }
         }
+    }
 
-        // Tiles no longer needed (neither wanted nor kept by `abort_stale`, nor a descendant standing in for a wanted
-        // tile while zooming out) are dropped: a decoded image may hold 4 MB outside the heap
+    /// Drops the queued tiles no longer needed (neither wanted nor kept by `abort_stale`, nor a descendant standing in
+    /// for a wanted tile while zooming out): a decoded image may hold 4 MB outside the heap. The tiles of the current
+    /// view go first, the others (stand-ins, tiles that left the view) after
+    fn drop_unneeded(&mut self) {
         let (wanted, keep, queued) = (&self.wanted_set, &self.keep, &mut self.queued);
 
         self.queue.retain(|(tile, pixels)| {
@@ -288,12 +316,13 @@ impl RasterSource {
 
             needed
         });
-        // Tiles of the current view first, the others (stand-ins, tiles that left the view) after
         self.queue
             .make_contiguous()
             .sort_by_key(|(tile, _)| !wanted.contains(tile));
+    }
 
-        // Uploads within the frame's time budget (at least one), the rest waits for the next frames
+    /// Uploads queued tiles within the frame's time budget (at least one), the rest waits for the next frames
+    fn upload_queued(&mut self, gl: &glow::Context, frame: u64, now: f64, budget_ms: f64) {
         let start = crate::js::now();
         let mut uploaded = 0;
 
@@ -303,55 +332,51 @@ impl RasterSource {
             };
 
             uploaded += 1;
-
-            let heights = match &pixels {
-                Pixels::Heights(heights) => Some(data::subsample(heights)),
-                Pixels::Image(_) => None,
-            };
-            let slot = match self.cache.install(tile, heights, frame, now) {
-                Install::Slot(slot) => slot,
-                Install::Duplicate => {
-                    self.queued.remove(&tile);
-                    pixels.close();
-                    continue;
-                }
-                Install::Full => {
-                    // Every slot is held by this frame: the tile is let go (the plan asks for it again once the
-                    // pool has room; kept waiting, it would ask for a frame after another)
-                    self.queued.remove(&tile);
-                    pixels.close();
-                    continue;
-                }
-            };
-
-            self.queued.remove(&tile);
-
-            let size = self.options.size;
-
-            // SAFETY: upload into an allocated slot of the pool
-            unsafe {
-                gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.pool));
-
-                match &pixels {
-                    Pixels::Image(bitmap) => gl::upload_bitmap_layer(gl, i32::from(slot), size, bitmap),
-                    Pixels::Heights(heights) => gl.tex_sub_image_3d(
-                        glow::TEXTURE_2D_ARRAY,
-                        0,
-                        0,
-                        0,
-                        i32::from(slot),
-                        TILE,
-                        TILE,
-                        1,
-                        glow::RED,
-                        glow::FLOAT,
-                        glow::PixelUnpackData::Slice(Some(gl::bytes(heights))),
-                    ),
-                }
-            }
+            self.upload(gl, tile, &pixels, frame, now);
             pixels.close();
-            self.generation = next_generation();
         }
+    }
+
+    /// Puts a tile into a slot of the pool (its altitudes subsampled for the CPU too); a duplicate, or a pool whose
+    /// every slot this frame holds, lets it go
+    fn upload(&mut self, gl: &glow::Context, tile: TileId, pixels: &Pixels, frame: u64, now: f64) {
+        let heights = match pixels {
+            Pixels::Heights(heights) => Some(data::subsample(heights)),
+            Pixels::Image(_) => None,
+        };
+
+        self.queued.remove(&tile);
+
+        let slot = match self.cache.install(tile, heights, frame, now) {
+            Install::Slot(slot) => slot,
+            // Already there, or every slot held by this frame: the tile is let go (the plan asks for it again once
+            // the pool has room; kept waiting, it would ask for a frame after another)
+            Install::Duplicate | Install::Full => return,
+        };
+        let size = self.options.size;
+
+        // SAFETY: upload into an allocated slot of the pool
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.pool));
+
+            match pixels {
+                Pixels::Image(bitmap) => gl::upload_bitmap_layer(gl, i32::from(slot), size, bitmap),
+                Pixels::Heights(heights) => gl.tex_sub_image_3d(
+                    glow::TEXTURE_2D_ARRAY,
+                    0,
+                    0,
+                    0,
+                    i32::from(slot),
+                    TILE,
+                    TILE,
+                    1,
+                    glow::RED,
+                    glow::FLOAT,
+                    glow::PixelUnpackData::Slice(Some(gl::bytes(heights))),
+                ),
+            }
+        }
+        self.generation = next_generation();
     }
 
     /// The texture array of the pool

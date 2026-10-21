@@ -76,7 +76,7 @@ checks the last build again).
 
 ## Release
 
-Raising the version is the release: set it in `packages/isard/package.json` and in the four `crates/*/Cargo.toml`,
+Raising the version is the release: set it in `packages/isard/package.json` and in `[workspace.package]` of the root `Cargo.toml`,
 describe it in `CHANGELOG.md`, check it, then push it to `main`.
 
 ```sh

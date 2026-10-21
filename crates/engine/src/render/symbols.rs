@@ -148,14 +148,21 @@ const TEXELS: usize = 5;
 
 /// Flags of a label (`MapLibre`'s layout properties of the same names)
 pub mod flag {
+    /// `text-allow-overlap`: the text shows even where it collides
     pub const TEXT_ALLOW_OVERLAP: u32 = 1;
+    /// `text-ignore-placement`: the text takes no room, others may overlap it
     pub const TEXT_IGNORE_PLACEMENT: u32 = 2;
+    /// `icon-allow-overlap`: the icon shows even where it collides
     pub const ICON_ALLOW_OVERLAP: u32 = 4;
+    /// `icon-ignore-placement`: the icon takes no room, others may overlap it
     pub const ICON_IGNORE_PLACEMENT: u32 = 8;
+    /// `text-optional`: the icon shows alone when the text collides
     pub const TEXT_OPTIONAL: u32 = 16;
+    /// `icon-optional`: the text shows alone when the icon collides
     pub const ICON_OPTIONAL: u32 = 32;
     /// It has a text, an icon
     pub const TEXT: u32 = 64;
+    /// It has an icon
     pub const ICON: u32 = 128;
     /// The text runs along the direction, kept upright
     pub const TEXT_ALONG: u32 = 256;
@@ -167,11 +174,15 @@ pub mod flag {
 
 /// What a placed label shows, and how its parts turn (the first number of its state, `SymbolLayer::visible`)
 mod shown {
+    /// The text shows
     pub const TEXT: u32 = 1;
+    /// The icon shows
     pub const ICON: u32 = 2;
     /// The text turns by the angle of the state, the icon too (half a turn more with `FLIP`)
     pub const TURN_TEXT: u32 = 4;
+    /// The icon turns by the angle of the state
     pub const TURN_ICON: u32 = 8;
+    /// Half a turn more for the icon (its text kept upright the other way)
     pub const FLIP: u32 = 16;
 }
 /// Labels in relief are pulled towards the camera by this fraction of their distance
@@ -209,9 +220,13 @@ struct Label {
 pub struct SymbolStyle {
     /// Size scale as zoom stops (zooms, then values: displayed size over shaped size)
     pub size: [[f32; 4]; 2],
+    /// Opacity as zoom stops: zooms, then values
     pub opacity: [[f32; 4]; 2],
+    /// Shown from this zoom on (inclusive)
     pub min_zoom: f64,
+    /// Hidden from this zoom on (exclusive)
     pub max_zoom: f64,
+    /// Shown at all (the application's toggle)
     pub visible: bool,
 }
 
@@ -295,7 +310,10 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
     }
 }
 
+/// A symbol layer: labels (text and icon quads from the glyph and icon atlases), placed each frame against the
+/// collision grid shared by the symbol layers, their state uploaded to a texture the shader reads
 pub struct SymbolLayer {
+    /// Layer-wide style, set by `setSymbolLayer`
     pub style: SymbolStyle,
     overlay: Overlay,
     uniforms: [Option<glow::UniformLocation>; 8],
@@ -324,6 +342,7 @@ pub struct SymbolLayer {
 }
 
 impl SymbolLayer {
+    /// An empty layer: no label until `set_labels`
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
@@ -636,14 +655,92 @@ fn decide(flags: u32, text_fits: bool, icon_fits: bool) -> (bool, bool) {
     (text, icon)
 }
 
+impl SymbolLayer {
+    /// Out of its zoom range or hidden: no label shows, nothing placed to take again
+    fn hide_all(&mut self) {
+        self.placed = None;
+        if self.visible.iter().any(|&v| v != 0.0) {
+            self.visible.fill(0.0);
+            self.uploaded = false;
+        }
+    }
+
+    /// Places each label near enough the screen in its order, into `visible` (cleared before) and `grid`, the boxes
+    /// it takes added to `boxes`
+    fn place_labels(&mut self, frame: &Frame, grid: &mut collision::Grid, boxes: &mut Vec<collision::Rect>) {
+        let (camera, view) = (frame.camera, frame.view);
+        let layer_scale = stops(&self.style.size, camera.zoom);
+
+        for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
+            let altitude = frame
+                .relief
+                .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
+                .unwrap_or(0.0);
+            let Some((at, distance)) = screen_point(frame, label.merc, altitude) else {
+                continue;
+            };
+
+            if at.x < -MARGIN || at.y < -MARGIN || at.x > camera.width + MARGIN || at.y > camera.height + MARGIN {
+                continue;
+            }
+
+            // Smaller further away, as MapLibre's perspective ratio: a tilted view keeps its far labels sparse
+            let perspective = (0.5 + 0.5 * view.center_distance / distance).clamp(0.5, 1.5);
+            let scale = layer_scale * stops(&label.size, camera.zoom) * perspective;
+            let icon_scale = layer_scale * stops(&label.icon_size, camera.zoom) * perspective;
+
+            if scale <= 0.0 && icon_scale <= 0.0 {
+                continue;
+            }
+
+            // The angle of its line on screen
+            let mut line = None;
+
+            if label.direction != DVec2::ZERO && label.flags & (flag::TEXT_ALONG | flag::ICON_ALONG) != 0 {
+                // A step of one pixel along the line
+                let step = label.direction.normalize() / view.world_size;
+
+                line = screen_point(frame, label.merc + step, altitude).map(|(ahead, _)| angle_of(at, ahead));
+            }
+
+            if let Some(placed) = place_label(label, at, (scale, icon_scale), line, grid, boxes) {
+                *state = placed;
+            }
+        }
+    }
+}
+
+/// Screen point (CSS pixels) of a Mercator point at `altitude` (metres) and its distance to the eye (pixels of the
+/// local frame); none past the horizon of the globe, hidden by the body (as `Engine::project`), or behind the camera
+fn screen_point(frame: &Frame, m: DVec2, altitude: f64) -> Option<(DVec2, f64)> {
+    let (camera, view) = (frame.camera, frame.view);
+    let shift = -(m.x - camera.center.x).round();
+    let ground = view.position(m, shift);
+
+    if view.globe.factor > 0.0 && !view.faces_camera(ground) {
+        return None;
+    }
+
+    let p = ground + glam::DVec3::Z * altitude * view.vertical;
+    let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
+
+    (clip.w > 0.0)
+        .then(|| {
+            let at = DVec2::new(
+                f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
+                f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
+            );
+
+            (at, clip.w)
+        })
+        // An anchor that is not a number is nowhere
+        .filter(|(at, _)| at.is_finite())
+}
+
 impl Layer for SymbolLayer {
     fn place(&mut self, frame: &Frame, grid: &mut collision::Grid) {
         if !self.shows(frame.camera.zoom) {
-            self.placed = None;
-            if self.visible.iter().any(|&v| v != 0.0) {
-                self.visible.fill(0.0);
-                self.uploaded = false;
-            }
+            self.hide_all();
 
             return;
         }
@@ -668,71 +765,7 @@ impl Layer for SymbolLayer {
         let mut boxes = self.placed.take().map(|(_, b)| b).unwrap_or_default();
 
         boxes.clear();
-
-        let (camera, view) = (frame.camera, frame.view);
-        let layer_scale = stops(&self.style.size, camera.zoom);
-        // Screen point and distance to the eye (pixels of the local frame); none past the horizon of the globe, hidden
-        // by the body (as `Engine::project`)
-        let screen = |m: DVec2, altitude: f64| -> Option<(DVec2, f64)> {
-            let shift = -(m.x - camera.center.x).round();
-            let ground = view.position(m, shift);
-
-            if view.globe.factor > 0.0 && !view.faces_camera(ground) {
-                return None;
-            }
-
-            let p = ground + glam::DVec3::Z * altitude * view.vertical;
-            let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
-
-            (clip.w > 0.0)
-                .then(|| {
-                    let at = DVec2::new(
-                        f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
-                        f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
-                    );
-
-                    (at, clip.w)
-                })
-                // An anchor that is not a number is nowhere
-                .filter(|(at, _)| at.is_finite())
-        };
-
-        for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
-            let altitude = frame
-                .relief
-                .and_then(|(source, e)| source.altitude(label.merc).map(|h| h * f64::from(e)))
-                .unwrap_or(0.0);
-            let Some((at, distance)) = screen(label.merc, altitude) else {
-                continue;
-            };
-
-            if at.x < -MARGIN || at.y < -MARGIN || at.x > camera.width + MARGIN || at.y > camera.height + MARGIN {
-                continue;
-            }
-
-            // Smaller further away, as MapLibre's perspective ratio: a tilted view keeps its far labels sparse
-            let perspective = (0.5 + 0.5 * view.center_distance / distance).clamp(0.5, 1.5);
-            let scale = layer_scale * stops(&label.size, camera.zoom) * perspective;
-            let icon_scale = layer_scale * stops(&label.icon_size, camera.zoom) * perspective;
-
-            if scale <= 0.0 && icon_scale <= 0.0 {
-                continue;
-            }
-
-            // The angle of its line on screen
-            let mut line = None;
-
-            if label.direction != DVec2::ZERO && label.flags & (flag::TEXT_ALONG | flag::ICON_ALONG) != 0 {
-                // A step of one pixel along the line
-                let step = label.direction.normalize() / view.world_size;
-
-                line = screen(label.merc + step, altitude).map(|(ahead, _)| angle_of(at, ahead));
-            }
-
-            if let Some(placed) = place_label(label, at, (scale, icon_scale), line, grid, &mut boxes) {
-                *state = placed;
-            }
-        }
+        self.place_labels(frame, grid, &mut boxes);
         self.uploaded &= self.visible == self.previous;
         self.placed = Some((key, boxes));
     }
@@ -812,9 +845,11 @@ impl Layer for SymbolLayer {
 
 /// The glyph atlas of an engine: signed distances, one byte per texel, in pages of one size (a texture array)
 pub struct GlyphAtlas {
+    /// The texture array of the pages (R8)
     pub texture: glow::Texture,
     /// Size of a page
     pub size: (i32, i32),
+    /// Pages in use
     pub pages: i32,
 }
 
@@ -823,13 +858,20 @@ const MAX_PAGES: i32 = 256;
 
 /// The icon atlas of an engine: RGBA, premultiplied (distance field icons: the distance in alpha)
 pub struct IconAtlas {
+    /// The texture (RGBA8)
     pub texture: glow::Texture,
+    /// Its size, pixels
     pub size: (i32, i32),
 }
 
 #[wasm_bindgen]
 impl Engine {
     /// An empty symbol layer
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log)
     #[wasm_bindgen(js_name = addSymbols)]
     pub fn add_symbols(&mut self) -> Result<u32, JsValue> {
         let layer = SymbolLayer::new(&self.gl)?;
@@ -840,6 +882,11 @@ impl Engine {
     /// Labels of a symbol layer, shaped by the page: anchors (Mercator, interleaved), their texts' boxes (min x, min y,
     /// max x, max y, CSS pixels from the anchor), styles (36 floats each, see `LABEL_FLOATS`) and glyph and icon quads
     /// (11 floats each, see `QUAD_FLOATS`)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the labels need a table texture past the GPU's `MAX_TEXTURE_SIZE`, or
+    /// when it cannot be created; the layer then keeps its labels
     #[wasm_bindgen(js_name = setSymbols)]
     pub fn set_symbols(
         &mut self,
@@ -883,8 +930,11 @@ impl Engine {
 
     /// The glyph atlas shared by the symbol layers, one page: `width` × `height` bytes of signed distances
     /// (allocated again, filled with `data` if given)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) as `setGlyphPages` does: a size that is not positive, or the texture not created
     #[wasm_bindgen(js_name = setGlyphAtlas)]
-    #[allow(clippy::needless_pass_by_value)]
     pub fn set_glyph_atlas(&mut self, width: i32, height: i32, data: Option<Box<[u8]>>) -> Result<(), JsValue> {
         self.set_glyph_pages(width, height, 1)?;
         if let Some(data) = data {
@@ -897,6 +947,11 @@ impl Engine {
     /// The glyph atlas shared by the symbol layers, `pages` pages of `width` × `height` bytes of signed distances,
     /// allocated again and empty (`updateGlyphPage` fills them). A glyph on page `p` at row `v` has the atlas
     /// coordinate `v + p × height`
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when `width` or `height` is not positive (or their product overflows), `pages`
+    /// is not 1 to 256, or the atlas texture cannot be created
     #[wasm_bindgen(js_name = setGlyphPages)]
     pub fn set_glyph_pages(&mut self, width: i32, height: i32, pages: i32) -> Result<(), JsValue> {
         gl::area(width, height)
@@ -934,6 +989,11 @@ impl Engine {
 
     /// The icon atlas shared by the symbol layers: `width` × `height` RGBA texels, premultiplied, allocated again
     /// and empty (`updateIconAtlas` fills it)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when `width` or `height` is not positive (or their product overflows), or the
+    /// atlas texture cannot be created
     #[wasm_bindgen(js_name = setIconAtlas)]
     pub fn set_icon_atlas(&mut self, width: i32, height: i32) -> Result<(), JsValue> {
         gl::area(width, height)

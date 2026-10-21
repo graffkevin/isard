@@ -4,8 +4,27 @@ members = ["crates/engine", "crates/geo", "crates/pointcloud", "crates/tiles3d"]
 exclude = ["fuzz"]
 resolver = "2"
 
+# What the crates share; the version is the npm package's (scripts/release.ts checks it)
+[workspace.package]
+version = "1.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Kevin Graff"]
+repository = "https://github.com/graffkevin/isard"
+
+[workspace.lints.rust]
+# Every public item says what it is, for whoever reads the code next
+missing_docs = "warn"
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Every unsafe block says why it holds; an exception to a lint is an `expect` with its reason (it fails once stale)
+undocumented_unsafe_blocks = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# One module layout: `foo.rs` next to its `foo/` folder, no `mod.rs`
+mod_module_files = "warn"
 # Rendering code converts between f64 (CPU precision) and f32 (GPU) all the time
 cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
@@ -13,7 +32,6 @@ cast_sign_loss = "allow"
 cast_possible_wrap = "allow"
 # Geometry code: x, y, w, h, a, b read better than long names
 many_single_char_names = "allow"
-missing_errors_doc = "allow"
 
 [profile.release]
 opt-level = 3

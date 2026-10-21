@@ -9,44 +9,56 @@ const VLR_HEADER: usize = 54;
 /// What the reader keeps of a LAS header
 #[derive(Clone, Debug, PartialEq)]
 pub struct Header {
+    /// Major and minor version: (1, 4), others are refused
     pub version: (u8, u8),
     /// Point data record format (0 to 10), the compression bits of LAZ cleared
     pub point_format: u8,
     /// Bytes per point record
     pub record_length: u16,
+    /// Bytes of the header (`HEADER_SIZE` at least): the first VLR starts here
     pub header_size: u16,
     /// Where the points start: the VLRs lie between the header and here
     pub point_data_offset: u32,
+    /// Number of VLRs
     pub vlr_count: u32,
     /// x, y, z of a record = its integer × scale + offset
     pub scale: [f64; 3],
+    /// x, y, z added to the scaled integers of a record (CRS units)
     pub offset: [f64; 3],
     /// Bounds of the points (CRS units)
     pub min: [f64; 3],
+    /// Upper bounds of the points (CRS units)
     pub max: [f64; 3],
+    /// Number of point records of the file (the 64-bit field of LAS 1.4)
     pub point_count: u64,
 }
 
+/// The little-endian u16 at `at`, None past the end
 pub(crate) fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
 }
 
+/// The little-endian u32 at `at`, None past the end
 pub(crate) fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
+/// The little-endian i32 at `at`, None past the end
 pub(crate) fn i32_at(bytes: &[u8], at: usize) -> Option<i32> {
     Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
+/// The little-endian u64 at `at`, None past the end
 pub(crate) fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }
 
+/// The little-endian f64 at `at`, None past the end
 pub(crate) fn f64_at(bytes: &[u8], at: usize) -> Option<f64> {
     Some(f64::from_le_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }
 
+/// The little-endian f64 at each offset of `at`, None if one is past the end
 fn f64s<const N: usize>(bytes: &[u8], at: &[usize; N]) -> Option<[f64; N]> {
     let mut out = [0.0; N];
 
@@ -59,6 +71,12 @@ fn f64s<const N: usize>(bytes: &[u8], at: &[usize; N]) -> Option<[f64; N]> {
 
 impl Header {
     /// The header at the start of a file (its first `HEADER_SIZE` bytes at least)
+    ///
+    /// # Errors
+    ///
+    /// Errors when the bytes do not start with `LASF`, stop before `HEADER_SIZE` or a field ("truncated LAS
+    /// header"), are not LAS 1.4, give a header size or point data offset too small, or a scale or offset not finite
+    /// (or a zero scale)
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         if bytes.get(..4) != Some(b"LASF") {
             return Err("not a LAS file".into());
@@ -108,6 +126,10 @@ impl Header {
     }
 
     /// The VLRs, from the bytes of the file up to `point_data_offset` at least; a VLR past them is an error
+    ///
+    /// # Errors
+    ///
+    /// "truncated VLR" when a VLR header or its data runs past `point_data_offset` or the end of `bytes`
     pub fn vlrs<'a>(&self, bytes: &'a [u8]) -> Result<Vec<Vlr<'a>>, String> {
         let end = (self.point_data_offset as usize).min(bytes.len());
         let mut at = usize::from(self.header_size);
@@ -138,8 +160,11 @@ impl Header {
 /// A variable length record: its user id, record id and data
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Vlr<'a> {
+    /// User id (`copc`, `laszip encoded`, `LASF_Projection`…), its NUL padding trimmed
     pub user: String,
+    /// Record id, its meaning given by the user id
     pub record: u16,
+    /// Its payload, borrowed from the file's bytes
     pub data: &'a [u8],
 }
 

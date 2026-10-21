@@ -20,9 +20,13 @@ const MAX_SIDE: u32 = 4096;
 /// The grid of a network, Mercator
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grid {
+    /// Corner of the first square (north-west), Mercator
     pub min: DVec2,
+    /// Side of a square, Mercator
     pub size: f64,
+    /// Squares from west to east, at least 1
     pub cols: u32,
+    /// Squares from north to south, at least 1; square `j * cols + i` is column `i` of row `j`
     pub rows: u32,
 }
 
@@ -80,23 +84,31 @@ impl Grid {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Piece {
+    /// Start, relative to the network origin (Mercator)
     pub from: [f32; 2],
+    /// End, relative to the network origin (Mercator)
     pub to: [f32; 2],
+    /// Fractions of the edge's length at `from` and `to` (0 at node A, 1 at node B)
     pub fractions: [f32; 2],
+    /// Index of the edge the piece belongs to
     pub edge: u32,
 }
 
 /// Pieces of a network, square after square
 pub struct Pieces {
+    /// The squares the pieces are sorted by
     pub grid: Grid,
     /// Pieces of square `s`: `start[s] .. start[s + 1]`
     pub start: Vec<u32>,
+    /// Every piece, square after square
     pub pieces: Vec<Piece>,
 }
 
 /// Lines of the edges: those of edge `e` are `points[start[e] .. start[e + 1]]`, from A to B (Mercator)
 pub struct Lines<'a> {
+    /// Where the line of each edge starts in `points`, with one more entry for the end of the last
     pub start: &'a [u32],
+    /// Points of every line, one after the other, Mercator
     pub points: &'a [DVec2],
 }
 
@@ -263,6 +275,8 @@ pub struct Visible {
 }
 
 impl Visible {
+    /// The bits of everything the squares in view depend on: the view's matrix, center, scale, globe blend and
+    /// vertical scale, and the look
     fn key(view: &View, ((low, high), shift, margin, far): Look) -> [u64; 26] {
         let mut key = [0u64; 26];
 

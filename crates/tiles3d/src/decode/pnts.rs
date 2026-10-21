@@ -16,10 +16,12 @@ pub const MAX_POINTS: usize = 1 << 24;
 struct FeatureTable<'a> {
     json: Value,
     binary: &'a [u8],
+    /// `POINTS_LENGTH`, at most `MAX_POINTS`
     count: usize,
 }
 
 impl<'a> FeatureTable<'a> {
+    /// The feature table after the 28-byte header of a `.pnts`: an error if truncated or past `MAX_POINTS`
     fn parse(bytes: &'a [u8]) -> Result<Self, String> {
         if bytes.get(..4) != Some(b"pnts") {
             return Err("not a pnts tile".into());
@@ -97,6 +99,7 @@ impl<'a> FeatureTable<'a> {
     }
 }
 
+/// The little-endian f32 at byte `i` (in bounds: checked by the caller)
 fn f32_at(b: &[u8], i: usize) -> f32 {
     f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
 }

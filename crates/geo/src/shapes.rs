@@ -26,20 +26,27 @@ pub const SQUARE: f64 = 1.0 / 128.0;
 /// Polygons in Mercator: polygon `p` has rings `polygon_start[p] .. polygon_start[p + 1]` (the first is the outer one,
 /// the others holes), ring `r` the points `points[ring_start[r] .. ring_start[r + 1]]` (closing point optional)
 pub struct Polygons<'a> {
+    /// Points of every ring, one after the other, Mercator 0-1
     pub points: &'a [DVec2],
+    /// Where each ring starts in `points`, with one more entry for the end of the last
     pub ring_start: &'a [u32],
+    /// Where each polygon starts in the rings, with one more entry for the end of the last
     pub polygon_start: &'a [u32],
 }
 
 /// Polygons kept by a layer (a copy of `Polygons`), to build their mesh again and test points against them
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OwnedPolygons {
+    /// As `Polygons::points`
     pub points: Vec<DVec2>,
+    /// As `Polygons::ring_start`
     pub ring_start: Vec<u32>,
+    /// As `Polygons::polygon_start`
     pub polygon_start: Vec<u32>,
 }
 
 impl OwnedPolygons {
+    /// A copy of borrowed polygons, offsets kept as they are (checked when read)
     #[must_use]
     pub fn new(polygons: &Polygons) -> Self {
         Self {
@@ -49,6 +56,7 @@ impl OwnedPolygons {
         }
     }
 
+    /// The polygons borrowed, to triangulate or extrude them
     #[must_use]
     pub fn as_polygons(&self) -> Polygons<'_> {
         Polygons {
@@ -90,9 +98,13 @@ pub fn polygon_rings(polygons: &Polygons) -> impl Iterator<Item = std::ops::Rang
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
+    /// Mercator position rounded to f32
     pub hi: [f32; 2],
+    /// What the rounding left out: `hi + lo` is the f64 position
     pub lo: [f32; 2],
+    /// Number of the polygon in the input, until the layer writes its feature there
     pub feature: u32,
+    /// 0: bottom of the prism, 1: top (the flat fill draws only level 1)
     pub level: f32,
 }
 
@@ -119,13 +131,19 @@ impl Vertex {
 /// part is all there is to upload
 #[derive(Default)]
 pub struct Mesh {
+    /// The vertices of the top cap first (`..top_vertices`), then those of the bottom cap and of the walls
     pub vertices: Vec<Vertex>,
+    /// Triangles, three indices each, counterclockwise seen from outside the prism
     pub indices: Vec<u32>,
+    /// End of the top cap in `indices`
     pub top: usize,
+    /// End of the bottom cap in `indices`, start of the walls (`top` without the prism)
     pub walls: usize,
+    /// Vertices the top cap uses
     pub top_vertices: usize,
-    /// Mercator bounds of the points
+    /// Mercator bounds of the points (zero when there are none)
     pub min: DVec2,
+    /// Upper Mercator bound, as `min`
     pub max: DVec2,
 }
 
@@ -306,9 +324,17 @@ struct Wall {
 }
 
 /// Triangulates the polygons as `triangulate_in`; `prism` false: the top cap only (`indices.len() == top`), what a
-/// flat fill draws. The top cap is the same either way
+/// flat fill draws. The top cap is the same either way.
+///
+/// Four steps, kept in one function as they share the vertex numbering: (1) each polygon's rings become the top
+/// vertices, earcut's triangles and, for the prism, the walls to build; (2) those triangles are clipped to the grid
+/// squares (the top cap); (3) the bottom cap copies the top one at level 0, turned the other way; (4) the walls are
+/// cut at the grid lines and stood on the rings' vertices.
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one algorithm over shared vertex numbering, its steps commented"
+)]
 pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
     let square = if square.is_finite() && square > 0.0 {
         square.min(SQUARE)
@@ -328,6 +354,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
     let (mut flat, mut holes, mut triangles, mut all): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>, Vec<DVec2>) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
+    // 1. Each polygon: its rings' points as top vertices (in `all`, then `exact`), its walls, earcut's triangles
     for (p, rings) in polygon_rings(polygons).enumerate() {
         let first = rings.start;
 
@@ -412,7 +439,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
         }
     }
 
-    // The caps, cut along the grid
+    // 2. The top cap, cut along the grid.
     // The vertices added by the pieces of the current polygon start at `added`; the points of a piece are looked for
     // among the last `RECENT` of them only (a polygon cut into thousands of pieces stays linear)
     let mut added = exact.len();
@@ -473,7 +500,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
     mesh.top_vertices = mesh.vertices.len();
     mesh.walls = mesh.top;
     if prism {
-        // The bottom cap faces down: the same triangles the other way round, on the same vertices at level 0
+        // 3. The bottom cap faces down: the same triangles the other way round, on the same vertices at level 0
         let lift = mesh.top_vertices as u32;
 
         mesh.vertices.extend_from_within(..mesh.top_vertices);
@@ -486,6 +513,8 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
         }
         mesh.walls = mesh.indices.len();
 
+        // 4. The walls: two triangles per piece between grid lines, from the top vertices to their copies below
+        // (`bottom`: the copy at `+ lift` for a ring vertex, the next vertex for one added on a grid line)
         for Wall { a, b, ends, polygon } in walls {
             // Split where they cross the grid lines, as the caps are: the walls meet the caps vertex to vertex. Each
             // point of the wall: its top vertex (the bottom one follows it)
@@ -522,6 +551,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
 
 /// The triangles of a fill mesh sorted by square of a grid, the top cap first: only the squares in view are drawn
 pub struct Chunks {
+    /// The squares the triangles are sorted by
     pub grid: Grid,
     /// Indices of square `s` in the top cap: `indices[top[s] .. top[s + 1]]`
     pub top: Vec<u32>,
@@ -574,6 +604,188 @@ pub fn chunk(mesh: &mut Mesh, square: f64) -> Chunks {
         top: top_start,
         rest,
     }
+}
+
+/// A vertex of an extruded polygon (32 bytes): its position and its polygon's centroid relative to the layer origin,
+/// its feature (its polygon's number here, which the layer replaces by the polygon's feature), its level (0: foot of
+/// a wall, 1: roof) and its shade (the light on its face)
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Block {
+    /// Position relative to the layer origin, Mercator
+    pub offset: [f32; 2],
+    /// Its polygon's centroid relative to the layer origin, Mercator (where the height is read)
+    pub centroid: [f32; 2],
+    /// Number of the polygon in the input, until the layer writes its feature there
+    pub feature: u32,
+    /// 0: foot of a wall, 1: roof
+    pub level: f32,
+    /// Light on its face, 1 on the roofs, 0.72 to 0.92 on the walls
+    pub shade: f32,
+    /// Padding to 32 bytes
+    pub pad: f32,
+}
+
+/// Extruded polygons: roofs then walls, as indexed triangles, polygon after polygon
+#[derive(Default)]
+pub struct Blocks {
+    /// Every vertex, roofs sharing theirs, walls with four each
+    pub vertices: Vec<Block>,
+    /// Triangles, three indices each
+    pub indices: Vec<u32>,
+    /// The indices of each polygon extruded (`first..end`), its centroid (Mercator) and how far its points lie from
+    /// it at most (until `chunk_blocks` sorts the indices)
+    pub parts: Vec<(u32, u32, DVec2, f64)>,
+}
+
+/// Light on the walls: from the north-west and above (x east, y south)
+const LIGHT: DVec2 = DVec2::new(-std::f64::consts::FRAC_1_SQRT_2, -std::f64::consts::FRAC_1_SQRT_2);
+
+/// Extrudes polygons (buildings): a roof per polygon (earcut, holes included) and a wall along every edge of its
+/// rings, shaded by the side it faces. Positions relative to `origin`.
+#[must_use]
+pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
+    let mut out = Blocks::default();
+    let mut earcut = earcut::Earcut::new();
+    let (mut flat, mut holes, mut triangles): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    let f32s = |p: DVec2| [p.x as f32, p.y as f32];
+
+    for (p, rings) in polygon_rings(polygons).enumerate() {
+        let rings: Vec<&[DVec2]> = rings.map(|r| ring(polygons, r)).filter(|r| r.len() >= 3).collect();
+        let Some(outer) = rings.first() else {
+            continue;
+        };
+        let first_index = out.indices.len() as u32;
+        let centroid = outer.iter().sum::<DVec2>() / outer.len() as f64;
+        let radius = outer.iter().map(|q| q.distance(centroid)).fold(0.0, f64::max);
+        let c = f32s(centroid - origin);
+        let vertex = |m: DVec2, level: f32, shade: f32| Block {
+            offset: f32s(m - origin),
+            centroid: c,
+            feature: p as u32,
+            level,
+            shade,
+            pad: 0.0,
+        };
+
+        // Roof
+        flat.clear();
+        holes.clear();
+
+        let mut all: Vec<DVec2> = Vec::new();
+
+        for (k, r) in rings.iter().enumerate() {
+            if k > 0 {
+                holes.push(all.len() as u32);
+            }
+            all.extend_from_slice(r);
+        }
+
+        let base = all[0];
+
+        flat.extend(all.iter().map(|&q| (q - base).to_array()));
+        earcut.earcut(flat.iter().copied(), &holes, &mut triangles);
+
+        let start = out.vertices.len() as u32;
+
+        out.vertices.extend(all.iter().map(|&m| vertex(m, 1.0, 1.0)));
+        out.indices.extend(triangles.iter().map(|&i| start + i));
+        push_walls(&mut out, &rings, vertex);
+
+        // Its holes reach no further than its outer ring
+        let radius = if radius.is_finite() { radius } else { 0.0 };
+
+        out.parts
+            .push((first_index, out.indices.len() as u32, centroid, radius));
+    }
+
+    out
+}
+
+/// The walls of one extruded polygon: a quad along every edge of its rings, each with its own four vertices (flat
+/// shading), shaded by the side it faces. `vertex` makes a vertex of the polygon (position, level, shade)
+fn push_walls(out: &mut Blocks, rings: &[&[DVec2]], vertex: impl Fn(DVec2, f32, f32) -> Block) {
+    for (k, r) in rings.iter().enumerate() {
+        // Outward normal: the inside is on the left of a counterclockwise outer ring and of a clockwise hole
+        let sign = if (area(r) > 0.0) == (k == 0) { 1.0 } else { -1.0 };
+
+        for i in 0..r.len() {
+            let (a, b) = (r[i], r[(i + 1) % r.len()]);
+            let d = b - a;
+
+            if d.length_squared() == 0.0 {
+                continue;
+            }
+
+            let normal = DVec2::new(d.y, -d.x).normalize() * sign;
+            let shade = (0.72 + 0.2 * normal.dot(LIGHT).max(0.0)) as f32;
+            let s = out.vertices.len() as u32;
+
+            out.vertices.extend([
+                vertex(a, 0.0, shade),
+                vertex(b, 0.0, shade),
+                vertex(b, 1.0, shade),
+                vertex(a, 1.0, shade),
+            ]);
+            out.indices.extend([s, s + 1, s + 2, s, s + 2, s + 3]);
+        }
+    }
+}
+
+/// Squares of the culling grid of extruded blocks along the longer side of their extent
+const BLOCK_SQUARES_ACROSS: f64 = 32.0;
+/// Smallest square of that grid, Mercator (about 100 m at the equator)
+const MIN_BLOCK_SQUARE: f64 = 100.0 / 40_075_016.686;
+
+/// The blocks sorted by square of a grid over their centroids, as `chunk` does for fills: only the squares in view
+/// are drawn
+pub struct BlockChunks {
+    /// The squares the blocks are sorted by
+    pub grid: Grid,
+    /// Indices of square `s`: `indices[start[s] .. start[s + 1]]`
+    pub start: Vec<u32>,
+    /// How far a block reaches out of its centroid at most (Mercator): the margin of the squares in view
+    pub reach: f64,
+}
+
+/// Sorts the indices of extruded blocks by square of their polygon's centroid, each polygon's triangles kept together
+/// and the polygons in their order within a square
+#[must_use]
+pub fn chunk_blocks(blocks: &mut Blocks) -> BlockChunks {
+    let (min, max) = blocks
+        .parts
+        .iter()
+        .map(|p| p.2)
+        .filter(|c| c.is_finite())
+        .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), c| (a.min(c), b.max(c)));
+    let extent = (max - min).max_element();
+    let grid = Grid::over(min, max, (extent / BLOCK_SQUARES_ACROSS).max(MIN_BLOCK_SQUARE));
+    let square_of: Vec<u32> = blocks.parts.iter().map(|p| grid.square(p.2)).collect();
+    let (order, part_start) = sort_by_square(&square_of, grid.len());
+    // The parts in their new order, and where each one starts
+    let mut indices = Vec::with_capacity(blocks.indices.len());
+    let mut at = Vec::with_capacity(order.len() + 1);
+
+    for &k in &order {
+        at.push(indices.len() as u32);
+
+        let (first, end, _, _) = blocks.parts[k as usize];
+
+        indices.extend_from_slice(&blocks.indices[first as usize..end as usize]);
+    }
+    at.push(indices.len() as u32);
+
+    let start = part_start.iter().map(|&p| at[p as usize]).collect();
+
+    blocks.indices = indices;
+
+    let reach = blocks.parts.iter().map(|p| p.3).fold(0.0, f64::max);
+
+    // Their ranges were those of the indices before
+    blocks.parts.clear();
+
+    BlockChunks { grid, start, reach }
 }
 
 #[cfg(test)]
@@ -974,172 +1186,4 @@ mod tests {
 
         assert!(v.position().distance(p) < 1e-14);
     }
-}
-
-/// A vertex of an extruded polygon (32 bytes): its position and its polygon's centroid relative to the layer origin,
-/// its feature (its polygon's number here, which the layer replaces by the polygon's feature), its level (0: foot of
-/// a wall, 1: roof) and its shade (the light on its face)
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Block {
-    pub offset: [f32; 2],
-    pub centroid: [f32; 2],
-    pub feature: u32,
-    pub level: f32,
-    pub shade: f32,
-    pub pad: f32,
-}
-
-/// Extruded polygons: roofs then walls, as indexed triangles, polygon after polygon
-#[derive(Default)]
-pub struct Blocks {
-    pub vertices: Vec<Block>,
-    pub indices: Vec<u32>,
-    /// The indices of each polygon extruded (`first..end`), its centroid (Mercator) and how far its points lie from
-    /// it at most (until `chunk_blocks` sorts the indices)
-    pub parts: Vec<(u32, u32, DVec2, f64)>,
-}
-
-/// Light on the walls: from the north-west and above (x east, y south)
-const LIGHT: DVec2 = DVec2::new(-std::f64::consts::FRAC_1_SQRT_2, -std::f64::consts::FRAC_1_SQRT_2);
-
-/// Extrudes polygons (buildings): a roof per polygon (earcut, holes included) and a wall along every edge of its
-/// rings, shaded by the side it faces. Positions relative to `origin`.
-#[must_use]
-pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
-    let mut out = Blocks::default();
-    let mut earcut = earcut::Earcut::new();
-    let (mut flat, mut holes, mut triangles): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    let f32s = |p: DVec2| [p.x as f32, p.y as f32];
-
-    for (p, rings) in polygon_rings(polygons).enumerate() {
-        let rings: Vec<&[DVec2]> = rings.map(|r| ring(polygons, r)).filter(|r| r.len() >= 3).collect();
-        let Some(outer) = rings.first() else {
-            continue;
-        };
-        let first_index = out.indices.len() as u32;
-        let centroid = outer.iter().sum::<DVec2>() / outer.len() as f64;
-        let radius = outer.iter().map(|q| q.distance(centroid)).fold(0.0, f64::max);
-        let c = f32s(centroid - origin);
-        let vertex = |m: DVec2, level: f32, shade: f32| Block {
-            offset: f32s(m - origin),
-            centroid: c,
-            feature: p as u32,
-            level,
-            shade,
-            pad: 0.0,
-        };
-
-        // Roof
-        flat.clear();
-        holes.clear();
-
-        let mut all: Vec<DVec2> = Vec::new();
-
-        for (k, r) in rings.iter().enumerate() {
-            if k > 0 {
-                holes.push(all.len() as u32);
-            }
-            all.extend_from_slice(r);
-        }
-
-        let base = all[0];
-
-        flat.extend(all.iter().map(|&q| (q - base).to_array()));
-        earcut.earcut(flat.iter().copied(), &holes, &mut triangles);
-
-        let start = out.vertices.len() as u32;
-
-        out.vertices.extend(all.iter().map(|&m| vertex(m, 1.0, 1.0)));
-        out.indices.extend(triangles.iter().map(|&i| start + i));
-        // Walls, each with its own vertices (flat shading)
-        for (k, r) in rings.iter().enumerate() {
-            // Outward normal: the inside is on the left of a counterclockwise outer ring and of a clockwise hole
-            let sign = if (area(r) > 0.0) == (k == 0) { 1.0 } else { -1.0 };
-
-            for i in 0..r.len() {
-                let (a, b) = (r[i], r[(i + 1) % r.len()]);
-                let d = b - a;
-
-                if d.length_squared() == 0.0 {
-                    continue;
-                }
-
-                let normal = DVec2::new(d.y, -d.x).normalize() * sign;
-                let shade = (0.72 + 0.2 * normal.dot(LIGHT).max(0.0)) as f32;
-                let s = out.vertices.len() as u32;
-
-                out.vertices.extend([
-                    vertex(a, 0.0, shade),
-                    vertex(b, 0.0, shade),
-                    vertex(b, 1.0, shade),
-                    vertex(a, 1.0, shade),
-                ]);
-                out.indices.extend([s, s + 1, s + 2, s, s + 2, s + 3]);
-            }
-        }
-
-        // Its holes reach no further than its outer ring
-        let radius = if radius.is_finite() { radius } else { 0.0 };
-
-        out.parts
-            .push((first_index, out.indices.len() as u32, centroid, radius));
-    }
-
-    out
-}
-
-/// Squares of the culling grid of extruded blocks along the longer side of their extent
-const BLOCK_SQUARES_ACROSS: f64 = 32.0;
-/// Smallest square of that grid, Mercator (about 100 m at the equator)
-const MIN_BLOCK_SQUARE: f64 = 100.0 / 40_075_016.686;
-
-/// The blocks sorted by square of a grid over their centroids, as `chunk` does for fills: only the squares in view
-/// are drawn
-pub struct BlockChunks {
-    pub grid: Grid,
-    /// Indices of square `s`: `indices[start[s] .. start[s + 1]]`
-    pub start: Vec<u32>,
-    /// How far a block reaches out of its centroid at most (Mercator): the margin of the squares in view
-    pub reach: f64,
-}
-
-/// Sorts the indices of extruded blocks by square of their polygon's centroid, each polygon's triangles kept together
-/// and the polygons in their order within a square
-#[must_use]
-pub fn chunk_blocks(blocks: &mut Blocks) -> BlockChunks {
-    let (min, max) = blocks
-        .parts
-        .iter()
-        .map(|p| p.2)
-        .filter(|c| c.is_finite())
-        .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), c| (a.min(c), b.max(c)));
-    let extent = (max - min).max_element();
-    let grid = Grid::over(min, max, (extent / BLOCK_SQUARES_ACROSS).max(MIN_BLOCK_SQUARE));
-    let square_of: Vec<u32> = blocks.parts.iter().map(|p| grid.square(p.2)).collect();
-    let (order, part_start) = sort_by_square(&square_of, grid.len());
-    // The parts in their new order, and where each one starts
-    let mut indices = Vec::with_capacity(blocks.indices.len());
-    let mut at = Vec::with_capacity(order.len() + 1);
-
-    for &k in &order {
-        at.push(indices.len() as u32);
-
-        let (first, end, _, _) = blocks.parts[k as usize];
-
-        indices.extend_from_slice(&blocks.indices[first as usize..end as usize]);
-    }
-    at.push(indices.len() as u32);
-
-    let start = part_start.iter().map(|&p| at[p as usize]).collect();
-
-    blocks.indices = indices;
-
-    let reach = blocks.parts.iter().map(|p| p.3).fold(0.0, f64::max);
-
-    // Their ranges were those of the indices before
-    blocks.parts.clear();
-
-    BlockChunks { grid, start, reach }
 }

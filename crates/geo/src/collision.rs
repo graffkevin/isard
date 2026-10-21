@@ -5,6 +5,7 @@
 /// A box on screen, CSS pixels: min x, min y, max x, max y
 pub type Rect = [f64; 4];
 
+/// The boxes taken so far on screen, binned in square cells of CSS pixels; reset each frame (`reset`)
 pub struct Grid {
     cell: f64,
     cols: usize,
@@ -15,8 +16,9 @@ pub struct Grid {
     hash: u64,
 }
 
-/// FNV-1a offset basis and prime
+/// FNV-1a offset basis (`fingerprint`)
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a prime
 const FNV_PRIME: u64 = 0x0100_0000_01b3;
 
 impl Grid {

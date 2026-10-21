@@ -253,6 +253,7 @@ impl Viewshed {
         })
     }
 
+    /// Frees the GPU objects of the viewshed
     pub(super) fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by the viewshed, not used afterwards
         unsafe {
@@ -359,8 +360,10 @@ fn face_axes(face: u32) -> (DVec3, DVec3) {
 }
 
 impl Engine {
-    /// The solid scene's depth into the bound target, seen with `view`. Call with the target bound and the viewport
-    /// set; the state is set back but for the framebuffer
+    /// The solid scene's depth into the bound target, seen with `view`; the state is set back but for the framebuffer
+    ///
+    /// # Safety
+    /// Call on the engine's live context with a depth target bound and the viewport set to its size
     pub(super) unsafe fn draw_solid_depth(&self, view: &View) {
         let gl = &self.gl;
 
@@ -548,6 +551,11 @@ impl Engine {
     /// only heading, tilt, angles of view across and up (degrees), the heading NaN to look all around. What some
     /// observer sees is tinted with `visible`, what is hidden from all those that reach it with `hidden` (RGB 0-1),
     /// at `opacity`; `outline` (RGB 0-1, or empty) the color of the cones' edges drawn in 3D
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when, on the first call, a WebGL object cannot be created or a shader fails to compile
+    /// (the error carries its info log)
     #[wasm_bindgen(js_name = setViewshed)]
     pub fn set_viewshed(
         &mut self,

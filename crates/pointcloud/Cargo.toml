@@ -1,11 +1,12 @@
 [package]
 name = "isard-pointcloud"
-version = "1.1.0"
+version.workspace = true
 publish = false
-edition = "2024"
-license = "MIT"
-authors = ["Kevin Graff"]
-repository = "https://github.com/graffkevin/isard"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Point clouds of isard: COPC (LAS 1.4 header, octree hierarchy, LAZ chunks), the octree traversal, the points ready for the GPU"
 
 [lib]

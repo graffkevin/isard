@@ -12,11 +12,14 @@ use wasm_bindgen::{JsCast, JsValue};
 /// Location of the feature of each vertex (`a_feature` of the picking pass); a primitive without features gives none
 pub const FEATURE_ATTRIBUTE: u32 = 7;
 
+/// A glTF primitive on the GPU: its vertex array and buffers (vertices, indices), drawn as indexed triangles
 pub struct GpuPrimitive {
+    /// Its attributes and index buffer
     pub vao: glow::VertexArray,
     buffers: [glow::Buffer; 2],
     /// The feature of each vertex (at `FEATURE_ATTRIBUTE`), when the tile has features
     pub features: Option<glow::Buffer>,
+    /// Index count
     pub count: i32,
     /// One of the mesh's `textures`
     pub texture: Option<glow::Texture>,
@@ -24,8 +27,12 @@ pub struct GpuPrimitive {
     pub color: [f32; 4],
 }
 
+/// A tile's or a model's content on the GPU: its primitives and points, relative to its anchor
 pub struct GpuMesh {
+    /// The origin of the mesh's vertices (ECEF metres, or the model's frame): kept in f64, the matrices made
+    /// relative to the camera
     pub anchor: glam::DVec3,
+    /// Its triangles, one draw each
     pub primitives: Vec<GpuPrimitive>,
     /// Its points (`.pnts`, glTF points)
     pub points: Vec<GpuPoints>,
@@ -325,6 +332,8 @@ pub fn upload_decoded(
     Ok(gpu)
 }
 
+/// Uploads one primitive a worker decoded into `gpu`; its texture made once per image, shared (`shared`) by the
+/// primitives using the same one. Nothing of it is left on a failure
 fn upload_decoded_primitive(
     gl: &glow::Context,
     raw: &web_sys::WebGl2RenderingContext,
@@ -332,6 +341,47 @@ fn upload_decoded_primitive(
     gpu: &mut GpuMesh,
     shared: &mut Vec<(JsValue, Option<glow::Texture>)>,
 ) -> Result<(), JsValue> {
+    let primitive = upload_decoded_buffers(gl, raw, p, gpu)?;
+    let (bitmap, compressed) = (js_get(p, "bitmap"), js_get(p, "texture"));
+    let source = if bitmap.is_object() { bitmap } else { compressed };
+
+    if !source.is_object() {
+        gpu.primitives.push(primitive);
+
+        return Ok(());
+    }
+    if let Some((_, texture)) = shared.iter().find(|(s, _)| js_sys::Object::is(s, &source)) {
+        gpu.primitives.push(GpuPrimitive {
+            texture: *texture,
+            ..primitive
+        });
+
+        return Ok(());
+    }
+
+    match decoded_texture(gl, raw, &source, gpu) {
+        Ok(texture) => {
+            shared.push((source, texture));
+            gpu.primitives.push(GpuPrimitive { texture, ..primitive });
+
+            Ok(())
+        }
+        Err(e) => {
+            delete_primitive(gl, &primitive);
+
+            Err(e)
+        }
+    }
+}
+
+/// The buffers of a primitive a worker decoded (vertices, indices, the feature of each vertex if any), counted in
+/// `gpu`'s memory and features; no texture yet
+fn upload_decoded_buffers(
+    gl: &glow::Context,
+    raw: &web_sys::WebGl2RenderingContext,
+    p: &JsValue,
+    gpu: &mut GpuMesh,
+) -> Result<GpuPrimitive, JsValue> {
     let vertices: js_sys::Float32Array = js_get(p, "vertices").dyn_into()?;
     let indices: js_sys::Uint32Array = js_get(p, "indices").dyn_into()?;
     let features = js_get(p, "features").dyn_into::<js_sys::Float32Array>().ok();
@@ -361,60 +411,37 @@ fn upload_decoded_primitive(
         gpu.feature_count = gpu.feature_count.max(feature_bound(features.to_vec()));
         gpu.bytes += features.byte_length() as usize;
     }
+    gpu.bytes += (vertices.byte_length() + indices.byte_length()) as usize;
 
-    let primitive = GpuPrimitive {
+    Ok(GpuPrimitive {
         vao,
         buffers,
         features: features_buffer,
         count: indices.length() as i32,
         texture: None,
         color: color_of(p),
-    };
+    })
+}
 
-    gpu.bytes += (vertices.byte_length() + indices.byte_length()) as usize;
-
-    let (bitmap, compressed) = (js_get(p, "bitmap"), js_get(p, "texture"));
-    let source = if bitmap.is_object() { bitmap } else { compressed };
-
-    if !source.is_object() {
-        gpu.primitives.push(primitive);
-
-        return Ok(());
-    }
-    if let Some((_, texture)) = shared.iter().find(|(s, _)| js_sys::Object::is(s, &source)) {
-        gpu.primitives.push(GpuPrimitive {
-            texture: *texture,
-            ..primitive
-        });
-
-        return Ok(());
-    }
-
+/// The texture of a decoded image (an `ImageBitmap`) or of a transcoded one (KTX2 levels), owned by `gpu` and counted
+/// in its memory; None (drawn untextured) when transcoded levels do not make a texture
+fn decoded_texture(
+    gl: &glow::Context,
+    raw: &web_sys::WebGl2RenderingContext,
+    source: &JsValue,
+    gpu: &mut GpuMesh,
+) -> Result<Option<glow::Texture>, JsValue> {
     let made = match source.clone().dyn_into::<web_sys::ImageBitmap>() {
         Ok(bitmap) => texture(gl, &bitmap).map(Some).map_err(JsValue::from),
-        Err(_) => compressed_texture(gl, raw, &source),
-    };
+        Err(_) => compressed_texture(gl, raw, source),
+    }?;
 
-    match made {
-        Ok(made) => {
-            let texture = made.map(|(texture, size)| {
-                gpu.textures.push(texture);
-                gpu.bytes += size;
+    Ok(made.map(|(texture, size)| {
+        gpu.textures.push(texture);
+        gpu.bytes += size;
 
-                texture
-            });
-
-            shared.push((source, texture));
-            gpu.primitives.push(GpuPrimitive { texture, ..primitive });
-
-            Ok(())
-        }
-        Err(e) => {
-            delete_primitive(gl, &primitive);
-
-            Err(e)
-        }
-    }
+        texture
+    }))
 }
 
 /// The base color of a primitive a worker decoded: white when it has none
@@ -591,6 +618,7 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
     }
 }
 
+/// Deletes everything of the mesh (buffers, vertex arrays, textures); it is not used afterwards
 pub fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
     for p in &mesh.primitives {
         delete_primitive(gl, p);

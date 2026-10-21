@@ -159,7 +159,9 @@ fn sort(points: &[f64], feature: &[u32]) -> Sorted {
     }
 }
 
+/// A circle layer: its points sorted by grid square, one instanced quad each, and the GL objects that draw them
 pub struct CircleLayer {
+    /// Per-feature style (colors, radius and stroke width stops, values) and visibility
     pub features: Features,
     /// Lying on the ground rather than facing the screen
     pub on_ground: bool,
@@ -181,6 +183,8 @@ pub struct CircleLayer {
 }
 
 impl CircleLayer {
+    /// Uploads the points (x, y pairs in Mercator 0-1) and the feature of each (index below `feature_count`), sorted by
+    /// square of the culling grid
     pub fn new(gl: &glow::Context, points: &[f64], feature: &[u32], feature_count: usize) -> Result<Self, String> {
         overlay::pick_ids_fit(feature_count, "circle layer");
 
@@ -367,6 +371,11 @@ impl Layer for CircleLayer {
 #[wasm_bindgen]
 impl Engine {
     /// Circle layer of `feature_count` features: points (Mercator [0, 1], interleaved) and the feature of each
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log), or when `feature_count` features need a table texture past the GPU's `MAX_TEXTURE_SIZE`
     #[wasm_bindgen(js_name = addCircles)]
     pub fn add_circles(&mut self, points: &[f64], feature: &[u32], feature_count: usize) -> Result<u32, JsValue> {
         let layer = CircleLayer::new(&self.gl, points, feature, feature_count)?;

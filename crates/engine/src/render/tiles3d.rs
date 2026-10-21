@@ -116,6 +116,23 @@ enum Arrival {
     Failed,
 }
 
+/// What the download of a tile needs, worked out by `Tiles3dLayer::request`
+struct TileRequest {
+    tile: usize,
+    /// The request number (`next_request`)
+    id: u32,
+    url: String,
+    /// A tileset rather than a mesh (by its node, or a JSON document found before)
+    is_tileset: bool,
+    /// The tile's transform and up axis, for its decoding
+    transform: glam::DMat4,
+    y_up: bool,
+    /// Past the HTTP cache: the tile failed before (the cache may hold the error)
+    reload: bool,
+    /// The Fetch Priority, `"high"` or `"low"`
+    priority: &'static str,
+}
+
 /// The virtual tile of the root tileset's arrival
 const ROOT: usize = usize::MAX;
 /// Requests of a frame fetched with a high priority (the first ones: the largest errors in view)
@@ -129,6 +146,8 @@ thread_local! {
     static NEXT_REQUEST: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
 }
 
+/// The next request number, never 0 (wrapping): shared by the 3D Tiles, model and point cloud layers, which share the
+/// worker pool
 pub(crate) fn next_request() -> u32 {
     NEXT_REQUEST.with(|n| {
         let id = n.get();
@@ -148,18 +167,25 @@ enum Root {
     Failed,
 }
 
+/// Counters of a 3D Tiles layer's last frame (the page's `Tiles3dStats`)
 #[derive(Default, Clone, Copy)]
 pub struct Tiles3dStats {
+    /// Tiles drawn
     pub drawn: usize,
+    /// Meshes on the GPU
     pub loaded: usize,
     /// Downloads of tiles in view
     pub in_flight: usize,
     /// Downloads of siblings out of view, in the background
     pub prefetching: usize,
+    /// GPU memory of the meshes, bytes
     pub gpu_bytes: usize,
+    /// Tiles known in the tree (external tilesets included once loaded)
     pub tiles: usize,
 }
 
+/// A 3D Tiles layer: the tile tree (grown by external tilesets), the state of each tile's content, its requests and
+/// uploads, and the programs that draw and pick the meshes
 pub struct Tiles3dLayer {
     url: String,
     tree: Tree,
@@ -179,7 +205,9 @@ pub struct Tiles3dLayer {
     pick_uniforms: [Option<glow::UniformLocation>; 4],
     /// The tiles of the last picking pass: the first handle of each and its tile
     picked: RefCell<Vec<(u32, usize)>>,
+    /// Screen-space error (CSS pixels) above which a tile is refined
     pub max_error: f64,
+    /// 0 to 1
     pub opacity: f32,
     /// A color tinting the textures, and of the untextured meshes (RGB 0-1)
     pub color: Option<[f32; 3]>,
@@ -191,6 +219,7 @@ pub struct Tiles3dLayer {
     points: Option<PointProgram>,
     /// GPU memory budget for the meshes (bytes)
     pub budget: usize,
+    /// Counters of the last frame
     pub stats: Tiles3dStats,
     /// Buffers of `draw_tiles`, kept from frame to frame
     stale: Vec<Loading>,
@@ -202,6 +231,8 @@ pub struct Tiles3dLayer {
 }
 
 impl Tiles3dLayer {
+    /// Starts fetching the root tileset `url`; `loader` decodes in workers if any, `redraw` is called when something
+    /// arrives
     pub fn new(
         gl: &glow::Context,
         url: String,
@@ -302,48 +333,64 @@ impl Tiles3dLayer {
         }
     }
 
+    /// Takes in what arrived (the root tileset, tiles' contents), then uploads the meshes queued within `budget_ms`
+    /// (at least one), the rest waiting for the next frames
     fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let now = js_sys::Date::now();
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
 
         for (tile, id, arrival) in arrivals {
             if tile == ROOT {
-                match arrival {
-                    Arrival::Tileset(json, url) => {
-                        if let Err(e) = self.graft(&json, &url, None) {
-                            self.root_failed(&e, false);
-                        }
-                    }
-                    other => {
-                        discard(other);
-                        self.root_failed("the tileset could not be loaded", true);
-                    }
-                }
-                continue;
-            }
-
-            // Only the answer to the current request of a tile counts (not one that was aborted, then asked again)
-            let current = self.states.is_current(tile, id);
-
-            match arrival {
-                Arrival::Tileset(json, url) if current => {
-                    if let Err(e) = self.graft(&json, &url, Some(tile)) {
-                        web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles {}: {e}", self.url)));
-                    }
-                }
-                Arrival::Mesh(_, _) | Arrival::Decoded(_) if current => self.queue.push_back((tile, arrival)),
-                Arrival::NotMesh if current => {
-                    self.json.insert(tile);
-                    self.states.replace(tile, State::Unloaded);
-                }
-                Arrival::Failed if current => {
-                    self.states.replace(tile, State::Failed(now + COOLDOWN_MS));
-                }
-                stale => discard(stale),
+                self.receive_root(arrival);
+            } else {
+                self.receive_tile(tile, id, arrival, now);
             }
         }
+        self.upload_queued(gl, raw, frame, budget_ms);
+    }
 
-        // Uploads within the frame's time budget (at least one), the rest waits for the next frames
+    /// The root tileset arrived: grafted, or asked again (`root_failed`)
+    fn receive_root(&mut self, arrival: Arrival) {
+        match arrival {
+            Arrival::Tileset(json, url) => {
+                if let Err(e) = self.graft(&json, &url, None) {
+                    self.root_failed(&e, false);
+                }
+            }
+            other => {
+                discard(other);
+                self.root_failed("the tileset could not be loaded", true);
+            }
+        }
+    }
+
+    /// A tile's content arrived for request `id`: an external tileset grafted, a mesh queued for its upload, a JSON
+    /// document asked again as a tileset, a failure waiting for the cooldown (`now`, ms)
+    fn receive_tile(&mut self, tile: usize, id: u32, arrival: Arrival, now: f64) {
+        // Only the answer to the current request of a tile counts (not one that was aborted, then asked again)
+        let current = self.states.is_current(tile, id);
+
+        match arrival {
+            Arrival::Tileset(json, url) if current => {
+                if let Err(e) = self.graft(&json, &url, Some(tile)) {
+                    web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles {}: {e}", self.url)));
+                }
+            }
+            Arrival::Mesh(_, _) | Arrival::Decoded(_) if current => self.queue.push_back((tile, arrival)),
+            Arrival::NotMesh if current => {
+                self.json.insert(tile);
+                self.states.replace(tile, State::Unloaded);
+            }
+            Arrival::Failed if current => {
+                self.states.replace(tile, State::Failed(now + COOLDOWN_MS));
+            }
+            stale => discard(stale),
+        }
+    }
+
+    /// Uploads the queued meshes in arrival order for `budget_ms` at most (at least one): those of tiles no longer
+    /// loading are discarded
+    fn upload_queued(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let start = crate::js::now();
         let mut uploaded = 0;
 
@@ -358,7 +405,7 @@ impl Tiles3dLayer {
                 continue;
             }
 
-            let uploaded = match arrival {
+            let mesh = match arrival {
                 Arrival::Mesh(mesh, images) => upload(gl, &mesh, images, frame),
                 Arrival::Decoded(tile) => upload_decoded(gl, raw, &tile, frame).map_err(|e| {
                     // The images not uploaded are closed
@@ -372,27 +419,33 @@ impl Tiles3dLayer {
                 }
             };
 
-            match uploaded {
-                Ok(mut gpu) => {
-                    if self.geoid {
-                        // Altitudes, not heights above the ellipsoid: the tile raised by the geoid under its anchor
-                        let g = geo::geodesy::from_ecef(gpu.anchor);
+            self.install(gl, tile, mesh);
+        }
+    }
 
-                        gpu.anchor = geo::geodesy::to_ecef(g.x, g.y, g.z + geo::geoid::height(g.x, g.y));
-                    }
-                    if !gpu.points.is_empty() && self.points.is_none() {
-                        match PointProgram::new(gl) {
-                            Ok(program) => self.points = Some(program),
-                            Err(e) => web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles points: {e}"))),
-                        }
-                    }
-                    self.states.replace(tile, State::Ready(gpu));
+    /// A tile's mesh uploaded (raised by the geoid if the layer's heights are altitudes) becomes ready; a failed
+    /// upload waits for the cooldown
+    fn install(&mut self, gl: &glow::Context, tile: usize, mesh: Result<GpuMesh, String>) {
+        match mesh {
+            Ok(mut gpu) => {
+                if self.geoid {
+                    // Altitudes, not heights above the ellipsoid: the tile raised by the geoid under its anchor
+                    let g = geo::geodesy::from_ecef(gpu.anchor);
+
+                    gpu.anchor = geo::geodesy::to_ecef(g.x, g.y, g.z + geo::geoid::height(g.x, g.y));
                 }
-                Err(e) => {
-                    web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles upload: {e}")));
-                    self.states
-                        .replace(tile, State::Failed(js_sys::Date::now() + COOLDOWN_MS));
+                if !gpu.points.is_empty() && self.points.is_none() {
+                    match PointProgram::new(gl) {
+                        Ok(program) => self.points = Some(program),
+                        Err(e) => web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles points: {e}"))),
+                    }
                 }
+                self.states.replace(tile, State::Ready(gpu));
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles upload: {e}")));
+                self.states
+                    .replace(tile, State::Failed(js_sys::Date::now() + COOLDOWN_MS));
             }
         }
     }
@@ -453,42 +506,71 @@ impl Tiles3dLayer {
             Content::Tileset(url) => (url.clone(), true),
             _ => return,
         };
-        let (transform, y_up) = (node.transform, node.y_up);
-        // A tile that failed before is fetched past the HTTP cache (it may hold the error)
-        let reload = self.states.failed_before(tile);
-        let priority = if urgent { "high" } else { "low" };
-        let id = next_request();
-        let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
+        let request = TileRequest {
+            tile,
+            id: next_request(),
+            url,
+            is_tileset,
+            transform: node.transform,
+            y_up: node.y_up,
+            reload: self.states.failed_before(tile),
+            priority: if urgent { "high" } else { "low" },
+        };
 
         // Meshes go to the worker pool when there is one: fetched and decoded off the main thread
-        if !is_tileset
-            && let Some(promise) = self
-                .loader
-                .as_ref()
-                .and_then(|l| load_in_worker(l, id, &url, &transform, (y_up, reload), priority))
-        {
-            self.states
-                .replace(tile, State::Loading(Loading { id, controller: None }));
-            wasm_bindgen_futures::spawn_local(async move {
-                let arrival = match JsFuture::from(promise).await {
-                    Ok(decoded) => Arrival::Decoded(decoded),
-                    // A JSON document where a mesh was expected: an external tileset
-                    Err(e) if format!("{e:?}").contains("JSON document") => Arrival::NotMesh,
-                    // Aborted downloads land here too: no warning (the tile is no longer waited for)
-                    Err(_) => Arrival::Failed,
-                };
+        if !request.is_tileset
+            && let Some(promise) = self.loader.as_ref().and_then(|l| {
+                let r = &request;
 
-                inbox.borrow_mut().push((tile, id, arrival));
-                redraw();
-            });
+                load_in_worker(l, r.id, &r.url, &r.transform, (r.y_up, r.reload), r.priority)
+            })
+        {
+            self.wait_for_worker(&request, promise);
 
             return;
         }
 
+        self.fetch_here(request);
+    }
+
+    /// The tile is loading in a worker: its arrival (decoded, a JSON document, a failure) is awaited
+    fn wait_for_worker(&mut self, request: &TileRequest, promise: js_sys::Promise) {
+        let (tile, id) = (request.tile, request.id);
+        let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
+
+        self.states
+            .replace(tile, State::Loading(Loading { id, controller: None }));
+        wasm_bindgen_futures::spawn_local(async move {
+            let arrival = match JsFuture::from(promise).await {
+                Ok(decoded) => Arrival::Decoded(decoded),
+                // A JSON document where a mesh was expected: an external tileset
+                Err(e) if format!("{e:?}").contains("JSON document") => Arrival::NotMesh,
+                // Aborted downloads land here too: no warning (the tile is no longer waited for)
+                Err(_) => Arrival::Failed,
+            };
+
+            inbox.borrow_mut().push((tile, id, arrival));
+            redraw();
+        });
+    }
+
+    /// Fetches the tile on this thread (abortable) and decodes it here: a tileset, or a mesh and its images
+    fn fetch_here(&mut self, request: TileRequest) {
         let Ok(controller) = web_sys::AbortController::new() else {
             return;
         };
         let signal = controller.signal();
+        let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
+        let TileRequest {
+            tile,
+            id,
+            url,
+            is_tileset,
+            transform,
+            y_up,
+            reload,
+            priority,
+        } = request;
 
         self.states.replace(
             tile,
@@ -545,6 +627,31 @@ impl Tiles3dLayer {
             Root::Loading(attempt) => return attempt == 0,
             Root::Failed => return false,
         };
+        let selection = self.select_tiles(view, root);
+
+        self.request_tiles(&selection, loading);
+        // Every tile of the view is kept, those loaded and waiting for their siblings too (a parent stands in until all
+        // its children are ready): unloaded past the budget, they would be asked again, and so on
+        self.states.touch(&selection.visible, frame);
+        self.states.touch(&selection.draw, frame);
+        self.states.touch(&selection.backfill, frame);
+        self.evict(gl, frame);
+        self.render(gl, view, &selection.draw, &selection.backfill);
+        self.render_points(gl, view, pixel_ratio, &selection.draw, &selection.backfill);
+
+        let (in_flight, prefetching) = self.update_stats(&selection);
+
+        self.selection = selection;
+        if !self.queue.is_empty() {
+            (self.redraw)();
+        }
+
+        in_flight > prefetching || !self.queue.is_empty()
+    }
+
+    /// Selects the tiles of `view` from `root` (`tileset::select_into`, into the selection of the last frame, taken
+    /// out of the layer until `draw_tiles` puts it back), and aborts the downloads of tiles that left the view
+    fn select_tiles(&mut self, view: &View, root: usize) -> tileset::Selection {
         let now = js_sys::Date::now();
         let states = &self.states;
         let mut selection = std::mem::take(&mut self.selection);
@@ -560,7 +667,6 @@ impl Tiles3dLayer {
             &mut self.scratch,
         );
 
-        // Downloads of tiles that left the view are aborted
         let mut stale = std::mem::take(&mut self.stale);
 
         self.states.take_stale(&selection.visible, &mut stale);
@@ -569,6 +675,11 @@ impl Tiles3dLayer {
         }
         self.stale = stale;
 
+        selection
+    }
+
+    /// Requests the tiles to load, as many as the frame allows within the GPU budget, then the siblings to prefetch
+    fn request_tiles(&mut self, selection: &tileset::Selection, loading: Profile) {
         let mut requests = std::mem::take(&mut self.requests);
 
         self.states.plan_requests(
@@ -586,15 +697,10 @@ impl Tiles3dLayer {
             self.request(i, urgent);
         }
         self.requests = requests;
-        // Every tile of the view is kept, those loaded and waiting for their siblings too (a parent stands in until all
-        // its children are ready): unloaded past the budget, they would be asked again, and so on
-        self.states.touch(&selection.visible, frame);
-        self.states.touch(&selection.draw, frame);
-        self.states.touch(&selection.backfill, frame);
-        self.evict(gl, frame);
-        self.render(gl, view, &selection.draw, &selection.backfill);
-        self.render_points(gl, view, pixel_ratio, &selection.draw, &selection.backfill);
+    }
 
+    /// The counters of this frame (`stats`); the downloads in flight and those of them prefetching
+    fn update_stats(&mut self, selection: &tileset::Selection) -> (usize, usize) {
         let prefetching = selection
             .prefetch
             .iter()
@@ -610,12 +716,8 @@ impl Tiles3dLayer {
             gpu_bytes,
             tiles: self.tree.nodes.len(),
         };
-        self.selection = selection;
-        if !self.queue.is_empty() {
-            (self.redraw)();
-        }
 
-        in_flight > prefetching || !self.queue.is_empty()
+        (in_flight, prefetching)
     }
 
     /// Frees the least recently drawn meshes beyond the budget
@@ -907,6 +1009,11 @@ impl Engine {
     /// 3D Tiles (b3dm / glb textured meshes, external tilesets) from the URL of a `tileset.json`. `max_error`:
     /// screen-space error (CSS pixels) above which a tile is refined; 16 is the usual value, lower is finer.
     /// `geoid`: its heights are altitudes (NGF-IGN69), each tile raised by the RAF20 geoid onto the relief.
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when one of the layer's programs fails to compile or link (the error carries
+    /// its info log). The tileset itself is read later: a bad one leaves the layer empty, it does not throw
     #[wasm_bindgen(js_name = addTiles3d)]
     pub fn add_tiles3d(&mut self, url: String, max_error: f64, geoid: Option<bool>) -> Result<u32, JsValue> {
         let mut layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;

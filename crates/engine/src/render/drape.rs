@@ -51,6 +51,7 @@ pub struct Drape {
 }
 
 impl Drape {
+    /// No table yet: `bind` draws flat (relief 0) until an `update` builds one
     pub fn new() -> Self {
         Self {
             texture: None,
@@ -132,6 +133,7 @@ impl Drape {
         }
     }
 
+    /// Deletes the page texture if made; the drape is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         if let Some(texture) = self.texture {
             // SAFETY: texture owned by this table, not used afterwards
@@ -144,6 +146,7 @@ impl Drape {
 pub struct DrapeUniforms([Option<glow::UniformLocation>; 4]);
 
 impl DrapeUniforms {
+    /// Looks the uniforms up in `program` (one that includes `ALTITUDE`) and sets its two sampler units
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         let uniforms = crate::render::gl::uniforms(gl, program, ["u_page", "u_heights", "u_page_rect", "u_relief"]);
 

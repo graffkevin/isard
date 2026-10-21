@@ -1,11 +1,12 @@
 [package]
 name = "isard"
-version = "1.1.0"
+version.workspace = true
 publish = false
-edition = "2024"
-license = "MIT"
-authors = ["Kevin Graff"]
-repository = "https://github.com/graffkevin/isard"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "A WebGL2 map engine for large, interactive data layers, compiled to WebAssembly"
 
 [lib]

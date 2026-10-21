@@ -72,6 +72,8 @@ void main() {
   gl_Position = u_matrix * vec4(p, 1.0);
 }";
 
+/// The ground's fragment shader: up to four raster layers (`u_count`) composited over each other (straight alpha,
+/// fading in over their stand-ins, saturation, swipe columns), then the fog; premultiplied out
 pub const FRAGMENT: &str = r"#version 300 es
 precision highp float;
 uniform highp sampler2DArray u_tiles0;

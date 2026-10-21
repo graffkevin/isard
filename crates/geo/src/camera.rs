@@ -9,8 +9,16 @@
 //! Everything is computed in f64. The GPU only receives coordinates relative to the camera center, in pixels at the
 //! current zoom, which keeps f32 exact to the centimetre at any zoom.
 //!
-//! Local frame of a view: pixels relative to the center, x east, y south, z up. The sphere touches the plane at the
-//! center, its own center at (0, 0, -radius).
+//! Frames of reference, from the page to the GPU:
+//! - Geographic: longitude and latitude in degrees, heights in metres (`set_view`, `View::geodetic`).
+//! - Mercator: x east and y south in [0, 1] over the world (`mercator`, `lon_lat`); the camera center and the tiles.
+//! - Body: unit vectors from the body's center, x at lon 0 lat 0, y at lon 90° E, z the north pole (`unit`); ECEF in
+//!   metres is the same axes scaled (`View::ecef`).
+//! - Local frame of a view: pixels at the current zoom relative to the center, x east, y south, z up. The sphere
+//!   touches the plane at the center, its own center at (0, 0, -radius); `Globe::east`, `north`, `up` turn body
+//!   vectors into it. Altitudes are lifted by `View::vertical` pixels per metre.
+//! - Eye space and clip space: `View::view_proj` (eye looking down -z, y up, OpenGL clip cube).
+//! - Screen: CSS pixels from the top left of the viewport (`Camera::ray`, `ground`, `pan`, `zoom_at`).
 
 use crate::geodesy::{self, Body};
 use glam::{DMat3, DMat4, DVec2, DVec3, DVec4};
@@ -27,7 +35,9 @@ pub const PITCH_LIMIT: f64 = 85.0;
 /// Under a camera tilted past the horizon, the ground is drawn up to this many center distances away (where the
 /// fog of `Atmosphere` hides the edge)
 pub const FAR_LIMIT: f64 = 100.0;
+/// Default lower zoom bound (`Camera::min_zoom`); on the globe the floor is lowered with the latitude (`clamp`)
 pub const MIN_ZOOM: f64 = 0.0;
+/// Default upper zoom bound (`Camera::max_zoom`)
 pub const MAX_ZOOM: f64 = 22.0;
 /// Globe projection: full sphere up to this zoom…
 pub const GLOBE_FULL: f64 = 5.0;
@@ -67,10 +77,13 @@ pub fn unit(m: DVec2) -> DVec3 {
     DVec3::new(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin())
 }
 
+/// The map camera as the page sets it (`MapLibre` conventions): where it looks, how close and how tilted, the
+/// viewport and the projection. `view` turns it into the matrices of a frame; `clamp` keeps it in its limits.
 #[derive(Clone, Debug)]
 pub struct Camera {
     /// Center in Mercator [0, 1]
     pub center: DVec2,
+    /// Zoom level: the world is `TILE_SIZE * 2^zoom` CSS pixels wide
     pub zoom: f64,
     /// Degrees from the vertical
     pub pitch: f64,
@@ -78,8 +91,11 @@ pub struct Camera {
     pub bearing: f64,
     /// Viewport in CSS pixels
     pub width: f64,
+    /// Viewport height, CSS pixels
     pub height: f64,
+    /// Lowest zoom `clamp` allows (lowered with the latitude on the globe)
     pub min_zoom: f64,
+    /// Highest zoom `clamp` allows
     pub max_zoom: f64,
     /// Degrees, up to `PITCH_LIMIT`
     pub max_pitch: f64,
@@ -103,8 +119,9 @@ pub struct FirstPerson {
     pub fov: f64,
 }
 
-/// Near and far planes of a first-person view, metres
+/// Near plane of a first-person view, metres
 const FIRST_PERSON_NEAR: f64 = 0.1;
+/// Far plane of a first-person view, metres
 const FIRST_PERSON_FAR: f64 = 30_000.0;
 
 /// Sphere of a view, in the local frame
@@ -114,9 +131,11 @@ pub struct Globe {
     pub factor: f64,
     /// Pixels
     pub radius: f64,
-    /// Local axes at the center, in body coordinates (`unit`)
+    /// Local axes at the center, in body coordinates (`unit`): east…
     pub east: DVec3,
+    /// …north (the local frame's -y)…
     pub north: DVec3,
+    /// …and up, the unit vector of the center
     pub up: DVec3,
 }
 
@@ -125,21 +144,27 @@ pub struct Globe {
 pub struct View {
     /// Local frame to clip space
     pub view_proj: DMat4,
+    /// Clip space back to the local frame (unprojecting screen points)
     pub inverse: DMat4,
     /// Camera position in the local frame
     pub eye: DVec3,
     /// Distance from the camera to the center, in pixels
     pub center_distance: f64,
-    /// Near and far plane distances, in pixels
+    /// Near plane distance, in pixels
     pub near: f64,
+    /// Far plane distance, in pixels
     pub far: f64,
     /// Altitude of the center in the local frame (pixels): the plane (or sphere) the camera turns around
     pub lift: f64,
     /// Pixels of the local frame per metre of altitude
     pub vertical: f64,
+    /// Width of the world in pixels at the camera's zoom (`Camera::world_size`)
     pub world_size: f64,
+    /// Camera center, Mercator: the origin of the local frame
     pub center: DVec2,
+    /// The sphere and how far the view is blended into it
     pub globe: Globe,
+    /// The body of the camera
     pub body: Body,
 }
 
@@ -214,6 +239,8 @@ impl View {
         flat.lerp(sphere + normal * h, self.globe.factor)
     }
 
+    /// Position on the sphere (local frame, pixels) of a Mercator point, whatever the blend: the body vector turned
+    /// into the local axes, scaled by the radius, the center at the origin
     #[must_use]
     pub fn sphere(&self, m: DVec2) -> DVec3 {
         let (g, n) = (&self.globe, unit(m));
@@ -359,6 +386,8 @@ impl View {
 }
 
 impl Camera {
+    /// A camera over a longitude and latitude (degrees) at a zoom, looking straight down north up, on the Earth in Web
+    /// Mercator; the viewport is 1 × 1 until the page sets it
     #[must_use]
     pub fn new(lon: f64, lat: f64, zoom: f64) -> Self {
         Self {
@@ -378,6 +407,7 @@ impl Camera {
         }
     }
 
+    /// Width of the world in CSS pixels at the current zoom
     #[must_use]
     pub fn world_size(&self) -> f64 {
         TILE_SIZE * self.zoom.exp2()
@@ -421,7 +451,7 @@ impl Camera {
     /// Brings the camera back into its limits. Never panics, whatever the fields hold: bounds out of order give way
     /// to the lower one, and a value that is not a number falls back to a limit (the zoom), 0 (pitch, bearing) or
     /// the middle of the world (center)
-    #[allow(
+    #[expect(
         clippy::manual_clamp,
         reason = "`f64::clamp` panics on bounds out of order or not numbers"
     )]
@@ -481,6 +511,8 @@ impl Camera {
         ((pitch.cos() / top.cos()) / flat).log2().clamp(0.0, GLOBE_TILT_LEVELS)
     }
 
+    /// The sphere of this camera: its blend with the plane (zoom put off by the tilt), its radius in pixels and the
+    /// local axes at the center
     fn globe(&self) -> Globe {
         let factor = if self.globe {
             let zoom = self.zoom - self.globe_tilt();
@@ -502,6 +534,8 @@ impl Camera {
         }
     }
 
+    /// The matrices of a frame: around the center at `pitch` and `bearing`, the eye as far as gives the zoom's scale at
+    /// the center (or from the first-person eye). Called whenever the camera moved
     #[must_use]
     pub fn view(&self) -> View {
         if let Some(eye) = self.first_person {
@@ -670,8 +704,14 @@ impl Camera {
             return Some(DVec2::new(u.x, u.y));
         }
 
-        // Not converged (the ray grazing the surface, or passing over it): the first point of the ray under it,
-        // found by steps and halved, None if the ray never goes under
+        // Not converged (the ray grazing the surface, or passing over it)
+        Self::ground_by_steps(view, a, d, altitude)
+    }
+
+    /// The first point (Mercator) of the ray `a + d * t`, `t` in 0..1 (local frame), under the surface at `altitude`
+    /// (metres): found by steps, then halved; None if the ray never goes under. The fallback of `ground_at` when
+    /// Newton's method does not converge on the blended surface
+    fn ground_by_steps(view: &View, a: DVec3, d: DVec3, altitude: f64) -> Option<DVec2> {
         let under = |t: f64| Self::stand(view, a + d * t).1 <= altitude;
         // Closer together near the eye, where the ground is seen
         let steps = 64;

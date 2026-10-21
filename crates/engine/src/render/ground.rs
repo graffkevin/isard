@@ -127,6 +127,119 @@ struct Texture {
     size: (i32, i32, i32),
 }
 
+/// A texture of a ground layer as the page describes it (`setGroundTexture`)
+pub struct TextureSpec<'a> {
+    /// The sampler it is bound to
+    pub name: &'a str,
+    /// Its format by name (`format`: r8, rgba8, r32f…)
+    pub format: &'a str,
+    /// Texels
+    pub width: i32,
+    /// Texels
+    pub height: i32,
+    /// 0 for a 2D texture, else the layers of a 2D array
+    pub depth: i32,
+    /// Linear filtering (the non-integer formats), else nearest
+    pub linear: bool,
+}
+
+/// A region of a ground layer's texture, texels: `width` × `height` at (`x`, `y`) of layer `layer` (0 for a 2D
+/// texture)
+#[derive(Clone, Copy)]
+pub struct Region {
+    /// Its first column
+    pub x: i32,
+    /// Its first row
+    pub y: i32,
+    /// The layer of a 2D array, 0 for a 2D texture
+    pub layer: i32,
+    /// Texels
+    pub width: i32,
+    /// Texels
+    pub height: i32,
+}
+
+/// Makes a texture of `target` (2D or 2D array) with its storage, clamped, filtered as `spec` says, and uploads
+/// `data` (exactly its bytes) if any. Left bound
+fn create_texture(
+    gl: &glow::Context,
+    target: u32,
+    (internal, pixel_format, kind, _, integer): (u32, u32, u32, usize, bool),
+    spec: &TextureSpec,
+    data: Option<&[u8]>,
+) -> Result<glow::Texture, String> {
+    let &TextureSpec {
+        width,
+        height,
+        depth,
+        linear,
+        ..
+    } = spec;
+
+    // SAFETY: creation and upload on the live context, the data checked against the storage by the caller
+    unsafe {
+        let texture = gl.create_texture()?;
+
+        gl.bind_texture(target, Some(texture));
+
+        let filter = if linear && !integer {
+            glow::LINEAR
+        } else {
+            glow::NEAREST
+        };
+
+        for (key, value) in [
+            (glow::TEXTURE_MIN_FILTER, filter),
+            (glow::TEXTURE_MAG_FILTER, filter),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.tex_parameter_i32(target, key, value as i32);
+        }
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        if depth > 0 {
+            gl.tex_storage_3d(target, 1, internal, width, height, depth);
+
+            if let Some(data) = data {
+                gl.tex_sub_image_3d(
+                    target,
+                    0,
+                    0,
+                    0,
+                    0,
+                    width,
+                    height,
+                    depth,
+                    pixel_format,
+                    kind,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+            }
+        } else {
+            gl.tex_storage_2d(target, 1, internal, width, height);
+
+            if let Some(data) = data {
+                gl.tex_sub_image_2d(
+                    target,
+                    0,
+                    0,
+                    0,
+                    width,
+                    height,
+                    pixel_format,
+                    kind,
+                    glow::PixelUnpackData::Slice(Some(data)),
+                );
+            }
+        }
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+
+        Ok(texture)
+    }
+}
+
+/// A ground layer: the application's GLSL `ground(offset)` compiled into a raster-pass program, its own uniforms and
+/// textures, drawn over the ground inside its Mercator bounds
 pub struct GroundLayer {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 11],
@@ -141,6 +254,7 @@ pub struct GroundLayer {
     anchor: DVec2,
     min: DVec2,
     max: DVec2,
+    /// Drawn at all (the application's toggle)
     pub visible: bool,
 }
 
@@ -198,6 +312,7 @@ impl GroundLayer {
         })
     }
 
+    /// The Mercator box (0-1) it shows in
     pub fn set_bounds(&mut self, min: DVec2, max: DVec2) {
         self.min = min;
         self.max = max;
@@ -218,40 +333,20 @@ impl GroundLayer {
 
     /// Creates (or replaces) the texture bound to sampler `name`: `depth` 0 for a 2D texture, else the layers of a 2D
     /// array; `data` (optional): its texels, row after row, layer after layer
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_texture(
-        &mut self,
-        gl: &glow::Context,
-        name: &str,
-        format_name: &str,
-        width: i32,
-        height: i32,
-        depth: i32,
-        linear: bool,
-        data: Option<&[u8]>,
-    ) -> Result<(), String> {
+    pub fn set_texture(&mut self, gl: &glow::Context, spec: &TextureSpec, data: Option<&[u8]>) -> Result<(), String> {
+        let &TextureSpec {
+            name,
+            format: format_name,
+            width,
+            height,
+            depth,
+            ..
+        } = spec;
         let format = format(format_name).ok_or_else(|| format!("unknown texture format {format_name}"))?;
-        let (internal, pixel_format, kind, bytes, integer) = format;
-        let target = if depth > 0 {
-            glow::TEXTURE_2D_ARRAY
-        } else {
-            glow::TEXTURE_2D
-        };
-        let unit = match self.textures.get(name) {
-            Some(t) => t.unit,
-            None => FIRST_UNIT + self.textures.len() as u32,
-        };
-
-        if unit >= MAX_UNITS {
-            return Err(format!(
-                "too many textures in the ground layer ({} at most)",
-                MAX_UNITS - FIRST_UNIT
-            ));
-        }
-
+        let unit = self.texture_unit(name)?;
         let expected = gl::area(width, height)
             .and_then(|texels| texels.checked_mul(usize::try_from(depth.max(1)).ok()?))
-            .and_then(|texels| texels.checked_mul(bytes))
+            .and_then(|texels| texels.checked_mul(format.3))
             .filter(|_| width > 0 && height > 0)
             .ok_or_else(|| format!("texture {name}: bad size {width} × {height} × {depth}"))?;
 
@@ -265,93 +360,56 @@ impl GroundLayer {
             // SAFETY: texture owned by this layer, replaced
             unsafe { gl.delete_texture(old.handle) };
         }
-        // SAFETY: creation and upload on the live context
-        unsafe {
-            let texture = gl.create_texture()?;
 
-            gl.bind_texture(target, Some(texture));
+        let target = if depth > 0 {
+            glow::TEXTURE_2D_ARRAY
+        } else {
+            glow::TEXTURE_2D
+        };
+        let handle = create_texture(gl, target, format, spec, data.map(|d| &d[..expected]))?;
 
-            let filter = if linear && !integer {
-                glow::LINEAR
-            } else {
-                glow::NEAREST
-            };
-
-            for (key, value) in [
-                (glow::TEXTURE_MIN_FILTER, filter),
-                (glow::TEXTURE_MAG_FILTER, filter),
-                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-            ] {
-                gl.tex_parameter_i32(target, key, value as i32);
-            }
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            if depth > 0 {
-                gl.tex_storage_3d(target, 1, internal, width, height, depth);
-
-                if let Some(data) = data {
-                    gl.tex_sub_image_3d(
-                        target,
-                        0,
-                        0,
-                        0,
-                        0,
-                        width,
-                        height,
-                        depth,
-                        pixel_format,
-                        kind,
-                        glow::PixelUnpackData::Slice(Some(&data[..expected])),
-                    );
-                }
-            } else {
-                gl.tex_storage_2d(target, 1, internal, width, height);
-
-                if let Some(data) = data {
-                    gl.tex_sub_image_2d(
-                        target,
-                        0,
-                        0,
-                        0,
-                        width,
-                        height,
-                        pixel_format,
-                        kind,
-                        glow::PixelUnpackData::Slice(Some(&data[..expected])),
-                    );
-                }
-            }
-            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-            self.textures.insert(
-                name.to_owned(),
-                Texture {
-                    handle: texture,
-                    unit,
-                    target,
-                    format,
-                    size: (width, height, depth),
-                },
-            );
-        }
+        self.textures.insert(
+            name.to_owned(),
+            Texture {
+                handle,
+                unit,
+                target,
+                format,
+                size: (width, height, depth),
+            },
+        );
 
         Ok(())
     }
 
-    /// Replaces a region of a texture: `width` × `height` texels at (`x`, `y`) of layer `layer` (0 for a 2D texture)
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_texture(
-        &self,
-        gl: &glow::Context,
-        name: &str,
-        x: i32,
-        y: i32,
-        layer: i32,
-        width: i32,
-        height: i32,
-        data: &[u8],
-    ) -> Result<(), String> {
+    /// The texture unit of sampler `name`: the one it has, else the next free one; an error past `MAX_UNITS`
+    fn texture_unit(&self, name: &str) -> Result<u32, String> {
+        let unit = match self.textures.get(name) {
+            Some(t) => t.unit,
+            None => FIRST_UNIT + self.textures.len() as u32,
+        };
+
+        if unit >= MAX_UNITS {
+            return Err(format!(
+                "too many textures in the ground layer ({} at most)",
+                MAX_UNITS - FIRST_UNIT
+            ));
+        }
+
+        Ok(unit)
+    }
+
+    /// Replaces a region of texture `name` with `data` (its texels, row after row)
+    pub fn update_texture(&self, gl: &glow::Context, name: &str, region: Region, data: &[u8]) -> Result<(), String> {
         let t = self.textures.get(name).ok_or_else(|| format!("no texture {name}"))?;
         let (_, pixel_format, kind, bytes, _) = t.format;
+        let Region {
+            x,
+            y,
+            layer,
+            width,
+            height,
+        } = region;
         let expected = gl::area(width, height)
             .and_then(|texels| texels.checked_mul(bytes))
             .unwrap_or(usize::MAX);
@@ -515,8 +573,15 @@ impl Engine {
     /// Ground layer running `code` (GLSL ES 3.0 defining `vec4 ground(vec2 offset)`, see `render::ground`) over the
     /// ground; `anchor`: Mercator point the offsets are taken from; bounds: Mercator box it shows in. Compilation errors
     /// come back with the shader's info log (line numbers of `code`)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when `code` does not compile or link, with the shader's info log
     #[wasm_bindgen(js_name = addGround)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API"
+    )]
     pub fn add_ground(
         &mut self,
         code: &str,
@@ -539,6 +604,7 @@ impl Engine {
         Ok(self.add_layer(Box::new(layer)))
     }
 
+    /// Moves the Mercator box (0-1) a ground layer shows in
     #[wasm_bindgen(js_name = setGroundBounds)]
     pub fn set_ground_bounds(&mut self, id: u32, min_x: f64, min_y: f64, max_x: f64, max_y: f64) {
         if let Some((layer, _)) = self.layer_mut::<GroundLayer>(id) {
@@ -546,6 +612,7 @@ impl Engine {
         }
     }
 
+    /// Shows or hides a ground layer (kept, with its uniforms and textures)
     #[wasm_bindgen(js_name = setGroundVisible)]
     pub fn set_ground_visible(&mut self, id: u32, visible: bool) {
         if let Some((layer, _)) = self.layer_mut::<GroundLayer>(id) {
@@ -554,6 +621,11 @@ impl Engine {
     }
 
     /// A uniform of a ground layer's code, as numbers
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the shader has no uniform `name` (one its code does not use is removed
+    /// by the compiler)
     #[wasm_bindgen(js_name = setGroundUniform)]
     pub fn set_ground_uniform(&mut self, id: u32, name: &str, values: &[f64]) -> Result<(), JsValue> {
         if let Some((layer, _)) = self.layer_mut::<GroundLayer>(id) {
@@ -566,8 +638,17 @@ impl Engine {
     /// Creates the texture of sampler `name` (`format`: r8, r8ui, r16ui, r16i, r32ui, r32f, rg16ui, rg32f, rgba8,
     /// rgba8ui, rgba16ui, rgba32f; `depth` 0 for 2D, else a 2D array of that many layers; `linear` filtering for the
     /// non-integer formats); `data`: its texels as bytes, or undefined for an empty texture
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) on an unknown `format`, a size not positive (or overflowing), `data` shorter
+    /// than the texels, more textures than the layer takes, or a texture WebGL cannot create
     #[wasm_bindgen(js_name = setGroundTexture)]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API, handed over"
+    )]
     pub fn set_ground_texture(
         &mut self,
         id: u32,
@@ -580,15 +661,32 @@ impl Engine {
         data: Option<Box<[u8]>>,
     ) -> Result<(), JsValue> {
         if let Some((layer, gl)) = self.layer_mut::<GroundLayer>(id) {
-            layer.set_texture(gl, name, format, width, height, depth, linear, data.as_deref())?;
+            let spec = TextureSpec {
+                name,
+                format,
+                width,
+                height,
+                depth,
+                linear,
+            };
+
+            layer.set_texture(gl, &spec, data.as_deref())?;
         }
 
         Ok(())
     }
 
     /// Replaces a region of a ground layer's texture (one layer of a 2D array)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when there is no texture `name`, or when the region is out of its bounds or
+    /// `data` holds too few bytes
     #[wasm_bindgen(js_name = updateGroundTexture)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API"
+    )]
     pub fn update_ground_texture(
         &mut self,
         id: u32,
@@ -601,7 +699,15 @@ impl Engine {
         data: &[u8],
     ) -> Result<(), JsValue> {
         if let Some((ground, gl)) = self.layer_mut::<GroundLayer>(id) {
-            ground.update_texture(gl, name, x, y, layer, width, height, data)?;
+            let region = Region {
+                x,
+                y,
+                layer,
+                width,
+                height,
+            };
+
+            ground.update_texture(gl, name, region, data)?;
         }
 
         Ok(())

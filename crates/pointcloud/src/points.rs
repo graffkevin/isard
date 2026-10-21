@@ -7,16 +7,21 @@ use crate::las::{i32_at, u16_at};
 
 /// Bytes per vertex
 pub const STRIDE: usize = 20;
-/// Offsets in a vertex: color and class, intensity, returns
+/// Offset in a vertex of the red, green, blue and class bytes
 pub const COLOR: usize = 12;
+/// Offset in a vertex of the intensity (u16)
 pub const INTENSITY: usize = 16;
+/// Offset in a vertex of the return number and the number of returns (u8 each)
 pub const RETURNS: usize = 18;
 
 /// What a vertex holds besides its position
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Attributes {
+    /// Red, green, blue (8 bits each; white for formats without colors)
     pub rgb: [u8; 3],
+    /// ASPRS classification (2 ground, 6 building…)
     pub class: u8,
+    /// Return intensity, as stored
     pub intensity: u16,
     /// Return number, number of returns
     pub returns: [u8; 2],
@@ -38,8 +43,11 @@ pub fn push(out: &mut Vec<u8>, position: [f32; 3], a: &Attributes) {
 pub struct Layout {
     /// Point data record format, 6 to 8
     pub format: u8,
+    /// Bytes per record (at least its format's minimum, at most 1024)
     pub record_length: usize,
+    /// x, y, z of a record = its integer × scale + offset
     pub scale: [f64; 3],
+    /// x, y, z added to the scaled integers of a record (CRS units)
     pub offset: [f64; 3],
 }
 
@@ -62,6 +70,12 @@ impl Layout {
         ]
     }
 
+    /// The layout of `numbers` (`Layout::numbers`); an error unless they are 8 finite numbers of a format 6 to 8
+    ///
+    /// # Errors
+    ///
+    /// "bad point layout" unless `numbers` are 8 finite numbers, of a format 6 to 8 and a record length from
+    /// the format's minimum to 1024
     pub fn parse(numbers: &[f64]) -> Result<Self, String> {
         let bad = || "bad point layout".to_owned();
         let [format, length, sx, sy, sz, ox, oy, oz] = numbers.try_into().map_err(|_| bad())?;
@@ -91,6 +105,7 @@ impl Layout {
         }
     }
 
+    /// Whether its records hold colors (formats 7 and 8)
     fn has_rgb(&self) -> bool {
         self.format >= 7
     }
@@ -98,6 +113,11 @@ impl Layout {
 
 /// The vertices of the records of a chunk, positioned by the grid (its anchor their origin). Colors stored on 16 bits
 /// are scaled to 8; a chunk whose colors all fit in 8 bits holds 8-bit colors (some writers store them so)
+///
+/// # Errors
+///
+/// Errors when the layout's record length is below its format's minimum or `records` is not a whole number
+/// of records
 pub fn vertices(records: &[u8], layout: &Layout, grid: &Grid) -> Result<Vec<u8>, String> {
     let length = layout.record_length;
 

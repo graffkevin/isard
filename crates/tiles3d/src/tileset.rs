@@ -33,6 +33,7 @@ use volume::Volume;
 /// What the content of a tile is
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Content {
+    /// No content: an empty tile, only its children are drawn
     None,
     /// `.b3dm`, `.pnts` or `.glb` (or an unknown extension: the decoder tells by the first bytes)
     Mesh(String),
@@ -51,6 +52,7 @@ pub enum Kind {
     Json,
     /// Binary implicit-tiling subtree
     Subtree,
+    /// Anything else (an error page, an unknown format)
     Other,
 }
 
@@ -65,16 +67,21 @@ pub fn sniff(bytes: &[u8]) -> Kind {
     }
 }
 
+/// A tile of the tree: its bounding sphere and error, its content, its children by index in `Tree::nodes`
 pub struct Node {
-    /// Bounding sphere, ECEF
+    /// Bounding sphere center, ECEF
     pub center: DVec3,
+    /// Bounding sphere radius, metres
     pub radius: f64,
     /// Longitude, latitude (degrees) and height (m) of `center`, computed once
     pub geodetic: DVec3,
-    /// Metres
+    /// Geometric error, metres
     pub error: f64,
+    /// REPLACE refinement (children replace it), else ADD (children are drawn with it)
     pub replace: bool,
+    /// What it holds
     pub content: Content,
+    /// Its child tiles, indices in `Tree::nodes`
     pub children: Vec<usize>,
     /// Nodes holding the other contents of this tile (3D Tiles 1.1 `contents`): in no children list, selected
     /// with this node
@@ -83,6 +90,7 @@ pub struct Node {
     pub transform: DMat4,
     /// glTF y-up (3D Tiles 1.0 default)
     pub y_up: bool,
+    /// Its depth from the root tile (0), external tilesets and subtrees included
     pub depth: u32,
 }
 
@@ -90,7 +98,9 @@ pub struct Node {
 /// tileset may graft others (itself under another name) without end
 pub const MAX_NODES: usize = 1 << 20;
 
+/// The tree of a tileset, its external tilesets and implicit subtrees grafted under their tiles as they are loaded
 pub struct Tree {
+    /// All the tiles, the root first; indices never change (nodes are only appended)
     pub nodes: Vec<Node>,
     /// `MAX_NODES` (fewer in the tests)
     max_nodes: usize,
@@ -148,6 +158,12 @@ impl Tree {
     ///
     /// An external tileset already among the tilesets above `parent` (one that grafts itself, directly or through
     /// others) is refused, and so is anything once the tree holds `MAX_NODES` nodes.
+    ///
+    /// # Errors
+    ///
+    /// Errors when the tree holds `MAX_NODES` nodes already (or would past them), on an external tileset that
+    /// includes itself, a JSON that is not a tileset, a bad bounding volume or implicit tiling, a subtree that does not
+    /// parse, or a tileset too deep; a refused tileset leaves nothing in the tree
     pub fn add(&mut self, json: &[u8], url: &str, parent: Option<usize>) -> Result<usize, String> {
         if self.nodes.len() >= self.max_nodes {
             return Err(format!("tileset: more than {} tiles", self.max_nodes));
@@ -239,6 +255,8 @@ impl Tree {
         index
     }
 
+    /// Adds a tile of a tileset and its children (or the placeholder of its implicit tiling); returns its index.
+    /// `parent`: the parent's world transform; `replace`: its refinement, inherited
     fn add_tile(
         &mut self,
         tile: &TileJson,

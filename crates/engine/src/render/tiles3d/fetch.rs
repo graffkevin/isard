@@ -5,10 +5,12 @@ use tiles3d::decode::Mesh;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
+/// Property `key` of a JavaScript object, undefined when missing or not an object
 pub fn js_get(target: &JsValue, key: &str) -> JsValue {
     js_sys::Reflect::get(target, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
 }
 
+/// Property `key` of a JavaScript object as an array, empty when missing or not one
 pub fn get_array(target: &JsValue, key: &str) -> js_sys::Array {
     js_get(target, key).dyn_into().unwrap_or_default()
 }
@@ -37,6 +39,7 @@ pub fn load_in_worker(
     load.apply(loader, &args).ok()?.dyn_into().ok()
 }
 
+/// Releases the decoded images of a tile that will not be uploaded (`ImageBitmap::close`)
 pub fn close(images: Vec<Option<web_sys::ImageBitmap>>) {
     for image in images.into_iter().flatten() {
         image.close();

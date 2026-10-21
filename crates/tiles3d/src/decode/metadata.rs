@@ -13,16 +13,22 @@ const MAX_FEATURES: usize = 1 << 20;
 /// A property's value for a feature
 #[derive(Clone, Debug, PartialEq)]
 pub enum Property {
+    /// No value: its no-data value, a type left out (vector, matrix, array), or past the end of its buffer
     Null,
+    /// A `BOOLEAN` property, or a JSON boolean of a batch table
     Bool(bool),
+    /// Any scalar component type (integers widened to f64, f32 rounded to 7 significant digits)
     Number(f64),
+    /// A `STRING` property, an `ENUM` property's name, or a JSON string of a batch table
     Text(String),
 }
 
 /// The properties of a tile's features: their names, and each feature's values in that order
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Properties {
+    /// Property names, in the order of each feature's values
     pub names: Vec<String>,
+    /// One row per feature (indexed by its feature ID), one value per name
     pub features: Vec<Vec<Property>>,
 }
 

@@ -10,13 +10,16 @@ use std::f64::consts::TAU;
 /// A bounding volume as the tileset gives it
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Volume {
+    /// Center x, y, z and radius, in the tile's frame (metres)
     Sphere([f64; 4]),
+    /// Center then three half-axes, in the tile's frame (metres)
     Box([f64; 12]),
     /// Radians and metres, in ECEF already
     Region([f64; 6]),
 }
 
 impl Volume {
+    /// The volume given (sphere first, then box, then region), an error without any
     pub(super) fn parse(v: &VolumeJson) -> Result<Self, String> {
         match (v.sphere, v.oriented_box, v.region) {
             (Some(s), _, _) => Ok(Self::Sphere(s)),

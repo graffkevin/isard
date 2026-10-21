@@ -115,16 +115,23 @@ enum Arrival {
 pub struct Style {
     /// None: by RGB when the file has colors, else by class
     pub color_by: Option<ColorBy>,
+    /// CSS pixels: the size, or the smallest with `adaptive`
     pub size: f64,
+    /// CSS pixels: the largest with `adaptive`
     pub max_size: f64,
+    /// Sizes following the spacing of the points (from `size` to `max_size`), else fixed at `size`
     pub adaptive: bool,
+    /// Discs rather than squares
     pub round: bool,
     /// Eye-Dome Lighting: strength (0: off) and radius (CSS pixels)
     pub edl: (f64, f64),
     /// Altitudes and intensities mapped onto the ramp: NaN for the file's (the header's z, the root's intensities)
     pub elevation: [f64; 2],
+    /// Intensities mapped onto the ramp, as `elevation`
     pub intensity: [f64; 2],
+    /// Spacing of the points (CSS pixels) above which a node is refined
     pub max_error: f64,
+    /// Points selected at most; the GPU memory kept follows it (`gpu_budget`)
     pub budget: u64,
     /// Requests a second at most, 0 for no limit
     pub rate: f64,
@@ -244,16 +251,25 @@ pub fn intensity_range(vertices: &[u8]) -> Option<[f64; 2]> {
     Some([lo, if hi > lo { hi } else { lo + 16.0 }])
 }
 
+/// What the last frame of a point cloud did, for the page's statistics
 #[derive(Default, Clone, Copy)]
 pub struct PointCloudStats {
+    /// Points drawn
     pub points: u64,
+    /// Nodes drawn
     pub nodes: usize,
+    /// Nodes on the GPU
     pub loaded: usize,
+    /// Nodes requested, not arrived yet
     pub in_flight: usize,
+    /// Bytes of the nodes on the GPU
     pub gpu_bytes: usize,
+    /// Nodes of the hierarchy known so far (its pages loaded)
     pub known: usize,
 }
 
+/// A COPC point cloud streamed by node: the header and hierarchy pages, the nodes' states, the requests throttled
+/// by a token bucket, and the program that draws them
 pub struct PointCloudLayer {
     url: String,
     /// The page's CRS for a WKT: `(wkt: string | undefined) => { inverse, geoid, verticalScale }`
@@ -272,6 +288,7 @@ pub struct PointCloudLayer {
     loader: Option<JsValue>,
     program: PointProgram,
     edl: Option<Edl>,
+    /// Current style, set by `setPointCloudStyle`
     pub style: Style,
     /// The intensities of the first node, when the page gives no range
     auto_intensity: Option<[f64; 2]>,
@@ -279,6 +296,7 @@ pub struct PointCloudLayer {
     /// A frame is asked for once the bucket has a token again (requests held back)
     waking: Rc<std::cell::Cell<bool>>,
     selection: Selection,
+    /// Statistics of the last frame
     pub stats: PointCloudStats,
     /// The nodes of the last picking pass and the id of their first point
     picked: RefCell<Vec<(usize, u32)>>,
@@ -286,6 +304,8 @@ pub struct PointCloudLayer {
 }
 
 impl PointCloudLayer {
+    /// Starts with the head of `url` (its header and root page); `resolve` gives the page's CRS for the file's WKT,
+    /// `loader` the decoding workers if any, `redraw` is called when something arrives
     pub fn new(
         gl: &glow::Context,
         url: String,
@@ -446,45 +466,16 @@ impl PointCloudLayer {
         Ok(())
     }
 
+    /// Takes in what arrived (the head, hierarchy pages, nodes' points), then uploads the nodes queued within
+    /// `budget_ms` (at least one)
     fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let now = js_sys::Date::now();
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
 
         for arrival in arrivals {
             match arrival {
-                Arrival::Head(bytes) => {
-                    let attempt = self.head.unwrap_or(0);
-
-                    match bytes {
-                        Ok(bytes) => {
-                            // A file that is not COPC, or a CRS the page does not know: given up
-                            if let Err(e) = self.read_head(&bytes) {
-                                self.fail(&e);
-                                self.head = None;
-                            }
-                        }
-                        // A network error is tried again
-                        Err(e) => {
-                            if let Some(ms) = root_retry_delay(attempt + 1) {
-                                self.fail(&format!("{e}; retried in {} s", ms / 1000.0));
-                                self.head = Some(attempt + 1);
-                                self.fetch_head(HEAD_BYTES, ms);
-                            } else {
-                                self.fail(&e);
-                                self.head = None;
-                            }
-                        }
-                    }
-                }
-                Arrival::Page(node, bytes) => match bytes.and_then(|b| self.read_page(node, &b)) {
-                    Ok(()) => {
-                        self.pages.remove(&node);
-                    }
-                    Err(e) => {
-                        self.fail(&format!("hierarchy page: {e}"));
-                        self.pages.insert(node, Some(now + COOLDOWN_MS));
-                    }
-                },
+                Arrival::Head(bytes) => self.receive_head(bytes),
+                Arrival::Page(node, bytes) => self.receive_page(node, bytes, now),
                 Arrival::Points(node, id, result) if self.states.is_current(node, id) => match result {
                     Ok(vertices) => self.queue.push_back((node, vertices)),
                     Err(_) => {
@@ -494,7 +485,57 @@ impl PointCloudLayer {
                 Arrival::Points(..) => {}
             }
         }
+        self.upload_queued(gl, raw, frame, budget_ms, now);
+    }
 
+    /// The head arrived: read, or given up (not COPC, a CRS the page does not know), or asked again after a network
+    /// error while attempts remain
+    fn receive_head(&mut self, bytes: Result<Vec<u8>, String>) {
+        let attempt = self.head.unwrap_or(0);
+
+        match bytes {
+            Ok(bytes) => {
+                if let Err(e) = self.read_head(&bytes) {
+                    self.fail(&e);
+                    self.head = None;
+                }
+            }
+            Err(e) => {
+                if let Some(ms) = root_retry_delay(attempt + 1) {
+                    self.fail(&format!("{e}; retried in {} s", ms / 1000.0));
+                    self.head = Some(attempt + 1);
+                    self.fetch_head(HEAD_BYTES, ms);
+                } else {
+                    self.fail(&e);
+                    self.head = None;
+                }
+            }
+        }
+    }
+
+    /// A hierarchy page arrived: read, or asked again after the cooldown (`now`, ms)
+    fn receive_page(&mut self, node: usize, bytes: Result<Vec<u8>, String>, now: f64) {
+        match bytes.and_then(|b| self.read_page(node, &b)) {
+            Ok(()) => {
+                self.pages.remove(&node);
+            }
+            Err(e) => {
+                self.fail(&format!("hierarchy page: {e}"));
+                self.pages.insert(node, Some(now + COOLDOWN_MS));
+            }
+        }
+    }
+
+    /// Uploads the queued nodes in arrival order for `budget_ms` at most (at least one): those no longer loading are
+    /// dropped
+    fn upload_queued(
+        &mut self,
+        gl: &glow::Context,
+        raw: &web_sys::WebGl2RenderingContext,
+        frame: u64,
+        budget_ms: f64,
+        now: f64,
+    ) {
         let start = js::now();
         let mut uploaded = 0;
 
@@ -504,40 +545,53 @@ impl PointCloudLayer {
             };
 
             uploaded += 1;
-            if !matches!(self.states.get(node), Some(State::Loading(_))) {
-                continue;
+            if matches!(self.states.get(node), Some(State::Loading(_))) {
+                self.upload_node(gl, raw, node, vertices, frame, now);
             }
+        }
+    }
 
-            let Ok(array) = vertices.dyn_into::<js_sys::Uint8Array>() else {
+    /// Puts a node's vertices (a `Uint8Array` from the workers) on the GPU, where `request` anchored it; a failure
+    /// waits for the cooldown (`now`, ms)
+    fn upload_node(
+        &mut self,
+        gl: &glow::Context,
+        raw: &web_sys::WebGl2RenderingContext,
+        node: usize,
+        vertices: JsValue,
+        frame: u64,
+        now: f64,
+    ) {
+        let Ok(array) = vertices.dyn_into::<js_sys::Uint8Array>() else {
+            self.states.replace(node, State::Failed(now + COOLDOWN_MS));
+
+            return;
+        };
+
+        if self.auto_intensity.is_none() {
+            self.auto_intensity = intensity_range(&array.to_vec());
+        }
+
+        let Some(&(anchor, up, base)) = self.anchors.get(&node) else {
+            return;
+        };
+
+        match GpuPoints::upload_js(gl, raw, &array) {
+            Ok(points) => {
+                self.states.replace(
+                    node,
+                    State::Ready(NodePoints {
+                        points,
+                        anchor,
+                        up,
+                        base,
+                        used: frame,
+                    }),
+                );
+            }
+            Err(e) => {
+                web_sys::console::warn_1(&JsValue::from_str(&format!("Point cloud upload: {e:?}")));
                 self.states.replace(node, State::Failed(now + COOLDOWN_MS));
-                continue;
-            };
-
-            if self.auto_intensity.is_none() {
-                self.auto_intensity = intensity_range(&array.to_vec());
-            }
-
-            let Some(&(anchor, up, base)) = self.anchors.get(&node) else {
-                continue;
-            };
-
-            match GpuPoints::upload_js(gl, raw, &array) {
-                Ok(points) => {
-                    self.states.replace(
-                        node,
-                        State::Ready(NodePoints {
-                            points,
-                            anchor,
-                            up,
-                            base,
-                            used: frame,
-                        }),
-                    );
-                }
-                Err(e) => {
-                    web_sys::console::warn_1(&JsValue::from_str(&format!("Point cloud upload: {e:?}")));
-                    self.states.replace(node, State::Failed(now + COOLDOWN_MS));
-                }
             }
         }
     }
@@ -687,16 +741,49 @@ impl PointCloudLayer {
             .unzip()
     }
 
+    /// A frame of the cloud: what arrived taken in, the nodes selected, pages then nodes requested (within the rate),
+    /// the GPU memory kept within the budget, the nodes drawn. Whether more frames are needed (loading, held back)
     fn draw_cloud(&mut self, frame: &Frame) -> bool {
-        let (gl, view) = (frame.gl, frame.view);
-
-        self.receive(gl, frame.raw, frame.number, frame.loading.upload_budget_ms);
+        self.receive(frame.gl, frame.raw, frame.number, frame.loading.upload_budget_ms);
 
         let waiting = self.head.is_some() && self.cloud.is_none();
-        let Some(cloud) = &self.cloud else {
+
+        if self.cloud.is_none() {
             return waiting && self.head == Some(0);
-        };
+        }
+
         let now = js_sys::Date::now();
+
+        self.select_nodes(frame.view, now);
+
+        // Pages first: the nodes under them wait for them
+        let rate = self.style.rate;
+        let budget = gpu_budget(self.style.budget);
+        let pages_held = self.request_pages(rate, now);
+        let nodes_held = self.request_nodes(frame, rate, budget, now);
+        let held = pages_held || nodes_held;
+
+        self.unload_over_budget(frame, budget);
+        self.render(frame);
+
+        let in_flight = self.update_stats();
+
+        if !self.queue.is_empty() {
+            (self.redraw)();
+        }
+        if held {
+            self.wake(rate);
+        }
+
+        held || in_flight > 0 || !self.queue.is_empty() || self.pages.values().any(Option::is_none)
+    }
+
+    /// Selects the nodes to draw and to load for `view` (`pointcloud::traversal::select`), and aborts the requests
+    /// of the nodes no longer in view
+    fn select_nodes(&mut self, view: &View, now: f64) {
+        let Some(cloud) = &self.cloud else {
+            return;
+        };
         let states = &self.states;
         let ready = |i: usize| match states.get(i) {
             Some(State::Ready(_)) => Readiness::Ready,
@@ -720,12 +807,17 @@ impl PointCloudLayer {
         for loading in &stale {
             self.abort(loading);
         }
+        self.selection = selection;
+    }
 
-        // Pages first: the nodes under them wait for them
-        let rate = self.style.rate;
+    /// Fetches the hierarchy pages selected, but those cooling down or too large; whether some were held back by the
+    /// rate (requests a second)
+    fn request_pages(&mut self, rate: f64, now: f64) -> bool {
+        // Taken for the loop (fetching borrows the layer), put back after
+        let pages = std::mem::take(&mut self.selection.pages);
         let mut held = false;
 
-        for &node in &selection.pages {
+        for &node in &pages {
             let cooling = self.pages.get(&node).is_some_and(|until| until.is_none_or(|t| now < t));
             let fits = self
                 .cloud
@@ -741,17 +833,22 @@ impl PointCloudLayer {
                 }
             }
         }
+        self.selection.pages = pages;
 
+        held
+    }
+
+    /// Requests the nodes selected, the nearest first and as many as the frame allows within the GPU `budget`
+    /// (bytes); whether some were held back by the rate
+    fn request_nodes(&mut self, frame: &Frame, rate: f64, budget: usize, now: f64) -> bool {
         let mut requests = Vec::new();
         let max_requests = (frame.loading.mesh_requests / 2).max(2);
-        let budget = gpu_budget(self.style.budget);
 
         self.states
-            .plan_requests(&selection.request, &[], max_requests, budget, &mut requests);
+            .plan_requests(&self.selection.request, &[], max_requests, budget, &mut requests);
         for (rank, &node) in requests.iter().enumerate() {
             if !self.bucket.take(rate, now) {
-                held = true;
-                break;
+                return true;
             }
 
             if let Err(e) = self.request(node, rank < URGENT_REQUESTS) {
@@ -760,17 +857,23 @@ impl PointCloudLayer {
             }
         }
 
-        let drawn: Vec<usize> = selection.draw.iter().map(|&(i, _)| i).collect();
+        false
+    }
+
+    /// Marks the nodes drawn this frame, then unloads the least recently drawn ones past the GPU `budget` (bytes)
+    fn unload_over_budget(&mut self, frame: &Frame, budget: usize) {
+        let drawn: Vec<usize> = self.selection.draw.iter().map(|&(i, _)| i).collect();
 
         self.states.touch(&drawn, frame.number);
         for i in self.states.over_budget(budget, frame.number) {
             if let Some(State::Ready(node)) = self.states.replace(i, State::Unloaded) {
-                node.points.delete(gl);
+                node.points.delete(frame.gl);
             }
         }
-        self.selection = selection;
-        self.render(frame);
+    }
 
+    /// The counters of this frame (`stats`); the requests in flight
+    fn update_stats(&mut self) -> usize {
         let (in_flight, loaded, gpu_bytes) = self.states.counts();
 
         self.stats = PointCloudStats {
@@ -789,14 +892,8 @@ impl PointCloudLayer {
             gpu_bytes,
             known: self.cloud.as_ref().map_or(0, |c| c.hierarchy.nodes.len()),
         };
-        if !self.queue.is_empty() {
-            (self.redraw)();
-        }
-        if held {
-            self.wake(rate);
-        }
 
-        held || in_flight > 0 || !self.queue.is_empty() || self.pages.values().any(Option::is_none)
+        in_flight
     }
 
     fn render(&mut self, frame: &Frame) {
@@ -1061,6 +1158,11 @@ impl Engine {
     /// A COPC point cloud from its URL (HTTP range requests). `resolve(wkt)` gives the CRS of the file from its WKT
     /// (undefined if it has none): its inverse projection, whether its altitudes are above the geoid, the metres of
     /// a unit of z; it may throw (an unknown CRS), the layer then stays empty
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log). The file itself is read later: a bad file, or a `resolve` that throws, leaves the layer empty
     #[wasm_bindgen(js_name = addPointCloud)]
     pub fn add_point_cloud(
         &mut self,

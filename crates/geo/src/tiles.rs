@@ -10,14 +10,19 @@
 use crate::camera::View;
 use glam::{DVec2, DVec3};
 
+/// A Web Mercator tile (XYZ scheme): level `z`, column `x` from the west, row `y` from the north
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileId {
+    /// Level: the world is `2^z` tiles across
     pub z: u8,
+    /// Column, 0 at longitude -180°
     pub x: u32,
+    /// Row, 0 at the north edge of Mercator
     pub y: u32,
 }
 
 impl TileId {
+    /// The tile `z/x/y` (not checked against the level)
     #[must_use]
     pub fn new(z: u8, x: u32, y: u32) -> Self {
         Self { z, x, y }
@@ -32,11 +37,13 @@ impl TileId {
         (min, min + DVec2::splat(1.0 / n))
     }
 
+    /// The tile one level up holding this one, None at level 0
     #[must_use]
     pub fn parent(self) -> Option<Self> {
         (self.z > 0).then(|| Self::new(self.z - 1, self.x / 2, self.y / 2))
     }
 
+    /// The four tiles one level down: north-west, north-east, south-west, south-east
     #[must_use]
     pub fn children(self) -> [Self; 4] {
         let (z, x, y) = (self.z + 1, self.x * 2, self.y * 2);
@@ -74,6 +81,7 @@ pub const FOVEA: f64 = crate::camera::FOV * 0.3;
 /// A tile to draw, with its loading priority
 #[derive(Clone, Copy, Debug)]
 pub struct Selected {
+    /// The tile
     pub tile: TileId,
     /// Lower loads first: distance to the camera, raised away from the screen center
     pub priority: f64,

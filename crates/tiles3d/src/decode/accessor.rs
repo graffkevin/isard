@@ -13,6 +13,7 @@ const MAX_ZEROS: usize = 1 << 22;
 pub(super) struct Layout {
     count: usize,
     components: usize,
+    /// The glTF component type (5120 i8 to 5126 f32)
     pub(super) component_type: u64,
     /// Bytes per component
     size: usize,
@@ -46,6 +47,7 @@ impl Layout {
     }
 }
 
+/// Bytes of a glTF component type, an error for an unknown one
 fn component_size(component_type: u64) -> Result<usize, String> {
     match component_type {
         5120 | 5121 => Ok(1),

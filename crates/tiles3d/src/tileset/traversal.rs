@@ -29,7 +29,9 @@ impl Hasher for IndexHasher {
     }
 }
 
+/// A map keyed by node index, hashed by `IndexHasher`
 type IndexMap<V> = HashMap<usize, V, BuildHasherDefault<IndexHasher>>;
+/// A set of node indices, hashed by `IndexHasher`
 type IndexSet = HashSet<usize, BuildHasherDefault<IndexHasher>>;
 
 /// Load state of a tile, as the traversal sees it
@@ -59,6 +61,7 @@ impl Readiness {
     }
 }
 
+/// What the traversal selected for a view, as indices in `Tree::nodes`
 #[derive(Default, Debug)]
 pub struct Selection {
     /// Tiles to draw
@@ -76,6 +79,7 @@ pub struct Selection {
 }
 
 impl Selection {
+    /// Empties every list, keeping their capacity
     fn clear(&mut self) {
         self.draw.clear();
         self.backfill.clear();
@@ -88,8 +92,11 @@ impl Selection {
 /// The working buffers of the traversal, kept from frame to frame with the selection (`select_into`)
 #[derive(Default)]
 pub struct Scratch {
+    /// Tiles to load with their screen-space error and distance, before sorting
     requests: Vec<(usize, f64, f64)>,
+    /// Screen-space error and distance of each tile measured this frame, None when out of view
     measures: IndexMap<Option<(f64, f64)>>,
+    /// Tiles already in `request`, to drop duplicates
     seen: IndexSet,
 }
 
@@ -147,11 +154,15 @@ pub fn select_into(
     scratch.measures = traversal.measures.into_inner();
 }
 
+/// One traversal of the tree for a view: its inputs, and the selection it fills
 struct Traversal<'a> {
     tree: &'a Tree,
     view: &'a View,
+    /// The view's frustum (`frustum`)
     planes: [DVec4; 6],
+    /// Screen-space error threshold, CSS pixels
     max_error: f64,
+    /// The load state of a node's content, from the caller's cache
     ready: &'a dyn Fn(usize) -> Readiness,
     out: Selection,
     /// (tile, screen-space error, distance)
@@ -215,12 +226,15 @@ impl<'a> Traversal<'a> {
         self.members(i).filter(move |&m| ready(m) == Readiness::Ready)
     }
 
+    /// Visits a tile and the tiles below it, if it is in view
     fn visit(&mut self, i: usize) {
         if let Some((error, distance)) = self.measure(i) {
             self.visit_visible(i, error, distance);
         }
     }
 
+    /// Visits a tile in view (its screen-space error and distance measured): draws it, or refines it into its
+    /// children by its refinement (ADD, REPLACE with backfill), requesting what is not loaded
     fn visit_visible(&mut self, i: usize, error: f64, distance: f64) {
         // A visible tile: its downloads must survive the next frame
         let members = self.members(i);
@@ -275,6 +289,7 @@ impl<'a> Traversal<'a> {
         }
     }
 
+    /// Draws the ready contents of a tile, or requests the ones to load
     fn draw_or_request(&mut self, i: usize, state: Readiness, error: f64, distance: f64) {
         match state {
             Readiness::Ready => {

@@ -1,5 +1,5 @@
 /**
- * Releases `isard`: raising the version (packages/isard/package.json and the crates, a changelog section) and pushing it
+ * Releases `isard`: raising the version (packages/isard/package.json and the crates' `[workspace.package]`, a changelog section) and pushing it
  * to main is the release. Once the checks pass on main, the Release workflow runs `--publish`: if the version is not on
  * npm yet, the package is built and published with provenance through npm's trusted publishing (no token anywhere),
  * then the commit is tagged `v<version>` with a GitHub release of its changelog section. On a machine,
@@ -32,12 +32,12 @@ const { name, version } = isManifest(manifest) ? manifest : fail(`${pkg}/package
 if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`)) {
   fail(`CHANGELOG.md does not describe ${version}: add its "## [${version}] - <date>" section first`);
 }
-['engine', 'geo', 'pointcloud', 'tiles3d'].forEach((crate) => {
-  const manifest = readFileSync(join(root, 'crates', crate, 'Cargo.toml'), 'utf8');
-  const crateVersion = /^version = "([^"]+)"/m.exec(manifest)?.[1];
+// The crates take the workspace's version (`[workspace.package]`)
+const workspace = readFileSync(join(root, 'Cargo.toml'), 'utf8');
+const cratesVersion = /^\[workspace\.package\][^[]*?^version = "([^"]+)"/ms.exec(workspace)?.[1];
 
-  if (crateVersion !== version) fail(`crates/${crate} is at ${crateVersion}, the package at ${version}: align them`);
-});
+if (cratesVersion !== version)
+  fail(`the crates are at ${cratesVersion} (Cargo.toml), the package at ${version}: align them`);
 
 const published = (await $`npm view ${name}@${version} version`.nothrow().quiet().text()).trim() === version;
 

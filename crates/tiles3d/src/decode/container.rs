@@ -5,7 +5,6 @@ use super::gltf::index;
 use glam::DVec3;
 use serde_json::Value;
 
-/// The glTF binary of a tile and its `RTC_CENTER`
 /// A b3dm's batch table (its JSON) and its length
 pub(super) type BatchTable = (Value, usize);
 
@@ -21,6 +20,7 @@ pub(super) fn split(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), 
     }
 }
 
+/// The little-endian u32 at `offset`, as a usize; an error past the end
 pub(super) fn u32_at(bytes: &[u8], offset: usize) -> Result<usize, String> {
     let b = slice(bytes, offset, 4).ok_or("truncated tile")?;
 
@@ -42,6 +42,8 @@ fn trim_padding(text: &[u8]) -> &[u8] {
     &text[..end]
 }
 
+/// The glTF binary inside a b3dm, after its 28-byte header, feature table and batch table; with the feature table's
+/// `RTC_CENTER` (JSON or binary, zero without) and the batch table's JSON
 fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> {
     let feature_json = u32_at(bytes, 12)?;
     let feature_binary = u32_at(bytes, 16)?;
@@ -90,8 +92,9 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> 
     Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc, batch))
 }
 
-/// Chunk types of a glTF binary
+/// Chunk type of the JSON chunk of a glTF binary (`JSON` in ASCII)
 pub(super) const JSON_CHUNK: usize = 0x4E4F_534A;
+/// Chunk type of the binary chunk of a glTF binary (`BIN\0` in ASCII)
 pub(super) const BIN_CHUNK: usize = 0x004E_4942;
 
 /// JSON and binary chunk of a glTF binary

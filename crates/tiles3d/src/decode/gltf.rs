@@ -3,7 +3,7 @@
 //! from the binary chunk or decompressed by meshopt).
 
 use super::container::{parse_glb, slice};
-use super::{DracoGeometry, Mesh, Points, Primitive, center, relative};
+use super::{DracoGeometry, Mesh, Points, Primitive, Properties, center, relative};
 use crate::meshopt;
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
@@ -25,6 +25,7 @@ pub(super) fn offset(v: &Value) -> Result<usize, String> {
     index(v).ok_or_else(|| "bad byteOffset".into())
 }
 
+/// The material of a primitive (`Value::Null` without one)
 fn material<'a>(json: &'a Value, primitive: &Value) -> &'a Value {
     &json["materials"][index(&primitive["material"]).unwrap_or(usize::MAX)]
 }
@@ -57,6 +58,9 @@ fn numbers<const N: usize>(value: &Value, default: [f64; N]) -> Result<[f64; N],
     }
 }
 
+/// Decodes a glTF binary into a mesh: its scene walked from the roots through the node transforms, then
+/// `transform` · `rtc` · the y-up to z-up rotation (`y_up`), to ECEF. `draco`: the Draco primitives decoded by the
+/// caller; `batch`: the b3dm's batch table and its length, for the features' properties without a property table
 pub(super) fn decode_glb(
     bytes: &[u8],
     transform: &DMat4,
@@ -67,13 +71,7 @@ pub(super) fn decode_glb(
 ) -> Result<Mesh, String> {
     let (json, bin) = parse_glb(bytes)?;
 
-    for required in json["extensionsRequired"].as_array().into_iter().flatten() {
-        let name = required.as_str().unwrap_or("");
-
-        if !SUPPORTED.contains(&name) {
-            return Err(format!("glTF extension {name} unsupported"));
-        }
-    }
+    check_extensions(&json)?;
 
     let gltf = Gltf::new(&json, bin, draco);
     // glTF y-up → z-up: +90° about x
@@ -84,40 +82,12 @@ pub(super) fn decode_glb(
     };
     let to_world = *transform * DMat4::from_translation(rtc) * axis;
     let mut out = Out::default();
-    let scene = index(&json["scene"]).unwrap_or(0);
-    let nodes = json["nodes"].as_array().map_or(&[][..], Vec::as_slice);
-    let roots: Vec<usize> = if let Some(roots) = json["scenes"][scene]["nodes"].as_array() {
-        roots.iter().filter_map(index).collect()
-    } else {
-        // No scene: the nodes no other node holds
-        let mut child = vec![false; nodes.len()];
 
-        for c in nodes
-            .iter()
-            .flat_map(|n| n["children"].as_array().into_iter().flatten())
-        {
-            if let Some(slot) = index(c).and_then(|c| child.get_mut(c)) {
-                *slot = true;
-            }
-        }
-
-        (0..nodes.len()).filter(|&n| !child[n]).collect()
-    };
-
-    for node in roots {
+    for node in scene_roots(&json) {
         gltf.node(node, &to_world, &mut out, 0)?;
     }
 
-    // Anchor: center of the positions' bounds
-    let corners: Vec<DVec3> = out
-        .triangles
-        .iter()
-        .map(|(_, world)| world)
-        .chain(out.points.iter().map(|(_, world)| world))
-        .filter_map(|world| bounds(world))
-        .flatten()
-        .collect();
-    let anchor = center(&corners).unwrap_or_else(|| transform.transform_point3(rtc));
+    let anchor = anchor(&out).unwrap_or_else(|| transform.transform_point3(rtc));
     let primitives = out
         .triangles
         .into_iter()
@@ -136,18 +106,7 @@ pub(super) fn decode_glb(
             points
         })
         .collect();
-    // The properties of the features: the property table of the first primitive with one (3D Tiles 1.1), else the
-    // b3dm's batch table
-    let table = json["meshes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|m| m["primitives"].as_array().into_iter().flatten())
-        .find_map(|p| index(&p["extensions"]["EXT_mesh_features"]["featureIds"][0]["propertyTable"]));
-    let properties = match table {
-        Some(table) => super::metadata::property_table(&gltf, table)?,
-        None => batch.and_then(|(table, count)| super::metadata::batch_table(table, *count)),
-    };
+    let properties = feature_properties(&gltf, batch)?;
 
     Ok(Mesh {
         anchor,
@@ -161,6 +120,72 @@ pub(super) fn decode_glb(
         points,
         properties,
     })
+}
+
+/// An error if the glTF requires an extension this decoder does not handle (`SUPPORTED`)
+fn check_extensions(json: &Value) -> Result<(), String> {
+    for required in json["extensionsRequired"].as_array().into_iter().flatten() {
+        let name = required.as_str().unwrap_or("");
+
+        if !SUPPORTED.contains(&name) {
+            return Err(format!("glTF extension {name} unsupported"));
+        }
+    }
+
+    Ok(())
+}
+
+/// The root nodes of the glTF's scene (`scene`, else the first); without scenes, the nodes no other node holds
+fn scene_roots(json: &Value) -> Vec<usize> {
+    let scene = index(&json["scene"]).unwrap_or(0);
+    let nodes = json["nodes"].as_array().map_or(&[][..], Vec::as_slice);
+
+    if let Some(roots) = json["scenes"][scene]["nodes"].as_array() {
+        return roots.iter().filter_map(index).collect();
+    }
+
+    let mut child = vec![false; nodes.len()];
+
+    for c in nodes
+        .iter()
+        .flat_map(|n| n["children"].as_array().into_iter().flatten())
+    {
+        if let Some(slot) = index(c).and_then(|c| child.get_mut(c)) {
+            *slot = true;
+        }
+    }
+
+    (0..nodes.len()).filter(|&n| !child[n]).collect()
+}
+
+/// The anchor of a tile: the center of the bounds of all its world positions (ECEF), None without finite ones
+fn anchor(out: &Out) -> Option<DVec3> {
+    let corners: Vec<DVec3> = out
+        .triangles
+        .iter()
+        .map(|(_, world)| world)
+        .chain(out.points.iter().map(|(_, world)| world))
+        .filter_map(|world| bounds(world))
+        .flatten()
+        .collect();
+
+    center(&corners)
+}
+
+/// The properties of the features: the property table of the first primitive with one (3D Tiles 1.1), else the
+/// b3dm's batch table, None without either
+fn feature_properties(gltf: &Gltf, batch: Option<&(Value, usize)>) -> Result<Option<Properties>, String> {
+    let table = gltf.json["meshes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["primitives"].as_array().into_iter().flatten())
+        .find_map(|p| index(&p["extensions"]["EXT_mesh_features"]["featureIds"][0]["propertyTable"]));
+
+    match table {
+        Some(table) => super::metadata::property_table(gltf, table),
+        None => Ok(batch.and_then(|(table, count)| super::metadata::batch_table(table, *count))),
+    }
 }
 
 /// The corners of the bounds of positions, None if not finite
@@ -209,8 +234,12 @@ const MAX_VALUES: usize = 1 << 24;
 /// An image of the glTF used by a primitive: its index in the glTF, its bytes, its media type
 type Image = (usize, Rc<[u8]>, String);
 
+/// A glTF being decoded: its JSON and binary chunk, the buffer views, accessors and images read so far (each once
+/// however many primitives use it), and the budgets that bound a malicious file
 pub(super) struct Gltf<'a> {
+    /// The JSON chunk
     pub(super) json: &'a Value,
+    /// The binary chunk (empty without)
     bin: &'a [u8],
     /// Draco primitives decoded by the caller
     draco: &'a [DracoGeometry],
@@ -218,6 +247,7 @@ pub(super) struct Gltf<'a> {
     views: RefCell<HashMap<usize, Rc<[u8]>>>,
     /// Accessors read so far, by index (`floats`, `indices`)
     pub(super) floats: RefCell<HashMap<usize, Rc<[f32]>>>,
+    /// Index accessors read so far, by index
     pub(super) indices: RefCell<HashMap<usize, Rc<[u32]>>>,
     /// Indices 0 to n - 1 of the primitives without indices, by n
     sequences: RefCell<HashMap<usize, Rc<[u32]>>>,
@@ -230,6 +260,7 @@ pub(super) struct Gltf<'a> {
 }
 
 impl<'a> Gltf<'a> {
+    /// A glTF from its chunks, nothing read yet, its node visits bounded by its node count
     pub(super) fn new(json: &'a Value, bin: &'a [u8], draco: &'a [DracoGeometry]) -> Self {
         let nodes = json["nodes"].as_array().map_or(0, Vec::len);
 
@@ -264,6 +295,8 @@ impl<'a> Gltf<'a> {
             .ok_or_else(|| "glTF tile too large".into())
     }
 
+    /// Walks node `index` and its children (depth-first), pushing the primitives of their meshes to `out` in world
+    /// positions; `parent`: the world transform above it. Errors past `MAX_DEPTH` or the visits budget
     fn node(&self, index: usize, parent: &DMat4, out: &mut Out, depth: u32) -> Result<(), String> {
         if depth > MAX_DEPTH {
             return Err("glTF node hierarchy too deep".into());

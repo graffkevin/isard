@@ -9,6 +9,7 @@ use wasm_bindgen_futures::JsFuture;
 
 /// The content of an arrived tile
 pub enum Pixels {
+    /// A decoded image, not premultiplied
     Image(web_sys::ImageBitmap),
     /// 256 × 256 altitudes, rows from the north
     Heights(Vec<f32>),
@@ -23,6 +24,7 @@ impl Pixels {
     }
 }
 
+/// Why a tile could not be had
 pub enum Fetch {
     /// No tile at this place (404, 204): final
     Missing,

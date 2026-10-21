@@ -155,8 +155,11 @@ pub fn stops_of(s: &[f32]) -> Option<[[f32; 4]; 2]> {
 pub struct LayerStyle {
     /// Opacity as zoom stops: zooms, then values
     pub opacity: [[f32; 4]; 2],
+    /// Shown from this zoom on (inclusive)
     pub min_zoom: f64,
+    /// Hidden from this zoom on (exclusive)
     pub max_zoom: f64,
+    /// Shown at all (the application's toggle)
     pub visible: bool,
 }
 
@@ -187,6 +190,7 @@ impl LayerStyle {
 
 /// The feature textures of a layer
 pub struct Features {
+    /// Number of features, the size of each per-feature table
     pub count: usize,
     layout: Layout,
     style: glow::Texture,
@@ -197,6 +201,7 @@ pub struct Features {
     /// A feature's color or the ramp has an alpha under 1 (`colors_translucent`)
     translucent_style: bool,
     translucent_ramp: bool,
+    /// The layer-wide style (opacity stops, zoom range, visibility)
     pub layer: LayerStyle,
 }
 
@@ -204,6 +209,7 @@ pub struct Features {
 pub struct FeatureUniforms([Option<glow::UniformLocation>; 9]);
 
 impl FeatureUniforms {
+    /// Looks the uniforms up in `program` (one that includes `FEATURES`) and sets its sampler units
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         let uniforms = crate::render::gl::uniforms(
             gl,
@@ -394,6 +400,7 @@ impl Features {
         }
     }
 
+    /// Deletes the four textures; the features are not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: textures owned by this layer, not used afterwards
         unsafe {
@@ -482,7 +489,10 @@ impl Engine {
 
     /// Colors of the values `min` to `max`, 256 RGBA texels (1024 bytes); undefined: none
     #[wasm_bindgen(js_name = setFeatureRamp)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_feature_ramp(&mut self, id: u32, rgba: Option<Box<[u8]>>, min: f32, max: f32) {
         let ramp = rgba.as_deref().map(|r| (r, min, max));
 

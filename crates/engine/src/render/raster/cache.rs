@@ -26,12 +26,16 @@ struct Loaded {
 /// What a source gives to one tile of the pass: texture slots and uv rects of the tile and of its stand-in
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
+    /// The tile's own slot and uv rect (or the ancestor standing in for it), None: nothing loaded over it
     pub front: Option<(u16, [f32; 4])>,
+    /// The stand-in it fades in over, while `fade < 1`
     pub back: Option<(u16, [f32; 4])>,
+    /// Fade-in of `front` over `back`, 0 to 1 (1: done)
     pub fade: f32,
 }
 
 impl Sample {
+    /// Nothing to show: no slot, no fade
     pub const NONE: Self = Self {
         front: None,
         back: None,
@@ -105,8 +109,12 @@ impl Plan {
     }
 }
 
+/// The tiles of one raster source in the slots of its texture pool: which tile is where, the least recently used
+/// first out, and the tiles that failed or are not served
 pub struct Cache {
+    /// Shallowest zoom of the source's tiles
     pub min_z: u8,
+    /// Deepest zoom of the source's tiles: a deeper view shows these stretched
     pub max_z: u8,
     /// Slots of the pool
     capacity: usize,
@@ -123,6 +131,7 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// An empty cache of `slots` slots (at most `u16::MAX`), for tiles of zoom `min_z` to `max_z`
     pub fn new(min_z: u8, max_z: u8, slots: usize) -> Self {
         let slots = slots.min(usize::from(u16::MAX)) as u16;
 
@@ -140,6 +149,7 @@ impl Cache {
         }
     }
 
+    /// Whether the tile is in the pool
     pub fn contains(&self, tile: TileId) -> bool {
         self.slots.contains_key(&tile)
     }
@@ -247,6 +257,7 @@ impl Cache {
         self.failed.contains_key(&tile) || self.missing.contains_key(&tile)
     }
 
+    /// Whether the tile is not to be requested now: not served, or failed and still in its cooldown (`now`, ms)
     pub fn is_failed(&self, tile: TileId, now: f64) -> bool {
         self.missing.contains_key(&tile) || self.failed.get(&tile).is_some_and(|&(until, _)| now < until)
     }
@@ -329,82 +340,13 @@ impl Cache {
                 continue;
             }
 
-            // Stand-in: nearest loaded ancestor (cropped to this tile by `sample`), or its loaded descendants
-            // (zooming out)
-            let ancestor = self.loaded_ancestor(tile);
-            let covered = ancestor.is_some();
+            let (stand_ins, covered) = self.plan_stand_in(plan, tile, frame, now);
 
-            if let Some(ancestor) = ancestor {
-                held += usize::from(self.hold(ancestor, frame));
-                plan.tiles.push(tile);
-            } else {
-                let before = plan.tiles.len();
-
-                self.push_descendants(tile, DESCENDANT_LEVELS, &mut plan.tiles);
-                for k in before..plan.tiles.len() {
-                    held += usize::from(self.hold(plan.tiles[k], frame));
-                }
-                if plan.tiles.len() == before {
-                    // Nothing yet: drawn anyway, the other layers of the pass may cover it
-                    plan.tiles.push(tile);
-                }
-
-                // Nothing loaded above: a coarse tile first, to cover the area quickly
-                let level = tile.z.saturating_sub(COVER_LEVELS).max(self.min_z);
-                let mut coarse = tile;
-
-                while coarse.z > level {
-                    coarse = coarse.parent().unwrap_or(coarse);
-                }
-
-                if coarse != tile && !self.is_failed(coarse, now) && !plan.cover.contains(&coarse) {
-                    plan.cover.push(coarse);
-                }
-            }
-            // During a flight, the levels flown through are skipped (Cesium's skip LOD): only the coarse coverage
-            // and the destination load
-            if motion.flying {
-                if covered {
-                    plan.deferred = true;
-                } else if tile.z <= self.min_z.saturating_add(COVER_LEVELS) && !self.is_failed(tile, now) {
-                    // Too coarse to have a coarser cover: the tile itself
-                    plan.want(tile, true);
-                }
-                continue;
-            }
-            // While the camera moves, covered tiles off the screen center wait (foveated loading, as in Cesium):
-            // the downloads go where the eye is
-            if motion.defer_off_center && covered && !selected.central {
-                plan.deferred = true;
-                continue;
-            }
-
-            if self.is_failed(tile, now) {
-                // No tile here (or it kept failing): its nearest ancestor that can load stands in
-                let mut ancestor = tile.parent();
-
-                while let Some(a) = ancestor {
-                    if a.z < self.min_z || self.slots.contains_key(&a) {
-                        break;
-                    }
-                    if !self.is_failed(a, now) {
-                        plan.want(a, false);
-                        break;
-                    }
-                    ancestor = a.parent();
-                }
-            } else {
-                plan.want(tile, selected.central);
-            }
+            held += stand_ins;
+            self.plan_request(plan, selected, covered, now, motion);
         }
-        // Destination of a camera flight: loaded after the current view, kept in the pool
-        for &tile in preload {
-            if self.hold(tile, frame) {
-                held += 1;
-            } else if !self.slots.contains_key(&tile) && !self.is_failed(tile, now) {
-                plan.want(tile, false);
-            }
-        }
+        held += self.plan_preload(plan, preload, frame, now);
+
         // Coverage first (urgent: holes), then the tiles by priority, then the flight destination; past the room
         // left in the pool, the last ones wait (the farthest tiles, then the destination)
         plan.urgent.splice(0..0, plan.cover.iter().map(|_| true));
@@ -414,6 +356,104 @@ impl Cache {
 
         plan.missing.truncate(room);
         plan.urgent.truncate(room);
+    }
+
+    /// What stands in for a wanted tile not loaded: its nearest loaded ancestor (cropped to this tile by `sample`), or
+    /// its loaded descendants (zooming out), held in the pool; with neither, a coarse tile to cover the area quickly.
+    /// The slots it newly holds, and whether an ancestor covers it
+    fn plan_stand_in(&mut self, plan: &mut Plan, tile: TileId, frame: u64, now: f64) -> (usize, bool) {
+        let mut held = 0;
+
+        if let Some(ancestor) = self.loaded_ancestor(tile) {
+            held += usize::from(self.hold(ancestor, frame));
+            plan.tiles.push(tile);
+
+            return (held, true);
+        }
+
+        let before = plan.tiles.len();
+
+        self.push_descendants(tile, DESCENDANT_LEVELS, &mut plan.tiles);
+        for k in before..plan.tiles.len() {
+            held += usize::from(self.hold(plan.tiles[k], frame));
+        }
+        if plan.tiles.len() == before {
+            // Nothing yet: drawn anyway, the other layers of the pass may cover it
+            plan.tiles.push(tile);
+        }
+
+        // Nothing loaded above: a coarse tile first, to cover the area quickly
+        let level = tile.z.saturating_sub(COVER_LEVELS).max(self.min_z);
+        let mut coarse = tile;
+
+        while coarse.z > level {
+            coarse = coarse.parent().unwrap_or(coarse);
+        }
+
+        if coarse != tile && !self.is_failed(coarse, now) && !plan.cover.contains(&coarse) {
+            plan.cover.push(coarse);
+        }
+
+        (held, false)
+    }
+
+    /// Whether and how a wanted tile not loaded is asked for: skipped during a flight, deferred off the screen center
+    /// while the camera moves (when `covered`), its nearest loadable ancestor in its place when it failed
+    fn plan_request(&self, plan: &mut Plan, selected: &Selected, covered: bool, now: f64, motion: Motion) {
+        let tile = selected.tile;
+
+        // During a flight, the levels flown through are skipped (Cesium's skip LOD): only the coarse coverage
+        // and the destination load
+        if motion.flying {
+            if covered {
+                plan.deferred = true;
+            } else if tile.z <= self.min_z.saturating_add(COVER_LEVELS) && !self.is_failed(tile, now) {
+                // Too coarse to have a coarser cover: the tile itself
+                plan.want(tile, true);
+            }
+
+            return;
+        }
+        // While the camera moves, covered tiles off the screen center wait (foveated loading, as in Cesium):
+        // the downloads go where the eye is
+        if motion.defer_off_center && covered && !selected.central {
+            plan.deferred = true;
+
+            return;
+        }
+
+        if self.is_failed(tile, now) {
+            // No tile here (or it kept failing): its nearest ancestor that can load stands in
+            let mut ancestor = tile.parent();
+
+            while let Some(a) = ancestor {
+                if a.z < self.min_z || self.slots.contains_key(&a) {
+                    break;
+                }
+                if !self.is_failed(a, now) {
+                    plan.want(a, false);
+                    break;
+                }
+                ancestor = a.parent();
+            }
+        } else {
+            plan.want(tile, selected.central);
+        }
+    }
+
+    /// Destination of a camera flight: loaded after the current view, kept in the pool. The slots it newly holds
+    fn plan_preload(&mut self, plan: &mut Plan, preload: &[TileId], frame: u64, now: f64) -> usize {
+        let mut held = 0;
+
+        for &tile in preload {
+            if self.hold(tile, frame) {
+                held += 1;
+            } else if !self.slots.contains_key(&tile) && !self.is_failed(tile, now) {
+                plan.want(tile, false);
+            }
+        }
+
+        held
     }
 
     /// What this source draws on the area of `tile`: its texture (or the deepest level it has, enlarged), with the

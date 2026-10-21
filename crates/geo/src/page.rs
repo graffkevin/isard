@@ -11,9 +11,13 @@ pub const MAX_SIDE: u32 = 512;
 /// the north
 #[derive(Debug, PartialEq)]
 pub struct Table {
+    /// Tile level of the cells (a cell is a tile of that level)
     pub level: u8,
+    /// Tile x and y of the first cell (north-west corner)
     pub first: (u32, u32),
+    /// Cells across and down, each at least 1 and at most `MAX_SIDE`
     pub size: (u32, u32),
+    /// `size.0 * size.1` cells, row after row: [slot, level, 1 if a tile covers it else 0, 0]
     pub cells: Vec<[u8; 4]>,
 }
 

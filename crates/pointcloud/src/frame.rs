@@ -14,14 +14,17 @@ pub const MAX_SIDE: usize = 17;
 /// is at `base(x, y) + z × vertical_scale × up(x, y)`
 #[derive(Clone, Debug, PartialEq)]
 pub struct Grid {
-    /// Corners of the square (CRS units)
+    /// Minimum corner of the square (CRS units)
     pub min: [f64; 2],
+    /// Maximum corner of the square (CRS units)
     pub max: [f64; 2],
+    /// Nodes along a side, 2 to `MAX_SIDE`
     pub side: usize,
     /// Metres of a unit of z
     pub vertical_scale: f64,
     /// Row after row (y), x along each: ECEF offsets from the anchor, and unit verticals
     pub base: Vec<DVec3>,
+    /// Unit vertical (ECEF) at each node, in the order of `base`
     pub up: Vec<DVec3>,
 }
 
@@ -51,6 +54,11 @@ impl Grid {
     }
 
     /// The grid of `numbers`; an error unless they hold a whole grid of finite numbers
+    ///
+    /// # Errors
+    ///
+    /// "bad point cloud grid" when the numbers are fewer than the head, the side is not a whole number from 2
+    /// to `MAX_SIDE`, the nodes are not `side × side × 6` numbers, a number is not finite or the box is empty
     pub fn parse(numbers: &[f64]) -> Result<Self, String> {
         let bad = || "bad point cloud grid".to_owned();
         let [x0, y0, x1, y1, side, vertical_scale] =

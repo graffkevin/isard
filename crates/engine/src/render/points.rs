@@ -129,13 +129,18 @@ void main() {
 /// What a point cloud is colored by
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorBy {
+    /// The points' own colors
     Rgb = 0,
+    /// The class palette (ASPRS classes)
     Classification = 1,
+    /// The altitude through the ramp
     Elevation = 2,
+    /// The intensity, in grey (within the style's range)
     Intensity = 3,
 }
 
 impl ColorBy {
+    /// From the page's number (1 class, 2 elevation, 3 intensity); anything else: RGB
     #[must_use]
     pub fn from_number(n: f64) -> Self {
         match n as i32 {
@@ -149,13 +154,17 @@ impl ColorBy {
 
 /// How the points of a draw look
 #[derive(Clone, Copy, Debug)]
-#[allow(clippy::struct_excessive_bools, reason = "switches of the shader, set together")]
+#[expect(clippy::struct_excessive_bools, reason = "switches of the shader, set together")]
 pub struct Look {
+    /// The attribute the color comes from
     pub color_by: ColorBy,
     /// CSS pixels: the size, or the smallest with `adaptive`
     pub size: f64,
+    /// CSS pixels: the largest with `adaptive`
     pub max_size: f64,
+    /// Sizes following the spacing of the points (from `size` to `max_size`), else fixed at `size`
     pub adaptive: bool,
+    /// Discs rather than squares
     pub round: bool,
     /// The range of the altitudes (elevation) or intensities mapped onto the ramp
     pub range: [f64; 2],
@@ -168,10 +177,15 @@ pub struct Look {
 /// One node or tile of points to draw: its points, the matrix of its anchor, the vertical there (ECEF axes), the
 /// altitude of the anchor, and the spacing of its points in pixels at a unit of distance (0: fixed size)
 pub struct Draw<'a> {
+    /// The points, on the GPU
     pub points: &'a GpuPoints,
+    /// Model-view-projection of the anchor's local frame (relative to the camera)
     pub matrix: glam::DMat4,
+    /// The vertical at the anchor (ECEF axes, unit)
     pub up: glam::DVec3,
+    /// Altitude of the anchor (metres), the base of the elevation ramp
     pub base: f64,
+    /// Spacing of the points in pixels at a unit of distance; 0: fixed size
     pub spacing: f64,
 }
 
@@ -205,6 +219,7 @@ const UNIFORMS: [&str; 13] = [
 const PALETTE: u32 = unit::OWN[0];
 
 impl PointProgram {
+    /// Builds the drawing and picking programs, the palette and the ramp textures
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
         let vertex = gl::vertex_shader(&[VERTEX]);
@@ -334,6 +349,7 @@ impl PointProgram {
         }
     }
 
+    /// Deletes both programs and both textures; the program is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by this program, not used afterwards
         unsafe {
@@ -369,9 +385,12 @@ fn upload_row(gl: &glow::Context, texture: glow::Texture, rgba: &[u8], width: us
 
 /// Points on the GPU: their vertex array and buffer
 pub struct GpuPoints {
+    /// Its attributes, one point per vertex (`STRIDE` bytes)
     pub vao: glow::VertexArray,
     buffer: glow::Buffer,
+    /// Number of points
     pub count: i32,
+    /// Bytes on the GPU (`count × STRIDE`)
     pub bytes: usize,
 }
 
@@ -450,6 +469,7 @@ impl GpuPoints {
         Some(out)
     }
 
+    /// Deletes the vertex array and buffer; the points are not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by these points, not used afterwards
         unsafe {
@@ -518,6 +538,7 @@ pub struct Edl {
 }
 
 impl Edl {
+    /// Builds the program, the framebuffer and its two textures (their storage made at the first `begin`)
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
         let program = objects.program(&gl::vertex_shader(&[SCREEN]), &gl::fragment_shader(&[EDL]))?;
@@ -625,6 +646,7 @@ impl Edl {
         }
     }
 
+    /// Deletes the program, the framebuffer and its textures; the pass is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by this pass, not used afterwards
         unsafe {

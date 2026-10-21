@@ -68,6 +68,7 @@ pub struct Objects<'a> {
 }
 
 impl<'a> Objects<'a> {
+    /// An empty set on `gl`: what is created through it is deleted on drop, unless `keep` is called
     pub fn new(gl: &'a glow::Context) -> Self {
         Self {
             gl,
@@ -80,6 +81,7 @@ impl<'a> Objects<'a> {
         }
     }
 
+    /// Compiles and links a program (`program`), tracked for deletion
     pub fn program(&mut self, vertex: &str, fragment: &str) -> Result<glow::Program, String> {
         let program = program(self.gl, vertex, fragment)?;
 
@@ -88,6 +90,7 @@ impl<'a> Objects<'a> {
         Ok(program)
     }
 
+    /// Creates a vertex array, tracked for deletion
     pub fn vertex_array(&mut self) -> Result<glow::VertexArray, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let vao = unsafe { self.gl.create_vertex_array()? };
@@ -97,6 +100,7 @@ impl<'a> Objects<'a> {
         Ok(vao)
     }
 
+    /// Creates a buffer, tracked for deletion
     pub fn buffer(&mut self) -> Result<glow::Buffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let buffer = unsafe { self.gl.create_buffer()? };
@@ -106,6 +110,7 @@ impl<'a> Objects<'a> {
         Ok(buffer)
     }
 
+    /// Creates a texture, tracked for deletion
     pub fn texture(&mut self) -> Result<glow::Texture, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let texture = unsafe { self.gl.create_texture()? };
@@ -122,6 +127,7 @@ impl<'a> Objects<'a> {
         texture
     }
 
+    /// Creates a framebuffer, tracked for deletion
     pub fn framebuffer(&mut self) -> Result<glow::Framebuffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let framebuffer = unsafe { self.gl.create_framebuffer()? };
@@ -131,6 +137,7 @@ impl<'a> Objects<'a> {
         Ok(framebuffer)
     }
 
+    /// Creates a renderbuffer, tracked for deletion
     pub fn renderbuffer(&mut self) -> Result<glow::Renderbuffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let renderbuffer = unsafe { self.gl.create_renderbuffer()? };
@@ -203,6 +210,7 @@ impl DepthTarget {
         Ok((framebuffer, texture))
     }
 
+    /// Deletes the texture and framebuffer if made; the target can be used again (made anew on the next `target`)
     pub fn delete(&mut self, gl: &glow::Context) {
         if let Some((texture, framebuffer, _)) = self.0.take() {
             // SAFETY: objects owned by the target, not used afterwards
@@ -304,6 +312,7 @@ vec3 project(vec2 plane, vec2 merc) { return project_up(plane, merc, 0.0); }
 pub struct Projection([Option<glow::UniformLocation>; 7]);
 
 impl Projection {
+    /// Looks the uniforms up in `program` (one that includes `PROJECT`)
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         Self(uniforms(
             gl,
@@ -339,17 +348,21 @@ pub const GRID: u16 = 16;
 /// levels). Indices: the full grid (`GRID² × 6`), the skirt (both windings), then the 6 indices of the corners only
 /// (for the flat plane). Clockwise on screen, the front faces (`front_face(CW)`).
 pub struct Grid {
+    /// `(GRID + 1)²` unit-square vertices then the skirt's (vec2 each)
     pub vertices: glow::Buffer,
+    /// u16 indices: the full grid, the skirt, then the corner quad
     pub indices: glow::Buffer,
 }
 
 impl Grid {
+    /// Index count of the full grid (`GRID² × 6`)
     pub const FULL: i32 = (GRID as i32) * (GRID as i32) * 6;
     /// The skirt: 4 × GRID border segments, two triangles each, both windings
     pub const SKIRT: i32 = 4 * (GRID as i32) * 12;
     /// Byte offset and count of the corner-only quad
     pub const CORNERS: (i32, i32) = ((Self::FULL + Self::SKIRT) * 2, 6);
 
+    /// Builds and uploads the mesh (static, shared by the tiles of every raster layer)
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let n = GRID + 1;
         let mut vertices: Vec<f32> = Vec::new();
@@ -416,6 +429,7 @@ impl Grid {
         }
     }
 
+    /// Deletes both buffers; the mesh is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: buffers owned by the mesh, not used afterwards
         unsafe {
@@ -459,7 +473,13 @@ pub fn bytes<T: bytemuck::NoUninit>(data: &[T]) -> &[u8] {
 }
 
 /// The glow context of a WebGL2 context (only in the browser: natively, the pure logic is compiled for its tests)
-#[cfg_attr(target_arch = "wasm32", allow(clippy::unnecessary_wraps))]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the native build, for the tests, has no WebGL and fails"
+    )
+)]
 pub fn context(webgl: web_sys::WebGl2RenderingContext) -> Result<glow::Context, String> {
     #[cfg(target_arch = "wasm32")]
     return Ok(glow::Context::from_webgl2_context(webgl));
@@ -532,11 +552,15 @@ pub mod unit {
     pub const OWN: [u32; 5] = [1, 2, 3, 4, 5];
     /// The drape: the page table and the elevation pool (`render::drape`)
     pub const PAGE: u32 = 6;
+    /// The drape's elevation pool
     pub const HEIGHTS: u32 = 7;
     /// The feature textures (`render::features`)
     pub const STYLE: u32 = 8;
+    /// The feature values (`render::features`)
     pub const VALUES: u32 = 9;
+    /// The feature mask (hidden / selected bits, `render::features`)
     pub const MASK: u32 = 10;
+    /// The feature ramps (`RAMP_TEXELS` wide)
     pub const RAMP: u32 = 11;
 }
 
@@ -742,6 +766,7 @@ pub fn draw_instances(gl: &glow::Context, attributes: &[Attribute], stride: i32,
 /// larger one (half as large again as needed, room for what follows) otherwise, or by a smaller one when it would
 /// stay four times too large. A new texture is made before the old one is deleted: if it cannot be, nothing changes
 pub struct Table {
+    /// The texture (`TABLE_WIDTH` wide, as many rows as its capacity needs), bound by `prepare` when kept
     pub texture: glow::Texture,
     format: u32,
     /// Texels it holds
@@ -749,6 +774,7 @@ pub struct Table {
 }
 
 impl Table {
+    /// A table of `format` (`RGBA32F`, `RGBA8`…) with room for `texels`, rounded up to whole rows of `TABLE_WIDTH`
     pub fn new(gl: &glow::Context, format: u32, texels: usize) -> Result<Self, String> {
         Ok(Self {
             texture: table_texture(gl, format, texels)?,
@@ -786,6 +812,7 @@ impl Table {
         }
     }
 
+    /// Deletes the texture; the table is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: texture owned by this table, not used afterwards
         unsafe { gl.delete_texture(self.texture) };

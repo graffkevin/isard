@@ -20,6 +20,11 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - Type guards in place of type assertions: the data read from outside (MapLibre styles, TileJSON, sprite indexes,
   panoramas' orientations and calibrations, WFS pages, TopoJSON, the viewer's messages) checked at run time, a clear
   error when it is not what it should be; `GeoMap`'s internals in `src/map/`.
+- The Rust crates read by a newcomer: every public item documented (`missing_docs`), every `unsafe` justified
+  (`undocumented_unsafe_blocks`), the failures of the functions returning a `Result` (`# Errors`), the long functions
+  of a frame, a tile's arrival or a request split into named steps, the lint exceptions as `#[expect(…, reason)]`, one
+  module layout (no `mod.rs`), the crates' shared fields in `[workspace.package]`; an Architecture page in the guide
+  (the engines, the SDK, the workers, a frame, a tile).
 
 ### Fixed
 

@@ -13,8 +13,9 @@ pub const PREFETCH_REQUESTS: usize = 4;
 /// are never drawn, so past the budget they would be the first unloaded (down to 9 tenths), then fetched again, in a
 /// loop of downloads and uploads for nothing
 const PREFETCH_TENTHS: usize = 8;
-/// Attempts at the root tileset before the layer gives up, and the pause before the first retry (ms, doubled at each)
+/// Attempts at the root tileset before the layer gives up
 pub const ROOT_ATTEMPTS: u32 = 4;
+/// The pause before the first retry of the root tileset (ms), doubled at each attempt
 pub const ROOT_RETRY_MS: f64 = 2_000.0;
 
 /// What the state keeps of a tile on the GPU
@@ -23,12 +24,17 @@ pub trait Resident {
     fn bytes(&self) -> usize;
     /// Last frame it was drawn
     fn used(&self) -> u64;
+    /// Marks it drawn in `frame`
     fn touch(&mut self, frame: u64);
 }
 
+/// Where a tile's content is: not asked, in flight, on the GPU (`M`), empty for good, or failed for a while
 pub enum State<M> {
+    /// Not asked yet, or unloaded (out of view, over the budget)
     Unloaded,
+    /// A request in flight
     Loading(Loading),
+    /// Its content on the GPU
     Ready(M),
     /// No drawable content, for good (none, unsupported, grafted external tileset)
     Empty,
@@ -38,6 +44,7 @@ pub enum State<M> {
 
 /// A request in flight: its number (arrivals of an older request are ignored) and how to cancel it
 pub struct Loading {
+    /// The request number (`next_request`)
     pub id: u32,
     /// Fetched on this thread; None when a worker of the loader has it
     pub controller: Option<web_sys::AbortController>,
@@ -68,10 +75,12 @@ impl<M> Default for States<M> {
 }
 
 impl<M: Resident> States<M> {
+    /// Tiles of the tree (the nodes known so far)
     pub fn len(&self) -> usize {
         self.tiles.len()
     }
 
+    /// The state of a tile, None past the tiles known
     pub fn get(&self, tile: usize) -> Option<&State<M>> {
         self.tiles.get(tile)
     }
@@ -130,6 +139,7 @@ impl<M: Resident> States<M> {
         matches!(self.tiles.get(tile), Some(State::Loading(l)) if l.id == id)
     }
 
+    /// Whether a request for the tile is in flight
     pub fn is_loading(&self, tile: usize) -> bool {
         self.loading.contains(&tile)
     }
@@ -144,6 +154,7 @@ impl<M: Resident> States<M> {
         matches!(self.tiles.get(tile), Some(State::Failed(_)))
     }
 
+    /// What the traversal needs of a tile: ready, empty, unavailable (in its cooldown at `now`, ms) or pending
     pub fn readiness(&self, tile: usize, now: f64) -> Readiness {
         match self.tiles.get(tile) {
             Some(State::Ready(_)) => Readiness::Ready,

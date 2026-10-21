@@ -7,29 +7,48 @@
 
 /// A compressed buffer view, as the extension describes it
 pub struct View<'a> {
+    /// The compressed bytes (the extension's `byteOffset` and `byteLength` in its buffer)
     pub data: &'a [u8],
+    /// Elements (vertices, or indices) once decoded
     pub count: usize,
+    /// Bytes per element once decoded
     pub stride: usize,
+    /// Which bitstream the bytes are
     pub mode: Mode,
+    /// The filter to undo after decoding (attributes only)
     pub filter: Filter,
 }
 
+/// The bitstream of a view (the extension's `mode`)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
+    /// Vertex attributes, byte deltas per block (Appendix A, mode 0)
     Attributes,
+    /// Triangle list indices, edge and vertex FIFOs (mode 1)
     Triangles,
+    /// Any other index sequence, varint deltas on two baselines (mode 2)
     Indices,
 }
 
+/// The filter of an attribute view (the extension's `filter`, Appendix B)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Filter {
+    /// The decoded bytes are the values
     None,
+    /// Unit vectors in octahedral encoding, to signed normalized x, y, z
     Octahedral,
+    /// Unit quaternions with their largest component dropped, to signed normalized x, y, z, w
     Quaternion,
+    /// 8-bit exponent and 24-bit mantissa, to f32
     Exponential,
 }
 
 impl Mode {
+    /// The mode named by the extension (`ATTRIBUTES`, `TRIANGLES`, `INDICES`), an error for another name
+    ///
+    /// # Errors
+    ///
+    /// "meshopt mode …" for a name other than `ATTRIBUTES`, `TRIANGLES` and `INDICES`
     pub fn parse(mode: &str) -> Result<Self, String> {
         match mode {
             "ATTRIBUTES" => Ok(Self::Attributes),
@@ -41,6 +60,11 @@ impl Mode {
 }
 
 impl Filter {
+    /// The filter named by the extension (`NONE` when absent), an error for an unknown name
+    ///
+    /// # Errors
+    ///
+    /// "meshopt filter …" for a name other than `NONE`, `OCTAHEDRAL`, `QUATERNION` and `EXPONENTIAL`
     pub fn parse(filter: Option<&str>) -> Result<Self, String> {
         match filter.unwrap_or("NONE") {
             "NONE" => Ok(Self::None),
@@ -55,6 +79,12 @@ impl Filter {
 /// Decodes a view into `count * stride` bytes. The sizes are checked against the stream before anything is allocated:
 /// attributes take a stride multiple of 4 up to 256, triangles and indices a stride of 2 or 4 (16- or 32-bit indices),
 /// filters apply to attributes only.
+///
+/// # Errors
+///
+/// Errors on a filter on triangles or indices, a stride of triangles or indices other than 2 or 4, a stream of an
+/// unsupported header, an attribute stride not a multiple of 4 up to 256, a filter's stride other than its own
+/// (octahedral 4 or 8, quaternion 8), or a stream that does not hold `count * stride` bytes ("corrupt meshopt stream")
 pub fn decode(view: &View) -> Result<Vec<u8>, String> {
     if view.filter != Filter::None && view.mode != Mode::Attributes {
         return Err("meshopt filters apply to attributes only".into());
@@ -79,6 +109,7 @@ pub fn decode(view: &View) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The error of every malformed stream
 const CORRUPT: &str = "corrupt meshopt stream";
 
 /// Bounds-checked reader
@@ -90,6 +121,7 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// The next byte, an error at `end`
     fn byte(&mut self) -> Result<u8, String> {
         let b = *self.data.get(self.at).filter(|_| self.at < self.end).ok_or(CORRUPT)?;
 
@@ -98,6 +130,7 @@ impl Reader<'_> {
         Ok(b)
     }
 
+    /// The next `n` bytes, an error past `end`
     fn bytes(&mut self, n: usize) -> Result<&[u8], String> {
         if n > self.end.saturating_sub(self.at) {
             return Err(CORRUPT.into());
@@ -130,6 +163,8 @@ impl Reader<'_> {
 
 // ── Mode 0: attributes ──
 
+/// Mode 0: a header byte `0xa0`, then blocks of at most `max_block` vertices, each byte position of the stride
+/// coded apart as zigzag deltas from the previous vertex, by groups of 16; the tail block holds the first baseline
 fn vertex_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, String> {
     if data.first() != Some(&0xa0) {
         return Err("meshopt attributes: unsupported header".into());
@@ -231,8 +266,14 @@ fn group_deltas(reader: &mut Reader, bits: u8, out: &mut [u8]) -> Result<(), Str
 
 // ── Mode 1: triangles ──
 
+/// Mode 1: a header byte `0xe1`, one code byte per triangle, then the extra bytes (explicit indices, varints), and a
+/// 16-byte `codeaux` table at the end. Each triangle reuses a recent edge (a FIFO of 16) and a recent vertex (a FIFO
+/// of 16), or the next new index, or an explicit one
 // One bitstream read in one place, case by case as the specification lists them
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a port of meshoptimizer's index codec, kept whole to follow it"
+)]
 fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, String> {
     if data.first() != Some(&0xe1) {
         return Err("meshopt triangles: unsupported header".into());
@@ -267,6 +308,8 @@ fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, Str
     for &code in codes {
         let (a, b, c);
 
+        // Codes 0x00-0xef: edge `code >> 4` of the FIFO, the third vertex by `code & 15`: 0 the next new index, 1-12
+        // a vertex of the FIFO, 13 / 14 the last explicit index -1 / +1, 15 an explicit index from the extra bytes
         if code < 0xf0 {
             // A recent edge and a third vertex
             (a, b) = edge(&edges, edge_at, usize::from(code >> 4));
@@ -309,6 +352,9 @@ fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, Str
             edges[(edge_at + 1) & 15] = (a, c);
             edge_at += 2;
         } else {
+            // Codes 0xf0-0xff: a triangle without edge reuse; its first vertex the next new index (0xff: explicit),
+            // the other two by the nibbles of `codeaux[code & 15]` (0xfe, 0xff: an extra byte, 0 resetting `next`), each
+            // 0 the next new index, 15 an explicit index (0xfe, 0xff), else a vertex of the FIFO
             let (zw, explicit) = if code < 0xfe {
                 (codeaux[usize::from(code & 15)], false)
             } else {
@@ -371,6 +417,8 @@ fn index_buffer(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, Str
 
 // ── Mode 2: indices ──
 
+/// Mode 2: a header byte `0xd1`, one varint per index (bit 0 its baseline of two, bit 1 the sign of its zigzag delta),
+/// and a 4-byte tail
 fn index_sequence(data: &[u8], count: usize, stride: usize) -> Result<Vec<u8>, String> {
     if data.first() != Some(&0xd1) {
         return Err("meshopt indices: unsupported header".into());

@@ -12,6 +12,12 @@ pub const MAX_POINTS: usize = 1 << 22;
 
 /// Decompresses the `count` point records of a chunk (`record_length` bytes each), compressed as the data of the LAZ
 /// VLR `vlr` says
+///
+/// # Errors
+///
+/// Errors when `count` is past `MAX_POINTS`, on a malformed LAZ VLR, items other than the layered ones of
+/// point formats 6 to 8, a record size other than `record_length`, or a chunk that does not decompress (one
+/// shorter than its `count` points included)
 pub fn decompress(chunk: &[u8], vlr: &[u8], record_length: usize, count: usize) -> Result<Vec<u8>, String> {
     if count > MAX_POINTS {
         return Err(format!("chunk of {count} points: more than {MAX_POINTS}"));

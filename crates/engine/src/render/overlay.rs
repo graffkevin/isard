@@ -102,6 +102,7 @@ const _: () = assert!(PIECE_STRIDE as usize == size_of::<geo::pieces::Piece>());
 /// A program of a layer drawn over the ground (lines, circles, networks, symbols), its vertex shader made of
 /// `PROJECT`, `drape::ALTITUDE`, `ANCHOR` then `vertex`, and the uniforms they share
 pub struct Overlay {
+    /// The linked program, owned by the layer (deleted with it)
     pub program: glow::Program,
     anchor: Anchor,
     projection: Projection,
@@ -232,6 +233,7 @@ pub fn split(x: f64) -> (f32, f32) {
 pub struct Anchor([Option<glow::UniformLocation>; 7]);
 
 impl Anchor {
+    /// Looks the uniforms up in `program` (one that includes `ANCHOR`)
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         Self(gl::uniforms(
             gl,

@@ -131,7 +131,10 @@ pub(super) struct AsyncPick {
 }
 
 impl AsyncPick {
-    /// Call with the context it was made on
+    /// Frees the pixel buffer and the fence of a pending request
+    ///
+    /// # Safety
+    /// Call with the context it was made on, and use the pick no more afterwards
     pub(super) unsafe fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by the picking, not used afterwards
         unsafe {
@@ -151,7 +154,10 @@ impl Engine {
     /// `only`: the ids of the layers to look in (all if undefined): the others are not drawn and hide nothing.
     /// Reads the pixels back at once (the GPU finishes its work first): for clicks; `requestPick` for the hover
     #[wasm_bindgen(unchecked_return_type = "PickHit | undefined")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn pick(&mut self, x: f64, y: f64, radius: Option<f64>, only: Option<Box<[u32]>>) -> JsValue {
         let only = only.as_deref();
         let hit = self
@@ -165,7 +171,6 @@ impl Engine {
     /// picking pass is drawn now and read back into a buffer; `pollPick` gives the answer on a later frame. A new
     /// request replaces the one in flight. Returns false if nothing could be asked (no WebGL2 fence)
     #[wasm_bindgen(js_name = requestPick)]
-    #[allow(clippy::needless_pass_by_value)]
     pub fn request_pick(&mut self, x: f64, y: f64, radius: Option<f64>, only: Option<Box<[u32]>>) -> bool {
         // The request in flight is dropped: only the latest one counts
         if let Some(fence) = self
@@ -259,7 +264,10 @@ impl Engine {
 }
 
 impl PickTarget {
-    /// Call with the target's context
+    /// Frees the framebuffer and its attachments
+    ///
+    /// # Safety
+    /// Call with the target's context, and use the target no more afterwards
     pub(super) unsafe fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by the target, not used afterwards
         unsafe {
@@ -300,8 +308,11 @@ impl Engine {
         (px >= 0 && py >= 0 && px < size.0 && py < size.1).then_some((px, py))
     }
 
-    /// Draws the ground's depth at a pixel into the bound picking target (its color holds the depth, packed). Call
-    /// with the target bound and the viewport set; the state is set back but for the framebuffer
+    /// Draws the ground's depth at a pixel into the bound picking target (its color holds the depth, packed); the
+    /// state is set back but for the framebuffer
+    ///
+    /// # Safety
+    /// Call on the engine's live context with the picking target bound and the viewport set
     unsafe fn draw_ground_depth(&self, view: &View, (px, py): (i32, i32)) {
         let Some((terrain, _)) = self.terrain.as_ref() else {
             return;
@@ -422,12 +433,15 @@ impl Engine {
         })
     }
 
-    /// Draws a picking pass into the bound picking target. Call with the target bound and the viewport set; the state
-    /// is set back (`gl::reset_state`) but for the framebuffer.
+    /// Draws a picking pass into the bound picking target; the state is set back (`gl::reset_state`) but for the
+    /// framebuffer.
     ///
     /// In relief the ground's depth is drawn first (no color), clipped to the block as the rest: the layers test
     /// against it as on screen, and a feature behind a hill is not picked. It is the ground of the last frame, drawn
     /// with that frame's view (its tiles are placed for it): the whole pass is, what is on screen.
+    ///
+    /// # Safety
+    /// Call on the engine's live context with the picking target bound and the viewport set
     unsafe fn draw_feature_pass(&self, pass: &FeaturePass) {
         let view = match (&self.terrain, &self.drawn) {
             (Some(_), Some(drawn)) => drawn.clone(),

@@ -55,6 +55,7 @@ impl Probe {
         })
     }
 
+    /// Frees the GPU objects of the probe
     pub(super) fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by the probe, not used afterwards
         unsafe {

@@ -35,6 +35,7 @@ pub struct Primitive {
     pub positions: Vec<f32>,
     /// u, v per vertex (zeros without texture coordinates)
     pub uvs: Rc<[f32]>,
+    /// Triangles, three vertex indices each (counter-clockwise front faces, as glTF)
     pub indices: Rc<[u32]>,
     /// Its image in `Mesh::images`
     pub image: Option<usize>,
@@ -54,12 +55,16 @@ pub struct Points {
     pub normals: Vec<[f32; 3]>,
 }
 
+/// A decoded tile: its triangle primitives, its points, their images and feature properties, all relative to one
+/// ECEF anchor
 pub struct Mesh {
     /// ECEF origin of the positions
     pub anchor: DVec3,
+    /// Triangle meshes, one per glTF primitive and node using it
     pub primitives: Vec<Primitive>,
     /// Encoded images (JPEG, PNG, WebP, KTX2) and their media types, each once however many primitives use it
     pub images: Vec<(Rc<[u8]>, String)>,
+    /// Point primitives (a `.pnts`, glTF primitives of mode 0)
     pub points: Vec<Points>,
     /// The properties of its features (`Primitive::features` index them)
     pub properties: Option<Properties>,
@@ -78,14 +83,19 @@ impl Mesh {
 /// A Draco-compressed primitive (`KHR_draco_mesh_compression`) or point cloud (`3DTILES_draco_point_compression`,
 /// mesh and primitive 0), for an external Draco decoder
 pub struct DracoRequest {
+    /// Index of the glTF mesh (0 for a `.pnts`)
     pub mesh: usize,
+    /// Index of the primitive in that mesh (0 for a `.pnts`)
     pub primitive: usize,
     /// The compressed geometry
     pub data: Vec<u8>,
-    /// Draco attribute ids
+    /// Draco attribute id of the positions
     pub position: u32,
+    /// Draco attribute id of the texture coordinates (triangles only), None without
     pub uv: Option<u32>,
+    /// Draco attribute id of the colors (points only), None without
     pub color: Option<u32>,
+    /// Draco attribute id of the normals (points only), None without
     pub normal: Option<u32>,
     /// Points (no triangles)
     pub points: bool,
@@ -95,19 +105,31 @@ pub struct DracoRequest {
 /// transforms), triangles (none for points)
 #[derive(Default)]
 pub struct DracoGeometry {
+    /// The `DracoRequest::mesh` it answers
     pub mesh: usize,
+    /// The `DracoRequest::primitive` it answers
     pub primitive: usize,
+    /// x, y, z per vertex, in the primitive's own frame
     pub positions: Vec<f32>,
+    /// u, v per vertex, empty without
     pub uvs: Vec<f32>,
+    /// Triangles, three vertex indices each (empty for points)
     pub indices: Vec<u32>,
     /// Three or four per point
     pub colors: Vec<f32>,
+    /// x, y, z per point, empty without
     pub normals: Vec<f32>,
 }
 
 /// Decodes a `.b3dm` or `.glb` tile. `transform`: the tile's world transform; `y_up`: glTF y-up to 3D Tiles z-up
 /// (always for `.b3dm` of 3D Tiles 1.0, unless the tileset says `gltfUpAxis: Z`).
 /// Draco primitives are decoded beforehand by the caller (`draco_requests`) and passed in `draco`.
+///
+/// # Errors
+///
+/// Errors on a malformed tile: a JSON document or an unsupported format (b3dm, pnts and glb only), a truncated or bad
+/// header, feature table or glTF chunk, or glTF content that does not decode (an unsupported required extension, bad
+/// accessors or views, Draco geometry missing from `draco`…); the error says which
 pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometry]) -> Result<Mesh, String> {
     if bytes.get(..4) == Some(b"pnts") {
         let (world, mut points) = pnts::decode(bytes, transform, draco)?;
@@ -149,7 +171,13 @@ fn relative(positions: &[DVec3], anchor: DVec3) -> Vec<f32> {
         .collect()
 }
 
-/// The Draco-compressed primitives of a tile, to decode before `decode`
+/// The Draco-compressed primitives of a tile, to decode before `decode` (empty when there are none). Errors on a
+/// malformed container
+///
+/// # Errors
+///
+/// Errors on a malformed container (as for `decode`), or on a Draco extension without its `bufferView` or
+/// its `POSITION` attribute, or whose view is out of the buffer
 pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
     if bytes.get(..4) == Some(b"pnts") {
         return Ok(pnts::draco_request(bytes)?.into_iter().collect());
@@ -200,7 +228,7 @@ mod tests {
     use serde_json::{Value, json};
 
     /// A tile of the Lille photomesh (Métropole Européenne de Lille, 2020, 5 cm)
-    const LILLE: &[u8] = include_bytes!("../../tests/data/lille_L11_00.b3dm");
+    const LILLE: &[u8] = include_bytes!("../tests/data/lille_L11_00.b3dm");
 
     #[test]
     fn decodes_a_lille_tile() {
@@ -249,9 +277,9 @@ mod tests {
         let o = &original.primitives[0];
 
         for (name, bytes, tolerance) in [
-            ("noq", &include_bytes!("../../tests/data/lille_noq.glb")[..], 0.01),
-            ("q", &include_bytes!("../../tests/data/lille_q.glb")[..], 0.6),
-            ("vpf", &include_bytes!("../../tests/data/lille_vpf.glb")[..], 0.6),
+            ("noq", &include_bytes!("../tests/data/lille_noq.glb")[..], 0.01),
+            ("q", &include_bytes!("../tests/data/lille_q.glb")[..], 0.6),
+            ("vpf", &include_bytes!("../tests/data/lille_vpf.glb")[..], 0.6),
         ] {
             // The glb were extracted from the b3dm without its RTC_CENTER: given back as the tile transform
             let rtc = DMat4::from_translation(DVec3::new(
@@ -307,7 +335,7 @@ mod tests {
     /// The tile compressed with Draco (gltf-pipeline): its geometry is decoded outside (workers), then given back
     #[test]
     fn draco_primitives_are_requested_then_used() {
-        let bytes = include_bytes!("../../tests/data/lille_draco.glb");
+        let bytes = include_bytes!("../tests/data/lille_draco.glb");
         let requests = draco_requests(bytes).unwrap();
 
         assert_eq!(requests.len(), 1);
@@ -338,7 +366,7 @@ mod tests {
     #[test]
     fn basisu_textures_prefer_the_ktx2_image() {
         let mesh = decode(
-            include_bytes!("../../tests/data/lille_ktx2.glb"),
+            include_bytes!("../tests/data/lille_ktx2.glb"),
             &DMat4::IDENTITY,
             true,
             &[],
@@ -386,6 +414,7 @@ mod tests {
         out
     }
 
+    /// Little-endian bytes of f32 values, for test buffers
     pub(super) fn f32s(values: &[f32]) -> Vec<u8> {
         values.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
@@ -521,12 +550,12 @@ mod tests {
     fn malformed_tiles_never_panic() {
         let fixtures: [&[u8]; 7] = [
             LILLE,
-            include_bytes!("../../tests/data/helix_points_meshopt.glb"),
-            include_bytes!("../../tests/data/lille_noq.glb"),
-            include_bytes!("../../tests/data/lille_q.glb"),
-            include_bytes!("../../tests/data/lille_vpf.glb"),
-            include_bytes!("../../tests/data/lille_draco.glb"),
-            include_bytes!("../../tests/data/lille_ktx2.glb"),
+            include_bytes!("../tests/data/helix_points_meshopt.glb"),
+            include_bytes!("../tests/data/lille_noq.glb"),
+            include_bytes!("../tests/data/lille_q.glb"),
+            include_bytes!("../tests/data/lille_vpf.glb"),
+            include_bytes!("../tests/data/lille_draco.glb"),
+            include_bytes!("../tests/data/lille_ktx2.glb"),
         ];
         let mut r = Random(0x9E37_79B9_7F4A_7C15);
 

@@ -119,10 +119,15 @@ fn atmosphere() -> String {
 /// Sky, horizon and fog over the plane (`MapLibre`'s `setSky`)
 #[derive(Clone, Copy, Debug)]
 pub struct Atmosphere {
+    /// Color high in the sky, RGB 0-1
     pub sky: [f32; 3],
+    /// Color at the horizon, RGB 0-1
     pub horizon: [f32; 3],
+    /// Color of the fog below the horizon and on the far ground, RGB 0-1
     pub fog: [f32; 3],
+    /// Share of the field of view above the horizon over which the horizon turns into the sky, 0 to 1
     pub sky_horizon_blend: f32,
+    /// Share of half the field of view below the horizon over which the horizon turns into the fog, 0 to 1
     pub horizon_fog_blend: f32,
     /// Share of the distance to the far plane over which the ground fades into the fog (0: no fog on the ground)
     pub fog_ground_blend: f32,
@@ -151,19 +156,24 @@ pub fn halo(settings: Option<&[f32]>) -> [f32; 4] {
     }
 }
 
+/// The sky: behind the globe (stars, halo) and, over the plane, the optional `Atmosphere`; one full-screen
+/// triangle each
 pub struct Sky {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 9],
     vao: glow::VertexArray,
+    /// The space behind the globe is drawn (off: none, and the atmosphere over the plane no longer fades out on the globe)
     pub enabled: bool,
     /// The atmosphere halo around the globe: RGB 0-1 and its strength, 0 for none (an airless body)
     pub halo: [f32; 4],
     atmosphere_program: glow::Program,
     atmosphere_uniforms: [Option<glow::UniformLocation>; 6],
+    /// The sky over the plane, None for none (the clear color shows)
     pub atmosphere: Option<Atmosphere>,
 }
 
 impl Sky {
+    /// Builds both programs; enabled, the Earth's halo, no atmosphere
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = gl::Objects::new(gl);
@@ -238,6 +248,7 @@ impl Sky {
         }
     }
 
+    /// Deletes both programs and the vertex array; the sky is not used afterwards
     pub fn delete(&self, gl: &glow::Context) {
         // SAFETY: objects owned by the sky, not used afterwards
         unsafe {

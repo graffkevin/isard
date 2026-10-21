@@ -86,6 +86,7 @@ impl Pass {
     }
 }
 
+/// How a network layer is drawn (`setNetworkStyle`)
 #[derive(Clone, Copy)]
 pub struct NetworkStyle {
     /// CSS pixels, as zoom stops (zooms, then values)
@@ -96,7 +97,9 @@ pub struct NetworkStyle {
     pub max: f32,
     /// Darker line every `contour` value units, 0 for none
     pub contour: f32,
+    /// Opacity of the lines, 0-1
     pub opacity: f32,
+    /// Opacity of the halo, 0-1
     pub halo_opacity: f32,
     /// Color of the unreached parts, RGBA 0-1
     pub unreached: [f32; 4],
@@ -141,7 +144,41 @@ const DEFAULT_RAMP: [[f32; 3]; 5] = [
     [0.910, 0.220, 0.310],
 ];
 
+/// The ramp texture's storage (`RAMP_TEXELS` RGBA8, linear, clamped) and the pieces uploaded into their buffer, the
+/// vertex array's three instanced attributes enabled (their pointers set at each draw by the pass)
+fn setup_ramp_and_pieces(
+    gl: &glow::Context,
+    ramp: glow::Texture,
+    (vao, buffer): (glow::VertexArray, glow::Buffer),
+    pieces: &[geo::pieces::Piece],
+) {
+    // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
+    unsafe {
+        gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
+        gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP_TEXELS as i32, 1);
+        for (key, value) in [
+            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
+        }
+        gl.bind_vertex_array(Some(vao));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, as_bytes(pieces), glow::STATIC_DRAW);
+        for location in 0..3 {
+            gl.enable_vertex_attrib_array(location);
+            gl.vertex_attrib_divisor(location, 1);
+        }
+        gl.bind_vertex_array(None);
+    }
+}
+
+/// A network layer: nodes and edges (their lines cut into pieces), the node values that color them, and the shaded
+/// and picking passes
 pub struct NetworkLayer {
+    /// Current style, set by `setNetworkStyle`
     pub style: NetworkStyle,
     shaded: Pass,
     pick: Pass,
@@ -213,27 +250,7 @@ impl NetworkLayer {
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
 
-        // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP_TEXELS as i32, 1);
-            for (key, value) in [
-                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
-                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
-                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-            ] {
-                gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
-            }
-            gl.bind_vertex_array(Some(vao));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, as_bytes(&built.pieces), glow::STATIC_DRAW);
-            for location in 0..3 {
-                gl.enable_vertex_attrib_array(location);
-                gl.vertex_attrib_divisor(location, 1);
-            }
-            gl.bind_vertex_array(None);
-        }
+        setup_ramp_and_pieces(gl, ramp, (vao, buffer), &built.pieces);
         objects.keep();
 
         let mut layer = Self {
@@ -587,9 +604,18 @@ impl Engine {
     /// edges (node index pairs, interleaved). `line_start` and `line_points`: the line of each edge from A to B, points
     /// `line_start[e] .. line_start[e + 1]` of `line_points` (Mercator, interleaved; straight if fewer than two). `costs`: per edge, the
     /// cost of travelling it from A to B then from B to A; without, values are interpolated along the edges.
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when `style` is not 25 numbers, `edges` is not node pairs or names a node past
+    /// those of `mercator`, the nodes or edges need a table texture past the GPU's `MAX_TEXTURE_SIZE`, or when
+    /// a WebGL object cannot be created or a shader fails to compile (the error carries its info log)
     #[wasm_bindgen(js_name = addNetwork)]
     // Optional arrays only cross the boundary owned
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn add_network(
         &mut self,
         mercator: &[f64],
@@ -616,7 +642,10 @@ impl Engine {
 
     /// Costs of a network's edges (see `addNetwork`), when the way it is travelled changes; null: interpolated values
     #[wasm_bindgen(js_name = setNetworkCosts)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_network_costs(&mut self, id: u32, costs: Option<Box<[f32]>>) {
         if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
             layer.set_costs(gl, costs.as_deref());
@@ -636,7 +665,10 @@ impl Engine {
 
     /// Width factor of each edge (1 without): rail lines wider than streets
     #[wasm_bindgen(js_name = setNetworkScales)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_network_scales(&mut self, id: u32, scales: Option<Box<[f32]>>) {
         if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
             layer.set_scales(gl, scales.as_deref());
@@ -645,7 +677,10 @@ impl Engine {
 
     /// Colors of the values from 0 to the maximum, 256 RGBA texels (1024 bytes); undefined: green to red
     #[wasm_bindgen(js_name = setNetworkRamp)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_network_ramp(&mut self, id: u32, rgba: Option<Box<[u8]>>) {
         if let Some((layer, gl)) = self.layer_mut::<NetworkLayer>(id) {
             layer.set_ramp(gl, rgba.as_deref());

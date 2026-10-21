@@ -72,13 +72,17 @@ pub const INSTANCE_NUMBERS: usize = 7;
 pub struct Instance {
     /// Degrees
     pub lon: f64,
+    /// Degrees
     pub lat: f64,
     /// Metres, above the ground or above the ellipsoid (`ModelLayer::ground`)
     pub altitude: f64,
-    /// Degrees: heading clockwise from the north, pitch nose up, roll right side down
+    /// Degrees, clockwise from the north
     pub heading: f64,
+    /// Degrees, nose up
     pub pitch: f64,
+    /// Degrees, right side down
     pub roll: f64,
+    /// Size factor of the model (1: its own size, its units read as metres)
     pub scale: f64,
 }
 
@@ -176,12 +180,14 @@ enum Model {
     Failed,
 }
 
+/// A model layer: one glTF / GLB file (loading, ready or failed) drawn at every instance, with its picking program
 pub struct ModelLayer {
     url: String,
     model: Model,
     inbox: Rc<RefCell<Option<Arrival>>>,
     /// The decoding workers' pool (`load`, `abort`), if any
     loader: Option<JsValue>,
+    /// Where the model stands, one matrix each per frame
     pub instances: Vec<Instance>,
     /// Altitudes above the relief (else above the ellipsoid)
     pub ground: bool,
@@ -196,6 +202,8 @@ pub struct ModelLayer {
 }
 
 impl ModelLayer {
+    /// Starts loading `url` (in the decoding workers of `loader` if any) and builds the programs; `redraw` is called when
+    /// the model arrives
     pub fn new(
         gl: &glow::Context,
         url: String,
@@ -500,6 +508,11 @@ impl Engine {
     /// A glTF / GLB model (its URL, a `blob:` one for data of the page) drawn at each instance of `instances`
     /// (`INSTANCE_NUMBERS` numbers each: longitude, latitude, altitude, heading, pitch, roll in degrees, scale);
     /// `ground`: altitudes above the relief, else above the ellipsoid
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log). A model that fails to load or decode does not throw: the layer stays empty
     #[wasm_bindgen(js_name = addModels)]
     pub fn add_models(&mut self, url: String, instances: &[f64], ground: bool) -> Result<u32, JsValue> {
         let layer = ModelLayer::new(

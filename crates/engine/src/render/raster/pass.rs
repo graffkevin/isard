@@ -6,6 +6,7 @@ use super::shaders::{DEPTH_FRAGMENT, FRAGMENT, VERTEX};
 use super::{INSTANCE, RasterSource, STACK};
 use crate::render::gl::{self, Grid, Objects, Projection};
 use geo::camera::View;
+use geo::tiles::TileId;
 use glow::HasContext;
 
 /// Instance attributes: location, floats, byte offset in the instance (rects, then 3 per layer, then the heights)
@@ -87,6 +88,16 @@ pub struct RasterPass {
     data: Vec<f32>,
 }
 
+/// The frame and the time of a draw, for the tiles' least recently used order and their fade-in
+#[derive(Clone, Copy)]
+struct Clock {
+    frame: u64,
+    /// The time (ms)
+    now: f64,
+    /// Fade-in duration (ms); 0: at once
+    fade_ms: f64,
+}
+
 /// The opacity, saturation and columns of the canvas of the first `n` sources of a pass, for its uniforms
 fn source_uniforms(sources: &[&mut RasterSource], n: usize) -> ([f32; STACK], [f32; STACK], [f32; 2 * STACK]) {
     let mut opacity = [0f32; STACK];
@@ -103,6 +114,7 @@ fn source_uniforms(sources: &[&mut RasterSource], n: usize) -> ([f32; STACK], [f
 }
 
 impl RasterPass {
+    /// Builds both programs (the ground, its depth) and the two stacks over the shared `grid` mesh
     pub fn new(gl: &glow::Context, grid: &Grid) -> Result<Self, String> {
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
@@ -194,6 +206,10 @@ impl RasterPass {
     }
 
     /// Points the instance attributes at instance `first` (WebGL2 has no base instance)
+    ///
+    /// # Safety
+    ///
+    /// The stack's vertex array and its instance buffer must be bound, the buffer holding instance `first`
     unsafe fn point_at(gl: &glow::Context, first: usize) {
         let stride = (INSTANCE * 4) as i32;
         let base = first as i32 * stride;
@@ -234,7 +250,10 @@ impl RasterPass {
     /// One draw call for the whole stack (1 to `STACK` sources, prepared for this frame), in relief over `terrain`
     /// (prepared too) when given: `relief` is its vertical exaggeration. `now`: the time (ms), for the fade-in;
     /// `fog`: color and range of the atmosphere's fog (`Atmosphere::fog`)
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the state of the frame, given by `Engine::draw_rasters`"
+    )]
     pub fn draw(
         &mut self,
         gl: &glow::Context,
@@ -252,16 +271,51 @@ impl RasterPass {
             return;
         }
 
-        let stack = &mut self.stacks[self.drawn.min(1)];
+        let index = self.drawn.min(1);
 
         self.drawn += 1;
-        self.data.clear();
 
         let tiles = std::mem::take(&mut sources[0].plan.tiles);
+        let stack = &mut self.stacks[index];
 
         stack.tiles.clear();
         stack.tiles.extend(tiles.iter().map(|t| t.bounds()));
-        for &tile in &tiles {
+
+        let clock = Clock { frame, now, fade_ms };
+
+        self.write_instances(
+            view,
+            &tiles,
+            &mut sources[..n],
+            terrain.as_mut().map(|(s, _)| &mut **s),
+            clock,
+        );
+        sources[0].plan.tiles = tiles;
+
+        let count = (self.data.len() / INSTANCE) as i32;
+        let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
+
+        self.stacks[index].last = Some((count, relief));
+
+        // SAFETY: the program owned by this pass
+        unsafe { gl.use_program(Some(self.program)) };
+        self.set_view_uniforms(gl, view, relief, fog);
+        self.bind_sources(gl, sources, n, terrain.as_ref().map(|(source, _)| source.pool));
+        self.draw_stack(gl, view, index, count, relief > 0.0);
+    }
+
+    /// The instances of this draw into `data`, one per tile of the base source: its rect on the plane and in
+    /// Mercator, what each source has there (`Sample`, empty past `sources`), the terrain's heights around it
+    fn write_instances(
+        &mut self,
+        view: &View,
+        tiles: &[TileId],
+        sources: &mut [&mut RasterSource],
+        mut terrain: Option<&mut RasterSource>,
+        clock: Clock,
+    ) {
+        self.data.clear();
+        for &tile in tiles {
             let (min, max) = tile.bounds();
             let shift = tile.shift(view.center);
             // Plane positions here; the sphere ones are computed on the GPU from the Mercator rect
@@ -272,59 +326,69 @@ impl RasterPass {
                 .extend_from_slice(&[a.x as f32, a.y as f32, b.x as f32, b.y as f32]);
             self.data
                 .extend_from_slice(&[min.x as f32, min.y as f32, max.x as f32, max.y as f32]);
-            for source in sources.iter_mut().take(n) {
-                source.sample(tile, frame, now, fade_ms).write(&mut self.data);
+            for source in sources.iter_mut() {
+                source
+                    .sample(tile, clock.frame, clock.now, clock.fade_ms)
+                    .write(&mut self.data);
             }
-            for _ in n..STACK {
+            for _ in sources.len()..STACK {
                 Sample::NONE.write(&mut self.data);
             }
 
             let heights = terrain
                 .as_mut()
-                .map_or([0.0, 0.0, 1.0, -1.0], |(source, _)| source.heights(tile, frame));
+                .map_or([0.0, 0.0, 1.0, -1.0], |source| source.heights(tile, clock.frame));
 
             self.data.extend_from_slice(&heights);
         }
-        sources[0].plan.tiles = tiles;
+    }
 
-        let (opacity, saturation, clip) = source_uniforms(sources, n);
-        let count = (self.data.len() / INSTANCE) as i32;
-        let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
+    /// The uniforms of the view (program in use): its matrix, eye and projection, the fog, the exaggeration
+    fn set_view_uniforms(&self, gl: &glow::Context, view: &View, relief: f32, fog: Option<([f32; 3], [f32; 2])>) {
+        let [matrix, .., relief_u, eye, fog_u, fog_range, _] = &self.uniforms;
+        let ([r, g, b], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
 
-        stack.last = Some((count, relief));
-
-        // SAFETY: draw with objects owned by this pass and the sources' pools
+        // SAFETY: uniform uploads on the program in use
         unsafe {
-            gl.use_program(Some(self.program));
-
-            let [
-                matrix,
-                count_u,
-                opacity_u,
-                saturation_u,
-                t0,
-                t1,
-                t2,
-                t3,
-                heights_u,
-                relief_u,
-                eye,
-                fog_u,
-                fog_range,
-                clip_u,
-            ] = &self.uniforms;
-            let ([r, g, b], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
-
             gl.uniform_3_f32(eye.as_ref(), view.eye.x as f32, view.eye.y as f32, view.eye.z as f32);
             gl.uniform_3_f32(fog_u.as_ref(), r, g, b);
             gl.uniform_2_f32(fog_range.as_ref(), start, end);
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
+            gl.uniform_1_f32(relief_u.as_ref(), relief);
+        }
+        self.projection.set(gl, view);
+    }
+
+    /// The uniforms of the first `n` sources (program in use) and their pools on units 0 to `STACK - 1`, the
+    /// terrain's on `STACK`
+    fn bind_sources(
+        &self,
+        gl: &glow::Context,
+        sources: &[&mut RasterSource],
+        n: usize,
+        terrain: Option<glow::Texture>,
+    ) {
+        let [
+            _,
+            count_u,
+            opacity_u,
+            saturation_u,
+            t0,
+            t1,
+            t2,
+            t3,
+            heights_u,
+            ..,
+            clip_u,
+        ] = &self.uniforms;
+        let (opacity, saturation, clip) = source_uniforms(sources, n);
+
+        // SAFETY: uniforms and bindings on the program in use, the pools owned by the sources
+        unsafe {
             gl.uniform_1_i32(count_u.as_ref(), n as i32);
             gl.uniform_1_f32_slice(opacity_u.as_ref(), &opacity);
             gl.uniform_1_f32_slice(saturation_u.as_ref(), &saturation);
             gl.uniform_2_f32_slice(clip_u.as_ref(), &clip);
-            gl.uniform_1_f32(relief_u.as_ref(), relief);
-            self.projection.set(gl, view);
             for (k, unit) in [t0, t1, t2, t3].into_iter().enumerate() {
                 gl.uniform_1_i32(unit.as_ref(), k as i32);
                 gl.active_texture(glow::TEXTURE0 + k as u32);
@@ -334,13 +398,20 @@ impl RasterPass {
             // Without relief the elevation unit stays empty: the shader never reads it
             gl.uniform_1_i32(heights_u.as_ref(), STACK as i32);
             gl.active_texture(glow::TEXTURE0 + STACK as u32);
-            gl.bind_texture(glow::TEXTURE_2D_ARRAY, terrain.as_ref().map(|(source, _)| source.pool));
+            gl.bind_texture(glow::TEXTURE_2D_ARRAY, terrain);
             gl.active_texture(glow::TEXTURE0);
+        }
+    }
+
+    /// Uploads the instances into stack `index` and draws its `count` tiles, premultiplied; `lifted`: in relief,
+    /// with the depth test and both faces (the skirts). The blending is set back to the layers' afterwards
+    fn draw_stack(&self, gl: &glow::Context, view: &View, index: usize, count: i32, lifted: bool) {
+        let stack = &self.stacks[index];
+
+        // SAFETY: state changes and a draw with objects owned by this pass
+        unsafe {
             // The shader composites the stack and outputs premultiplied alpha
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-
-            let lifted = relief > 0.0;
-
             if lifted {
                 // In relief the ground hides itself (hills) and the 3D layers drawn after; the skirts hang either side
                 gl.enable(glow::DEPTH_TEST);

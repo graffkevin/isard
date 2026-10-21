@@ -18,11 +18,12 @@ pub struct Loading {
     pub defer_off_center: bool,
     /// Time spent uploading arrived tiles to the GPU per frame and layer (ms; at least one tile)
     pub upload_budget_ms: f64,
-    /// Requests in flight per raster layer, and per 3D Tiles layer
+    /// Requests in flight per raster layer at most
     pub raster_requests: usize,
+    /// Requests in flight per 3D Tiles layer at most
     #[cfg_attr(
         not(feature = "tiles3d"),
-        allow(dead_code, reason = "read by the 3D Tiles layers only")
+        expect(dead_code, reason = "read by the 3D Tiles layers only")
     )]
     pub mesh_requests: usize,
 }
@@ -50,26 +51,31 @@ impl Loading {
 
 /// What a layer gets to draw a frame
 pub struct Frame<'a> {
+    /// The WebGL2 context, in the state `gl::reset_state` sets (a layer sets back what it changes)
     pub gl: &'a glow::Context,
     /// The same context, for uploads straight from JavaScript typed arrays
     #[cfg_attr(
         not(feature = "tiles3d"),
-        allow(dead_code, reason = "read by the 3D Tiles layers only")
+        expect(dead_code, reason = "read by the 3D Tiles layers only")
     )]
     pub raw: &'a web_sys::WebGl2RenderingContext,
+    /// The engine's camera (its size in CSS pixels)
     pub camera: &'a Camera,
+    /// The view this frame is drawn from (or the picking pass)
     pub view: &'a View,
+    /// Device pixels per CSS pixel
     pub pixel_ratio: f64,
     /// Frame number
     #[cfg_attr(
         not(feature = "tiles3d"),
-        allow(dead_code, reason = "read by the 3D Tiles layers only")
+        expect(dead_code, reason = "read by the 3D Tiles layers only")
     )]
     pub number: u64,
     #[cfg_attr(
         not(feature = "tiles3d"),
-        allow(dead_code, reason = "read by the 3D Tiles layers only")
+        expect(dead_code, reason = "read by the 3D Tiles layers only")
     )]
+    /// How tiles load and show (`setImmediateLoading`)
     pub loading: Loading,
     /// The relief, if any: its elevation source and vertical exaggeration
     pub relief: Option<(&'a RasterSource, f32)>,

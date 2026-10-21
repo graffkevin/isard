@@ -12,13 +12,18 @@ use std::rc::Rc;
 /// Coordinates of an implicit tile
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Coord {
+    /// Level in the whole tiling, 0 at its root tile
     pub(super) level: u32,
+    /// Column at that level, 0 to 2^level - 1
     pub(super) x: u32,
+    /// Row at that level, 0 to 2^level - 1
     pub(super) y: u32,
+    /// Height at that level, 0 to 2^level - 1 (always 0 in a quadtree)
     pub(super) z: u32,
 }
 
 impl Coord {
+    /// Its 4 (quadtree) or 8 (octree) children, in Morton order
     fn children(self, octree: bool) -> impl Iterator<Item = Self> {
         let n = if octree { 8 } else { 4 };
 
@@ -86,20 +91,30 @@ const MAX_LEVELS: u32 = 31;
 
 /// An implicit tileset: its root tile and how it subdivides
 pub(super) struct Implicit {
+    /// OCTREE, else QUADTREE
     octree: bool,
+    /// Levels of each subtree file
     subtree_levels: u32,
+    /// Levels of the whole tiling (at most `MAX_LEVELS`)
     available_levels: u32,
-    /// Template URIs, resolved against the tileset
+    /// Template URI of the subtree files, resolved against the tileset
     subtrees: String,
+    /// Template URIs of the contents, resolved against the tileset
     contents: Vec<String>,
+    /// Bounding volume of the root tile, halved at each level
     volume: Volume,
+    /// Geometric error of the root tile (metres), halved at each level
     error: f64,
+    /// World transform of the root tile, shared by all
     transform: DMat4,
+    /// REPLACE refinement, shared by all
     replace: bool,
+    /// glTF y-up, shared by all
     y_up: bool,
 }
 
 impl Implicit {
+    /// Children per tile: 4 or 8
     fn branching(&self) -> u64 {
         if self.octree { 8 } else { 4 }
     }
@@ -107,11 +122,14 @@ impl Implicit {
 
 /// Availability bits of a subtree
 enum Bits {
+    /// Every bit the same (`constant`)
     Constant(bool),
+    /// A bitstream, least significant bit first in each byte
     Stream(Vec<u8>),
 }
 
 impl Bits {
+    /// Bit `i`, false past the end of the stream
     fn get(&self, i: u64) -> bool {
         match self {
             Self::Constant(c) => *c,
@@ -125,18 +143,26 @@ impl Bits {
 
 /// A loaded subtree: availability of its tiles, of their contents, of the subtrees below it
 pub(super) struct Subtree {
+    /// Its root tile
     root: Coord,
+    /// Its file, resolved
     url: String,
+    /// Availability of its tiles (`tileAvailability`), level after level, Morton order within one
     tiles: Bits,
+    /// Availability of each content of its tiles (`contentAvailability`), in the order of `Implicit::contents`
     contents: Vec<Bits>,
+    /// Availability of the subtrees below its last level (`childSubtreeAvailability`), Morton order
     children: Bits,
 }
 
 /// An implicit node waiting for its expansion: `tile` and below, from `subtree` if already loaded (else its file is
 /// the content of the node)
 pub(super) struct Placeholder {
+    /// The tiling it belongs to
     tiling: Rc<Implicit>,
+    /// The implicit tile it stands for
     tile: Coord,
+    /// The subtree holding `tile`, None while its file is to download
     pub(super) subtree: Option<Rc<Subtree>>,
 }
 
@@ -150,15 +176,18 @@ fn trim_padding(text: &[u8]) -> &[u8] {
     &text[..end]
 }
 
+/// The little-endian u64 at `at`, None past the end
 fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
     let b = bytes.get(at..at + 8)?;
 
     Some(u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
-/// Parses a subtree file (binary `.subtree` or JSON) rooted at `root`
+/// Parses a subtree file (binary `.subtree` or JSON) rooted at `root` (3D Tiles 1.1, Implicit Tiling, Subtrees)
 fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Result<Subtree, String> {
     let bad = || "bad subtree".to_string();
+    // Binary format: magic `subt`, version 1, JSON length and binary length (u64), then the JSON and binary chunks;
+    // a JSON subtree has no binary chunk (its buffers would be external, unsupported)
     let (json, binary): (Value, &[u8]) = if bytes.starts_with(b"subt") {
         if bytes.get(4..8) != Some(&1u32.to_le_bytes()[..]) {
             return Err("subtree version 1 expected".into());
@@ -186,6 +215,7 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
         )
     };
     let index = |v: &Value| v.as_u64().and_then(|n| usize::try_from(n).ok());
+    // Buffer views: only the internal buffer (the binary chunk, no `uri`) is read
     let view = |i: usize| -> Result<&[u8], String> {
         let view = &json["bufferViews"][i];
         let buffer = &json["buffers"][index(&view["buffer"]).ok_or_else(bad)?];
@@ -206,6 +236,8 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
             .and_then(|end| binary.get(start..end))
             .ok_or_else(|| "subtree buffer view out of range".into())
     };
+    // Availability: a `constant` (0 or 1), or a `bitstream` buffer view of at least `count` bits (`bufferView` in
+    // `3DTILES_implicit_tiling`)
     let bits = |v: &Value, count: u64| -> Result<Bits, String> {
         if let Some(c) = v["constant"].as_u64() {
             return Ok(Bits::Constant(c == 1));
@@ -222,9 +254,11 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
 
         Ok(Bits::Stream(stream.to_vec()))
     };
+    // Bit counts: (n^levels - 1) / (n - 1) tiles over the subtree's levels, n^levels child subtrees below its last
     let n = tiling.branching();
     let (levels, child_bits) = (tiling.subtree_levels, n.pow(tiling.subtree_levels));
     let tile_bits = (child_bits - 1) / (n - 1);
+    // One content availability per content of the tiles (an object alone in `3DTILES_implicit_tiling`)
     let contents = match &json["contentAvailability"] {
         Value::Array(a) => a.iter().collect(),
         Value::Null => Vec::new(),
@@ -362,6 +396,8 @@ impl Tree {
 }
 
 impl Implicit {
+    /// The implicit tiling of a tile: its scheme and levels checked, its templates resolved against the tileset's
+    /// `url`, its root's volume and `base` fields kept for the tiles below. Errors on a sphere or bad levels
     pub(super) fn new(
         json: &ImplicitJson,
         url: &str,

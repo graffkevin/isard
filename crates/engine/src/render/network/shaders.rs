@@ -65,6 +65,8 @@ float value() {
 }
 ";
 
+/// The shaded pass, after `VALUE`: each pixel of a line colored by its value through the ramp (contours, fade before
+/// the maximum, unreached color), or the halo when `u_halo` is set
 pub const FRAGMENT: &str = r"
 uniform float u_max;
 uniform float u_contour;

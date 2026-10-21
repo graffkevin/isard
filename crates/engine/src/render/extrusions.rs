@@ -146,6 +146,40 @@ impl Batch {
     }
 }
 
+/// Uploads a batch's blocks into its buffers and sets up its vertex array: offset and centroid (vec2 each), feature,
+/// level (foot 0, roof 1) and shade (`shapes::Block`)
+fn upload_blocks(
+    gl: &glow::Context,
+    vao: glow::VertexArray,
+    (vertices, indices): (glow::Buffer, glow::Buffer),
+    blocks: &shapes::Blocks,
+) {
+    // SAFETY: state setup and uploads of objects just created on the live context
+    unsafe {
+        gl.bind_vertex_array(Some(vao));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&blocks.vertices), glow::STATIC_DRAW);
+
+        let stride = size_of::<shapes::Block>() as i32;
+
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+        gl.enable_vertex_attrib_array(1);
+        gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
+        gl.enable_vertex_attrib_array(2);
+        gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, stride, 16);
+        gl.enable_vertex_attrib_array(3);
+        gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
+        gl.enable_vertex_attrib_array(4);
+        gl.vertex_attrib_pointer_f32(4, 1, glow::FLOAT, false, stride, 24);
+        gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
+        gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&blocks.indices), glow::STATIC_DRAW);
+        gl.bind_vertex_array(None);
+    }
+}
+
+/// An extrusion layer: its batches (by key) of blocks, with their own feature textures, and the program and ramp they
+/// share
 pub struct ExtrusionLayer {
     program: glow::Program,
     uniforms: [Option<glow::UniformLocation>; 7],
@@ -162,6 +196,7 @@ pub struct ExtrusionLayer {
 }
 
 impl ExtrusionLayer {
+    /// An empty layer: no batch until `set_batch`
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let program = gl::program(
             gl,
@@ -231,44 +266,23 @@ impl ExtrusionLayer {
         objects.keep();
         features.set_ramp(gl, self.ramp.as_ref().map(|(rgba, lo, hi)| (rgba.as_slice(), *lo, *hi)));
 
-        // SAFETY: state setup and uploads of objects just created on the live context
-        let batch = unsafe {
-            gl.bind_vertex_array(Some(vao));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&blocks.vertices), glow::STATIC_DRAW);
+        upload_blocks(gl, vao, (vertices, indices), &blocks);
 
-            let stride = size_of::<shapes::Block>() as i32;
-
-            gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
-            gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
-            gl.enable_vertex_attrib_array(2);
-            gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, stride, 16);
-            gl.enable_vertex_attrib_array(3);
-            gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
-            gl.enable_vertex_attrib_array(4);
-            gl.vertex_attrib_pointer_f32(4, 1, glow::FLOAT, false, stride, 24);
-            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
-            gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&blocks.indices), glow::STATIC_DRAW);
-            gl.bind_vertex_array(None);
-
-            Batch {
-                features,
-                vao,
-                vertices,
-                indices,
-                count: blocks.indices.len() as i32,
-                origin,
-                min,
-                max,
-                anchors: None,
-                drape: Drape::new(),
-                grid: chunks.grid,
-                start: chunks.start,
-                reach: chunks.reach,
-                visible: Visible::default(),
-            }
+        let batch = Batch {
+            features,
+            vao,
+            vertices,
+            indices,
+            count: blocks.indices.len() as i32,
+            origin,
+            min,
+            max,
+            anchors: None,
+            drape: Drape::new(),
+            grid: chunks.grid,
+            start: chunks.start,
+            reach: chunks.reach,
+            visible: Visible::default(),
         };
 
         if let Some(old) = self.batches.insert(key, batch) {
@@ -278,6 +292,7 @@ impl ExtrusionLayer {
         Ok(())
     }
 
+    /// Removes the batch `key` and deletes its GL objects (nothing if there is none)
     pub fn remove_batch(&mut self, gl: &glow::Context, key: u32) {
         if let Some(old) = self.batches.remove(&key) {
             old.delete(gl);
@@ -513,6 +528,11 @@ impl Layer for ExtrusionLayer {
 #[wasm_bindgen]
 impl Engine {
     /// An empty extrusion layer: its blocks come in batches (`setExtrusionBatch`)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL object cannot be created or a shader fails to compile (the error carries its
+    /// info log)
     #[wasm_bindgen(js_name = addExtrusions)]
     pub fn add_extrusions(&mut self) -> Result<u32, JsValue> {
         let layer = ExtrusionLayer::new(&self.gl)?;
@@ -522,8 +542,16 @@ impl Engine {
 
     /// Adds or replaces batch `key` of an extrusion layer: polygons as for `addFills`, `feature_count` features (the
     /// feature style gives each its height and base height as its two sizes, metres)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when a WebGL buffer or vertex array of the batch cannot be created, or when
+    /// `feature_count` features need a table texture past the GPU's `MAX_TEXTURE_SIZE`
     #[wasm_bindgen(js_name = setExtrusionBatch)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API"
+    )]
     pub fn set_extrusion_batch(
         &mut self,
         id: u32,
@@ -549,6 +577,7 @@ impl Engine {
         Ok(())
     }
 
+    /// Removes batch `key` of an extrusion layer (nothing if there is none)
     #[wasm_bindgen(js_name = removeExtrusionBatch)]
     pub fn remove_extrusion_batch(&mut self, id: u32, key: u32) {
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
@@ -569,6 +598,11 @@ impl Engine {
     }
 
     /// Anchors of batch `key` on the linked network: per feature, node A, node B, cost from A, cost from B
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the batch's features need an anchor texture past the GPU's
+    /// `MAX_TEXTURE_SIZE`, or when it cannot be created
     #[wasm_bindgen(js_name = setExtrusionAnchors)]
     pub fn set_extrusion_anchors(&mut self, id: u32, key: u32, anchors: &[f32]) -> Result<(), JsValue> {
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {

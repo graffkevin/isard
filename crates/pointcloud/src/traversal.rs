@@ -13,6 +13,7 @@ use std::collections::{BinaryHeap, HashMap};
 /// Load state of a node's chunk, as the traversal sees it
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Readiness {
+    /// Its vertices are on the GPU, drawable now
     Ready,
     /// To load, or loading
     Pending,
@@ -20,6 +21,8 @@ pub enum Readiness {
     Unavailable,
 }
 
+/// What the traversal selected for a view, as indices in `Hierarchy::nodes`; kept from frame to frame (`select`
+/// clears it)
 #[derive(Default, Debug)]
 pub struct Selection {
     /// Nodes to draw, by priority, and the level their points are sized at: the deepest level drawn below each that
@@ -189,6 +192,7 @@ fn measure(tree: &Hierarchy, i: usize, view: &View, planes: &[DVec4; 6]) -> Opti
     Some((error, error / (1.0 + 2.0 * angle)))
 }
 
+/// Frustum planes (local frame, normalized, inside when `dot(n, p) + w >= 0`)
 fn frustum(view: &View) -> [DVec4; 6] {
     let m = view.view_proj.transpose();
     let (r0, r1, r2, r3) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);

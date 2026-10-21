@@ -72,14 +72,18 @@ enum Slot {
     Layer(Box<dyn Layer>),
 }
 
+/// A map on one canvas: its WebGL2 context, camera, ground (raster layers over the relief) and the layers over it.
+/// Draws only when `render` is called (the JavaScript side calls it after `redraw` asks for a frame)
 #[wasm_bindgen]
 pub struct Engine {
+    /// The WebGL2 context of the canvas, through `glow`
     pub(crate) gl: glow::Context,
+    /// The same context as `web_sys` sees it: uploads straight from JavaScript typed arrays
     pub(crate) raw: web_sys::WebGl2RenderingContext,
     /// Pool of decoding workers for 3D Tiles (`load`, `abort`), set by the JavaScript side
     #[cfg_attr(
         not(feature = "tiles3d"),
-        allow(dead_code, reason = "read by the 3D Tiles layers only")
+        expect(dead_code, reason = "read by the 3D Tiles layers only")
     )]
     pub(crate) loader: Option<JsValue>,
     camera: Camera,
@@ -87,6 +91,7 @@ pub struct Engine {
     layers: Vec<(u32, Slot)>,
     next_id: u32,
     frame: u64,
+    /// Asks the page for a new frame (the `redraw` callback of the constructor)
     pub(crate) redraw: Rc<dyn Fn()>,
     background: [f32; 3],
     /// The tile mesh shared by the ground and the globe base
@@ -149,6 +154,11 @@ const MOVING_MS: f64 = 100.0;
 #[wasm_bindgen]
 impl Engine {
     /// `redraw` is called when the engine needs a new frame (a tile arrived)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the canvas gives no WebGL2 context ("WebGL2 is not available"), or when a WebGL
+    /// object of the globe, the sky or the raster pass cannot be created or one of their shaders fails to compile
     #[wasm_bindgen(constructor)]
     pub fn new(
         canvas: &web_sys::HtmlCanvasElement,
@@ -237,6 +247,8 @@ impl Engine {
         }
     }
 
+    /// Sets the camera (degrees, the conventions of `MapLibre`): leaves a street-level view, and the camera keeps this
+    /// center as the relief comes in
     #[wasm_bindgen(js_name = setCamera)]
     pub fn set_camera(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
         self.camera.first_person = None;
@@ -267,6 +279,7 @@ impl Engine {
         (self.redraw)();
     }
 
+    /// The camera as set or moved: center (degrees), zoom, pitch and bearing (degrees)
     #[must_use]
     #[wasm_bindgen(unchecked_return_type = "Camera")]
     pub fn camera(&self) -> JsValue {
@@ -280,11 +293,13 @@ impl Engine {
         ])
     }
 
+    /// Lowest and highest zoom levels the camera accepts
     #[wasm_bindgen(js_name = setZoomRange)]
     pub fn set_zoom_range(&mut self, min: f64, max: f64) {
         self.camera.set_zoom_range(min, max);
     }
 
+    /// Color the canvas is cleared to (RGB 0-1), where neither ground nor sky is drawn
     #[wasm_bindgen(js_name = setBackground)]
     pub fn set_background(&mut self, r: f32, g: f32, b: f32) {
         self.background = [r, g, b];
@@ -309,7 +324,10 @@ impl Engine {
     /// blue halo and the range of its relief worldwide (-450 m to 8900 m) by default; set before the layers and the
     /// relief, whose shaders may take its size (`ISARD_CIRCUMFERENCE` of the ground layers)
     #[wasm_bindgen(js_name = setBody)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_body(&mut self, radius: f64, flattening: f64, halo: Option<Box<[f32]>>, lowest: f64, highest: f64) {
         if radius.is_finite() && radius > 0.0 && (0.0..1.0).contains(&flattening) {
             // Not a range around the ellipsoid: 1 % of the radius up and down
@@ -337,7 +355,10 @@ impl Engine {
     /// Sky over the plane (`MapLibre`'s `setSky`): colors of the sky, the horizon and the fog (RGB 0-1, 9 numbers),
     /// then the sky-horizon, horizon-fog and fog-ground blends; `undefined` for none (the background color shows)
     #[wasm_bindgen(js_name = setAtmosphere)]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "a wasm-bindgen export: JavaScript hands its values over"
+    )]
     pub fn set_atmosphere(&mut self, settings: Option<Box<[f32]>>) {
         self.sky.atmosphere = settings.as_deref().and_then(|s| {
             let &[sr, sg, sb, hr, hg, hb, fr, fg, fb, sky_horizon, horizon_fog, fog_ground] = s else {
@@ -369,6 +390,10 @@ impl Engine {
     /// above the ellipsoid, those of 3D Tiles; over France, on the Earth only), else left as served (the default);
     /// `loader`: gives the
     /// altitudes of each tile instead of fetching `url` (an encoding decoded by the page: Terrarium, Terrain-RGB)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the texture holding the relief's tiles cannot be created
     #[wasm_bindgen(js_name = setTerrain)]
     pub fn set_terrain(
         &mut self,
@@ -551,6 +576,7 @@ impl Engine {
         self.preload = Some((self.preload_generation, camera));
     }
 
+    /// Stops loading the tiles of the flight's destination (`preload`)
     #[wasm_bindgen(js_name = clearPreload)]
     pub fn clear_preload(&mut self) {
         self.preload = None;
@@ -572,6 +598,7 @@ impl Engine {
         self.settle_base = None;
     }
 
+    /// Zooms by `delta` levels around a screen point (CSS pixels), which keeps the same ground point under it
     #[wasm_bindgen(js_name = zoomAt)]
     pub fn zoom_at(&mut self, delta: f64, x: f64, y: f64) {
         if ![delta, x, y].iter().all(|v| v.is_finite()) {
@@ -687,8 +714,15 @@ impl Engine {
     /// Raster tiles in Web Mercator; `url` holds {z}, {x} and {y}. `size`: side of the tiles' textures (256 by
     /// default); `loader`: draws each tile instead of fetching `url`, `(z, x, y, signal) => Promise<ImageBitmap |
     /// null>`, an image of `size` × `size` (null: nothing there)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when the texture holding the layer's tiles cannot be created
     #[wasm_bindgen(js_name = addRaster)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API"
+    )]
     pub fn add_raster(
         &mut self,
         url: String,
@@ -721,6 +755,7 @@ impl Engine {
         Ok(self.push(Slot::Raster(Box::new(layer))))
     }
 
+    /// Opacity and saturation (0-1) of a raster layer; nothing for another id
     #[wasm_bindgen(js_name = setRasterStyle)]
     pub fn set_raster_style(&mut self, id: u32, opacity: f32, saturation: f32) {
         if let Some(Slot::Raster(layer)) = self.slot(id) {
@@ -729,6 +764,7 @@ impl Engine {
         }
     }
 
+    /// Removes a layer and frees its GPU objects; the other layers forget it (a layer that referred to it)
     #[wasm_bindgen(js_name = removeLayer)]
     pub fn remove_layer(&mut self, id: u32) {
         if let Some(index) = self.layers.iter().position(|(i, _)| *i == id) {
@@ -755,16 +791,8 @@ impl Engine {
         }
     }
 
-    /// Draws a frame; returns true while tiles are still loading (a new frame will be asked through `redraw`)
-    /// The sky and the globe base, under everything; both lie as deep as the lowest ground under relief (a canyon at
-    /// the horizon shows the halo beyond, not the base)
-    fn draw_backdrop(&self, view: &View) {
-        let depth = globe::depth(view, self.terrain.as_ref().map(|(_, e)| *e));
-
-        self.sky.draw(&self.gl, view, depth);
-        self.globe.draw(&self.gl, view, depth);
-    }
-
+    /// Draws a frame: the backdrop, the ground and the layers over it bottom to top, then the panorama and the
+    /// viewshed; returns true while tiles are still loading (a new frame will be asked through `redraw`)
     pub fn render(&mut self) -> bool {
         self.frame += 1;
         self.follow_relief();
@@ -774,28 +802,11 @@ impl Engine {
             self.camera.width * self.pixel_ratio,
             self.camera.height * self.pixel_ratio,
         );
-        let mut loading = false;
 
         self.begin_frame(w, h);
 
-        // Camera motion, for the foveated loading
-        let key = key_of(&self.camera);
-        let now = js_sys::Date::now();
-
-        if key != self.last_camera {
-            self.last_camera = key;
-            self.moved_at = now;
-        }
-
-        let moving = now - self.moved_at < MOVING_MS;
-        let preload = self.preload.as_ref().map(|(generation, camera)| {
-            let mut camera = camera.clone();
-
-            camera.width = self.camera.width;
-            camera.height = self.camera.height;
-
-            (*generation, camera.view())
-        });
+        let (now, moving) = self.camera_motion();
+        let preload = self.preload_view();
 
         self.drawn = Some(view.clone());
         self.draw_backdrop(&view);
@@ -810,77 +821,9 @@ impl Engine {
             loading: self.loading,
             now,
         };
+        let loading = self.draw_slots(&ctx);
 
-        self.raster_pass.begin_frame();
-        if let Some((terrain, _)) = &mut self.terrain {
-            loading |= terrain.prepare(&self.gl, &ctx);
-        }
-
-        // Taken out while they draw: each layer gets the engine's state, the rasters the relief to drape on
-        let mut layers = std::mem::take(&mut self.layers);
-
-        self.place_labels(&mut layers, &view);
-
-        let mut i = 0;
-
-        while i < layers.len() {
-            let id = layers[i].0;
-
-            if let Slot::Layer(layer) = &mut layers[i].1 {
-                loading |= self.draw_layer(layer.as_mut(), id, &view);
-                i += 1;
-                continue;
-            }
-
-            // Consecutive raster layers: one composited pass (up to STACK layers)
-            let mut j = i;
-
-            while j < layers.len() && j - i < STACK && matches!(layers[j].1, Slot::Raster(_)) {
-                j += 1;
-            }
-
-            // Each in its columns of the canvas: all of it, or its side of the swipe
-            let mut stack: Vec<&mut RasterSource> = layers[i..j]
-                .iter_mut()
-                .filter_map(|(id, slot)| match slot {
-                    Slot::Raster(source) => {
-                        source.clip = self.swipe_columns(*id).unwrap_or(crate::render::raster::UNCLIPPED);
-
-                        Some(source.as_mut())
-                    }
-                    Slot::Layer(_) => None,
-                })
-                .collect();
-
-            for source in &mut stack {
-                loading |= source.prepare(&self.gl, &ctx);
-            }
-
-            let terrain = self
-                .terrain
-                .as_mut()
-                .map(|(source, exaggeration)| (source, *exaggeration));
-            let fog = self.sky.atmosphere.map(|a| a.fog(&view));
-            let (frame, fade) = (self.frame, self.loading.fade_ms);
-
-            self.raster_pass
-                .draw(&self.gl, &view, &mut stack, terrain, frame, now, fade, fog);
-            for source in &stack {
-                source.finish(&self.redraw);
-            }
-            i = j;
-        }
-        self.layers = layers;
-        if let Some((terrain, _)) = &self.terrain {
-            terrain.finish(&self.redraw);
-        }
-        // The camera followed the relief before this frame's uploads: finer relief under its center that came in
-        // meanwhile is followed by one more frame (else that frame would stay, drawn from the former altitude)
-        if ground_elevation(self.terrain.as_ref(), self.camera.center)
-            .is_some_and(|h| (h - self.camera.elevation).abs() > 1e-6)
-        {
-            (self.redraw)();
-        }
+        self.redraw_if_relief_arrived();
         #[cfg(feature = "tiles3d")]
         self.draw_panorama(&view);
         self.draw_viewshed(&view);
@@ -895,6 +838,131 @@ fn key_of(c: &Camera) -> [u64; 5] {
 }
 
 impl Engine {
+    /// The sky and the globe base, under everything; both lie as deep as the lowest ground under relief (a canyon at
+    /// the horizon shows the halo beyond, not the base)
+    fn draw_backdrop(&self, view: &View) {
+        let depth = globe::depth(view, self.terrain.as_ref().map(|(_, e)| *e));
+
+        self.sky.draw(&self.gl, view, depth);
+        self.globe.draw(&self.gl, view, depth);
+    }
+
+    /// The time of this frame (ms) and whether the camera changed less than `MOVING_MS` ago, for the foveated loading
+    fn camera_motion(&mut self) -> (f64, bool) {
+        let key = key_of(&self.camera);
+        let now = js_sys::Date::now();
+
+        if key != self.last_camera {
+            self.last_camera = key;
+            self.moved_at = now;
+        }
+
+        (now, now - self.moved_at < MOVING_MS)
+    }
+
+    /// The view of a camera flight's destination at the canvas size, with its generation: its tiles load in advance
+    fn preload_view(&self) -> Option<(u64, View)> {
+        self.preload.as_ref().map(|(generation, camera)| {
+            let mut camera = camera.clone();
+
+            camera.width = self.camera.width;
+            camera.height = self.camera.height;
+
+            (*generation, camera.view())
+        })
+    }
+
+    /// Draws the slots bottom to top: each layer over the ground on its own, consecutive raster layers in one
+    /// composited pass over the relief, which is prepared before them and finished after; whether tiles are still
+    /// loading
+    fn draw_slots(&mut self, ctx: &DrawContext) -> bool {
+        let mut loading = false;
+
+        self.raster_pass.begin_frame();
+        if let Some((terrain, _)) = &mut self.terrain {
+            loading |= terrain.prepare(&self.gl, ctx);
+        }
+
+        // Taken out while they draw: each layer gets the engine's state, the rasters the relief to drape on
+        let mut layers = std::mem::take(&mut self.layers);
+
+        self.place_labels(&mut layers, ctx.view);
+
+        let mut i = 0;
+
+        while i < layers.len() {
+            let id = layers[i].0;
+
+            if let Slot::Layer(layer) = &mut layers[i].1 {
+                loading |= self.draw_layer(layer.as_mut(), id, ctx.view);
+                i += 1;
+                continue;
+            }
+
+            // Consecutive raster layers: one composited pass (up to STACK layers)
+            let mut j = i;
+
+            while j < layers.len() && j - i < STACK && matches!(layers[j].1, Slot::Raster(_)) {
+                j += 1;
+            }
+
+            loading |= self.draw_rasters(&mut layers[i..j], ctx);
+            i = j;
+        }
+        self.layers = layers;
+        if let Some((terrain, _)) = &self.terrain {
+            terrain.finish(&self.redraw);
+        }
+
+        loading
+    }
+
+    /// Draws consecutive raster layers in one composited pass over the relief, each in its columns of the canvas (all
+    /// of it, or its side of the swipe); whether tiles are still loading
+    fn draw_rasters(&mut self, slots: &mut [(u32, Slot)], ctx: &DrawContext) -> bool {
+        let mut loading = false;
+        let mut stack: Vec<&mut RasterSource> = slots
+            .iter_mut()
+            .filter_map(|(id, slot)| match slot {
+                Slot::Raster(source) => {
+                    source.clip = self.swipe_columns(*id).unwrap_or(crate::render::raster::UNCLIPPED);
+
+                    Some(source.as_mut())
+                }
+                Slot::Layer(_) => None,
+            })
+            .collect();
+
+        for source in &mut stack {
+            loading |= source.prepare(&self.gl, ctx);
+        }
+
+        let terrain = self
+            .terrain
+            .as_mut()
+            .map(|(source, exaggeration)| (source, *exaggeration));
+        let fog = self.sky.atmosphere.map(|a| a.fog(ctx.view));
+        let (frame, fade) = (self.frame, self.loading.fade_ms);
+
+        self.raster_pass
+            .draw(&self.gl, ctx.view, &mut stack, terrain, frame, ctx.now, fade, fog);
+        for source in &stack {
+            source.finish(&self.redraw);
+        }
+
+        loading
+    }
+
+    /// Asks one more frame when finer relief under the center came in during this one: the camera followed the
+    /// relief before this frame's uploads, else that frame would stay, drawn from the former altitude
+    fn redraw_if_relief_arrived(&self) {
+        if ground_elevation(self.terrain.as_ref(), self.camera.center)
+            .is_some_and(|h| (h - self.camera.elevation).abs() > 1e-6)
+        {
+            (self.redraw)();
+        }
+    }
+
     /// The camera onto the relief under its center (sea level without relief), before a frame
     fn follow_relief(&mut self) {
         if self.terrain.is_none() {
@@ -1070,6 +1138,7 @@ impl Engine {
         }
     }
 
+    /// Adds a slot on top under a new id, returned
     fn push(&mut self, slot: Slot) -> u32 {
         let id = self.next_id;
 
@@ -1079,6 +1148,7 @@ impl Engine {
         id
     }
 
+    /// The slot of this id
     fn slot(&mut self, id: u32) -> Option<&mut Slot> {
         self.layers.iter_mut().find(|(i, _)| *i == id).map(|(_, slot)| slot)
     }

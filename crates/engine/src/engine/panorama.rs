@@ -99,10 +99,13 @@ struct Camera {
     rotation: DMat3,
     /// In the panorama frame, metres
     position: DVec3,
+    /// Focal x, y, center x, y (pixels)
     intrinsics: [f32; 4],
     /// Skew, width, height
     size: [f32; 3],
+    /// Principal point of the distortion x, y, its r³ and r⁵ coefficients
     distortion: [f32; 4],
+    /// The r⁷ coefficient and the square of the distortion's limit (`f32::MAX`: none)
     limits: [f32; 2],
 }
 
@@ -118,7 +121,7 @@ struct Settings {
     opacity: f32,
 }
 
-/// The GPU side: the pass, the images, the screen's depth
+/// A panorama set by the page and its GPU side: the pass, the images, the screen's depth
 pub(super) struct Panorama {
     settings: Settings,
     program: glow::Program,
@@ -134,6 +137,7 @@ pub(super) struct Panorama {
 }
 
 impl Panorama {
+    /// Compiles the pass and creates the images' texture (its storage comes with the first image)
     fn new(gl: &glow::Context, settings: Settings) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
         let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
@@ -174,6 +178,7 @@ impl Panorama {
         })
     }
 
+    /// Frees the GPU objects; the panorama is not drawn afterwards
     pub(super) fn delete(&mut self, gl: &glow::Context) {
         // SAFETY: objects owned by the panorama, not used afterwards
         unsafe {
@@ -212,41 +217,21 @@ impl Engine {
         self.panorama = Some(panorama);
     }
 
+    /// The full-screen pass that puts each pixel of `depth` (the solid scene from the camera) into the panorama's
+    /// cameras and blends their images over the default framebuffer
     fn draw_panorama_pass(&self, panorama: &Panorama, view: &View, depth: glow::Texture) {
         let s = &panorama.settings;
         let k = view.pixels_per_metre(s.position.y);
         // The panorama's east-north-up frame (metres) in the local frame (pixels), and back
         let enu = view.enu_matrix(s.position);
         let center = enu.transform_point3(DVec3::ZERO);
-        let to_enu = enu.inverse();
-        // Local offsets from the panorama to each camera: through east-north-up, the panorama frame, the camera
-        let mut cameras = Vec::with_capacity(CAMERAS * 16);
-        let (mut intrinsics, mut sizes, mut distortions, mut limits) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-
-        for (layer, c) in s.cameras.iter().enumerate().take(CAMERAS) {
-            let rotation = c.rotation * s.rotation.transpose();
-            let offset = DMat4::from_mat3(DMat3::from_cols(
-                to_enu.x_axis.truncate(),
-                to_enu.y_axis.truncate(),
-                to_enu.z_axis.truncate(),
-            ));
-            let m = DMat4::from_mat3(rotation) * DMat4::from_translation(-(s.rotation * c.position)) * offset;
-
-            cameras.extend(m.to_cols_array().map(|v| v as f32));
-            intrinsics.extend(c.intrinsics);
-
-            // A camera whose image has not arrived: its layer -1, left out
-            let image = if panorama.loaded.get(layer).copied().unwrap_or(false) {
-                layer as f32
-            } else {
-                -1.0
-            };
-
-            sizes.extend([c.size[0], c.size[1], c.size[2], image]);
-            distortions.extend(c.distortion);
-            limits.extend(c.limits);
-        }
-
+        let CameraUniforms {
+            cameras,
+            intrinsics,
+            sizes,
+            distortions,
+            limits,
+        } = camera_uniforms(panorama, &enu.inverse());
         let count = s.cameras.len().min(CAMERAS);
         let [
             depth_u,
@@ -308,6 +293,56 @@ impl Engine {
     }
 }
 
+/// The arrays of the cameras' uniforms, one entry per camera (`CAMERAS` at most)
+struct CameraUniforms {
+    /// Local frame to each camera, 16 numbers each (column-major)
+    cameras: Vec<f32>,
+    intrinsics: Vec<f32>,
+    /// Skew, width, height, layer of the image (-1 while it has not arrived)
+    sizes: Vec<f32>,
+    distortions: Vec<f32>,
+    limits: Vec<f32>,
+}
+
+/// The cameras' uniforms of a panorama, `to_enu` taking the local frame (pixels) to its east-north-up frame (metres)
+fn camera_uniforms(panorama: &Panorama, to_enu: &DMat4) -> CameraUniforms {
+    let s = &panorama.settings;
+    // Local offsets from the panorama to each camera: through east-north-up, the panorama frame, the camera
+    let mut u = CameraUniforms {
+        cameras: Vec::with_capacity(CAMERAS * 16),
+        intrinsics: Vec::new(),
+        sizes: Vec::new(),
+        distortions: Vec::new(),
+        limits: Vec::new(),
+    };
+
+    for (layer, c) in s.cameras.iter().enumerate().take(CAMERAS) {
+        let rotation = c.rotation * s.rotation.transpose();
+        let offset = DMat4::from_mat3(DMat3::from_cols(
+            to_enu.x_axis.truncate(),
+            to_enu.y_axis.truncate(),
+            to_enu.z_axis.truncate(),
+        ));
+        let m = DMat4::from_mat3(rotation) * DMat4::from_translation(-(s.rotation * c.position)) * offset;
+
+        u.cameras.extend(m.to_cols_array().map(|v| v as f32));
+        u.intrinsics.extend(c.intrinsics);
+
+        // A camera whose image has not arrived: its layer -1, left out
+        let image = if panorama.loaded.get(layer).copied().unwrap_or(false) {
+            layer as f32
+        } else {
+            -1.0
+        };
+
+        u.sizes.extend([c.size[0], c.size[1], c.size[2], image]);
+        u.distortions.extend(c.distortion);
+        u.limits.extend(c.limits);
+    }
+
+    u
+}
+
 #[wasm_bindgen]
 impl Engine {
     /// Shows a panorama: at `lon`, `lat` (degrees) and `height` (metres above the ellipsoid), turned by `rotation`
@@ -315,8 +350,16 @@ impl Engine {
     /// frame, row-major, 9; position in it, 3; focal x, y; center x, y; skew; image width, height; principal point of
     /// the distortion x, y; its coefficients r³, r⁵, r⁷; its limit, pixels), a backdrop sphere of `radius` metres, at
     /// `opacity`. Its images come after (`setPanoramaImage`)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when `rotation` holds fewer than 9 numbers, or when a WebGL object cannot be created or a
+    /// shader fails to compile (the error carries its info log)
     #[wasm_bindgen(js_name = setPanorama)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a wasm-bindgen export: its arguments are the JavaScript API"
+    )]
     pub fn set_panorama(
         &mut self,
         lon: f64,
@@ -373,6 +416,10 @@ impl Engine {
     }
 
     /// The image of camera `index` of the panorama (the images sharing the size of the first)
+    ///
+    /// # Errors
+    ///
+    /// Throws (to JavaScript) when WebGL refuses the upload of `image` into the panorama's texture
     #[wasm_bindgen(js_name = setPanoramaImage)]
     pub fn set_panorama_image(&mut self, index: usize, image: &web_sys::ImageBitmap) -> Result<(), JsValue> {
         let Some(panorama) = self.panorama.as_mut() else {
