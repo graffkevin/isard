@@ -72,6 +72,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ### Fixed
 
+- Finer relief arriving under the center during a frame is followed by one more frame: the camera follows the relief
+  before the frame's uploads, and a frame drawn from the former altitude could stay (the pitched Mars view of the
+  visual tests drawn either way).
 - The camera settling onto finer relief after a move ends where the relief puts it whatever order its tiles arrived
   in (each settle from the camera the move left, not from the last settle): the same view for the same relief, the
   pitched scenes of the visual tests stable.

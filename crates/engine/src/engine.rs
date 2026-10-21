@@ -815,6 +815,13 @@ impl Engine {
         if let Some((terrain, _)) = &self.terrain {
             terrain.finish(&self.redraw);
         }
+        // The camera followed the relief before this frame's uploads: finer relief under its center that came in
+        // meanwhile is followed by one more frame (else that frame would stay, drawn from the former altitude)
+        if ground_elevation(self.terrain.as_ref(), self.camera.center)
+            .is_some_and(|h| (h - self.camera.elevation).abs() > 1e-6)
+        {
+            (self.redraw)();
+        }
         #[cfg(feature = "tiles3d")]
         self.draw_panorama(&view);
         self.draw_viewshed(&view);
