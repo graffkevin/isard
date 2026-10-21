@@ -67,7 +67,7 @@ async function bundle(entries: string[], outdir: string, options: { split?: bool
     sourcemap: 'linked',
     conditions: ['isard-source'],
   } satisfies Partial<Bun.BuildConfig>;
-  const workers = [join(root, pkg, 'src/decoder.worker.ts'), join(root, pkg, 'src/basemap.worker.ts')];
+  const workers = [join(root, pkg, 'src/workers/decoder.worker.ts'), join(root, pkg, 'src/workers/basemap.worker.ts')];
   // Workers on their own (a worker cannot share the page's chunks), entry points split or not
   const builds = split
     ? [

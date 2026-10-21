@@ -4,10 +4,10 @@
  * `hillshade`, `terrain: 'ign'`, `PLAN_STYLES`); the rasters credit the IGN by themselves.
  */
 
-import type { ExtrusionOptions } from './extrusions.ts';
-import type { FeatureCollection, Properties } from './features.ts';
-import type { TileGrid, TileMatrix } from './grid.ts';
-import { withHeaders } from './requests.ts';
+import type { TileGrid, TileMatrix } from './basemap/grid.ts';
+import { withHeaders } from './engine/requests.ts';
+import type { ExtrusionOptions } from './layers/extrusions.ts';
+import type { FeatureCollection, Properties } from './layers/features.ts';
 import type { GeoMapOptions, RasterOptions, Tiles3dOptions } from './types.ts';
 
 /** Credits of the Géoplateforme's data: its basemaps, hillshade, terrain model, rasters and features */

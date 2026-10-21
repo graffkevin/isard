@@ -2,10 +2,11 @@
  * The two builds of the engine, downloaded, compiled and instantiated once per page; the decoding workers of 3D Tiles
  * that run the full one; the engine of a destroyed map.
  */
-import { DEFAULT_DECODERS } from './decoders.ts';
-import { TileLoader } from './loader.ts';
+
+import { defaultWorkerCount } from './basemap/vectortiles.ts';
+import { DEFAULT_DECODERS } from './engine/decoders.ts';
+import { TileLoader } from './engine/loader.ts';
 import type { GeoMapOptions } from './types.ts';
-import { defaultWorkerCount } from './vectortiles.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
 /** The class of an engine build: its constructor and its static `customMatrix` (custom layers) */

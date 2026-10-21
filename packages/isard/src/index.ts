@@ -11,15 +11,28 @@
  * new Marker().setLonLat([2.4246, 48.8457]).setPopup(new Popup({ offset: [0, -34] }).setText('Here')).addTo(map);
  * ```
  */
-export { OPENFREEMAP_ATTRIBUTION, TERRAIN_TILES_ATTRIBUTION } from './basemaps.ts';
+export { OPENFREEMAP_ATTRIBUTION, TERRAIN_TILES_ATTRIBUTION } from './basemap/basemaps.ts';
+export type { TileGrid, TileMatrix } from './basemap/grid.ts';
 export {
-  AttributionControl,
-  type AttributionOptions,
-  type Control,
-  type ControlPosition,
-  NavigationControl,
-  type NavigationOptions,
-} from './controls.ts';
+  PMTiles,
+  type PmtilesEntry,
+  type PmtilesHeader,
+  type PmtilesTileType,
+  tileIdToZxy,
+  zxyToTileId,
+} from './basemap/pmtiles.ts';
+export type {
+  CandidateIcon,
+  CandidateOverlap,
+  Json,
+  LabelCandidate,
+  RasterSource,
+  Style,
+  StyleLayer,
+} from './basemap/vectorstyle.ts';
+export type { PmtilesOptions, VectorTilesOptions } from './basemap/vectortiles.ts';
+export { basicStyle, OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './basemap/vectortiles.ts';
+export { parseWmtsGrid, wmtsGrid } from './basemap/wmts.ts';
 export {
   type Crs,
   type CrsLike,
@@ -28,10 +41,26 @@ export {
   registerCrs,
   reproject,
   transverseMercator,
-} from './crs.ts';
-export type { DecoderUrls } from './decoders.ts';
-export type { ExtrusionOptions, ExtrusionStyle, PolygonArrays, TileKey } from './extrusions.ts';
-export { ExtrusionLayer } from './extrusions.ts';
+} from './data/crs.ts';
+export { parseGpx } from './data/gpx.ts';
+export { parseKml } from './data/kml.ts';
+export { parseTopoJson, type TopoGeometry, type Topology } from './data/topojson.ts';
+export type { DecoderUrls } from './engine/decoders.ts';
+export { setRequestHeaders } from './engine/requests.ts';
+export {
+  BATIMENTS_3D_URL,
+  type BdTopoBuilding,
+  batiments3d,
+  bdtopoBuildings,
+  geoplateformeWfs,
+  geoplateformeWms,
+  geoplateformeWmts,
+  IGN_ATTRIBUTION,
+  IGN_PRESETS,
+  type IgnPreset,
+} from './geoplateforme.ts';
+export type { ExtrusionOptions, ExtrusionStyle, PolygonArrays, TileKey } from './layers/extrusions.ts';
+export { ExtrusionLayer } from './layers/extrusions.ts';
 export type {
   CircleOptions,
   CircleStyle,
@@ -51,26 +80,11 @@ export type {
   Size,
   Stops,
   Styled,
-} from './features.ts';
-export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
-export {
-  BATIMENTS_3D_URL,
-  type BdTopoBuilding,
-  batiments3d,
-  bdtopoBuildings,
-  geoplateformeWfs,
-  geoplateformeWms,
-  geoplateformeWmts,
-  IGN_ATTRIBUTION,
-  IGN_PRESETS,
-  type IgnPreset,
-} from './geoplateforme.ts';
-export type { TextPart } from './glyphs.ts';
-export { DEFAULT_FONT, GLYPHS_URL } from './glyphs.ts';
-export { parseGpx } from './gpx.ts';
-export type { TileGrid, TileMatrix } from './grid.ts';
-export type { ImageOptions, Pixels, SpriteIcon } from './icons.ts';
-export { parseKml } from './kml.ts';
+} from './layers/features.ts';
+export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './layers/features.ts';
+export type { TextPart } from './layers/glyphs.ts';
+export { DEFAULT_FONT, GLYPHS_URL } from './layers/glyphs.ts';
+export type { ImageOptions, Pixels, SpriteIcon } from './layers/icons.ts';
 export type {
   CustomFrame,
   CustomLayerInterface,
@@ -78,7 +92,7 @@ export type {
   GroundTexture,
   ModelInstance,
   ModelOptions,
-} from './layers.ts';
+} from './layers/layers.ts';
 export {
   CustomLayer,
   GroundLayer,
@@ -87,35 +101,13 @@ export {
   NetworkLayer,
   RasterLayer,
   Tiles3dLayer,
-} from './layers.ts';
+} from './layers/layers.ts';
+export { type Panorama, type PanoramaOptions, Panoramas } from './layers/panoramas.ts';
+export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from './layers/pointclouds.ts';
+export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './layers/pointclouds.ts';
+export type { Overlap, SymbolOptions, SymbolStyle } from './layers/symbols.ts';
+export { SymbolLayer } from './layers/symbols.ts';
 export { GeoMap, type LayerSpec } from './map.ts';
-export {
-  type Anchor,
-  Marker,
-  type MarkerEvent,
-  type MarkerEvents,
-  type MarkerOptions,
-  Panel,
-  type PanelOptions,
-  Popup,
-  type PopupEvents,
-  type PopupOptions,
-} from './overlay.ts';
-export { type Panorama, type PanoramaOptions, Panoramas } from './panoramas.ts';
-export {
-  PMTiles,
-  type PmtilesEntry,
-  type PmtilesHeader,
-  type PmtilesTileType,
-  tileIdToZxy,
-  zxyToTileId,
-} from './pmtiles.ts';
-export type { ClassStyle, PointCloudOptions, PointCloudStyle, PointColor } from './pointclouds.ts';
-export { CLASSIFICATIONS, ELEVATION_RAMP, PointCloudLayer } from './pointclouds.ts';
-export { setRequestHeaders } from './requests.ts';
-export type { Overlap, SymbolOptions, SymbolStyle } from './symbols.ts';
-export { SymbolLayer } from './symbols.ts';
-export { parseTopoJson, type TopoGeometry, type Topology } from './topojson.ts';
 export type {
   AnimationOptions,
   AtmosphereOptions,
@@ -147,17 +139,26 @@ export type {
   Tiles3dStyle,
   ViewshedOptions,
 } from './types.ts';
-export type {
-  CandidateIcon,
-  CandidateOverlap,
-  Json,
-  LabelCandidate,
-  RasterSource,
-  Style,
-  StyleLayer,
-} from './vectorstyle.ts';
-export type { PmtilesOptions, VectorTilesOptions } from './vectortiles.ts';
-export { basicStyle, OPENFREEMAP_STYLES, PLAN_STYLES, VectorTiles } from './vectortiles.ts';
+export {
+  AttributionControl,
+  type AttributionOptions,
+  type Control,
+  type ControlPosition,
+  NavigationControl,
+  type NavigationOptions,
+} from './ui/controls.ts';
+export {
+  type Anchor,
+  Marker,
+  type MarkerEvent,
+  type MarkerEvents,
+  type MarkerOptions,
+  Panel,
+  type PanelOptions,
+  Popup,
+  type PopupEvents,
+  type PopupOptions,
+} from './ui/overlay.ts';
 export type {
   Camera,
   NetworkStats,
@@ -169,4 +170,3 @@ export type {
   RasterLayerStats,
   Tiles3dStats,
 } from './wasm/isard.js';
-export { parseWmtsGrid, wmtsGrid } from './wmts.ts';

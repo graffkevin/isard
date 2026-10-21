@@ -8,6 +8,9 @@
  * map.addRaster({ url, grid: await wmtsGrid(capabilitiesUrl, 'PLANIGNV2.L93', '2154_10cm_6_20') });
  * ```
  */
+
+export type { TileGrid, TileMatrix } from './basemap/grid.ts';
+export { parseWmtsGrid, wmtsGrid } from './basemap/wmts.ts';
 export {
   type Crs,
   type CrsLike,
@@ -16,6 +19,4 @@ export {
   registerCrs,
   reproject,
   transverseMercator,
-} from './crs.ts';
-export type { TileGrid, TileMatrix } from './grid.ts';
-export { parseWmtsGrid, wmtsGrid } from './wmts.ts';
+} from './data/crs.ts';

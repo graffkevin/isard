@@ -4,9 +4,23 @@
  * drawn in the same frame. The engine's loading is in engine-loader.ts, its settings from the options in settings.ts,
  * the camera animations in animation.ts.
  */
-import { easeTo, flyTo, type Step } from './animation.ts';
-import { BASEMAPS, HILLSHADE, RENAMED_BASEMAPS, SEA } from './basemaps.ts';
-import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
+
+import { BASEMAPS, HILLSHADE, RENAMED_BASEMAPS, SEA } from './basemap/basemaps.ts';
+import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './basemap/grid.ts';
+import { encodedTerrainLoader, type PngEncoding, type RemoteHeights } from './basemap/terrain.ts';
+import {
+  BasemapWorkers,
+  defaultWorkerCount,
+  defaultWorkerUrl,
+  type PmtilesOptions,
+  pmtilesLayer,
+  pmtilesRasterLoader,
+  VECTOR_BASEMAPS,
+  VectorTiles,
+  type VectorTilesOptions,
+} from './basemap/vectortiles.ts';
+import type { TileLoader } from './engine/loader.ts';
+import { type HeaderRules, headerRules, onHeaderRules } from './engine/requests.ts';
 import {
   destroyedEngine,
   type EngineClass,
@@ -16,7 +30,8 @@ import {
   preloadFullEngine,
   startTileLoader,
 } from './engine-loader.ts';
-import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './extrusions.ts';
+import { IGN_PRESETS } from './geoplateforme.ts';
+import { ExtrusionLayer, type ExtrusionOptions, extrusionStyle } from './layers/extrusions.ts';
 import {
   CircleLayer,
   type CircleOptions,
@@ -28,12 +43,9 @@ import {
   LineLayer,
   type LineOptions,
   lineStyle,
-} from './features.ts';
-import { IGN_PRESETS } from './geoplateforme.ts';
-import { Glyphs } from './glyphs.ts';
-import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './grid.ts';
-import { Icons, type ImageOptions, type Pixels, readPixels } from './icons.ts';
-import { Interaction } from './interaction.ts';
+} from './layers/features.ts';
+import { Glyphs } from './layers/glyphs.ts';
+import { Icons, type ImageOptions, type Pixels, readPixels } from './layers/icons.ts';
 import {
   CustomLayer,
   type CustomLayerInterface,
@@ -45,12 +57,10 @@ import {
   NetworkLayer,
   RasterLayer,
   Tiles3dLayer,
-} from './layers.ts';
-import type { TileLoader } from './loader.ts';
-import type { Positioned } from './overlay.ts';
-import { loadPanoramas, type PanoramaHost, type PanoramaOptions, type Panoramas } from './panoramas.ts';
-import { PointCloudLayer, type PointCloudOptions } from './pointclouds.ts';
-import { type HeaderRules, headerRules, onHeaderRules } from './requests.ts';
+} from './layers/layers.ts';
+import { loadPanoramas, type PanoramaHost, type PanoramaOptions, type Panoramas } from './layers/panoramas.ts';
+import { PointCloudLayer, type PointCloudOptions } from './layers/pointclouds.ts';
+import { SymbolLayer, type SymbolOptions, symbolStyle } from './layers/symbols.ts';
 import {
   atmosphereSettings,
   bodySettings,
@@ -60,9 +70,6 @@ import {
   type TerrainLoader,
   terrainSettings,
 } from './settings.ts';
-import { injectStyle } from './style.ts';
-import { SymbolLayer, type SymbolOptions, symbolStyle } from './symbols.ts';
-import { encodedTerrainLoader, type PngEncoding, type RemoteHeights } from './terrain.ts';
 import type {
   AnimationOptions,
   AtmosphereOptions,
@@ -86,17 +93,11 @@ import type {
   Tiles3dOptions,
   ViewshedOptions,
 } from './types.ts';
-import {
-  BasemapWorkers,
-  defaultWorkerCount,
-  defaultWorkerUrl,
-  type PmtilesOptions,
-  pmtilesLayer,
-  pmtilesRasterLoader,
-  VECTOR_BASEMAPS,
-  VectorTiles,
-  type VectorTilesOptions,
-} from './vectortiles.ts';
+import { AttributionControl, type Control, type ControlPosition } from './ui/controls.ts';
+import { Interaction } from './ui/interaction.ts';
+import type { Positioned } from './ui/overlay.ts';
+import { injectStyle } from './ui/style.ts';
+import { easeTo, flyTo, type Step } from './util/animation.ts';
 import type { Camera, Engine, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
 
 /** Reports an error without throwing it here: the console shows it, as an uncaught one */

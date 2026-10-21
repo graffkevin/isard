@@ -3,7 +3,7 @@
  * on the engine without them, a WebGL context lost and restored, a map destroyed meanwhile
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { Feature } from '../src/features.ts';
+import type { Feature } from '../src/layers/features.ts';
 import type { GeoMapOptions } from '../src/types.ts';
 import { CoreFakeEngine, domGlobals, EMPTY_WASM, FakeElement, FakeEngine, Frames, setGlobals } from './fakes.ts';
 

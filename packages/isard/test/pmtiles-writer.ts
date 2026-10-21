@@ -5,7 +5,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { zxyToTileId } from '../src/pmtiles.ts';
+import { zxyToTileId } from '../src/basemap/pmtiles.ts';
 
 export function varint(value: number): number[] {
   let v = value;

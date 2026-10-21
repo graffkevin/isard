@@ -41,7 +41,7 @@ export default function isard(options = {}) {
     transform(code, id) {
       if (!building || !/[\\/]isard[\\/]/.test(id) || !code.includes('import.meta.url')) return null;
       const next = code.replace(
-        /new URL\((["'`])(?:\.\/)?([\w.-]+\.(?:wasm|js))\1,\s*import\.meta\.url\)/g,
+        /new URL\((["'`])(?:\.{1,2}\/)?([\w.-]+\.(?:wasm|js))\1,\s*import\.meta\.url\)/g,
         (_, quote, file) => `new URL(${quote}${file}${quote}, globalThis.isardAssetsUrl ?? location.href)`,
       );
       return next === code ? null : { code: next, map: null };

@@ -19,7 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { basename, extname, join, normalize, resolve } from 'node:path';
 import type { AddMessage, Bounds, GeoJsonCollection, HostMessage, ViewerMessage } from '../apps/viewer/src/protocol.ts';
-import { parseHeader } from '../packages/isard/src/pmtiles.ts';
+import { parseHeader } from '../packages/isard/src/basemap/pmtiles.ts';
 
 const root = join(import.meta.dir, '..');
 
@@ -37,7 +37,9 @@ let formats: Promise<Formats> | undefined;
 function loadFormats(): Promise<Formats> {
   const src = join(root, 'packages/isard/src');
   formats ??= Promise.all(
-    ['kml.ts', 'gpx.ts', 'topojson.ts', 'crs.ts'].map((m) => import(join(src, m)) as Promise<Partial<Formats>>),
+    ['data/kml.ts', 'data/gpx.ts', 'data/topojson.ts', 'data/crs.ts'].map(
+      (m) => import(join(src, m)) as Promise<Partial<Formats>>,
+    ),
   ).then((modules) => Object.assign({}, ...modules) as Formats);
   return formats;
 }

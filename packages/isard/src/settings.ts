@@ -10,9 +10,8 @@ import {
   TERRAIN_TILES,
   TERRAIN_TILES_ATTRIBUTION,
   TERRAIN_URL,
-} from './basemaps.ts';
-import { parseCssColor } from './color.ts';
-import type { PngEncoding } from './terrain.ts';
+} from './basemap/basemaps.ts';
+import type { PngEncoding } from './basemap/terrain.ts';
 import type {
   AtmosphereOptions,
   BodyOptions,
@@ -21,6 +20,7 @@ import type {
   TerrainModel,
   TerrainOptions,
 } from './types.ts';
+import { parseCssColor } from './util/color.ts';
 
 /** Decodes the relief tiles of a URL for the engine: 256 × 256 altitudes, null where there is no tile */
 export type TerrainLoader = (z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>;

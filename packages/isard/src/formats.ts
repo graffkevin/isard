@@ -6,6 +6,6 @@
  * map.addLines({ data: parseGpx(await (await fetch('track.gpx')).text()), color: '#0057b8' });
  * ```
  */
-export { parseGpx } from './gpx.ts';
-export { parseKml } from './kml.ts';
-export { parseTopoJson, type TopoGeometry, type Topology } from './topojson.ts';
+export { parseGpx } from './data/gpx.ts';
+export { parseKml } from './data/kml.ts';
+export { parseTopoJson, type TopoGeometry, type Topology } from './data/topojson.ts';

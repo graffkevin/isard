@@ -5,16 +5,16 @@
     "types": []
   },
   "include": [
-    "src/decoder.worker.ts",
-    "src/protocol.ts",
-    "src/decoders.ts",
-    "src/basemap.worker.ts",
-    "src/resample.ts",
-    "src/geo.ts",
-    "src/lru.ts",
-    "src/mvt.ts",
-    "src/pmtiles.ts",
-    "src/terrain.ts",
-    "src/vectorstyle.ts"
+    "src/workers/decoder.worker.ts",
+    "src/engine/protocol.ts",
+    "src/engine/decoders.ts",
+    "src/workers/basemap.worker.ts",
+    "src/basemap/resample.ts",
+    "src/util/geo.ts",
+    "src/util/lru.ts",
+    "src/basemap/mvt.ts",
+    "src/basemap/pmtiles.ts",
+    "src/basemap/terrain.ts",
+    "src/basemap/vectorstyle.ts"
   ]
 }

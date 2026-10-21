@@ -33,8 +33,8 @@ const restore = setGlobals({
 afterAll(restore);
 
 const { GeoMap } = await import('../src/map.ts');
-const { defaultEasing } = await import('../src/animation.ts');
-const { TileLoader } = await import('../src/loader.ts');
+const { defaultEasing } = await import('../src/util/animation.ts');
+const { TileLoader } = await import('../src/engine/loader.ts');
 const { geoplateformeWms, geoplateformeWmts } = await import('../src/geoplateforme.ts');
 const {
   BODY_TERRAINS,
@@ -43,7 +43,7 @@ const {
   TERRAIN_TILES,
   TERRAIN_TILES_ATTRIBUTION,
   TERRAIN_URL,
-} = await import('../src/basemaps.ts');
+} = await import('../src/basemap/basemaps.ts');
 
 type Map = Awaited<ReturnType<typeof GeoMap.create>>;
 
@@ -257,7 +257,7 @@ describe('options', () => {
   });
 
   test("OpenFreeMap's and PLAN.IGN's styles credit their sources", async () => {
-    const { styleAttribution, OPENFREEMAP_STYLES, PLAN_STYLES } = await import('../src/vectortiles.ts');
+    const { styleAttribution, OPENFREEMAP_STYLES, PLAN_STYLES } = await import('../src/basemap/vectortiles.ts');
     expect(styleAttribution(OPENFREEMAP_STYLES.positron)).toBe(OPENFREEMAP_ATTRIBUTION);
     expect(OPENFREEMAP_ATTRIBUTION).toContain('OpenStreetMap');
     expect(styleAttribution(PLAN_STYLES.grey)).toBe(IGN_ATTRIBUTION);

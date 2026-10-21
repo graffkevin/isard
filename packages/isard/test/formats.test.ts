@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { parseGpx } from '../src/gpx.ts';
-import { parseKml } from '../src/kml.ts';
-import { parseTopoJson, type Topology } from '../src/topojson.ts';
-import { child, childText, descendants, parseXml } from '../src/xml.ts';
+import { parseGpx } from '../src/data/gpx.ts';
+import { parseKml } from '../src/data/kml.ts';
+import { parseTopoJson, type Topology } from '../src/data/topojson.ts';
+import { child, childText, descendants, parseXml } from '../src/data/xml.ts';
 
 describe('parseXml', () => {
   test('elements, attributes, text; prefixes dropped; comments, CDATA, entities, a DOCTYPE', () => {

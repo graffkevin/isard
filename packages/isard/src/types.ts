@@ -1,9 +1,10 @@
 /** Public types of the `isard` package */
-import type { AttributionOptions } from './controls.ts';
-import type { DecoderUrls } from './decoders.ts';
-import type { Feature, Ramp, Size } from './features.ts';
-import type { TileGrid } from './grid.ts';
-import type { Layer } from './layers.ts';
+
+import type { TileGrid } from './basemap/grid.ts';
+import type { DecoderUrls } from './engine/decoders.ts';
+import type { Feature, Ramp, Size } from './layers/features.ts';
+import type { Layer } from './layers/layers.ts';
+import type { AttributionOptions } from './ui/controls.ts';
 import type { Camera, Engine } from './wasm/isard.js';
 
 export type LonLat = [lon: number, lat: number];
