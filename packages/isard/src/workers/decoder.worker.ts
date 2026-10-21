@@ -45,14 +45,14 @@ addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   }
 });
 
-async function load(
+const load = async (
   id: number,
   url: string,
   transform: Float64Array,
   yUp: boolean,
   reload: boolean,
   priority: 'high' | 'low' | undefined,
-): Promise<void> {
+): Promise<void> => {
   const controller = new AbortController();
   controllers.set(id, controller);
   try {
@@ -122,7 +122,7 @@ async function load(
   } finally {
     controllers.delete(id);
   }
-}
+};
 
 /** Attempts at a chunk the server turned away for too many requests (HTTP 429), and the first pause (ms, doubled) */
 const BUSY_ATTEMPTS = 4;
@@ -138,13 +138,13 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 /** A range of a file; a server that ignores the range (200 for more than asked) is an error, its body not read */
-async function fetchRange(
+const fetchRange = async (
   url: string,
   offset: number,
   size: number,
   signal: AbortSignal,
   priority: 'high' | 'low' | undefined,
-): Promise<Uint8Array> {
+): Promise<Uint8Array> => {
   for (let attempt = 1; ; attempt += 1) {
     const init: RequestInit & { priority?: 'high' | 'low' } = {
       signal,
@@ -168,10 +168,10 @@ async function fetchRange(
     }
     return new Uint8Array(await response.arrayBuffer());
   }
-}
+};
 
 /** The points of a COPC node: its chunk fetched, decompressed and positioned by the point cloud module */
-async function loadPoints(message: Extract<WorkerRequest, { type: 'points' }>): Promise<void> {
+const loadPoints = async (message: Extract<WorkerRequest, { type: 'points' }>): Promise<void> => {
   const { id, url, offset, size, laz, layout, grid, count, priority } = message;
   const controller = new AbortController();
   controllers.set(id, controller);
@@ -189,4 +189,4 @@ async function loadPoints(message: Extract<WorkerRequest, { type: 'points' }>): 
   } finally {
     controllers.delete(id);
   }
-}
+};

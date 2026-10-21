@@ -11,11 +11,11 @@ export type PngEncoding = 'terrarium' | 'mapbox';
 const SIZE = 256;
 
 /** Altitudes (metres, rows from the north) of RGBA pixels in an encoding; below `floor` raised to it */
-export function decodeHeights(
+export const decodeHeights = (
   rgba: Uint8ClampedArray | Uint8Array,
   encoding: PngEncoding,
   floor = Number.NEGATIVE_INFINITY,
-): Float32Array {
+): Float32Array => {
   const n = rgba.length >> 2;
   const out = new Float32Array(n);
   // A loop per encoding, without allocations: 65 536 pixels a tile
@@ -31,7 +31,7 @@ export function decodeHeights(
     }
   }
   return out;
-}
+};
 
 /** Where the tiles are drawn and read back, made on first use and kept (each tile drawn and read at once) */
 export interface Surface {
@@ -42,13 +42,13 @@ export interface Surface {
  * The altitudes of the PNG tile at `url`: 256 × 256, null where the server has no tile; a network or server error
  * rejects (the engine retries). Where it runs: in a worker of the map, or in the page without workers
  */
-export async function fetchHeights(
+export const fetchHeights = async (
   url: string,
   encoding: PngEncoding,
   floor: number | undefined,
   signal: AbortSignal,
   surface: Surface,
-): Promise<Float32Array | null> {
+): Promise<Float32Array | null> => {
   const response = await fetch(url, withHeaders(url, { signal }));
   if (response.status === 404 || response.status === 204 || response.status === 410) return null;
   if (!response.ok) throw new Error(`${response.url}: ${response.status}`);
@@ -69,7 +69,7 @@ export async function fetchHeights(
   } finally {
     bitmap.close();
   }
-}
+};
 
 /** `fetchHeights` run in a worker for tile `z`/`x`/`y`; undefined when the map has no workers (run in the page) */
 export type RemoteHeights = (
@@ -85,15 +85,15 @@ export type RemoteHeights = (
  * where the server has no tile; a network or server error rejects (retried). `floor`: the lowest altitude kept (the
  * sea floor of a worldwide model flattened at sea level). `remote`: decodes in a worker when it can
  */
-export function encodedTerrainLoader(
+export const encodedTerrainLoader = (
   url: string,
   encoding: PngEncoding,
   floor?: number,
   remote?: RemoteHeights,
-): (z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null> {
+): ((z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>) => {
   const surface: Surface = {};
   return (z, x, y, signal) => {
     const tile = url.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y));
     return remote?.(tile, encoding, floor, [z, x, y], signal) ?? fetchHeights(tile, encoding, floor, signal, surface);
   };
-}
+};

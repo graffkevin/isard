@@ -15,10 +15,10 @@ const pkg = join(root, 'packages/isard');
 const publish = process.argv.includes('--publish');
 $.cwd(root);
 
-function fail(message: string): never {
+const fail = (message: string): never => {
   console.error(message);
   process.exit(1);
-}
+};
 
 const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')) as {
   name: string;

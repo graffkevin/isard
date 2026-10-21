@@ -73,7 +73,7 @@ const BUDGETS = {
 const root = join(import.meta.dir, '..');
 const dist = join(root, 'packages/isard/dist');
 
-function measure(files: string[]): { raw: number; gzip: number } {
+const measure = (files: string[]): { raw: number; gzip: number } => {
   let raw = 0;
   let gzip = 0;
   for (const file of files) {
@@ -82,10 +82,10 @@ function measure(files: string[]): { raw: number; gzip: number } {
     gzip += Bun.gzipSync(bytes, { level: 9 }).length;
   }
   return { raw, gzip };
-}
+};
 
 /** Prints the sizes against their budgets; false if one is over */
-export function checkSizes(): boolean {
+export const checkSizes = (): boolean => {
   const modules = [...new Bun.Glob('*.js').scanSync(dist)].filter((file) => !file.endsWith('.worker.js')).sort();
   const groups: Record<keyof typeof BUDGETS, string[]> = {
     'isard_core_bg.wasm': ['isard_core_bg.wasm'],
@@ -111,6 +111,6 @@ export function checkSizes(): boolean {
   }
   if (!ok) console.error('A size is over its budget: see scripts/size.ts to raise it deliberately');
   return ok;
-}
+};
 
 if (import.meta.main && !checkSizes()) process.exit(1);

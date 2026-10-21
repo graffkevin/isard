@@ -57,7 +57,7 @@ await Promise.all(
 /** Bundles entry points with the workers next to them (they are loaded by URL, relative to the bundle). The output
  * folder is emptied first: files of an older build (renamed since) would ship. `split`: the entry points share the
  * chunks of their common code (the package), loaded once by the browser for all of them. */
-async function bundle(entries: string[], outdir: string, options: { split?: boolean; empty?: boolean } = {}) {
+const bundle = async (entries: string[], outdir: string, options: { split?: boolean; empty?: boolean } = {}) => {
   const { split = false, empty = true } = options;
   if (empty) rmSync(join(root, outdir), { recursive: true, force: true });
   const common = {
@@ -96,11 +96,11 @@ async function bundle(entries: string[], outdir: string, options: { split?: bool
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
   copyFileSync(join(root, coreWasm), join(root, outdir, 'isard_core_bg.wasm'));
   copyFileSync(join(root, pointsWasm), join(root, outdir, 'isard_points_bg.wasm'));
-}
+};
 
 /** The package: its modules as they are (an application's bundler keeps what it uses), the engine's bindings, the
  * workers bundled (loaded by URL, they must stand alone) and the engine next to them */
-async function buildPackage(): Promise<void> {
+const buildPackage = async (): Promise<void> => {
   const dist = join(root, pkg, 'dist');
   rmSync(dist, { recursive: true, force: true });
   await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
@@ -113,14 +113,14 @@ async function buildPackage(): Promise<void> {
   }
   // After tsc: the workers it emitted module by module (imported for their types) are replaced
   await bundle([], `${pkg}/dist`, { empty: false });
-}
+};
 
 /** The viewer (apps/viewer): a folder that stands alone, its page, module, workers and engines side by side, every URL
  * relative (served under any path: the local server, the QGIS plugin, a webview); not in the npm package */
-async function buildViewer(): Promise<void> {
+const buildViewer = async (): Promise<void> => {
   await bundle(['apps/viewer/src/main.ts'], 'apps/viewer/dist');
   copyFileSync(join(root, 'apps/viewer/index.html'), join(root, 'apps/viewer/dist/index.html'));
-}
+};
 
 const bundles: Promise<void>[] = [
   buildPackage(),

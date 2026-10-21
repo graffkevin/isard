@@ -36,7 +36,7 @@ const updated = metadata.replace(/^version=.*$/m, `version=${version}`);
 if (updated !== metadata) writeFileSync(metadataPath, updated);
 
 /** The files of the plugin, without Python caches and system files */
-function files(dir: string): string[] {
+const files = (dir: string): string[] => {
   return readdirSync(dir)
     .filter((name) => name !== '__pycache__' && name !== '.DS_Store' && !name.endsWith('.pyc'))
     .flatMap((name) => {
@@ -44,10 +44,10 @@ function files(dir: string): string[] {
       return statSync(path).isDirectory() ? files(path) : [path];
     })
     .sort();
-}
+};
 
 /** A ZIP archive (deflated entries, UTF-8 names), enough for QGIS's installer and any unzip */
-function zip(entries: { name: string; data: Uint8Array }[]): Uint8Array {
+const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
   let offset = 0;
@@ -110,7 +110,7 @@ function zip(entries: { name: string; data: Uint8Array }[]): Uint8Array {
     at += part.length;
   }
   return result;
-}
+};
 
 const entries = files(plugin).map((path) => ({
   name: `isard_viewer/${relative(plugin, path).split(sep).join('/')}`,

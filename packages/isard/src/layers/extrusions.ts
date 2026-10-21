@@ -296,7 +296,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   }
 }
 
-export function extrusionStyle<P>(options: ExtrusionOptions<P>): ExtrusionStyle<P> {
+export const extrusionStyle = <P>(options: ExtrusionOptions<P>): ExtrusionStyle<P> => {
   const { data: _, before: __, ...rest } = options;
   return {
     opacity: 1,
@@ -310,4 +310,4 @@ export function extrusionStyle<P>(options: ExtrusionOptions<P>): ExtrusionStyle<
     base: 0,
     ...rest,
   };
-}
+};

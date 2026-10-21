@@ -36,7 +36,7 @@ const COLOR = '#2f6fd1';
 const HIGHLIGHT = '#ff8c00';
 
 /** The names of a vector tile's layers (protobuf: field 3, a layer; its field 1, the name) */
-export function tileLayerNames(bytes: Uint8Array): string[] {
+export const tileLayerNames = (bytes: Uint8Array): string[] => {
   const names: string[] = [];
   let pos = 0;
   const varint = () => {
@@ -73,12 +73,12 @@ export function tileLayerNames(bytes: Uint8Array): string[] {
     } else skip(key & 7);
   }
   return names;
-}
+};
 
 /** An absolute URL, its `{z}`-like placeholders kept as they are (the workers resolve nothing) */
-export function absolute(url: string): string {
+export const absolute = (url: string): string => {
   return new URL(url, location.href).href.replace(/%7B/gi, '{').replace(/%7D/gi, '}');
-}
+};
 
 const lon2x = (lon: number) => (lon + 180) / 360;
 const lat2y = (lat: number) =>
@@ -364,11 +364,11 @@ export class Layers {
 }
 
 /** The camera that shows bounds in a viewport (Web Mercator, 512 px tiles as the map's zooms) */
-export function boundsCamera(
+export const boundsCamera = (
   [west, south, east, north]: Bounds,
   [width, height]: [number, number],
   padding = 40,
-): { center: LonLat; zoom: number } {
+): { center: LonLat; zoom: number } => {
   const dx = Math.max(1e-9, lon2x(east) - lon2x(west));
   const dy = Math.max(1e-9, lat2y(south) - lat2y(north));
   const w = Math.max(1, width - 2 * padding);
@@ -377,4 +377,4 @@ export function boundsCamera(
   const cy = (lat2y(south) + lat2y(north)) / 2;
   const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * cy))) * 180) / Math.PI;
   return { center: [(west + east) / 2, lat], zoom: Math.max(0, Math.min(18, zoom)) };
-}
+};

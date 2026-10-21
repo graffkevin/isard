@@ -4,7 +4,7 @@ import type { Bounds, GeoJsonCollection } from './protocol.ts';
 type Geometry = GeoJsonCollection['features'][number]['geometry'];
 
 /** The bounds of a feature collection's coordinates (west, south, east, north), undefined if it has no position */
-export function collectionBounds(data: GeoJsonCollection): Bounds | undefined {
+export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined => {
   const b: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
   const visit = (c: unknown): void => {
     if (!Array.isArray(c)) return;
@@ -24,4 +24,4 @@ export function collectionBounds(data: GeoJsonCollection): Bounds | undefined {
   };
   for (const f of data.features ?? []) geometry(f.geometry);
   return Number.isFinite(b[0]) ? b : undefined;
-}
+};

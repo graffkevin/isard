@@ -34,7 +34,7 @@ export interface Topology {
  * The features of object `name` of a TopoJSON topology (default its first object): a GeometryCollection gives one
  * feature per geometry, another geometry one feature; arcs are stitched and dequantized, ids and properties kept
  */
-export function parseTopoJson<P = Properties>(topology: Topology, name?: string): FeatureCollection<P> {
+export const parseTopoJson = <P = Properties>(topology: Topology, name?: string): FeatureCollection<P> => {
   const object = name === undefined ? Object.values(topology.objects)[0] : topology.objects[name];
   if (!object) throw new Error(`isard: no TopoJSON object ${name ?? ''}`);
   const { scale = [1, 1], translate = [0, 0] } = topology.transform ?? {};
@@ -93,4 +93,4 @@ export function parseTopoJson<P = Properties>(topology: Topology, name?: string)
   });
   const features = object.type === 'GeometryCollection' ? (object.geometries ?? []).map(feature) : [feature(object)];
   return { type: 'FeatureCollection', features };
-}
+};

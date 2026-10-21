@@ -124,11 +124,11 @@ const CSS = `
 const styled = new WeakSet<Document>();
 
 /** Adds the overlay styles to a document, once; first in the head so application rules win at equal specificity */
-export function injectStyle(doc: Document): void {
+export const injectStyle = (doc: Document): void => {
   if (styled.has(doc)) return;
   styled.add(doc);
   const style = doc.createElement('style');
   style.dataset.isard = '';
   style.textContent = CSS;
   doc.head.prepend(style);
-}
+};

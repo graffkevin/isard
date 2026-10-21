@@ -79,7 +79,7 @@ class Reader {
 }
 
 /** Glyphs of a range file: id → metrics and bitmap */
-function parse(buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Array }> {
+const parse = (buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Array }> => {
   const out = new Map<number, { glyph: Glyph; bitmap: Uint8Array }>();
   const root = new Reader(new Uint8Array(buffer));
   while (!root.done) {
@@ -132,7 +132,7 @@ function parse(buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Ar
     }
   }
   return out;
-}
+};
 
 /** A shelf of the packer: its page, y, height, and the x of the next free place */
 interface Shelf {
@@ -349,17 +349,17 @@ export interface Shaping {
 }
 
 /** Code points of a text, for loading */
-export function codes(parts: readonly TextPart[]): Set<number> {
+export const codes = (parts: readonly TextPart[]): Set<number> => {
   const out = new Set<number>();
   for (const p of parts) for (const ch of p.text) out.add(ch.codePointAt(0) ?? 32);
   return out;
-}
+};
 
 /**
  * Lays out a label: lines split at `\n` and wrapped at `maxWidth` ems, centered, the block placed by `anchor` around
  * the anchor point and moved by `offset` (ems); `size` in CSS pixels. Glyphs not loaded take no room.
  */
-export function shape(
+export const shape = (
   parts: readonly TextPart[],
   glyphsOf: (font: string) => Map<number, Glyph> | undefined,
   options: {
@@ -370,7 +370,7 @@ export function shape(
     anchor: Anchor;
     offset: [number, number];
   },
-): Shaping {
+): Shaping => {
   const { size, maxWidth, lineHeight, anchor, offset } = options;
   const k = size / EM;
   // Characters with their glyph and scale, split into lines
@@ -468,4 +468,4 @@ export function shape(
     box: [(x0 + dx) * k, (y0 + dy) * k, (x1 + dx) * k, (y1 + dy) * k],
     layout: [(dx - widest / 2) * k, (middle - height / 2) * k, (dx + widest / 2) * k, (middle + height / 2) * k],
   };
-}
+};

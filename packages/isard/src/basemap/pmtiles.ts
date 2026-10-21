@@ -49,7 +49,7 @@ const TYPES: PmtilesTileType[] = ['unknown', 'mvt', 'png', 'jpeg', 'webp', 'avif
 const levelStart = (z: number) => (4 ** z - 1) / 3;
 
 /** The tile id of z/x/y: the tiles of the lower levels, then the position along the level's Hilbert curve */
-export function zxyToTileId(z: number, x: number, y: number): number {
+export const zxyToTileId = (z: number, x: number, y: number): number => {
   if (z > 26) throw new Error(`isard: PMTiles level ${z} past 26`);
   const n = 2 ** z;
   if (x < 0 || y < 0 || x >= n || y >= n) throw new Error(`isard: PMTiles tile ${z}/${x}/${y} out of its level`);
@@ -65,10 +65,10 @@ export function zxyToTileId(z: number, x: number, y: number): number {
     }
   }
   return levelStart(z) + d;
-}
+};
 
 /** The z/x/y of a tile id (the inverse of `zxyToTileId`) */
-export function tileIdToZxy(id: number): [z: number, x: number, y: number] {
+export const tileIdToZxy = (id: number): [z: number, x: number, y: number] => {
   let z = 0;
   while (levelStart(z + 1) <= id) z += 1;
   const n = 2 ** z;
@@ -87,7 +87,7 @@ export function tileIdToZxy(id: number): [z: number, x: number, y: number] {
     t = Math.floor(t / 4);
   }
   return [z, x, y];
-}
+};
 
 /** A reader of unsigned varints past 32 bits (tile ids reach 2^52) */
 class Varints {
@@ -108,7 +108,7 @@ class Varints {
 }
 
 /** The entries of a directory (decompressed) */
-export function parseDirectory(bytes: Uint8Array): PmtilesEntry[] {
+export const parseDirectory = (bytes: Uint8Array): PmtilesEntry[] => {
   const v = new Varints(bytes);
   const count = v.next();
   if (count > bytes.length) throw new Error('isard: PMTiles directory larger than its bytes');
@@ -127,10 +127,10 @@ export function parseDirectory(bytes: Uint8Array): PmtilesEntry[] {
     e.offset = value === 0 && previous ? previous.offset + previous.length : value - 1;
   });
   return entries;
-}
+};
 
 /** The entry holding a tile id: its run of tiles, or the leaf directory it falls in; undefined if none */
-export function findEntry(entries: readonly PmtilesEntry[], id: number): PmtilesEntry | undefined {
+export const findEntry = (entries: readonly PmtilesEntry[], id: number): PmtilesEntry | undefined => {
   let [lo, hi] = [0, entries.length - 1];
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
@@ -143,10 +143,10 @@ export function findEntry(entries: readonly PmtilesEntry[], id: number): Pmtiles
   if (!e) return undefined;
   if (e.runLength === 0 || id - e.tileId < e.runLength) return e;
   return undefined;
-}
+};
 
 /** The header of an archive from its first bytes */
-export function parseHeader(bytes: Uint8Array): PmtilesHeader {
+export const parseHeader = (bytes: Uint8Array): PmtilesHeader => {
   if (bytes.length < HEADER || String.fromCharCode(...bytes.subarray(0, 7)) !== 'PMTiles') {
     throw new Error('isard: not a PMTiles archive');
   }
@@ -171,17 +171,17 @@ export function parseHeader(bytes: Uint8Array): PmtilesHeader {
     bounds: [deg(102), deg(106), deg(110), deg(114)],
     center: [deg(119), deg(123), view.getUint8(118)],
   };
-}
+};
 
 /** Bytes as they are stored, decompressed (1: none, 2: gzip; 0, unknown, is read as none) */
-export async function decompress(bytes: Uint8Array, compression: number): Promise<Uint8Array> {
+export const decompress = async (bytes: Uint8Array, compression: number): Promise<Uint8Array> => {
   if (compression === 0 || compression === 1) return bytes;
   if (compression !== 2) {
     throw new Error(`isard: PMTiles compression ${compression === 3 ? 'brotli' : 'zstd'} is not read (gzip only)`);
   }
   const stream = new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
-}
+};
 
 /** Past this, a whole file sent for a range request (a server ignoring ranges) is an error rather than kept */
 const WHOLE_FILE_MAX = 64 * 1024 * 1024;
@@ -293,17 +293,17 @@ export class PMTiles {
 const archives = new Lru<string, PMTiles>(16);
 
 /** The reader of an archive URL (without `pmtiles://`), shared */
-export function pmtiles(url: string): PMTiles {
+export const pmtiles = (url: string): PMTiles => {
   let archive = archives.get(url);
   if (!archive) {
     archive = new PMTiles(url);
     archives.set(url, archive);
   }
   return archive;
-}
+};
 
 /** The archive URL of a `pmtiles://` URL, absolute (relative to the page), or undefined for another URL */
-export function pmtilesUrl(url: string, base?: string): string | undefined {
+export const pmtilesUrl = (url: string, base?: string): string | undefined => {
   if (!url.startsWith('pmtiles://')) return undefined;
   const inner = url.slice('pmtiles://'.length);
   const from = base ?? (globalThis as { location?: { href: string } }).location?.href;
@@ -312,13 +312,13 @@ export function pmtilesUrl(url: string, base?: string): string | undefined {
   } catch {
     return inner;
   }
-}
+};
 
 /** A tile URL `pmtiles://<archive>/{z}/{x}/{y}` (with its numbers in) read from its archive: its bytes, undefined
  * where there is none; undefined too (`false`) for a URL that is not one */
-export function pmtilesTile(url: string, signal?: AbortSignal): Promise<Uint8Array | undefined> | false {
+export const pmtilesTile = (url: string, signal?: AbortSignal): Promise<Uint8Array | undefined> | false => {
   const match = /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url);
   if (!match) return false;
   const [, archive = '', z, x, y] = match;
   return pmtiles(archive).tile(Number(z), Number(x), Number(y), signal);
-}
+};

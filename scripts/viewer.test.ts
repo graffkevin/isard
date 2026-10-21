@@ -12,7 +12,7 @@ const root = join(dir, 'dist');
 const bytes = new Uint8Array(1000).map((_, i) => i % 251);
 
 /** The events of a Server-Sent Events stream, `count` of them */
-async function events(url: string, count: number, after?: () => Promise<unknown>): Promise<unknown[]> {
+const events = async (url: string, count: number, after?: () => Promise<unknown>): Promise<unknown[]> => {
   const controller = new AbortController();
   const response = await fetch(url, { signal: controller.signal });
   expect(response.headers.get('Content-Type')).toBe('text/event-stream');
@@ -38,7 +38,7 @@ async function events(url: string, count: number, after?: () => Promise<unknown>
   }
   controller.abort();
   return out;
-}
+};
 
 let viewer: ViewerServer;
 let base: string;

@@ -69,29 +69,29 @@ const BODIES: Record<Exclude<CelestialBody, BodyOptions>, Required<BodyOptions>>
 const EARTH_HALO = Float32Array.of(0.42, 0.66, 1, 1);
 
 /** A body from the option, its defaults filled in */
-export function bodySettings(body: CelestialBody | undefined): Required<BodyOptions> {
+export const bodySettings = (body: CelestialBody | undefined): Required<BodyOptions> => {
   if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
   const relief: [number, number] = [-0.01 * body.radius, 0.01 * body.radius];
   return { flattening: 0, atmosphere: false, color: '#808080', relief, ...body };
-}
+};
 
 /** The halo of an atmosphere for the engine (RGB 0-1 and its strength, the color's alpha): undefined for none */
-export function haloSettings(atmosphere: boolean | string): Float32Array | undefined {
+export const haloSettings = (atmosphere: boolean | string): Float32Array | undefined => {
   if (atmosphere === true) return EARTH_HALO;
   const color = atmosphere === false ? undefined : parseCssColor(atmosphere);
   return color && Float32Array.from(color);
-}
+};
 
 /** Relief settings from the option: undefined when off. On the Earth the Terrain Tiles by default (worldwide,
  * Terrarium PNGs decoded by `terrainLoader`) or the IGN terrain model (France, raised by the geoid); NASA's on the Moon
  * and Mars; an ArcGIS image service asked for in the body's Mercator. `terrainLoader`: the loader of PNG tiles in an
  * encoding, the same for the same tiles (the engine keeps its tiles when only the exaggeration changes) */
-export function terrainSettings(
+export const terrainSettings = (
   terrain: boolean | TerrainModel | TerrainOptions | undefined,
   body: CelestialBody | undefined,
   radius: number,
   terrainLoader: (url: string, encoding: PngEncoding, floor?: number) => TerrainLoader,
-): Settings['terrain'] {
+): Settings['terrain'] => {
   if (!terrain) return undefined;
   let options: TerrainOptions = {};
   if (typeof terrain === 'string') options = { model: terrain };
@@ -133,10 +133,10 @@ export function terrainSettings(
     // NASA's credits for its models
     ...(options.url === undefined && preset ? { attribution: preset.attribution } : {}),
   };
-}
+};
 
 /** Sky settings for the engine: colors (RGB 0-1) and blends, MapLibre's defaults */
-export function atmosphereSettings(options: AtmosphereOptions | undefined): Float32Array | undefined {
+export const atmosphereSettings = (options: AtmosphereOptions | undefined): Float32Array | undefined => {
   if (!options) return undefined;
   return Float32Array.from([
     ...rgb(options.skyColor ?? '#9cc7ec'),
@@ -146,10 +146,10 @@ export function atmosphereSettings(options: AtmosphereOptions | undefined): Floa
     options.horizonFogBlend ?? 0.7,
     options.fogGroundBlend ?? 0.4,
   ]);
-}
+};
 
 /** A CSS color to RGB 0-1 (its alpha dropped); black if unknown */
-export function rgb(color: string): [r: number, g: number, b: number] {
+export const rgb = (color: string): [r: number, g: number, b: number] => {
   const [r, g, b] = parseCssColor(color) ?? [0, 0, 0, 1];
   return [r, g, b];
-}
+};

@@ -37,7 +37,7 @@ function fakeGlyphs(missing = new Set<number>()) {
 type P = { text: string; icon?: string };
 
 /** A layer on a recording engine; `sent()` waits for the next labels sent */
-function layer(glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, icons = new Icons()) {
+const layer = (glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, icons = new Icons()) => {
   let resolve: (args: unknown[]) => void = () => {};
   const engine = new Proxy(
     {},
@@ -57,7 +57,7 @@ function layer(glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, ico
     });
   symbols.attach(engine as never);
   return { symbols, glyphs, icons, next };
-}
+};
 
 const point = (text: string, lon: number, icon?: string): Feature<P> => ({
   type: 'Feature',

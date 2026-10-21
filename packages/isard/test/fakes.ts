@@ -293,7 +293,7 @@ export class Frames {
 }
 
 /** Replaces globals for the time of a test file; returns the function that puts them back */
-export function setGlobals(values: Record<string, unknown>): () => void {
+export const setGlobals = (values: Record<string, unknown>): (() => void) => {
   const g = globalThis as Record<string, unknown>;
   const saved = Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(g, key)] as const);
   for (const [key, value] of Object.entries(values)) {
@@ -305,7 +305,7 @@ export function setGlobals(values: Record<string, unknown>): () => void {
       else delete g[key];
     }
   };
-}
+};
 
 /** Records what ResizeObserver watches */
 export class FakeResizeObserver {
@@ -324,7 +324,7 @@ export class FakeResizeObserver {
 }
 
 /** The globals a map needs, with a frame scheduler */
-export function domGlobals(frames: Frames): Record<string, unknown> {
+export const domGlobals = (frames: Frames): Record<string, unknown> => {
   return {
     document: fakeDocument,
     window: { devicePixelRatio: 2 },
@@ -333,7 +333,7 @@ export function domGlobals(frames: Frames): Record<string, unknown> {
     requestAnimationFrame: frames.request,
     cancelAnimationFrame: frames.cancel,
   };
-}
+};
 
 /** The smallest valid WebAssembly module (magic number, version 1) */
 export const EMPTY_WASM = Uint8Array.of(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00);

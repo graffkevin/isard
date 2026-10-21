@@ -27,7 +27,7 @@ const INFO =
   '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" ' +
   'd="M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm-1 5.5h2V14H9zM10 5.5a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2z"/></svg>';
 
-function button(className: string, label: string, icon: string, onClick: () => void): HTMLButtonElement {
+const button = (className: string, label: string, icon: string, onClick: () => void): HTMLButtonElement => {
   const element = document.createElement('button');
   element.type = 'button';
   element.className = className;
@@ -36,7 +36,7 @@ function button(className: string, label: string, icon: string, onClick: () => v
   element.innerHTML = icon;
   element.addEventListener('click', onClick);
   return element;
-}
+};
 
 export interface NavigationOptions {
   /** Zoom in and out buttons (default true) */

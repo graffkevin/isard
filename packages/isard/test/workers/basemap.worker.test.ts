@@ -6,7 +6,7 @@ import { setGlobals } from '../fakes.ts';
 
 // ── A vector tile writer (protobuf) ──
 
-function varint(value: number): number[] {
+const varint = (value: number): number[] => {
   let v = value;
   const out: number[] = [];
   do {
@@ -15,7 +15,7 @@ function varint(value: number): number[] {
     out.push(v > 0 ? b | 0x80 : b);
   } while (v > 0);
   return out;
-}
+};
 const zigzag = (n: number) => (n < 0 ? -2 * n - 1 : 2 * n);
 const tag = (field: number, wire: number) => varint((field << 3) | wire);
 const bytes = (field: number, data: number[]) => [...tag(field, 2), ...varint(data.length), ...data];
@@ -24,7 +24,7 @@ const uint = (field: number, v: number) => [...tag(field, 0), ...varint(v)];
 const command = (id: number, count: number) => varint((count << 3) | id);
 
 /** A layer of one feature: a point (type 1) or a line (type 2) through `points` (tile units), `name` its property */
-function layer(name: string, type: 1 | 2, points: [number, number][], text?: string): number[] {
+const layer = (name: string, type: 1 | 2, points: [number, number][], text?: string): number[] => {
   const geometry: number[] = [];
   let [x, y] = [0, 0];
   points.forEach(([px, py], i) => {
@@ -36,7 +36,7 @@ function layer(name: string, type: 1 | 2, points: [number, number][], text?: str
   const feature = [...(text ? bytes(2, [0, 0]) : []), ...uint(3, type), ...bytes(4, geometry)];
   const properties = text ? [...string(3, 'name'), ...bytes(4, string(1, text))] : [];
   return bytes(3, [...string(1, name), ...properties, ...bytes(2, feature), ...uint(5, 4096)]);
-}
+};
 
 // ── A recording canvas ──
 
@@ -112,22 +112,22 @@ beforeEach(() => {
 
 let keys = 0;
 /** A renderer of these layers, its key */
-async function renderer(layers: StyleLayer[], rasters = {}): Promise<string> {
+const renderer = async (layers: StyleLayer[], rasters = {}): Promise<string> => {
   const key = `k${keys++}`;
   await onmessage({
     data: { type: 'init', key, tiles: 'https://t/{z}/{x}/{y}.pbf', maxzoom: 14, layers, rasters, workers: 2 },
   });
   return key;
-}
+};
 
 let ids = 0;
-async function ask(work: BasemapWork): Promise<BasemapResponse> {
+const ask = async (work: BasemapWork): Promise<BasemapResponse> => {
   const id = ++ids;
   await onmessage({ data: { ...work, id } as BasemapRequest });
   const answer = posted.find((m) => m.id === id);
   if (!answer) throw new Error('no answer');
   return answer;
-}
+};
 
 /** The values a canvas property was given, in order */
 const sets = (canvas: FakeCanvas | undefined, name: string) =>

@@ -5,11 +5,11 @@ const ENGINES = ['isard', 'itowns', 'tiles-renderer'] as const;
 /** Column names, in the order of `ENGINES` (a result's engine name starts with one) */
 const NAMES = ['isard', 'iTowns', '3DTilesRendererJS'];
 
-function element<T extends HTMLElement>(id: string, type: new () => T): T {
+const element = <T extends HTMLElement>(id: string, type: new () => T): T => {
   const found = document.getElementById(id);
   if (!(found instanceof type)) throw new Error(`#${id} missing`);
   return found;
-}
+};
 
 const button = element('run', HTMLButtonElement);
 const status = element('status', HTMLSpanElement);
@@ -23,7 +23,7 @@ const ENGINE_TIMEOUT_MS = 4 * 60_000;
  * Frees the GPU of the engine that just ran, then puts a fresh frame in place: browsers (Firefox notably) keep the
  * WebGL context of a navigated-away page until garbage collection, so the engines would pile up on the GPU
  */
-async function freshFrame(): Promise<void> {
+const freshFrame = async (): Promise<void> => {
   try {
     for (const canvas of frame.contentDocument?.querySelectorAll('canvas') ?? []) {
       const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
@@ -39,22 +39,22 @@ async function freshFrame(): Promise<void> {
   frame = next;
   // A moment for the browser to release the old page
   await new Promise((resolve) => setTimeout(resolve, 1000));
-}
+};
 
 /**
  * Opens the connection to the mesh server before an engine starts: through the IGN proxy, the first tunnel to it after
  * a while takes ~10 s (its name resolves slowly), and Firefox holds the page's other requests back meanwhile; without
  * this, whichever engine came first after the proxy forgot the name paid for it
  */
-async function warmUp(): Promise<void> {
+const warmUp = async (): Promise<void> => {
   try {
     await fetch(new URL('Data/L11_32.b3dm', LILLE_MESH), { mode: 'no-cors', cache: 'no-store' });
   } catch {
     // The engines will meet the same error
   }
-}
+};
 
-async function once(page: string): Promise<BenchResult> {
+const once = async (page: string): Promise<BenchResult> => {
   await freshFrame();
   await warmUp();
   return new Promise((resolve) => {
@@ -71,7 +71,7 @@ async function once(page: string): Promise<BenchResult> {
     addEventListener('message', listener);
     frame.src = `./${page}.html?run=${Date.now()}`;
   });
-}
+};
 
 /** Detailed metrics per phase, and whether higher is better */
 const METRICS: [keyof PhaseResult, string, boolean][] = [
@@ -87,12 +87,12 @@ const METRICS: [keyof PhaseResult, string, boolean][] = [
 
 const MOTION = ['2 flight to Lille', '4 orbit 360°', '6 back to France'];
 
-function phase(result: BenchResult, name: string): PhaseResult | undefined {
+const phase = (result: BenchResult, name: string): PhaseResult | undefined => {
   return result.phases.find((p) => p.phase.startsWith(name));
-}
+};
 
 /** Frame-weighted average of a metric over the motion phases */
-function motion(result: BenchResult, key: 'fps' | 'slowFrames'): number | undefined {
+const motion = (result: BenchResult, key: 'fps' | 'slowFrames'): number | undefined => {
   const phases = result.phases.filter((p) => MOTION.includes(p.phase));
   const frames = phases.reduce((n, p) => n + p.frames, 0);
   if (!frames) return undefined;
@@ -101,7 +101,7 @@ function motion(result: BenchResult, key: 'fps' | 'slowFrames'): number | undefi
     return Math.round((frames / ms) * 1000);
   }
   return Math.round(phases.reduce((n, p) => n + p.slowFrames * p.frames, 0) / frames);
-}
+};
 
 /** The few numbers that tell the story, in plain words */
 const SUMMARY: {
@@ -142,12 +142,12 @@ const SUMMARY: {
   },
 ];
 
-function seconds(ms: number | undefined): number | undefined {
+const seconds = (ms: number | undefined): number | undefined => {
   return ms === undefined ? undefined : Math.round(ms / 100) / 10;
-}
+};
 
 /** Cells of a row, the best one highlighted; engines not run yet show a placeholder */
-function cells(values: (number | undefined | null)[], higher: boolean, missing = 'never'): string {
+const cells = (values: (number | undefined | null)[], higher: boolean, missing = 'never'): string => {
   const numbers = values.filter((v): v is number => typeof v === 'number');
   const best = higher ? Math.max(...numbers) : Math.min(...numbers);
   return values
@@ -156,14 +156,14 @@ function cells(values: (number | undefined | null)[], higher: boolean, missing =
       return `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? missing}</td>`;
     })
     .join('');
-}
+};
 
 /** Engine columns in a fixed order, null while an engine has not run in this round */
-function columns(results: BenchResult[]): (BenchResult | null)[] {
+const columns = (results: BenchResult[]): (BenchResult | null)[] => {
   return NAMES.map((name) => results.find((r) => r.engine.startsWith(name)) ?? null);
-}
+};
 
-function summaryTable(results: BenchResult[]): string {
+const summaryTable = (results: BenchResult[]): string => {
   const cols = columns(results);
   const head = `<tr><th></th>${cols.map((r, i) => `<th>${r?.engine ?? NAMES[i]}</th>`).join('')}</tr>`;
   const rows = SUMMARY.map(
@@ -175,9 +175,9 @@ function summaryTable(results: BenchResult[]): string {
       )}</tr>`,
   );
   return `<table class="summary">${head}${rows.join('')}</table>`;
-}
+};
 
-function detailTable(results: BenchResult[]): string {
+const detailTable = (results: BenchResult[]): string => {
   const head = `<tr><th>phase / metric</th>${results.map((r) => `<th>${r.engine}</th>`).join('')}</tr>`;
   const rows: string[] = [];
   for (const name of results[0]?.phases.map((p) => p.phase) ?? []) {
@@ -193,7 +193,7 @@ function detailTable(results: BenchResult[]): string {
     }
   }
   return `<table>${head}${rows.join('')}</table>`;
-}
+};
 
 /**
  * Two rounds: the first one warms the servers (the Lille mesh server takes ~15 s per cold file) and the browser cache,

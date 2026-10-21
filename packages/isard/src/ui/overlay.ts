@@ -73,7 +73,7 @@ class Emitter<E> {
 
 /** Moves `element` so that its anchor sits on `lonLat`, `height` metres above the ground, or hides it when the
  * position is out of sight; returns the screen point */
-function place(
+const place = (
   map: GeoMap,
   element: HTMLElement,
   lonLat: LonLat,
@@ -81,7 +81,7 @@ function place(
   anchor: Anchor,
   offset: Point,
   size: Point,
-): Point | undefined {
+): Point | undefined => {
   const point = map.project(lonLat, height);
   const visible =
     point !== undefined &&
@@ -99,17 +99,17 @@ function place(
   const y = Math.round(point[1] + offset[1]);
   element.style.transform = `translate(${x}px, ${y}px) ${ANCHOR_TRANSLATE[anchor]}`;
   return point;
-}
+};
 
 /** Round pin, its tip at the bottom: the default marker */
-function pin(): HTMLElement {
+const pin = (): HTMLElement => {
   const element = document.createElement('div');
   element.innerHTML =
     '<svg class="isard-marker-pin" width="25" height="34" viewBox="0 0 25 34" aria-hidden="true">' +
     '<path fill="currentColor" stroke="rgb(0 0 0 / 0.25)" d="M12.5 33.5C12.5 33.5 .5 20.6 .5 12.5a12 12 0 0 1 24 0' +
     'c0 8.1-12 21-12 21z"/><circle cx="12.5" cy="12.5" r="4.5" fill="#fff"/></svg>';
   return element;
-}
+};
 
 export interface MarkerOptions {
   /** The element to show (default: a round pin) */
@@ -511,7 +511,7 @@ export interface PanelOptions {
 }
 
 /** `a × b`, 4 × 4 column-major */
-function multiply(a: ArrayLike<number>, b: ArrayLike<number>): number[] {
+const multiply = (a: ArrayLike<number>, b: ArrayLike<number>): number[] => {
   const out = new Array<number>(16).fill(0);
   for (let c = 0; c < 4; c++) {
     for (let r = 0; r < 4; r++) {
@@ -521,7 +521,7 @@ function multiply(a: ArrayLike<number>, b: ArrayLike<number>): number[] {
     }
   }
   return out;
-}
+};
 
 /**
  * An element standing in 3D at a position: a video, a web page, a sign, `width` metres wide on the ground, facing

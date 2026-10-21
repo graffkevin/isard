@@ -60,7 +60,7 @@ describe('glyphs', () => {
 });
 
 /** A protobuf varint */
-function varint(n: number): number[] {
+const varint = (n: number): number[] => {
   const out: number[] = [];
   let v = n;
   while (v >= 0x80) {
@@ -69,14 +69,14 @@ function varint(n: number): number[] {
   }
   out.push(v);
   return out;
-}
+};
 
 /** A length-delimited field */
 const field = (tag: number, bytes: number[]) => [...varint((tag << 3) | 2), ...varint(bytes.length), ...bytes];
 const number = (tag: number, n: number) => [...varint(tag << 3), ...varint(n)];
 
 /** A glyph range file: `count` glyphs of `side` × `side` px from code point `first` */
-function rangeFile(first: number, count: number, side: number): ArrayBuffer {
+const rangeFile = (first: number, count: number, side: number): ArrayBuffer => {
   const glyphs: number[] = [];
   for (let i = 0; i < count; i += 1) {
     const bitmap = new Array<number>((side + 6) * (side + 6)).fill(i + 1);
@@ -96,7 +96,7 @@ function rangeFile(first: number, count: number, side: number): ArrayBuffer {
     );
   }
   return new Uint8Array(field(1, glyphs)).buffer;
-}
+};
 
 describe('glyph atlas', () => {
   test('pages are added when the atlas is full, the glyphs placed keep their coordinates', async () => {

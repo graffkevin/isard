@@ -6,13 +6,13 @@ import { lambertConformalConic } from '../../src/data/crs.ts';
 import { CLASSIFICATIONS, classPalette, pointCloudCrs, wktCrs } from '../../src/layers/pointclouds.ts';
 
 /** The WKT of a fixture of the point cloud crate (its LAS header and VLRs) */
-function wkt(file: string, start: string): string {
+const wkt = (file: string, start: string): string => {
   const bytes = readFileSync(join(import.meta.dir, '../../../../crates/pointcloud/tests/data', file));
   const text = new TextDecoder('latin1').decode(bytes);
   const from = text.indexOf(start);
   const end = text.indexOf('\0', from);
   return text.slice(from, end < 0 ? undefined : end);
-}
+};
 
 const PARIS = wkt('paris_header.bin', 'PROJCS');
 const AUTZEN = wkt('autzen_header.bin', 'COMPD_CS');

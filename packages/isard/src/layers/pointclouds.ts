@@ -115,7 +115,7 @@ export const ELEVATION_RAMP: Ramp = [
 ];
 
 /** The colors of the 256 classes (RGBA, alpha 0 hides one) */
-export function classPalette(overrides: Record<number, ClassStyle> = {}): Uint8Array {
+export const classPalette = (overrides: Record<number, ClassStyle> = {}): Uint8Array => {
   const out = new Uint8Array(256 * 4);
   for (let code = 0; code < 256; code += 1) {
     const base = CLASSIFICATIONS[code] ?? { color: '#c8c8c8', visible: true };
@@ -124,10 +124,10 @@ export function classPalette(overrides: Record<number, ClassStyle> = {}): Uint8A
     out.set([r * 255, g * 255, b * 255, (own.visible ?? base.visible) ? 255 : 0], code * 4);
   }
   return out;
-}
+};
 
 /** The section of a WKT opening with one of `keywords` (`PROJCS[…]`), from its keyword to its closing bracket */
-function section(wkt: string, keywords: string[]): string | undefined {
+const section = (wkt: string, keywords: string[]): string | undefined => {
   for (const keyword of keywords) {
     const start = wkt.indexOf(`${keyword}[`);
     if (start < 0) continue;
@@ -138,24 +138,24 @@ function section(wkt: string, keywords: string[]): string | undefined {
     }
   }
   return undefined;
-}
+};
 
 /** The EPSG code a WKT section ends with (its own `AUTHORITY`, or `ID` in WKT2), the last of its nested ones */
-function lastCode(part: string): number | undefined {
+const lastCode = (part: string): number | undefined => {
   const codes = [...part.matchAll(/(?:AUTHORITY|ID)\[\s*"EPSG"\s*,\s*"?(\d+)"?\s*\]/g)];
   const last = codes.at(-1)?.[1];
   return last === undefined ? undefined : Number(last);
-}
+};
 
 /** The factor of the last `UNIT` (`LENGTHUNIT` in WKT2) of a WKT section */
-function lastUnit(part: string | undefined): number | undefined {
+const lastUnit = (part: string | undefined): number | undefined => {
   const units = [...(part ?? '').matchAll(/(?:LENGTH)?UNIT\[\s*"[^"]*"\s*,\s*([\d.eE+-]+)/g)];
   const factor = Number(units.at(-1)?.[1]);
   return Number.isFinite(factor) && factor > 0 ? factor : undefined;
-}
+};
 
 /** What a WKT says of a CRS: its EPSG code (projected first), the metres of a unit of z */
-export function wktCrs(wkt: string): { code: number | undefined; verticalScale: number | undefined } {
+export const wktCrs = (wkt: string): { code: number | undefined; verticalScale: number | undefined } => {
   const projected = section(wkt, ['PROJCS', 'PROJCRS']);
   const geographic = section(wkt, ['GEOGCS', 'GEOGCRS']);
   let code = lastCode(projected ?? geographic ?? '');
@@ -163,16 +163,16 @@ export function wktCrs(wkt: string): { code: number | undefined; verticalScale: 
   const vertical = section(wkt, ['VERT_CS', 'VERTCRS']);
   const verticalScale = lastUnit(vertical ?? projected);
   return { code, verticalScale };
-}
+};
 
 /** Whether the altitudes of a CRS are NGF-IGN69 by default: Lambert-93 and the CC zones */
 const FRENCH = (code: number | undefined) => code === 2154 || (code !== undefined && code >= 3942 && code <= 3950);
 
 /** The CRS of a COPC file for the engine, from its WKT and the options */
-export function pointCloudCrs(
+export const pointCloudCrs = (
   wkt: string | undefined,
   options: Pick<PointCloudOptions, 'crs' | 'geoid' | 'verticalScale'>,
-): PointCloudCrs {
+): PointCloudCrs => {
   const parsed = wkt ? wktCrs(wkt) : { code: undefined, verticalScale: undefined };
   let crs: Crs;
   let code = parsed.code;
@@ -202,10 +202,10 @@ export function pointCloudCrs(
     geoid: options.geoid ?? (FRENCH(code) || /IGN69|NGF/.test(wkt ?? '')),
     verticalScale: options.verticalScale ?? parsed.verticalScale ?? 1,
   };
-}
+};
 
 /** The style numbers of the engine (`setPointCloudStyle`) */
-function styleNumbers(s: PointCloudStyle, rate: number): Float64Array {
+const styleNumbers = (s: PointCloudStyle, rate: number): Float64Array => {
   const colors: PointColor[] = ['rgb', 'classification', 'elevation', 'intensity'];
   let edl: { strength?: number; radius?: number } | undefined;
   if (s.edl) edl = s.edl === true ? {} : s.edl;
@@ -227,7 +227,7 @@ function styleNumbers(s: PointCloudStyle, rate: number): Float64Array {
     s.pointBudget,
     rate,
   );
-}
+};
 
 /** A point cloud (`GeoMap.addPointCloud`): COPC or 3D Tiles points; `pickFeature` gives a COPC point's attributes */
 export class PointCloudLayer extends Layer {

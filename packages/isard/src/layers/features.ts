@@ -119,12 +119,12 @@ const BASE: FeatureLayerStyle = {
 // ── Colors ──
 
 /** A CSS color to RGBA 0-1 (see `parseCssColor`); black if unknown or missing */
-export function parseColor(color: string): [r: number, g: number, b: number, a: number] {
+export const parseColor = (color: string): [r: number, g: number, b: number, a: number] => {
   return parseCssColor(color) ?? [0, 0, 0, 1];
-}
+};
 
 /** 256 RGBA texels of a ramp over its value range, and that range */
-export function rampTexels(ramp: Ramp): { rgba: Uint8Array; min: number; max: number } {
+export const rampTexels = (ramp: Ramp): { rgba: Uint8Array; min: number; max: number } => {
   const stops = ramp.map(([v, c]) => [v, parseColor(c)] as const).sort((a, b) => a[0] - b[0]);
   const min = stops[0]?.[0] ?? 0;
   const max = stops.at(-1)?.[0] ?? 1;
@@ -140,10 +140,10 @@ export function rampTexels(ramp: Ramp): { rgba: Uint8Array; min: number; max: nu
       rgba[i * 4 + j] = Math.round(((c0[j] ?? 0) + ((c1[j] ?? 0) - (c0[j] ?? 0)) * t) * 255);
   }
   return { rgba, min, max };
-}
+};
 
 /** Up to four stops as zooms then values, constant if a number */
-export function stops(size: Size): [number, number, number, number, number, number, number, number] {
+export const stops = (size: Size): [number, number, number, number, number, number, number, number] => {
   if (!Array.isArray(size)) {
     // A style function may return nothing for a feature without the property: 0
     const v = Number.isFinite(size) ? size : 0;
@@ -161,10 +161,10 @@ export function stops(size: Size): [number, number, number, number, number, numb
   }
   const at = (k: number) => s[Math.min(k, s.length - 1)] ?? [0, 0];
   return [at(0)[0], at(1)[0], at(2)[0], at(3)[0], at(0)[1], at(1)[1], at(2)[1], at(3)[1]];
-}
+};
 
 /** Value of zoom stops at a zoom */
-export function interpolate(size: Size, zoom: number): number {
+export const interpolate = (size: Size, zoom: number): number => {
   if (typeof size === 'number') return size;
   const first = size[0];
   if (!first) return 0;
@@ -175,18 +175,18 @@ export function interpolate(size: Size, zoom: number): number {
     if (zoom <= z1) return v0 + ((v1 - v0) * (zoom - z0)) / Math.max(z1 - z0, 1e-9);
   }
   return size.at(-1)?.[1] ?? 0;
-}
+};
 
-export function evaluate<T, P>(value: Styled<T, P>, properties: P, index: number): T {
+export const evaluate = <T, P>(value: Styled<T, P>, properties: P, index: number): T => {
   return typeof value === 'function' ? (value as (p: P, i: number) => T)(properties, index) : value;
-}
+};
 
 // ── Geometry ──
 
 /** Collections in another CRS, reprojected once (the layers read their data again) */
 const reprojected = new WeakMap<object, Feature<unknown>[]>();
 
-export function featuresOf<P>(data: FeatureData<P>): Feature<P>[] {
+export const featuresOf = <P>(data: FeatureData<P>): Feature<P>[] => {
   if (Array.isArray(data)) return data;
   if (data.type !== 'FeatureCollection') return [data];
   if (crsOf(data) === undefined) return data.features;
@@ -196,7 +196,7 @@ export function featuresOf<P>(data: FeatureData<P>): Feature<P>[] {
     reprojected.set(data, features);
   }
   return features;
-}
+};
 
 /** Every geometry of a feature, collections flattened */
 function* geometries(geometry: Geometry | null): Generator<Geometry> {
@@ -225,7 +225,7 @@ class Grow<T extends Float64Array | Uint32Array> {
 }
 
 /** Lines of the features: points (Mercator), first point of each line, feature of each line */
-function lineGeometry(features: Feature<unknown>[]) {
+const lineGeometry = (features: Feature<unknown>[]) => {
   const points = new Grow(new Float64Array(1024));
   const start = new Grow(new Uint32Array(64));
   const feature = new Grow(new Uint32Array(64));
@@ -244,9 +244,9 @@ function lineGeometry(features: Feature<unknown>[]) {
   });
   start.push(points.length / 2);
   return { points: points.done(), start: start.done(), feature: feature.done() };
-}
+};
 
-function pointGeometry(features: Feature<unknown>[]) {
+const pointGeometry = (features: Feature<unknown>[]) => {
   const points = new Grow(new Float64Array(1024));
   const feature = new Grow(new Uint32Array(64));
   const point = ([lon, lat]: Position, f: number) => {
@@ -260,9 +260,9 @@ function pointGeometry(features: Feature<unknown>[]) {
     }
   });
   return { points: points.done(), feature: feature.done() };
-}
+};
 
-export function polygonGeometry(features: Feature<unknown>[]) {
+export const polygonGeometry = (features: Feature<unknown>[]) => {
   const points = new Grow(new Float64Array(1024));
   const ringStart = new Grow(new Uint32Array(64));
   const polygonStart = new Grow(new Uint32Array(64));
@@ -289,7 +289,7 @@ export function polygonGeometry(features: Feature<unknown>[]) {
     polygonStart: polygonStart.done(),
     feature: feature.done(),
   };
-}
+};
 
 // ── Layers ──
 
@@ -492,12 +492,12 @@ export class FillLayer<P = Properties> extends FeatureLayer<P, FillStyle<P>> {
   protected applyExtra(): void {}
 }
 
-export function lineStyle<P>(options: LineOptions<P>): LineStyle<P> {
+export const lineStyle = <P>(options: LineOptions<P>): LineStyle<P> => {
   const { data: _, before: __, ...rest } = options;
   return { ...(BASE as FeatureLayerStyle<P>), color: '#000', width: 1, dash: undefined, ...rest };
-}
+};
 
-export function circleStyle<P>(options: CircleOptions<P>): CircleStyle<P> {
+export const circleStyle = <P>(options: CircleOptions<P>): CircleStyle<P> => {
   const { data: _, before: __, ...rest } = options;
   return {
     ...(BASE as FeatureLayerStyle<P>),
@@ -508,9 +508,9 @@ export function circleStyle<P>(options: CircleOptions<P>): CircleStyle<P> {
     alignment: 'viewport',
     ...rest,
   };
-}
+};
 
-export function fillStyle<P>(options: FillOptions<P>): FillStyle<P> {
+export const fillStyle = <P>(options: FillOptions<P>): FillStyle<P> => {
   const { data: _, before: __, ...rest } = options;
   return { ...(BASE as FeatureLayerStyle<P>), color: '#000', ...rest };
-}
+};

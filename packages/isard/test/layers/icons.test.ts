@@ -12,14 +12,14 @@ import {
 import type { Engine } from '../../src/wasm/isard.js';
 
 /** An image of `w` × `h` pixels, each of one color */
-function pixels(w: number, h: number, rgba: [number, number, number, number]): Pixels {
+const pixels = (w: number, h: number, rgba: [number, number, number, number]): Pixels => {
   const data = new Uint8Array(w * h * 4);
   for (let i = 0; i < w * h; i += 1) data.set(rgba, i * 4);
   return { width: w, height: h, data };
-}
+};
 
 /** An engine recording the atlas calls */
-function recorder() {
+const recorder = () => {
   const calls: [string, number[]][] = [];
   const engine = {
     setIconAtlas: (w: number, h: number) => calls.push(['set', [w, h]]),
@@ -27,7 +27,7 @@ function recorder() {
       calls.push(['update', [x, y, w, h, data.length]]),
   } as unknown as Engine;
   return { engine, calls };
-}
+};
 
 const icon = (over: Partial<Icon> = {}): Icon => ({
   x: 100,

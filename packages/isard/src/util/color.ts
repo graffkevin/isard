@@ -36,31 +36,31 @@ const NAMES =
 
 let named: Map<string, string> | undefined;
 
-function namedHex(name: string): string | undefined {
+const namedHex = (name: string): string | undefined => {
   if (!named) {
     named = new Map();
     const words = NAMES.split(' ');
     for (let i = 0; i + 1 < words.length; i += 2) named.set(words[i] as string, words[i + 1] as string);
   }
   return named.get(name);
-}
+};
 
 const clamp = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
 
-function hex(digits: string): Rgba | undefined {
+const hex = (digits: string): Rgba | undefined => {
   if (!/^[0-9a-f]+$/.test(digits) || ![3, 4, 6, 8].includes(digits.length)) return undefined;
   const full = digits.length <= 4 ? [...digits].map((h) => h + h).join('') : digits;
   const v = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255;
   return [v(0), v(2), v(4), full.length === 8 ? v(6) : 1];
-}
+};
 
 /** An alpha: a number from 0 to 1 or a percentage */
-function alpha(p: string | undefined): number {
+const alpha = (p: string | undefined): number => {
   if (p === undefined) return 1;
   return clamp(p.endsWith('%') ? Number.parseFloat(p) / 100 : Number.parseFloat(p));
-}
+};
 
-function hsl(h: number, s: number, l: number): [number, number, number] {
+const hsl = (h: number, s: number, l: number): [number, number, number] => {
   const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
   const p = 2 * l - q;
   const hue = (t: number) => {
@@ -71,10 +71,10 @@ function hsl(h: number, s: number, l: number): [number, number, number] {
     return p;
   };
   return [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
-}
+};
 
 /** A CSS color to RGBA 0-1; undefined if it is not one */
-export function parseCssColor(value: unknown): Rgba | undefined {
+export const parseCssColor = (value: unknown): Rgba | undefined => {
   if (typeof value !== 'string') return undefined;
   const c = value.trim().toLowerCase();
   if (c.startsWith('#')) return hex(c.slice(1));
@@ -97,4 +97,4 @@ export function parseCssColor(value: unknown): Rgba | undefined {
     clamp(Number.parseFloat(parts[2] as string) / 100),
   );
   return [r, g, b, a];
-}
+};

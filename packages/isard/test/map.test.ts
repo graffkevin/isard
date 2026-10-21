@@ -54,7 +54,9 @@ afterEach(() => {
 });
 
 /** A map with no basemap, no controls and no workers unless asked */
-async function create(options: GeoMapOptions = {}): Promise<{ map: Map; engine: FakeEngine; container: FakeElement }> {
+const create = async (
+  options: GeoMapOptions = {},
+): Promise<{ map: Map; engine: FakeEngine; container: FakeElement }> => {
   const container = new FakeElement('div');
   const map = await GeoMap.create(container as unknown as HTMLElement, {
     basemap: 'none',
@@ -65,7 +67,7 @@ async function create(options: GeoMapOptions = {}): Promise<{ map: Map; engine: 
   });
   maps.push(map);
   return { map, engine: map.engine as unknown as FakeEngine, container };
-}
+};
 
 const canvasOf = (map: Map) => map.canvas as unknown as FakeElement;
 

@@ -4,7 +4,7 @@ import { decode } from '../../src/basemap/mvt.ts';
 // ── A small protobuf writer ──
 
 /** A varint; a bigint for 64-bit values (negative ones in two's complement, 10 bytes) */
-function varint(value: number | bigint): number[] {
+const varint = (value: number | bigint): number[] => {
   let v = BigInt.asUintN(64, BigInt(value));
   const out: number[] = [];
   do {
@@ -13,7 +13,7 @@ function varint(value: number | bigint): number[] {
     out.push(v > 0n ? b | 0x80 : b);
   } while (v > 0n);
   return out;
-}
+};
 const zigzag = (n: number) => (n < 0 ? -2 * n - 1 : 2 * n);
 const tag = (field: number, wire: number) => varint((field << 3) | wire);
 const bytes = (field: number, data: number[]) => [...tag(field, 2), ...varint(data.length), ...data];
@@ -26,9 +26,9 @@ const double = (field: number, v: number) => {
 };
 const command = (id: number, count: number) => varint((count << 3) | id);
 
-function tile(layer: number[]): Uint8Array {
+const tile = (layer: number[]): Uint8Array => {
   return Uint8Array.from(bytes(3, layer));
-}
+};
 
 describe('mvt', () => {
   test('values: strings, doubles, negative int64, sint64, uint64, booleans', () => {

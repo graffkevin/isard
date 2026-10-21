@@ -35,7 +35,7 @@ interface Formats {
   reproject(data: unknown): GeoJsonCollection;
 }
 let formats: Promise<Formats> | undefined;
-function loadFormats(): Promise<Formats> {
+const loadFormats = (): Promise<Formats> => {
   const src = join(root, 'packages/isard/src');
   formats ??= Promise.all(
     ['data/kml.ts', 'data/gpx.ts', 'data/topojson.ts', 'data/crs.ts'].map(
@@ -43,7 +43,7 @@ function loadFormats(): Promise<Formats> {
     ),
   ).then((modules) => Object.assign({}, ...modules) as Formats);
   return formats;
-}
+};
 const KEEPALIVE_MS = 15_000;
 
 export interface ViewerServerOptions {
@@ -172,7 +172,7 @@ class Channel {
 }
 
 /** A file served with HTTP ranges: 206 for one range, 416 past its end, 200 without */
-export function rangeResponse(path: string, request: Request): Response {
+export const rangeResponse = (path: string, request: Request): Response => {
   const file = Bun.file(path);
   const size = file.size;
   const headers: Record<string, string> = { 'Accept-Ranges': 'bytes', 'Content-Type': file.type };
@@ -204,7 +204,7 @@ export function rangeResponse(path: string, request: Request): Response {
       'Content-Length': String(end - start + 1),
     },
   });
-}
+};
 
 const TILE_TYPES: Record<string, string> = {
   png: 'image/png',
@@ -275,14 +275,14 @@ export class MbTiles {
 }
 
 /** GeoJSON of any kind (a collection, a feature, a geometry) as a collection in longitudes and latitudes */
-export async function featureCollection(json: unknown): Promise<GeoJsonCollection> {
+export const featureCollection = async (json: unknown): Promise<GeoJsonCollection> => {
   const value = json as { type?: string };
   let data: unknown = value;
   if (value?.type !== 'FeatureCollection' && value?.type !== 'Feature') {
     data = { type: 'Feature', geometry: value, properties: {} };
   }
   return (await loadFormats()).reproject(data);
-}
+};
 
 /** A file of the startup list: where it is served, and the messages adding it */
 interface Served {
@@ -299,10 +299,10 @@ const union = (a: Bounds | undefined, b: Bounds | undefined): Bounds | undefined
 };
 
 /** The messages adding a file as a layer, and its bounds; an error for a file it cannot read */
-export async function fileMessages(
+export const fileMessages = async (
   file: Served,
   id: string,
-): Promise<{ messages: AddMessage[]; bounds: Bounds | undefined }> {
+): Promise<{ messages: AddMessage[]; bounds: Bounds | undefined }> => {
   const lower = file.name.toLowerCase();
   const url = `files/${file.token}/${encodeURIComponent(file.name)}`;
   const ext = extname(lower);
@@ -352,10 +352,10 @@ export async function fileMessages(
     return { messages: [{ type: 'addModels', ...named, url, instances: [] }], bounds: undefined };
   }
   throw new Error(`${file.name}: not a format the viewer reads`);
-}
+};
 
 /** Starts the server: the viewer, its bridge, the files */
-export async function createViewerServer(options: ViewerServerOptions = {}): Promise<ViewerServer> {
+export const createViewerServer = async (options: ViewerServerOptions = {}): Promise<ViewerServer> => {
   const folder = resolve(options.root ?? join(root, 'apps/viewer/dist'));
   if (!existsSync(join(folder, 'index.html'))) {
     console.warn(`isard viewer: ${folder}/index.html is missing (bun run build); the bridge is served anyway`);
@@ -481,7 +481,7 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
       for (const f of files.values()) f.mbtiles?.close();
     },
   };
-}
+};
 
 if (import.meta.main) {
   const args = process.argv.slice(2);

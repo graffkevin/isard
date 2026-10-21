@@ -101,32 +101,32 @@ export interface Context {
 
 const TYPES = ['Unknown', 'Point', 'LineString', 'Polygon'];
 
-export function context(feature: TileFeature, zoom: number): Context {
+export const context = (feature: TileFeature, zoom: number): Context => {
   return { zoom, properties: feature.properties, type: TYPES[feature.type] ?? 'Unknown' };
-}
+};
 
 // ── Colors ──
 
 /** A color to RGBA 0-1, undefined if it is not one */
-export function color(value: unknown): [number, number, number, number] | undefined {
+export const color = (value: unknown): [number, number, number, number] | undefined => {
   return parseCssColor(value);
-}
+};
 
-export function css([r, g, b, a]: [number, number, number, number]): string {
+export const css = ([r, g, b, a]: [number, number, number, number]): string => {
   return `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`;
-}
+};
 
 // ── Interpolation ──
 
 /** Factor between two stops: linear, or exponential of `base` */
-function factor(x: number, x0: number, x1: number, base = 1): number {
+const factor = (x: number, x0: number, x1: number, base = 1): number => {
   const d = x1 - x0;
   if (d === 0) return 0;
   const t = x - x0;
   return base === 1 ? t / d : (base ** t - 1) / (base ** d - 1);
-}
+};
 
-function mix(a: unknown, b: unknown, t: number): unknown {
+const mix = (a: unknown, b: unknown, t: number): unknown => {
   if (typeof a === 'number' && typeof b === 'number') return a + (b - a) * t;
   const ca = color(a);
   const cb = color(b);
@@ -136,7 +136,7 @@ function mix(a: unknown, b: unknown, t: number): unknown {
     );
   if (Array.isArray(a) && Array.isArray(b)) return a.map((v, i) => mix(v, b[i], t));
   return t < 0.5 ? a : b;
-}
+};
 
 // ── Legacy functions ──
 
@@ -148,11 +148,11 @@ interface LegacyFunction {
   default?: Json;
 }
 
-function isFunction(v: Json): v is { [key: string]: Json } & LegacyFunction {
+const isFunction = (v: Json): v is { [key: string]: Json } & LegacyFunction => {
   return typeof v === 'object' && v !== null && !Array.isArray(v) && Array.isArray((v as { stops?: Json }).stops);
-}
+};
 
-function legacy(f: LegacyFunction, ctx: Context): unknown {
+const legacy = (f: LegacyFunction, ctx: Context): unknown => {
   const input = f.property === undefined ? ctx.zoom : ctx.properties[f.property];
   const stops = f.stops;
   const type =
@@ -175,14 +175,14 @@ function legacy(f: LegacyFunction, ctx: Context): unknown {
     }
   }
   return stops.at(-1)?.[1];
-}
+};
 
 // ── Expressions ──
 
-function get(ctx: Context, key: unknown): unknown {
+const get = (ctx: Context, key: unknown): unknown => {
   if (key === '$type') return ctx.type;
   return typeof key === 'string' ? ctx.properties[key] : undefined;
-}
+};
 
 /** The operators `evaluate` knows */
 const OPERATORS = new Set([
@@ -250,16 +250,16 @@ const OPERATORS = new Set([
 ]);
 
 /** Whether a value is an expression (an array starting with a known operator), not a literal array */
-export function isExpression(e: unknown): e is Json[] {
+export const isExpression = (e: unknown): e is Json[] => {
   return Array.isArray(e) && typeof e[0] === 'string' && OPERATORS.has(e[0]);
-}
+};
 
 /** Operators already warned about */
 const warned = new Set<string>();
 
 const str = (v: unknown) => (v === undefined || v === null ? '' : String(v));
 
-export function evaluate(e: Json, ctx: Context): unknown {
+export const evaluate = (e: Json, ctx: Context): unknown => {
   if (isFunction(e)) return legacy(e, ctx);
   if (!Array.isArray(e)) return e;
   const [op, ...args] = e;
@@ -469,7 +469,7 @@ export function evaluate(e: Json, ctx: Context): unknown {
       }
       return null;
   }
-}
+};
 
 // ── Filters ──
 
@@ -477,15 +477,15 @@ const LEGACY_COMPARISONS = new Set(['==', '!=', '<', '<=', '>', '>=']);
 
 /** Whether a filter (not `all`, `any`, `none`) is in the legacy form: `["==", "key", value]`, `["in", "key", a, b]`,
  * `["has", "key"]`; a key and literal values, as MapLibre tells them from expressions */
-function isLegacyLeaf(f: Json[]): boolean {
+const isLegacyLeaf = (f: Json[]): boolean => {
   const [op, a, ...rest] = f;
   if (typeof op !== 'string' || typeof a !== 'string' || rest.some(Array.isArray)) return false;
   if (LEGACY_COMPARISONS.has(op)) return f.length === 3;
   if (op === 'in') return f.length !== 3 || !Array.isArray(f[2]);
   return op === '!in' || op === 'has' || op === '!has';
-}
+};
 
-function legacyFilter(f: Json[], ctx: Context): boolean {
+const legacyFilter = (f: Json[], ctx: Context): boolean => {
   const [op, key, ...rest] = f;
   const v = get(ctx, key);
   switch (op) {
@@ -512,7 +512,7 @@ function legacyFilter(f: Json[], ctx: Context): boolean {
     default:
       return true;
   }
-}
+};
 
 type Test = (ctx: Context) => boolean;
 
@@ -520,7 +520,7 @@ type Test = (ctx: Context) => boolean;
 const compiled = new WeakMap<Json[], Test>();
 
 /** A filter as a function: `all`, `any`, `none` of their parts, each part legacy or an expression (they may mix) */
-function compile(f: Json): Test {
+const compile = (f: Json): Test => {
   if (!Array.isArray(f)) return () => Boolean(f);
   const hit = compiled.get(f);
   if (hit) return hit;
@@ -538,23 +538,23 @@ function compile(f: Json): Test {
   }
   compiled.set(f, test);
   return test;
-}
+};
 
-export function filter(f: Json | undefined, ctx: Context): boolean {
+export const filter = (f: Json | undefined, ctx: Context): boolean => {
   if (f === undefined || f === null) return true;
   return compile(f)(ctx);
-}
+};
 
 /** Whether a value depends on the feature (else only on the zoom, evaluated once per tile) */
-export function isFeatureDependent(e: Json | undefined): boolean {
+export const isFeatureDependent = (e: Json | undefined): boolean => {
   if (e !== undefined && isFunction(e)) return e.property !== undefined;
   if (!Array.isArray(e)) return false;
   if (['get', 'has', '!has', 'geometry-type', 'properties', 'id'].includes(e[0] as string)) return true;
   return e.some((x) => isFeatureDependent(x));
-}
+};
 
 /** A `{token}` text field (or an expression) to the text of a feature */
-export function text(field: Json | undefined, ctx: Context): string {
+export const text = (field: Json | undefined, ctx: Context): string => {
   if (field === undefined || field === null) return '';
   if (typeof field === 'string') {
     return field.replace(/\{([^}]+)\}/g, (_, key: string) => {
@@ -568,19 +568,19 @@ export function text(field: Json | undefined, ctx: Context): string {
     return v.filter((x) => typeof x === 'string').join('');
   }
   return v === undefined || v === null ? '' : String(v);
-}
+};
 
 /** The font of a label from the first of its `text-font`: a family without its weight takes the regular one */
-export function labelFont(font: string): string {
+export const labelFont = (font: string): string => {
   return /Regular|Bold|Italic|Semibold|Light|Medium|Black/.test(font) ? font : `${font} Regular`;
-}
+};
 
 /**
  * A value of the zoom only (an expression: `interpolate`, `step` of `["zoom"]`) as stops `[[zoom, value], …]` for the
  * engine, which interpolates them linearly: evaluated at its own stops and at the whole zooms between (an exponential
  * curve followed closely), a step kept sharp just before its threshold
  */
-export function zoomStops(e: Json): [number, number][] {
+export const zoomStops = (e: Json): [number, number][] => {
   const zooms = new Set<number>();
   const walk = (x: Json) => {
     if (!Array.isArray(x)) return;
@@ -604,4 +604,4 @@ export function zoomStops(e: Json): [number, number][] {
   return [...new Set(finite)]
     .sort((a, b) => a - b)
     .map((zoom) => [zoom, Number(evaluate(e, { zoom, properties: {}, type: 'Unknown' }))]);
-}
+};

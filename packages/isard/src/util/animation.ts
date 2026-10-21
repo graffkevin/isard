@@ -14,7 +14,7 @@ export type Step = (now: number) => boolean;
 type Target = () => Pick<Engine, 'setCamera' | 'clearPreload'>;
 
 /** MapLibre's default easing: cubic Bézier (0.25, 0.1, 0.25, 1) */
-export function defaultEasing(t: number): number {
+export const defaultEasing = (t: number): number => {
   if (t <= 0 || t >= 1) return Math.max(0, Math.min(1, t));
   // Solve x(u) = t for the curve parameter, Newton then bisection
   const [x1, y1, x2, y2] = [0.25, 0.1, 0.25, 1];
@@ -27,11 +27,11 @@ export function defaultEasing(t: number): number {
     u = Math.max(0, Math.min(1, u - x / dx));
   }
   return bezier(u, y1, y2);
-}
+};
 
 /** The step of an animated move from `from` to `to`: over `duration` milliseconds (or the options), ease-out by
  * default, the bearing turning the shortest way round */
-export function easeTo(engine: Target, from: Camera, to: Camera, options: number | AnimationOptions = 600): Step {
+export const easeTo = (engine: Target, from: Camera, to: Camera, options: number | AnimationOptions = 600): Step => {
   const { duration = 600, easing = (t: number) => 1 - (1 - t) ** 3 } =
     typeof options === 'number' ? { duration: options } : options;
   // Shortest way round
@@ -51,14 +51,14 @@ export function easeTo(engine: Target, from: Camera, to: Camera, options: number
     );
     return t < 1;
   };
-}
+};
 
 /**
  * The step of a flight from `from` to `to` that zooms out on its way and back in (van Wijk and Nuij's optimal path, as
  * MapLibre's `flyTo`): long moves stay readable. Pitch and bearing follow the progress. `viewport`: the larger side of
  * the canvas, CSS pixels.
  */
-export function flyTo(engine: Target, from: Camera, to: Camera, viewport: number, options: FlyToOptions = {}): Step {
+export const flyTo = (engine: Target, from: Camera, to: Camera, viewport: number, options: FlyToOptions = {}): Step => {
   const { curve: rho = 1.42, speed = 1.2, easing = defaultEasing } = options;
   const [x0, y0] = toMercator(from.center);
   const [x1, y1] = toMercator(to.center);
@@ -97,4 +97,4 @@ export function flyTo(engine: Target, from: Camera, to: Camera, viewport: number
     engine().setCamera(lon, lat, zoom, from.pitch + (to.pitch - from.pitch) * k, from.bearing + turn * k);
     return t < 1;
   };
-}
+};

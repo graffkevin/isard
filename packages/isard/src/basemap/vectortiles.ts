@@ -73,16 +73,16 @@ export interface VectorTilesOptions {
 }
 
 /** The credits of a known style: OpenFreeMap's, PLAN.IGN's */
-export function styleAttribution(style: string | Style): string | undefined {
+export const styleAttribution = (style: string | Style): string | undefined => {
   if (typeof style !== 'string') return undefined;
   if ((Object.values(OPENFREEMAP_STYLES) as string[]).includes(style)) return OPENFREEMAP_ATTRIBUTION;
   if ((Object.values(PLAN_STYLES) as string[]).includes(style)) return IGN_ATTRIBUTION;
   return undefined;
-}
+};
 
 /** Text or icon size of a style (a number, legacy stops, or the stops of a zoom expression made by the worker) as a
  * size for the symbol layer */
-export function size(value: Json, fallback = 16): Size {
+export const size = (value: Json, fallback = 16): Size => {
   if (typeof value === 'number') return value;
   if (Array.isArray(value) && value.length > 0 && value.every(Array.isArray)) {
     return value.map((s) => [Number((s as Json[])[0]), Number((s as Json[])[1])] as [number, number]);
@@ -94,20 +94,20 @@ export function size(value: Json, fallback = 16): Size {
     });
   }
   return fallback;
-}
+};
 
 /** Fetches a JSON document (a style, a TileJSON) */
-async function json<T>(url: string): Promise<T> {
+const json = async <T>(url: string): Promise<T> => {
   const response = await fetch(url, withHeaders(url));
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
   return (await response.json()) as T;
-}
+};
 
 /**
  * A style source's tiles and deepest level: a `pmtiles://` archive (its `url`, or a `tiles` template) read for its
  * header, its tiles then named `pmtiles://<absolute archive URL>/{z}/{x}/{y}` for the workers; other sources as they are
  */
-async function resolveSource(source: Style['sources'][string]): Promise<{ tiles?: string[]; maxzoom?: number }> {
+const resolveSource = async (source: Style['sources'][string]): Promise<{ tiles?: string[]; maxzoom?: number }> => {
   const given = source.url ?? source.tiles?.[0] ?? '';
   const archive = pmtilesUrl(given.replace(/\/\{z\}\/\{x\}\/\{y\}$/, ''));
   if (!archive)
@@ -117,24 +117,24 @@ async function resolveSource(source: Style['sources'][string]): Promise<{ tiles?
     };
   const header = await pmtiles(archive).header();
   return { tiles: [`pmtiles://${archive}/{z}/{x}/{y}`], maxzoom: source.maxzoom ?? header.maxZoom };
-}
+};
 
 /** Pause before the labels of tiles that failed are asked for again, when no move brings an update (ms) */
 const RETRY_LABELS_MS = 3000;
 
 /** Default size of a basemap worker pool: cores - 1, 1 to 4 */
-export function defaultWorkerCount(): number {
+export const defaultWorkerCount = (): number => {
   return Math.min(4, Math.max(1, (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2) - 1));
-}
+};
 
 /** Default URL of the basemap worker: in the page's assets folder (`isard/vite`), else next to the module */
-export function defaultWorkerUrl(assetsUrl?: string | URL): string | URL {
+export const defaultWorkerUrl = (assetsUrl?: string | URL): string | URL => {
   return assetUrl('basemap.worker.js', undefined, assetsUrl);
-}
+};
 
 /** Fetch priority of a raster tile drawn by the workers: 'high' near the center of the view, at the current zoom or
  * coarser; 'low' far from it or finer (prefetch); 'auto' between */
-export function tilePriority(z: number, x: number, y: number, camera: Pick<Camera, 'center' | 'zoom'>): Priority {
+export const tilePriority = (z: number, x: number, y: number, camera: Pick<Camera, 'center' | 'zoom'>): Priority => {
   // A raster tile of level z covers the map at zoom z - 1
   if (z - 1 > camera.zoom + 1) return 'low';
   const n = 2 ** z;
@@ -147,18 +147,18 @@ export function tilePriority(z: number, x: number, y: number, camera: Pick<Camer
   const d = Math.hypot(dx, y + 0.5 - cy);
   if (d <= 1.5) return 'high';
   return d >= 4 ? 'low' : 'auto';
-}
+};
 
 /** The worker of a vector tile among `count`: always the same one */
-export function workerIndex(vz: number, vx: number, vy: number, count: number): number {
+export const workerIndex = (vz: number, vx: number, vy: number, count: number): number => {
   // Unsigned: every worker gets its share
   return ((Math.imul(vx, 73856093) ^ Math.imul(vy, 19349663) ^ vz) >>> 0) % Math.max(1, count);
-}
+};
 
 /** The worker-side key of a renderer: unique across the `VectorTiles` sharing a pool */
-export function rendererKey(namespace: string, n: number): string {
+export const rendererKey = (namespace: string, n: number): string => {
   return `${namespace}:r${n}`;
-}
+};
 
 /** What the pool needs of a worker (a `Worker`, or a stand-in in tests) */
 export type PoolWorker = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
@@ -328,7 +328,7 @@ export class BasemapWorkers {
 type TileLabels = [layer: number, features: Feature<LabelCandidate>[]][];
 
 /** A tile's label candidates as features, by style layer */
-export function tileLabels(candidates: readonly LabelCandidate[]): TileLabels {
+export const tileLabels = (candidates: readonly LabelCandidate[]): TileLabels => {
   const byLayer = new Map<number, Feature<LabelCandidate>[]>();
   for (const p of candidates) {
     const feature: Feature<LabelCandidate> = {
@@ -349,7 +349,7 @@ export function tileLabels(candidates: readonly LabelCandidate[]): TileLabels {
     else byLayer.set(p.layer, [feature]);
   }
   return [...byLayer].sort((a, b) => b[0] - a[0]);
-}
+};
 
 export class VectorTiles {
   private readonly pool: BasemapWorkers;
@@ -733,10 +733,10 @@ const BASIC_COLORS = ['#2f6fd1', '#d1495b', '#2a9d8f', '#e9a03b', '#7b5ea7', '#5
  * layer, the `name` of points as labels. `source` is the style's vector source (`url`: TileJSON or `pmtiles://…`, or
  * `tiles`)
  */
-export function basicStyle(
+export const basicStyle = (
   source: { url?: string; tiles?: string[]; minzoom?: number; maxzoom?: number },
   layers: readonly string[],
-): Style {
+): Style => {
   const out: StyleLayer[] = [];
   layers.forEach((name, i) => {
     const color = BASIC_COLORS[i % BASIC_COLORS.length] as string;
@@ -764,7 +764,7 @@ export function basicStyle(
     });
   });
   return { version: 8, sources: { data: { type: 'vector', ...source } }, layers: out };
-}
+};
 
 /** Options of `GeoMap.addPmtiles` */
 export interface PmtilesOptions {
@@ -781,21 +781,21 @@ export interface PmtilesOptions {
 }
 
 /** HTML of a file reduced to its text, escaped: credits from an archive's metadata cannot run in the page */
-function plainText(html: string): string {
+const plainText = (html: string): string => {
   return html
     .replace(/<[^>]*>/g, '')
     .replace(/&(?!(amp|lt|gt|quot|copy|#\d+);)/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
+};
 
 /** @internal `GeoMap.addPmtiles`: a raster layer of the archive's images, or vector tiles with their raster layer and
  * labels */
-export async function pmtilesLayer(
+export const pmtilesLayer = async (
   map: GeoMap,
   url: string,
   options: PmtilesOptions,
-): Promise<RasterLayer | VectorTiles> {
+): Promise<RasterLayer | VectorTiles> => {
   const archiveUrl = pmtilesUrl(url.startsWith('pmtiles://') ? url : `pmtiles://${url}`) as string;
   const archive = pmtiles(archiveUrl);
   const [header, metadata] = await Promise.all([archive.header(), archive.metadata().catch(() => ({}))]);
@@ -824,11 +824,11 @@ export async function pmtilesLayer(
   });
   tiles.labels();
   return tiles;
-}
+};
 
 /** A raster loader reading the tiles of a `pmtiles://` archive URL (images of any size, drawn at `size`); undefined
  * for another URL */
-export function pmtilesRasterLoader(url: string, size: number): RasterOptions['loader'] {
+export const pmtilesRasterLoader = (url: string, size: number): RasterOptions['loader'] => {
   const archiveUrl = pmtilesUrl(url);
   if (!archiveUrl) return undefined;
   const archive = pmtiles(archiveUrl);
@@ -837,4 +837,4 @@ export function pmtilesRasterLoader(url: string, size: number): RasterOptions['l
     if (!bytes) return null;
     return createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), { resizeWidth: size, resizeHeight: size });
   };
-}
+};

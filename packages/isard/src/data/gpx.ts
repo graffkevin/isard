@@ -7,7 +7,7 @@ import { child, children, childText, parseXml, type XmlElement } from './xml.ts'
 /** The fields of a waypoint, route or track kept as properties when present */
 const FIELDS = ['name', 'cmt', 'desc', 'src', 'sym', 'type', 'number'];
 
-function properties(element: XmlElement): Properties {
+const properties = (element: XmlElement): Properties => {
   const out: Properties = {};
   for (const key of FIELDS) {
     const value = childText(element, key);
@@ -16,27 +16,27 @@ function properties(element: XmlElement): Properties {
   const link = child(element, 'link')?.attributes.href;
   if (link !== undefined) out.link = link;
   return out;
-}
+};
 
 /** A point of a GPX file (wpt, rtept, trkpt): its position, its altitude third if any, and its time */
-function point(element: XmlElement): { position: Position; time: string | undefined } | undefined {
+const point = (element: XmlElement): { position: Position; time: string | undefined } | undefined => {
   const lon = Number(element.attributes.lon);
   const lat = Number(element.attributes.lat);
   if (!Number.isFinite(lon) || !Number.isFinite(lat) || element.attributes.lon === undefined) return undefined;
   const ele = childText(element, 'ele');
   const position: Position = ele !== undefined && Number.isFinite(Number(ele)) ? [lon, lat, Number(ele)] : [lon, lat];
   return { position, time: childText(element, 'time') };
-}
+};
 
 /** The positions of a line of points, and their times when every point has one */
-function line(points: XmlElement[]): { coordinates: Position[]; times: string[] | undefined } {
+const line = (points: XmlElement[]): { coordinates: Position[]; times: string[] | undefined } => {
   const read = points.map(point).filter((p) => p !== undefined);
   const times = read.map((p) => p.time);
   return {
     coordinates: read.map((p) => p.position),
     times: read.length > 0 && times.every((t) => t !== undefined) ? (times as string[]) : undefined,
   };
-}
+};
 
 /**
  * The waypoints, routes and tracks of a GPX file as GeoJSON features: a waypoint as a point (its `time` a property),
@@ -44,7 +44,7 @@ function line(points: XmlElement[]): { coordinates: Position[]; times: string[] 
  * coordinate; `name`, `desc`, `cmt`, `type`… as properties, and the times of the points as `times` (one list, or one
  * per segment) when they all have one
  */
-export function parseGpx<P = Properties>(text: string): FeatureCollection<P> {
+export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => {
   const root = parseXml(text);
   const features: Feature<P>[] = [];
   const add = (geometry: Geometry, props: Properties) =>
@@ -77,4 +77,4 @@ export function parseGpx<P = Properties>(text: string): FeatureCollection<P> {
     }
   }
   return { type: 'FeatureCollection', features };
-}
+};

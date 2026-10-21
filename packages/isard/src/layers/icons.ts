@@ -60,23 +60,23 @@ export interface SpriteSource {
 }
 
 /** The sprites of a style's `sprite`: one URL, or several with their ids (MapLibre's style specification) */
-export function spriteSources(sprite: string | readonly SpriteSource[] | undefined): SpriteSource[] {
+export const spriteSources = (sprite: string | readonly SpriteSource[] | undefined): SpriteSource[] => {
   if (typeof sprite === 'string') return sprite ? [{ id: 'default', url: sprite }] : [];
   return Array.isArray(sprite) ? sprite.filter((s) => typeof s?.url === 'string' && typeof s.id === 'string') : [];
-}
+};
 
 /** The name of an image of a sprite in the style: its own in the `default` sprite, `id:name` in another */
-export function spriteName(id: string, name: string): string {
+export const spriteName = (id: string, name: string): string => {
   return id === 'default' ? name : `${id}:${name}`;
-}
+};
 
 /** The URL of a sprite's index or sheet: `.json` or `.png`, `@2x` before it for high-density screens, before the
  * query of the URL if it has one */
-export function spriteFile(url: string, extension: 'json' | 'png', ratio: number): string {
+export const spriteFile = (url: string, extension: 'json' | 'png', ratio: number): string => {
   const suffix = `${ratio > 1 ? '@2x' : ''}.${extension}`;
   const query = url.search(/[?#]/);
   return query < 0 ? `${url}${suffix}` : `${url.slice(0, query)}${suffix}${url.slice(query)}`;
-}
+};
 
 /** A sprite loaded: its images by name (with the sprite's prefix) and its sheet */
 export interface LoadedSprite {
@@ -86,10 +86,10 @@ export interface LoadedSprite {
 
 /** Loads a style's sprites (`@2x` above a device pixel ratio of 1, the 1x ones if a server has none); the sprites
  * that fail are left out */
-export async function loadSprites(
+export const loadSprites = async (
   sprite: string | readonly SpriteSource[] | undefined,
   ratio = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1,
-): Promise<LoadedSprite[]> {
+): Promise<LoadedSprite[]> => {
   const one = async ({ id, url }: SpriteSource, r: number): Promise<LoadedSprite | undefined> => {
     const [json, png] = await Promise.all([
       fetch(spriteFile(url, 'json', r), withHeaders(spriteFile(url, 'json', r))),
@@ -103,10 +103,10 @@ export async function loadSprites(
   };
   const loaded = await Promise.all(spriteSources(sprite).map((s) => one(s, ratio).catch(() => undefined)));
   return loaded.filter((s): s is LoadedSprite => s !== undefined);
-}
+};
 
 /** The pixels of an image (read back through a canvas) */
-export function readPixels(image: CanvasImageSource & { width: number; height: number }): Pixels | undefined {
+export const readPixels = (image: CanvasImageSource & { width: number; height: number }): Pixels | undefined => {
   const { width, height } = image;
   if (!(width > 0 && height > 0)) return undefined;
   const canvas =
@@ -117,7 +117,7 @@ export function readPixels(image: CanvasImageSource & { width: number; height: n
   if (!g) return undefined;
   g.drawImage(image, 0, 0);
   return g.getImageData(0, 0, width, height);
-}
+};
 
 /** Where an icon's pixels are: a region of an image, read when first packed */
 interface IconSource {
@@ -350,14 +350,14 @@ type Pieces = [number, number, number, number][];
  * stretchable zones (the whole image by default) taking the room the fixed parts (at `scale` CSS pixels per image
  * pixel) leave
  */
-export function stretch(
+export const stretch = (
   length: number,
   zones: readonly [number, number][] | undefined,
   content: [number, number] | undefined,
   lo: number,
   hi: number,
   scale: number,
-): Pieces {
+): Pieces => {
   const clamp = (v: number) => Math.max(0, Math.min(length, Number(v) || 0));
   const spans = (zones?.length ? zones : [[0, length] as [number, number]])
     .map(([a, b]): [number, number] => [clamp(Math.min(a, b)), clamp(Math.max(a, b))])
@@ -377,16 +377,16 @@ export function stretch(
   const at = (x: number) => pieces.reduce((n, [a, b, s]) => n + Math.max(0, Math.min(x, b) - a) * (s ? k : scale), 0);
   const origin = lo - at(c0);
   return pieces.map(([a, b]) => [a, b, origin + at(a), origin + at(b)]);
-}
+};
 
 /** Where an anchor's side lies along an axis of the icon: at its start 0, at its end 1, else the middle */
-function align(start: boolean, end: boolean): number {
+const align = (start: boolean, end: boolean): number => {
   if (start) return 0;
   return end ? 1 : 0.5;
-}
+};
 
 /** Lays an icon out around its anchor: placed by its anchor and offset, or fitted to its text */
-export function layoutIcon(icon: Icon, options: IconLayoutOptions): IconLayout {
+export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout => {
   const { size, anchor, offset, rotate, fit, padding, text } = options;
   const { width: w, height: h, pixelRatio } = icon;
   let xs: Pieces;
@@ -459,4 +459,4 @@ export function layoutIcon(icon: Icon, options: IconLayoutOptions): IconLayout {
     }
   }
   return { quads, box: quads.length ? box : [0, 0, 0, 0] };
-}
+};

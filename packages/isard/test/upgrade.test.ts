@@ -21,21 +21,21 @@ const fetchMock = mock(async (url: unknown) => {
 const fullFetches = () => fetchMock.mock.calls.filter(([url]) => String(url).includes('full')).length;
 
 /** Holds the next downloads of the full engine until `release()` */
-function hold(): void {
+const hold = (): void => {
   gate = new Promise((resolve) => {
     open = resolve;
   });
-}
+};
 
-function release(): void {
+const release = (): void => {
   open?.();
   gate = undefined;
-}
+};
 
 /** Lets the pending promises and timers run (the engine instantiated, the map rebuilt in a task of its own) */
-async function settle(): Promise<void> {
+const settle = async (): Promise<void> => {
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
-}
+};
 
 const restoreGlobals = setGlobals({
   ...domGlobals(frames),
@@ -68,7 +68,7 @@ afterEach(() => {
   frames.flush();
 });
 
-async function create(options: GeoMapOptions = {}): Promise<Map> {
+const create = async (options: GeoMapOptions = {}): Promise<Map> => {
   const map = await GeoMap.create(new FakeElement('div') as unknown as HTMLElement, {
     basemap: 'none',
     attributionControl: false,
@@ -79,7 +79,7 @@ async function create(options: GeoMapOptions = {}): Promise<Map> {
   });
   maps.push(map);
   return map;
-}
+};
 
 const engineOf = (map: Map) => map.engine as unknown as FakeEngine;
 const canvasOf = (map: Map) => map.canvas as unknown as FakeElement;
@@ -491,7 +491,7 @@ describe('point clouds, on the engine with 3D Tiles', () => {
 
 describe('custom layers', () => {
   /** A custom layer recording its calls */
-  function custom(renderingMode?: '2d' | '3d') {
+  const custom = (renderingMode?: '2d' | '3d') => {
     const calls: string[] = [];
     const frames: { matrix: Float32Array; camera: unknown }[] = [];
     const layer = {
@@ -506,7 +506,7 @@ describe('custom layers', () => {
       onRemove: mock((_gl: WebGL2RenderingContext, _map: unknown) => calls.push('remove')),
     };
     return { layer, calls, frames };
-  }
+  };
   /** Draws a frame of the engine, calling the custom layers it holds as the engine does */
   const draw = (engine: FakeEngine) => {
     for (const [callback] of engine.args('addCustomLayer')) (callback as () => void)();

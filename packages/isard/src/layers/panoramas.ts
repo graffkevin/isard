@@ -88,7 +88,7 @@ interface Attitude {
 const RAD = Math.PI / 180;
 
 /** 3 × 3 product, row-major */
-function times(a: number[], b: number[]): number[] {
+const times = (a: number[], b: number[]): number[] => {
   const out: number[] = [];
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) {
@@ -98,7 +98,7 @@ function times(a: number[], b: number[]): number[] {
     }
   }
   return out;
-}
+};
 
 const rotX = (t: number) => [1, 0, 0, 0, Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos(t)];
 const rotY = (t: number) => [Math.cos(t), 0, Math.sin(t), 0, 1, 0, -Math.sin(t), 0, Math.cos(t)];
@@ -109,14 +109,14 @@ const rotZ = (t: number) => [Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos
  * `quaternionFromRollPitchHeading`: Ry(-roll) · Rx(-pitch) · Rz(-heading)), turned by the meridian convergence of the
  * projection (Lambert-93: sin(46.5°) · (3° - longitude))
  */
-export function panoramaRotation(attitude: Attitude, lon: number, lambert93: boolean): number[] {
+export const panoramaRotation = (attitude: Attitude, lon: number, lambert93: boolean): number[] => {
   const vehicle = times(times(rotY(-attitude.roll * RAD), rotX(-attitude.pitch * RAD)), rotZ(-attitude.heading * RAD));
   const convergence = lambert93 ? Math.sin(46.5 * RAD) * (3 - lon) * RAD : 0;
   return times(rotZ(convergence), vehicle);
-}
+};
 
 /** The 25 numbers of a camera for `setPanorama` */
-function cameraNumbers(c: Calibration): number[] {
+const cameraNumbers = (c: Calibration): number[] => {
   const p = c.projection;
   const d = c.distortion;
   return [
@@ -136,7 +136,7 @@ function cameraNumbers(c: Calibration): number[] {
     d?.poly357[2] ?? 0,
     d?.limit ?? 0,
   ];
-}
+};
 
 /** The panoramas of a set, one shown at a time */
 export class Panoramas {
@@ -290,7 +290,7 @@ export class Panoramas {
 }
 
 /** Loads a set of panoramas: their positions and attitudes, the calibration of their cameras */
-export async function loadPanoramas(host: PanoramaHost, options: PanoramaOptions): Promise<Panoramas> {
+export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions): Promise<Panoramas> => {
   const json = async <T>(src: string) => {
     const response = await fetch(src, withHeaders(src));
     if (!response.ok) throw new Error(`isard: ${src}: ${response.status}`);
@@ -335,4 +335,4 @@ export async function loadPanoramas(host: PanoramaHost, options: PanoramaOptions
     cameras,
     lambert93,
   );
-}
+};

@@ -32,7 +32,7 @@ const RAD = Math.PI / 180;
 const isometric = (phi: number, e: number) => Math.atanh(Math.sin(phi)) - e * Math.atanh(e * Math.sin(phi));
 
 /** Latitude (radians) of an isometric latitude, by fixed-point iteration (converges by e² at each step) */
-function fromIsometric(psi: number, e: number): number {
+const fromIsometric = (psi: number, e: number): number => {
   let phi = Math.asin(Math.tanh(psi));
   for (let i = 0; i < 20; i += 1) {
     const next = Math.asin(Math.tanh(psi + e * Math.atanh(e * Math.sin(phi))));
@@ -40,7 +40,7 @@ function fromIsometric(psi: number, e: number): number {
     phi = next;
   }
   return phi;
-}
+};
 
 /** An angle (radians) brought into [-π, π] */
 const wrap = (angle: number) => angle - 2 * Math.PI * Math.round(angle / (2 * Math.PI));
@@ -49,7 +49,7 @@ const wrap = (angle: number) => angle - 2 * Math.PI * Math.round(angle / (2 * Ma
  * Lambert Conformal Conic with two standard parallels (EPSG method 9802), angles in degrees: the projection of
  * Lambert-93 and of the CC zones, and of many national grids
  */
-export function lambertConformalConic(p: {
+export const lambertConformalConic = (p: {
   /** Semi-major axis (metres) and flattening (default GRS80) */
   ellipsoid?: [a: number, f: number];
   lat0: number;
@@ -58,7 +58,7 @@ export function lambertConformalConic(p: {
   lat2: number;
   x0: number;
   y0: number;
-}): Crs {
+}): Crs => {
   const [a, f] = p.ellipsoid ?? GRS80;
   const e = Math.sqrt(f * (2 - f));
   const m = (phi: number) => Math.cos(phi) / Math.sqrt(1 - (e * Math.sin(phi)) ** 2);
@@ -84,13 +84,13 @@ export function lambertConformalConic(p: {
       return [(theta / n + lon0) / RAD, fromIsometric(-Math.log(r / aF) / n, e) / RAD];
     },
   };
-}
+};
 
 /**
  * Transverse Mercator (EPSG method 9807) by Krüger's series to the sixth order (Karney, 2011), angles in degrees:
  * exact to the tenth of a millimetre within 4000 km of the central meridian. The projection of the UTM zones
  */
-export function transverseMercator(p: {
+export const transverseMercator = (p: {
   /** Semi-major axis (metres) and flattening (default GRS80) */
   ellipsoid?: [a: number, f: number];
   lon0: number;
@@ -98,7 +98,7 @@ export function transverseMercator(p: {
   k0: number;
   x0: number;
   y0: number;
-}): Crs {
+}): Crs => {
   const [a, f] = p.ellipsoid ?? GRS80;
   const e = Math.sqrt(f * (2 - f));
   const n = f / (2 - f);
@@ -150,7 +150,7 @@ export function transverseMercator(p: {
       return [(lon0 + Math.atan2(Math.sinh(eta), Math.cos(xi))) / RAD, fromIsometric(Math.asinh(t), e) / RAD];
     },
   };
-}
+};
 
 /** Longitudes and latitudes themselves */
 const GEOGRAPHIC: Crs = {
@@ -175,7 +175,7 @@ const made = new Map<number, Crs>();
  * `http://www.opengis.net/def/crs/EPSG/0/2154`; `CRS:84`, `OGC:CRS84` and the IGN's `IGNF:WGS84G` are 4326, its
  * `IGNF:LAMB93` 2154, the old names of Web Mercator 3857. Undefined for another name
  */
-export function epsgCode(name: string): number | undefined {
+export const epsgCode = (name: string): number | undefined => {
   const n = name.trim().toUpperCase();
   if (/CRS:?84$/.test(n) || n === 'IGNF:WGS84G') return 4326;
   if (n === 'IGNF:LAMB93') return 2154;
@@ -183,10 +183,10 @@ export function epsgCode(name: string): number | undefined {
   if (code === undefined) return undefined;
   const c = Number(code);
   return c === 900913 || c === 3785 || c === 102100 || c === 102113 ? 3857 : c;
-}
+};
 
 /** A built-in CRS by EPSG code; undefined if not built in */
-function builtin(code: number): Crs | undefined {
+const builtin = (code: number): Crs | undefined => {
   if (code === 4326 || code === 4258 || code === 4171) return GEOGRAPHIC;
   if (code === 3857) return WEB_MERCATOR;
   if (code === 2154) {
@@ -203,13 +203,13 @@ function builtin(code: number): Crs | undefined {
   if (code >= 32701 && code <= 32760) return utm(code - 32700, true, WGS84);
   if (code >= 25828 && code <= 25838) return utm(code - 25800, false, GRS80);
   return undefined;
-}
+};
 
 /** Whether a CRS name is longitudes and latitudes (needs no reprojection) */
-export function isGeographic(name: string): boolean {
+export const isGeographic = (name: string): boolean => {
   const code = epsgCode(name);
   return !registered.has(normalize(name)) && code !== undefined && builtin(code) === GEOGRAPHIC;
-}
+};
 
 const normalize = (name: string) => {
   const code = epsgCode(name);
@@ -220,12 +220,12 @@ const normalize = (name: string) => {
  * Names a CRS for every place that takes one (`registerCrs('EPSG:27572', proj4('EPSG:27572'))`): the `crs` of a tile
  * grid, the `crs` member of GeoJSON, `reproject`. A registered name wins over a built-in one
  */
-export function registerCrs(name: string, crs: Crs): void {
+export const registerCrs = (name: string, crs: Crs): void => {
   registered.set(normalize(name), crs);
-}
+};
 
 /** The CRS of a name (registered or built in), or the CRS given; throws for an unknown name */
-export function getCrs(crs: CrsLike): Crs {
+export const getCrs = (crs: CrsLike): Crs => {
   if (typeof crs !== 'string') return crs;
   const found = registered.get(normalize(crs));
   if (found) return found;
@@ -239,17 +239,17 @@ export function getCrs(crs: CrsLike): Crs {
     if (c) return c;
   }
   throw new Error(`isard: unknown CRS ${crs}: registerCrs('${crs}', proj4('${crs}')) names it`);
-}
+};
 
 /** The name in the legacy `crs` member of GeoJSON (`{ type: 'name', properties: { name } }`), if any */
-export function crsOf(data: unknown): string | undefined {
+export const crsOf = (data: unknown): string | undefined => {
   const member = (data as { crs?: { properties?: { name?: unknown } } } | null)?.crs;
   const name = member?.properties?.name;
   return typeof name === 'string' ? name : undefined;
-}
+};
 
 /** A geometry with its positions mapped */
-function mapGeometry(g: Geometry, f: (p: Position) => Position): Geometry {
+const mapGeometry = (g: Geometry, f: (p: Position) => Position): Geometry => {
   switch (g.type) {
     case 'Point':
       return { type: g.type, coordinates: f(g.coordinates) };
@@ -264,7 +264,7 @@ function mapGeometry(g: Geometry, f: (p: Position) => Position): Geometry {
     case 'GeometryCollection':
       return { type: g.type, geometries: g.geometries.map((child) => mapGeometry(child, f)) };
   }
-}
+};
 
 /**
  * GeoJSON in `from` (default: the CRS its `crs` member names) as GeoJSON in longitudes and latitudes, for the feature
@@ -273,7 +273,7 @@ function mapGeometry(g: Geometry, f: (p: Position) => Position): Geometry {
  * The feature layers do this by themselves for a collection whose `crs` member names its CRS (a WFS's output in
  * EPSG:2154)
  */
-export function reproject<P>(data: FeatureData<P>, from?: CrsLike): FeatureCollection<P> {
+export const reproject = <P>(data: FeatureData<P>, from?: CrsLike): FeatureCollection<P> => {
   let features = Array.isArray(data) ? data : [data as Feature<P>];
   if (!Array.isArray(data) && data.type === 'FeatureCollection') features = data.features;
   const source = from ?? crsOf(data);
@@ -294,4 +294,4 @@ export function reproject<P>(data: FeatureData<P>, from?: CrsLike): FeatureColle
       }),
     ),
   };
-}
+};

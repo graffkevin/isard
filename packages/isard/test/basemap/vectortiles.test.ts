@@ -26,14 +26,14 @@ const restore = setGlobals({ fetch: fetchMock });
 afterAll(restore);
 
 /** What VectorTiles needs of a map to resolve its style: workers */
-function host(workers: FakeWorker[] = []): GeoMap {
+const host = (workers: FakeWorker[] = []): GeoMap => {
   const pool = new BasemapWorkers(2, 'worker.js', () => {
     const w = new FakeWorker();
     workers.push(w);
     return w as unknown as PoolWorker;
   });
   return { basemapWorkers: () => ({ pool, own: true }) } as unknown as GeoMap;
-}
+};
 
 const style = (): Style => ({
   version: 8,

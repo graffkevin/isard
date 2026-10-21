@@ -97,18 +97,18 @@ type Factory<T> = (options: { wasmBinary: ArrayBuffer }) => Promise<T>;
 
 /** Loads an Emscripten factory published as a classic script (module workers have no importScripts); needs
  * `'unsafe-eval'` under a Content Security Policy (see `DecoderUrls`) */
-async function factory<T>(url: string, name: string): Promise<Factory<T>> {
+const factory = async <T>(url: string, name: string): Promise<Factory<T>> => {
   const source = await (await fetch(url)).text();
   return new Function(`${source}\nreturn ${name};`)() as Factory<T>;
-}
+};
 
-async function instantiate<T>(base: string, script: string, wasm: string, name: string): Promise<T> {
+const instantiate = async <T>(base: string, script: string, wasm: string, name: string): Promise<T> => {
   const [create, binary] = await Promise.all([
     factory<T>(`${base}${script}`, name),
     fetch(`${base}${wasm}`).then((r) => r.arrayBuffer()),
   ]);
   return create({ wasmBinary: binary });
-}
+};
 
 let draco: Promise<DracoModule> | undefined;
 /** The full Draco decoder: the glTF build decodes meshes only, not the point clouds */
@@ -116,7 +116,7 @@ let dracoPoints: Promise<DracoModule> | undefined;
 let basis: Promise<BasisModule> | undefined;
 
 /** Decodes the Draco primitives of a tile (their points alone for point clouds) */
-export async function decodeDraco(urls: DecoderUrls, requests: DracoRequest[]): Promise<DracoGeometry[]> {
+export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): Promise<DracoGeometry[]> => {
   const meshes = requests.some((r) => !r.points);
   if (meshes) {
     draco ??= instantiate<DracoModule>(
@@ -188,23 +188,23 @@ export async function decodeDraco(urls: DecoderUrls, requests: DracoRequest[]): 
       module.destroy(decoder);
     }
   });
-}
+};
 
 /** Basis target format and WebGL internal format, best first */
-function target(formats: TextureFormats, alpha: boolean): { basis: number; gl: number } {
+const target = (formats: TextureFormats, alpha: boolean): { basis: number; gl: number } => {
   if (formats.astc) return { basis: 10, gl: 0x93b0 }; // ASTC 4×4
   if (formats.bptc) return { basis: 6, gl: 0x8e8c }; // BC7
   if (formats.etc) return alpha ? { basis: 1, gl: 0x9278 } : { basis: 0, gl: 0x9274 }; // ETC2 RGBA / ETC1 as ETC2 RGB
   if (formats.s3tc) return alpha ? { basis: 3, gl: 0x83f3 } : { basis: 2, gl: 0x83f0 }; // BC3 / BC1
   return { basis: 13, gl: 0x8058 }; // RGBA8, uncompressed
-}
+};
 
 /** Transcodes a KTX2 image for the GPU */
-export async function transcodeKtx2(
+export const transcodeKtx2 = async (
   urls: DecoderUrls,
   formats: TextureFormats,
   bytes: Uint8Array,
-): Promise<CompressedTexture> {
+): Promise<CompressedTexture> => {
   basis ??= instantiate<BasisModule>(urls.basis, 'basis_transcoder.js', 'basis_transcoder.wasm', 'BASIS').then((m) => {
     m.initializeBasis();
     return m;
@@ -226,4 +226,4 @@ export async function transcodeKtx2(
     file.close();
     file.delete();
   }
-}
+};

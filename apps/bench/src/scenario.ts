@@ -75,7 +75,7 @@ const VIEUX_LILLE: Pose = { lon: 3.0598, lat: 50.6435, range: 600, tilt: 55, hea
 export const START = FRANCE;
 
 /** Interpolated pose: distances geometrically (constant zoom speed), angles linearly */
-function between(a: Pose, b: Pose, t: number): Pose {
+const between = (a: Pose, b: Pose, t: number): Pose => {
   const k = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;
   return {
     lon: a.lon + (b.lon - a.lon) * k,
@@ -84,7 +84,7 @@ function between(a: Pose, b: Pose, t: number): Pose {
     tilt: a.tilt + (b.tilt - a.tilt) * k,
     heading: a.heading + (b.heading - a.heading) * k,
   };
-}
+};
 
 const frame = () => new Promise<number>((resolve) => requestAnimationFrame(resolve));
 
@@ -97,7 +97,7 @@ if (longTasksReported) {
   }).observe({ type: 'longtask', buffered: true });
 }
 
-function summary(phase: string, times: number[], start: number, end: number): PhaseResult {
+const summary = (phase: string, times: number[], start: number, end: number): PhaseResult => {
   const gaps = times.slice(1).map((t, i) => t - (times[i] ?? t));
   const sorted = [...gaps].sort((a, b) => a - b);
   const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
@@ -117,10 +117,10 @@ function summary(phase: string, times: number[], start: number, end: number): Ph
       ),
     }),
   };
-}
+};
 
 /** Moves the camera from `from` to `to` over `ms`, one pose per frame */
-async function animate(engine: BenchEngine, phase: string, from: Pose, to: Pose, ms: number): Promise<PhaseResult> {
+const animate = async (engine: BenchEngine, phase: string, from: Pose, to: Pose, ms: number): Promise<PhaseResult> => {
   Object.assign(window, { benchPhase: phase });
   const times: number[] = [];
   const start = await frame();
@@ -130,11 +130,11 @@ async function animate(engine: BenchEngine, phase: string, from: Pose, to: Pose,
   }
   engine.setPose(to);
   return summary(phase, times, start, performance.now());
-}
+};
 
 /** Waits until the engine is idle (or `maxMs`), measuring the frames meanwhile; a part counts as complete from the
  * last time it was still busy */
-async function settle(engine: BenchEngine, phase: string, maxMs: number): Promise<PhaseResult> {
+const settle = async (engine: BenchEngine, phase: string, maxMs: number): Promise<PhaseResult> => {
   // The current phase, for inspection from outside (screenshots at given times of a phase)
   Object.assign(window, { benchPhase: phase });
   const times: number[] = [];
@@ -166,9 +166,9 @@ async function settle(engine: BenchEngine, phase: string, maxMs: number): Promis
   const half = counts.find(([, n]) => n >= final / 2 && n > 0);
   if (half && final > 0) result.meshHalfMs = Math.round(half[0] - start);
   return result;
-}
+};
 
-export async function run(engine: BenchEngine): Promise<BenchResult> {
+export const run = async (engine: BenchEngine): Promise<BenchResult> => {
   const phases: PhaseResult[] = [];
   engine.setPose(FRANCE);
   phases.push(await settle(engine, '1 load France', 30_000));
@@ -184,11 +184,11 @@ export async function run(engine: BenchEngine): Promise<BenchResult> {
   const result: BenchResult = { engine: engine.name, phases, info: engine.info() };
   if (memory) result.heapMb = Math.round(memory.usedJSHeapSize / 1048576);
   return result;
-}
+};
 
 /** Runs the scenario and hands the result to the runner page; `?still=lille` or `?still=france` only holds a pose
  * (to check what an engine shows) */
-export async function benchmark(engine: BenchEngine): Promise<void> {
+export const benchmark = async (engine: BenchEngine): Promise<void> => {
   const still = new URLSearchParams(location.search).get('still');
   if (still) {
     engine.setPose(still === 'lille' ? LILLE : FRANCE);
@@ -197,4 +197,4 @@ export async function benchmark(engine: BenchEngine): Promise<void> {
   const result = await run(engine);
   parent.postMessage({ type: 'bench-result', result }, '*');
   (window as Window & { benchResult?: BenchResult }).benchResult = result;
-}
+};

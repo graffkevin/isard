@@ -18,7 +18,7 @@ const numbers = (text: string | undefined) => (text ?? '').trim().split(/\s+/).m
  * The tile grid of `layer` in the capabilities document `xml`: its tile matrix set `matrixSet` (default the layer's
  * first), with the layer's tile limits and longitude-latitude extent. Throws if the layer or the set is missing
  */
-export function parseWmtsGrid(xml: string, layer: string, matrixSet?: string): TileGrid {
+export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): TileGrid => {
   const contents = child(parseXml(xml), 'Contents');
   const entry = children(contents, 'Layer').find((l) => childText(l, 'Identifier') === layer);
   if (!entry) throw new Error(`isard: no WMTS layer ${layer}`);
@@ -66,23 +66,23 @@ export function parseWmtsGrid(xml: string, layer: string, matrixSet?: string): T
     name,
     ...(bounds.every(Number.isFinite) ? { bounds: bounds as [number, number, number, number] } : {}),
   };
-}
+};
 
 /**
  * The tile grid of a WMTS layer, from the service's capabilities at `capabilities` (fetched with CORS), for
  * `addRaster`: `await wmtsGrid('https://…/wmts?SERVICE=WMTS&REQUEST=GetCapabilities', 'LAYER', 'MATRIXSET')`. The
  * raster's URL writes the matrix set, {z} for the matrix, {x} and {y} for the column and the row
  */
-export async function wmtsGrid(
+export const wmtsGrid = async (
   capabilities: string | URL,
   layer: string,
   matrixSet?: string,
   options: { signal?: AbortSignal } = {},
-): Promise<TileGrid> {
+): Promise<TileGrid> => {
   const response = await fetch(
     capabilities,
     withHeaders(capabilities, options.signal ? { signal: options.signal } : {}),
   );
   if (!response.ok) throw new Error(`isard: ${response.status} for the WMTS capabilities`);
   return parseWmtsGrid(await response.text(), layer, matrixSet);
-}
+};

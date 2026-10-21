@@ -15,7 +15,7 @@ const tilesOf = (job: Job | null) => job?.sources.map((s) => s.url.split('/').ma
 
 /** The largest distance (source pixels) between a job's mesh, interpolated at the tile's pixel centers, and the exact
  * projection of those centers */
-function meshError(g: ReturnType<typeof resolveGrid>, z: number, x: number, y: number): number {
+const meshError = (g: ReturnType<typeof resolveGrid>, z: number, x: number, y: number): number => {
   const job = planTile(g, '{z}/{x}/{y}', z, x, y, 256) as Job;
   const [level, col0, row0] = tilesOf(job)[0] as number[];
   const m = g.matrices.find((matrix) => Number(matrix.id) === level);
@@ -44,7 +44,7 @@ function meshError(g: ReturnType<typeof resolveGrid>, z: number, x: number, y: n
     }
   }
   return worst;
-}
+};
 
 describe('planTile in Lambert-93', () => {
   test('the level of the same pixel size, the source tiles under the Mercator tile', () => {

@@ -7,11 +7,11 @@ if (!(found instanceof HTMLDivElement)) throw new Error('#view missing');
 const container: HTMLDivElement = found;
 
 /** Zoom whose camera distance is `range` metres at latitude `lat` (`MapLibre` conventions, same field of view) */
-function zoom(range: number, lat: number): number {
+const zoom = (range: number, lat: number): number => {
   const centerDistance = (0.5 * container.clientHeight) / Math.tan(((FOV / 2) * Math.PI) / 180);
   const metresAround = 2 * Math.PI * 6_378_137 * Math.cos((lat * Math.PI) / 180);
   return Math.log2(((centerDistance / range) * metresAround) / 512);
-}
+};
 
 const map = await GeoMap.create(container, {
   basemap: 'ign-ortho',

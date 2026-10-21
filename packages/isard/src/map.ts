@@ -101,18 +101,18 @@ import { easeTo, flyTo, type Step } from './util/animation.ts';
 import type { Camera, Engine, PickHit, PickResult, RasterLayerStats } from './wasm/isard.js';
 
 /** Reports an error without throwing it here: the console shows it, as an uncaught one */
-function report(error: unknown): void {
+const report = (error: unknown): void => {
   if (typeof reportError === 'function') reportError(error);
   else
     queueMicrotask(() => {
       throw error;
     });
-}
+};
 
 type Listeners = { [K in keyof MapEvents]: Set<(event: MapEvents[K]) => void> };
 
 /** Checks a network's arrays before the engine reads them: node index pairs, indices of existing nodes */
-function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
+const validateNetwork = (nodes: Float64Array, edges: Uint32Array): void => {
   if (nodes.length % 2 !== 0) throw new Error(`isard: network nodes must be lon, lat pairs (length ${nodes.length})`);
   if (edges.length % 2 !== 0) throw new Error(`isard: network edges must be node index pairs (length ${edges.length})`);
   const count = nodes.length / 2;
@@ -120,7 +120,7 @@ function validateNetwork(nodes: Float64Array, edges: Uint32Array): void {
     const node = edges[i] as number;
     if (node >= count) throw new Error(`isard: network edge ${i >> 1} refers to node ${node}, of ${count} nodes`);
   }
-}
+};
 
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
@@ -128,14 +128,14 @@ const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-le
 const MAX_POLLS = 30;
 
 /** The name of a basemap, checked: an unknown one throws */
-function checkBasemap(basemap: Basemap): BasemapName {
+const checkBasemap = (basemap: Basemap): BasemapName => {
   const renamed = RENAMED_BASEMAPS[basemap];
   if (renamed) throw new Error(`isard: the basemap '${basemap}' is now named '${renamed}'`);
   if (basemap !== 'none' && !(basemap in VECTOR_BASEMAPS) && !(basemap in BASEMAPS)) {
     throw new Error(`isard: unknown basemap '${basemap}'`);
   }
   return basemap;
-}
+};
 
 /** A map (see `GeoMap.create`); layers take it as their host */
 export class GeoMap {
@@ -1502,13 +1502,13 @@ export class GeoMap {
 }
 
 /** The page's request headers to an engine (its own requests: raster tiles, tilesets, point clouds) */
-function sendHeaders(engine: Engine, rules: HeaderRules): void {
+const sendHeaders = (engine: Engine, rules: HeaderRules): void => {
   engine.setRequestHeaders(
     rules.map(([prefix]) => prefix),
     Uint32Array.from(rules, ([, headers]) => Object.keys(headers).length),
     rules.flatMap(([, headers]) => Object.entries(headers).flat()),
   );
-}
+};
 
 /** A layer by its type and the options of its `add…` method (`GeoMap.add`) */
 export type LayerSpec<P = Record<string, unknown>> =

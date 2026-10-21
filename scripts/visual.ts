@@ -206,7 +206,7 @@ await session.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage:
 /** Attempts at a URL the server turns away for too many requests (HTTP 429, the Géoplateforme past 10 a second) */
 const BUSY_ATTEMPTS = 6;
 
-async function answer(requestId: string, request: Protocol.Network.Request): Promise<void> {
+const answer = async (requestId: string, request: Protocol.Network.Request): Promise<void> => {
   const range = request.headers.Range ?? request.headers.range;
   const h = key(range ? `${request.url}#${range}` : request.url);
   used.add(h);
@@ -256,7 +256,7 @@ async function answer(requestId: string, request: Protocol.Network.Request): Pro
     responseHeaders: [...cors, { name: 'Content-Type', value: fixture.type }],
     body: body.toString('base64'),
   });
-}
+};
 
 /** Counts the frames asked for; for frozen examples, pins performance.now and the rAF timestamps */
 const instrument = (frozen: boolean) => `(() => {

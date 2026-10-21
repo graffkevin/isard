@@ -19,7 +19,7 @@ export interface XmlElement {
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
 
 /** Text with its entities decoded (unknown ones kept as they are) */
-function decode(text: string): string {
+const decode = (text: string): string => {
   if (!text.includes('&')) return text;
   return text.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (whole, entity: string) => {
     if (entity[0] === '#') {
@@ -29,7 +29,7 @@ function decode(text: string): string {
     }
     return ENTITIES[entity] ?? whole;
   });
-}
+};
 
 const local = (name: string) => name.slice(name.indexOf(':') + 1);
 
@@ -37,7 +37,7 @@ const local = (name: string) => name.slice(name.indexOf(':') + 1);
 const START = /<([^\s/>]+)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/y;
 
 /** The document's root element; throws if there is none */
-export function parseXml(source: string): XmlElement {
+export const parseXml = (source: string): XmlElement => {
   const root: XmlElement = { name: '#document', attributes: {}, children: [], text: '' };
   const stack = [root];
   const top = () => stack[stack.length - 1] as XmlElement;
@@ -88,28 +88,28 @@ export function parseXml(source: string): XmlElement {
   const first = root.children[0];
   if (!first) throw new Error('isard: no XML element');
   return first;
-}
+};
 
 /** The first child element of a name */
-export function child(element: XmlElement | undefined, name: string): XmlElement | undefined {
+export const child = (element: XmlElement | undefined, name: string): XmlElement | undefined => {
   return element?.children.find((c) => c.name === name);
-}
+};
 
 /** The child elements of a name */
-export function children(element: XmlElement | undefined, name: string): XmlElement[] {
+export const children = (element: XmlElement | undefined, name: string): XmlElement[] => {
   return element?.children.filter((c) => c.name === name) ?? [];
-}
+};
 
 /** The trimmed text of the first child of a name; undefined without one */
-export function childText(element: XmlElement | undefined, name: string): string | undefined {
+export const childText = (element: XmlElement | undefined, name: string): string | undefined => {
   return child(element, name)?.text.trim();
-}
+};
 
 /** Every element of a name under an element, in document order (not inside a match) */
-export function descendants(element: XmlElement, name: string, out: XmlElement[] = []): XmlElement[] {
+export const descendants = (element: XmlElement, name: string, out: XmlElement[] = []): XmlElement[] => {
   for (const c of element.children) {
     if (c.name === name) out.push(c);
     else descendants(c, name, out);
   }
   return out;
-}
+};

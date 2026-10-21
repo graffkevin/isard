@@ -67,7 +67,7 @@ export const IMAGE_SERVER = /\/ImageServer\/?$/;
  * by its validity mask) of the box `{bbox}` in the Mercator of the body. On the Earth, Web Mercator (EPSG:3857);
  * elsewhere, a Mercator on the sphere of `radius` metres (Web Mercator's own formulas), given in WKT.
  */
-export function imageServerTerrain(url: string, earth: boolean, radius: number): string {
+export const imageServerTerrain = (url: string, earth: boolean, radius: number): string => {
   const crs = earth
     ? '3857'
     : encodeURIComponent(
@@ -83,7 +83,7 @@ export function imageServerTerrain(url: string, earth: boolean, radius: number):
     `${url.replace(/\/$/, '')}/exportImage?f=image&format=bsq&pixelType=F32&size=256,256` +
     `&bboxSR=${crs}&imageSR=${crs}&bbox={bbox}`
   );
-}
+};
 
 /** The Earth's relief for `terrain: true`: the Terrain Tiles of AWS's open data registry, worldwide (SRTM, EU-DEM,
  * GMTED… merged by Mapzen), Terrarium PNGs of 256 px to level 14, altitudes above the mean sea level */

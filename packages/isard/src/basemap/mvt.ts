@@ -103,7 +103,7 @@ class Pbf {
 
 const decoder = new TextDecoder();
 
-function value(p: Pbf): Value {
+const value = (p: Pbf): Value => {
   let v: Value = '';
   while (p.more) {
     const tag = p.varint();
@@ -134,10 +134,10 @@ function value(p: Pbf): Value {
     }
   }
   return v;
-}
+};
 
 /** Point lists of a geometry's commands (MoveTo, LineTo, ClosePath) */
-function geometry(p: Pbf): number[][] {
+const geometry = (p: Pbf): number[][] => {
   const out: number[][] = [];
   let current: number[] | undefined;
   let [x, y] = [0, 0];
@@ -162,10 +162,10 @@ function geometry(p: Pbf): number[][] {
     }
   }
   return out;
-}
+};
 
 /** Decodes a tile; only the layers in `wanted` (all if undefined) */
-export function decode(bytes: Uint8Array, wanted?: Set<string>): Map<string, TileLayer> {
+export const decode = (bytes: Uint8Array, wanted?: Set<string>): Map<string, TileLayer> => {
   const layers = new Map<string, TileLayer>();
   const tile = new Pbf(bytes);
   while (tile.more) {
@@ -235,4 +235,4 @@ export function decode(bytes: Uint8Array, wanted?: Set<string>): Map<string, Til
     layers.set(name, { extent, features });
   }
   return layers;
-}
+};

@@ -31,11 +31,11 @@ const LILLE_MESH = 'https://webimaging.lillemetropole.fr/externe/maillage/2020_m
 const params = new URLSearchParams(location.search);
 const projection: Projection = params.get('projection') === 'mercator' ? 'mercator' : 'globe';
 
-function element<T extends HTMLElement = HTMLElement>(id: string): T {
+const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
   if (!found) throw new Error(`#${id} missing from the page`);
   return found as T;
-}
+};
 
 const map = await GeoMap.create(element('map'), {
   ...WORLD,
@@ -60,7 +60,12 @@ where();
 pin.on('drag', where);
 
 /** A row of toggle buttons */
-function buttons<T extends string>(parent: string, options: readonly T[], initial: T, pick: (option: T) => void): void {
+const buttons = <T extends string>(
+  parent: string,
+  options: readonly T[],
+  initial: T,
+  pick: (option: T) => void,
+): void => {
   const row = element(parent);
   for (const option of options) {
     const button = document.createElement('button');
@@ -73,7 +78,7 @@ function buttons<T extends string>(parent: string, options: readonly T[], initia
     };
     row.append(button);
   }
-}
+};
 
 const projections: readonly Projection[] = ['globe', 'mercator'];
 const basemaps: readonly Basemap[] = [

@@ -66,7 +66,7 @@ interface Resolved {
 }
 
 /** A box of the CRS around points of it (x, y, x, y…), NaN ignored; undefined without any */
-function box(points: ArrayLike<number>): [number, number, number, number] | undefined {
+const box = (points: ArrayLike<number>): [number, number, number, number] | undefined => {
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
   for (let k = 0; k + 1 < points.length; k += 2) {
     const [x, y] = [points[k] as number, points[k + 1] as number];
@@ -77,10 +77,10 @@ function box(points: ArrayLike<number>): [number, number, number, number] | unde
     y1 = Math.max(y1, y);
   }
   return x0 <= x1 ? [x0, y0, x1, y1] : undefined;
-}
+};
 
 /** A tile grid ready to plan tiles: its CRS found, its matrices completed, its bounds projected */
-export function resolveGrid(grid: TileGrid): Resolved {
+export const resolveGrid = (grid: TileGrid): Resolved => {
   const crs = getCrs(grid.crs);
   const matrices = (grid.matrices ?? [])
     .map(
@@ -111,21 +111,29 @@ export function resolveGrid(grid: TileGrid): Resolved {
     }
   }
   return { crs, matrices, bounds: grid.bounds, extent };
-}
+};
 
 /** The longitudes and latitudes of tiles in longitudes and latitudes, two 256 px tiles side by side at level 0, rows
  * from the north (NASA's Trek, WorldCRS84Quad), levels `minLevel` to `maxLevel` ({z} is the level) */
-export function equirectangularGrid(minLevel: number, maxLevel: number): TileGrid {
+export const equirectangularGrid = (minLevel: number, maxLevel: number): TileGrid => {
   const matrices: TileMatrix[] = [];
   for (let level = minLevel; level <= maxLevel; level += 1) {
     const n = 2 ** level;
     matrices.push({ id: level, resolution: 180 / 256 / n, origin: [-180, 90], matrixWidth: 2 * n, matrixHeight: n });
   }
   return { crs: 'EPSG:4326', matrices };
-}
+};
 
 /** A URL of the source: {z}, {x}, {y}, {bbox}, {width} and {height} replaced */
-function sourceUrl(template: string, z: string | number, x: number, y: number, bbox: number[], w: number, h: number) {
+const sourceUrl = (
+  template: string,
+  z: string | number,
+  x: number,
+  y: number,
+  bbox: number[],
+  w: number,
+  h: number,
+) => {
   return template
     .replaceAll('{z}', String(z))
     .replaceAll('{x}', String(x))
@@ -133,23 +141,23 @@ function sourceUrl(template: string, z: string | number, x: number, y: number, b
     .replaceAll('{bbox}', bbox.join(','))
     .replaceAll('{width}', String(w))
     .replaceAll('{height}', String(h));
-}
+};
 
 /** CRS units per pixel along the mesh's x and y around its middle (NaN where the CRS has nothing there) */
-function pixelSize(points: Float64Array, size: number): [number, number] {
+const pixelSize = (points: Float64Array, size: number): [number, number] => {
   const c = N / 2;
   const at = (i: number, j: number) => 2 * (j * (N + 1) + i);
   const d = (p: number, q: number) =>
     Math.hypot((points[q] as number) - (points[p] as number), (points[q + 1] as number) - (points[p + 1] as number));
   const step = (2 * size) / N;
   return [d(at(c - 1, c), at(c + 1, c)) / step, d(at(c, c - 1), at(c, c + 1)) / step];
-}
+};
 
 /**
  * The box (CRS) of the points a tile samples: the centers of its edge pixels, interpolated in the mesh as `resample`
  * does, and the inner points of the mesh (should the projection bend); within `clip`. Undefined if none is
  */
-function sampled(points: Float64Array, size: number, clip: number[]): [number, number, number, number] | undefined {
+const sampled = (points: Float64Array, size: number, clip: number[]): [number, number, number, number] | undefined => {
   const at = (i: number, j: number, k: number) => points[2 * (j * (N + 1) + i) + k] as number;
   const centers: number[] = [];
   for (let j = 1; j < N; j += 1) for (let i = 1; i < N; i += 1) centers.push(at(i, j, 0), at(i, j, 1));
@@ -179,13 +187,13 @@ function sampled(points: Float64Array, size: number, clip: number[]): [number, n
     Math.min(b[3], clip[3] as number),
   ];
   return out[0] <= out[2] && out[1] <= out[3] ? out : undefined;
-}
+};
 
 /**
  * The plan of Mercator tile `z`/`x`/`y` (`size` pixels a side) from a source of URL template `url` in grid `g`; null
  * where the source has nothing
  */
-export function planTile(g: Resolved, url: string, z: number, x: number, y: number, size: number): Job | null {
+export const planTile = (g: Resolved, url: string, z: number, x: number, y: number, size: number): Job | null => {
   const tiles = 2 ** z;
   if (g.bounds) {
     const [w, s, e, n] = g.bounds;
@@ -263,13 +271,13 @@ export function planTile(g: Resolved, url: string, z: number, x: number, y: numb
     return { size, width, height, sources, n: N, mesh };
   }
   return null;
-}
+};
 
 /**
  * The map zooms a grid's matrices span (the pixel size of the finest and of the coarsest, two levels coarser, where
  * the tiles still fit a mosaic), measured at the middle of its bounds, or of its coarsest matrix
  */
-export function gridZooms(g: Resolved): { minZoom: number; maxZoom: number } {
+export const gridZooms = (g: Resolved): { minZoom: number; maxZoom: number } => {
   const coarse = g.matrices[0];
   const fine = g.matrices.at(-1);
   if (!coarse || !fine) return { minZoom: 0, maxZoom: 19 };
@@ -292,7 +300,7 @@ export function gridZooms(g: Resolved): { minZoom: number; maxZoom: number } {
     minZoom: Math.max(0, Math.floor(Math.log2(zero / coarse.resolution)) - 2),
     maxZoom: Math.max(0, Math.round(Math.log2(zero / fine.resolution))),
   };
-}
+};
 
 /** Draws a Mercator tile `z`/`x`/`y`: its image, null where the source has nothing; rejects on errors */
 type Draw = (z: number, x: number, y: number, signal: AbortSignal) => Promise<ImageBitmap | null>;
@@ -308,7 +316,7 @@ export type RemoteReprojection = (
  * A raster loader drawing Web Mercator tiles of `size` pixels from a source of URL template `url` in tile grid `grid`:
  * planned here, drawn in a worker of the map through `remote` when it can, else in the page
  */
-export function gridLoader(url: string, grid: Resolved, size: number, remote?: RemoteReprojection): Draw {
+export const gridLoader = (url: string, grid: Resolved, size: number, remote?: RemoteReprojection): Draw => {
   let local: ReturnType<typeof resampler>['draw'] | undefined;
   return async (z, x, y, signal) => {
     const job = planTile(grid, url, z, x, y, size);
@@ -318,4 +326,4 @@ export function gridLoader(url: string, grid: Resolved, size: number, remote?: R
     local ??= resampler().draw;
     return local(job, signal);
   };
-}
+};

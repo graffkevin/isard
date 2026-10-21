@@ -41,7 +41,7 @@ let bridge: Bridge | undefined;
 const post = (message: ViewerMessage) => bridge?.send(message);
 const toast = element<HTMLDivElement>('toast');
 let toastTimer = 0;
-function report(message: string, id?: string): void {
+const report = (message: string, id?: string): void => {
   console.warn('isard viewer:', id ?? '', message);
   toast.textContent = id ? `${id}: ${message}` : message;
   toast.style.display = 'block';
@@ -50,23 +50,23 @@ function report(message: string, id?: string): void {
     toast.style.display = 'none';
   }, 5000);
   post({ type: 'error', message, ...(id ? { id } : {}) });
-}
+};
 
 const layers = new Layers(map, report);
 
-function size(): [number, number] {
+const size = (): [number, number] => {
   const canvas = map.getCanvas();
   return [canvas.clientWidth, canvas.clientHeight];
-}
+};
 
-function fit(bounds: Bounds, padding = 40, duration = 0): void {
+const fit = (bounds: Bounds, padding = 40, duration = 0): void => {
   const camera = boundsCamera(bounds, size(), padding);
   if (duration > 0) map.easeTo({ ...camera, pitch: 0, bearing: 0 }, duration);
   else map.setCamera({ ...camera, pitch: 0, bearing: 0 });
-}
+};
 
 /** Applies a host message */
-function apply(message: HostMessage): void {
+const apply = (message: HostMessage): void => {
   try {
     switch (message.type) {
       case 'camera': {
@@ -109,7 +109,7 @@ function apply(message: HostMessage): void {
   } catch (error) {
     report(error instanceof Error ? error.message : String(error), 'id' in message ? String(message.id) : undefined);
   }
-}
+};
 
 bridge = new Bridge(apply, { http: query.get('bridge') === '1' });
 
@@ -145,14 +145,14 @@ map.on('click', ({ point, lonLat }) => {
 // ── Files ──
 
 /** A layer id from a file name, unique */
-function idOf(name: string): string {
+const idOf = (name: string): string => {
   let id = name;
   for (let n = 2; layers.entries.has(id); n += 1) id = `${name}-${n}`;
   return id;
-}
+};
 
 /** A feature collection from parsed JSON: a collection, a feature, a geometry, or TopoJSON */
-function collection(json: unknown): GeoJsonCollection {
+const collection = (json: unknown): GeoJsonCollection => {
   const value = json as { type?: string; objects?: Record<string, unknown> };
   if (value?.type === 'Topology' && value.objects) {
     const name = Object.keys(value.objects)[0];
@@ -165,7 +165,7 @@ function collection(json: unknown): GeoJsonCollection {
     return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: value as never, properties: {} }] };
   }
   throw new Error('not GeoJSON');
-}
+};
 
 const kindOf = (name: string) => {
   const lower = name.toLowerCase().replace(/[?#].*$/, '');
@@ -180,7 +180,7 @@ const kindOf = (name: string) => {
 };
 
 /** Adds a file (dropped or opened: read in the page) or a URL; `at`: where a model goes */
-async function addSource(name: string, source: File | string, at?: LonLat): Promise<void> {
+const addSource = async (name: string, source: File | string, at?: LonLat): Promise<void> => {
   const id = idOf(name.replace(/^.*\//, '').replace(/[?#].*$/, ''));
   const kind = kindOf(name);
   const text = async () => (typeof source === 'string' ? (await fetchOk(source)).text() : source.text());
@@ -231,16 +231,16 @@ async function addSource(name: string, source: File | string, at?: LonLat): Prom
   } catch (error) {
     report(error instanceof Error ? error.message : String(error), id);
   }
-}
+};
 
-async function fetchOk(url: string): Promise<Response> {
+const fetchOk = async (url: string): Promise<Response> => {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   return response;
-}
+};
 
 /** Goes to a point cloud once its head is read */
-function flyToCloud(id: string): void {
+const flyToCloud = (id: string): void => {
   const start = Date.now();
   const poll = () => {
     const entry = layers.entries.get(id);
@@ -255,7 +255,7 @@ function flyToCloud(id: string): void {
     if (entry && !entry.error && Date.now() - start < 30_000) setTimeout(poll, 300);
   };
   poll();
-}
+};
 
 const addFiles = (files: Iterable<File>, at?: LonLat) => {
   for (const file of files) void addSource(file.name, file, at);

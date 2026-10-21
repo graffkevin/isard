@@ -92,12 +92,12 @@ export interface SymbolOptions<P = Properties> extends Partial<SymbolStyle<P>>, 
 
 /** Where a geometry is labelled: its points, the middle of its longest line (with the direction of the line there),
  * the centroid of its largest polygon */
-function anchors(geometry: Geometry | null): { at: Position; along?: [number, number] }[] {
+const anchors = (geometry: Geometry | null): { at: Position; along?: [number, number] }[] => {
   return points(geometry).map((p) => (p.length > 2 ? { at: [p[0], p[1]], along: [p[2] ?? 0, p[3] ?? 0] } : { at: p }));
-}
+};
 
 /** Anchors as positions, a line's carrying the direction (lon, lat, dlon, dlat) */
-function points(geometry: Geometry | null): Position[] {
+const points = (geometry: Geometry | null): Position[] => {
   if (!geometry) return [];
   switch (geometry.type) {
     case 'Point':
@@ -148,7 +148,7 @@ function points(geometry: Geometry | null): Position[] {
     case 'GeometryCollection':
       return geometry.geometries.flatMap(points);
   }
-}
+};
 
 /** The map's glyphs and icons, for a layer */
 export interface GlyphHost extends LayerHost {
@@ -172,11 +172,11 @@ const FLAG = {
 } as const;
 
 /** Flags of an overlap: allowed to overlap, ignored by the placement */
-function overlapFlags(overlap: Overlap, allow: number, ignore: number): number {
+const overlapFlags = (overlap: Overlap, allow: number, ignore: number): number => {
   if (overlap === true) return allow | ignore;
   if (overlap === 'allow') return allow;
   return overlap === 'ignore' ? ignore : 0;
-}
+};
 
 /** Room around an icon's box, CSS pixels (MapLibre's default `icon-padding`) */
 const ICON_PADDING = 2;
@@ -206,15 +206,15 @@ interface Chunk extends Labels {
 }
 
 /** Every character of a run has its glyph */
-function present(part: TextPart, loaded: Map<string, Map<number, Glyph>>): boolean {
+const present = (part: TextPart, loaded: Map<string, Map<number, Glyph>>): boolean => {
   const glyphs = loaded.get(part.font ?? DEFAULT_FONT);
   if (!glyphs) return false;
   for (const ch of part.text) if (ch !== '\n' && !glyphs.has(ch.codePointAt(0) ?? 32)) return false;
   return true;
-}
+};
 
 /** The labels of chunks one after the other, the quads' label indices moved past those of the chunks before */
-function concat(chunks: readonly Chunk[]): Labels {
+const concat = (chunks: readonly Chunk[]): Labels => {
   if (chunks.length === 1 && chunks[0]) return chunks[0];
   const length = (key: keyof Labels) => chunks.reduce((n, c) => n + c[key].length, 0);
   const out: Labels = {
@@ -239,7 +239,7 @@ function concat(chunks: readonly Chunk[]): Labels {
     labels += c.count;
   }
   return out;
-}
+};
 
 export class SymbolLayer<P = Properties> extends Layer {
   private list: Feature<P>[];
@@ -549,7 +549,7 @@ export class SymbolLayer<P = Properties> extends Layer {
   }
 }
 
-export function symbolStyle<P>(options: SymbolOptions<P>): SymbolStyle<P> {
+export const symbolStyle = <P>(options: SymbolOptions<P>): SymbolStyle<P> => {
   const { data: _, before: __, ...rest } = options;
   return {
     opacity: 1,
@@ -584,4 +584,4 @@ export function symbolStyle<P>(options: SymbolOptions<P>): SymbolStyle<P> {
     iconOpacity: 1,
     ...rest,
   };
-}
+};

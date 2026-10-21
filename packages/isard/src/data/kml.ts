@@ -5,17 +5,17 @@ import type { Feature, FeatureCollection, Geometry, Position, Properties } from 
 import { child, children, childText, descendants, parseXml, type XmlElement } from './xml.ts';
 
 /** Positions of a `coordinates` element: `lon,lat[,alt]` tuples separated by spaces */
-function positions(element: XmlElement | undefined): Position[] {
+const positions = (element: XmlElement | undefined): Position[] => {
   const out: Position[] = [];
   for (const tuple of (element?.text ?? '').trim().split(/\s+/)) {
     const values = tuple.split(',').map(Number);
     if (values.length >= 2 && values.every(Number.isFinite)) out.push(values as Position);
   }
   return out;
-}
+};
 
 /** The geometries of an element (a Placemark, a MultiGeometry), in order */
-function geometries(parent: XmlElement): Geometry[] {
+const geometries = (parent: XmlElement): Geometry[] => {
   const out: Geometry[] = [];
   for (const g of parent.children) {
     if (g.name === 'Point') {
@@ -40,10 +40,10 @@ function geometries(parent: XmlElement): Geometry[] {
     }
   }
   return out;
-}
+};
 
 /** One geometry of several: a Multi… of one type, else a collection */
-function merge(list: Geometry[]): Geometry | null {
+const merge = (list: Geometry[]): Geometry | null => {
   const [first] = list;
   if (!first) return null;
   if (list.length === 1) return first;
@@ -58,19 +58,19 @@ function merge(list: Geometry[]): Geometry | null {
     return { type: 'MultiPolygon', coordinates: list.map((g) => (g as { coordinates: Position[][] }).coordinates) };
   }
   return { type: 'GeometryCollection', geometries: list };
-}
+};
 
 /** A KML color (`aabbggrr`, hexadecimal) as a CSS color and an opacity */
-function color(element: XmlElement | undefined): [css: string, opacity: number] | undefined {
+const color = (element: XmlElement | undefined): [css: string, opacity: number] | undefined => {
   const value = childText(element, 'color')?.replace(/^#/, '');
   if (!value || !/^[\da-f]{8}$/i.test(value)) return undefined;
   const [a, b, g, r] = [0, 2, 4, 6].map((i) => value.slice(i, i + 2));
   return [`#${r}${g}${b}`.toLowerCase(), Math.round((Number.parseInt(a as string, 16) / 255) * 1000) / 1000];
-}
+};
 
 /** The properties of a style (simplestyle's names, as togeojson): stroke, stroke-opacity, stroke-width, fill,
  * fill-opacity, marker-color */
-function styleProperties(style: XmlElement | undefined): Properties {
+const styleProperties = (style: XmlElement | undefined): Properties => {
   const out: Properties = {};
   if (!style) return out;
   const line = child(style, 'LineStyle');
@@ -86,7 +86,7 @@ function styleProperties(style: XmlElement | undefined): Properties {
   const icon = color(child(style, 'IconStyle'));
   if (icon) out['marker-color'] = icon[0];
   return out;
-}
+};
 
 /**
  * The placemarks of a KML document as GeoJSON features: their points, lines (and gx:Track), polygons (with their
@@ -95,7 +95,7 @@ function styleProperties(style: XmlElement | undefined): Properties {
  * `StyleMap`) as `stroke`, `stroke-opacity`, `stroke-width`, `fill`, `fill-opacity`, `marker-color`. A placemark
  * without geometry has a null one
  */
-export function parseKml<P = Properties>(text: string): FeatureCollection<P> {
+export const parseKml = <P = Properties>(text: string): FeatureCollection<P> => {
   const root = parseXml(text);
   const styles = new Map<string, XmlElement>();
   for (const s of descendants(root, 'Style')) if (s.attributes.id) styles.set(s.attributes.id, s);
@@ -138,4 +138,4 @@ export function parseKml<P = Properties>(text: string): FeatureCollection<P> {
     };
   });
   return { type: 'FeatureCollection', features };
-}
+};

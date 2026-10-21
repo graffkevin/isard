@@ -40,14 +40,14 @@ export interface Job {
  * straight alpha) through the mesh of a job. Pixels whose position falls outside the mosaic, or on a NaN, stay
  * transparent; the mosaic's edge fades over half a pixel
  */
-export function resample(
+export const resample = (
   source: Uint8ClampedArray,
   width: number,
   height: number,
   mesh: Float32Array,
   n: number,
   size: number,
-): Uint8ClampedArray<ArrayBuffer> {
+): Uint8ClampedArray<ArrayBuffer> => {
   const out = new Uint8ClampedArray(size * size * 4);
   const cell = size / n;
   const stride = n + 1;
@@ -108,7 +108,7 @@ export function resample(
     }
   }
   return out;
-}
+};
 
 /** Draws a planned tile: its image, null where the source has nothing; rejects on errors */
 export type DrawJob = (job: Job, signal: AbortSignal) => Promise<ImageBitmap | null>;
@@ -118,7 +118,7 @@ export type DrawJob = (job: Job, signal: AbortSignal) => Promise<ImageBitmap | n
  * empty; a tile with no source at all is missing; other errors reject (retried by the engine). In the page, or in a
  * worker of the map (`close` frees the images kept)
  */
-export function resampler(cached = SOURCE_CACHE): { draw: DrawJob; close: () => void; cache: { capacity: number } } {
+export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => void; cache: { capacity: number } } => {
   type Image = Promise<ImageBitmap | null>;
   /** Tiles being drawn from each source image: an evicted one is closed once none is */
   const users = new Map<Image, number>();
@@ -186,4 +186,4 @@ export function resampler(cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
       cache.clear();
     },
   };
-}
+};

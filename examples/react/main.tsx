@@ -21,7 +21,7 @@ const START: Stop[] = [
 ];
 const BASEMAPS: Basemap[] = ['ign-plan-grey-vector', 'ign-plan-vector', 'ign-ortho'];
 
-function App() {
+const App = () => {
   const [stops, setStops] = useState(START);
   const [width, setWidth] = useState(4);
   const [color, setColor] = useState('#0057b8');
@@ -96,6 +96,6 @@ function App() {
       </div>
     </>
   );
-}
+};
 
 createRoot(element('root')).render(<App />);

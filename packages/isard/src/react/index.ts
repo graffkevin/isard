@@ -52,17 +52,17 @@ interface Binding {
 const MapContext = createContext<Binding | undefined>(undefined);
 
 /** The map of the `<IsardMap>` around, once created (undefined before) */
-export function useMap(): GeoMap | undefined {
+export const useMap = (): GeoMap | undefined => {
   return useContext(MapContext)?.map;
-}
+};
 
 /** Listens to an event of the map around while the component is mounted; the listener may change at each render */
-export function useMapEvent<K extends keyof MapEvents>(type: K, listener: (event: MapEvents[K]) => void): void {
+export const useMapEvent = <K extends keyof MapEvents>(type: K, listener: (event: MapEvents[K]) => void): void => {
   const map = useMap();
   const latest = useRef(listener);
   latest.current = listener;
   useEffect(() => map?.on(type, (event) => latest.current(event)), [map, type]);
-}
+};
 
 /** The props of the map's events: `onClick` for 'click', `onMoveEnd` for 'moveend'… */
 export interface MapEventProps {
@@ -131,14 +131,14 @@ const LIVE_OPTIONS: { [K in keyof GeoMapOptions]?: (map: GeoMap, props: IsardMap
   },
 };
 
-function sameCamera(a: Camera, b: Partial<Camera>): boolean {
+const sameCamera = (a: Camera, b: Partial<Camera>): boolean => {
   return (
     (b.center === undefined || (a.center[0] === b.center[0] && a.center[1] === b.center[1])) &&
     (b.zoom === undefined || a.zoom === b.zoom) &&
     (b.pitch === undefined || a.pitch === b.pitch) &&
     (b.bearing === undefined || a.bearing === b.bearing)
   );
-}
+};
 
 /**
  * A map filling its element (give it a height). Created once mounted, destroyed when unmounted; the options read at
@@ -234,18 +234,18 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
 });
 
 /** The props that are not options of the map */
-function stripProps(props: Partial<IsardMapProps>): GeoMapOptions {
+const stripProps = (props: Partial<IsardMapProps>): GeoMapOptions => {
   const options: Record<string, unknown> = { ...props };
   for (const key of [...Object.keys(EVENT_PROPS), 'onLoad', 'onError', 'id', 'className', 'style']) delete options[key];
   return options as GeoMapOptions;
-}
+};
 
 /** The entries of an object whose value is defined (`exactOptionalPropertyTypes`) */
-function defined<T extends object>(object: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+const defined = <T extends object>(object: T): { [K in keyof T]?: Exclude<T[K], undefined> } => {
   return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined)) as {
     [K in keyof T]?: Exclude<T[K], undefined>;
   };
-}
+};
 
 // ── Layers ──
 
@@ -345,7 +345,7 @@ export interface MarkerProps {
 }
 
 /** A marker at a position, its look the default pin or the `icon` given */
-export function Marker(props: MarkerProps): ReactNode {
+export const Marker = (props: MarkerProps): ReactNode => {
   const map = useMap();
   const custom = props.icon !== undefined;
   const { anchor, className } = props;
@@ -391,7 +391,7 @@ export function Marker(props: MarkerProps): ReactNode {
     element ? createPortal(props.icon, element) : null,
     props.children,
   );
-}
+};
 
 export interface PopupProps extends PopupOptions {
   /** Its position; in a `<Marker>`, the marker's */
@@ -407,7 +407,7 @@ export interface PopupProps extends PopupOptions {
 }
 
 /** A popup of JSX content, at a position or on a `<Marker>` */
-export function Popup(props: PopupProps): ReactNode {
+export const Popup = (props: PopupProps): ReactNode => {
   const map = useMap();
   const marker = useContext(MarkerContext);
   const { anchor, closeButton, closeOnClick, maxWidth, className } = props;
@@ -449,7 +449,7 @@ export function Popup(props: PopupProps): ReactNode {
   }, [map, marker, popup, lonLat?.[0], lonLat?.[1], height, open, opened]);
 
   return createPortal(props.children, content);
-}
+};
 
 export interface PanelProps extends Omit<PanelOptions, 'element'> {
   lonLat: LonLat;
@@ -458,7 +458,7 @@ export interface PanelProps extends Omit<PanelOptions, 'element'> {
 }
 
 /** JSX standing in 3D at a position, `width` metres wide, facing `heading` */
-export function Panel(props: PanelProps): ReactNode {
+export const Panel = (props: PanelProps): ReactNode => {
   const map = useMap();
   const { className } = props;
   const element = useMemo(() => document.createElement('div'), []);
@@ -490,12 +490,12 @@ export function Panel(props: PanelProps): ReactNode {
   });
 
   return createPortal(props.children, element);
-}
+};
 
 // ── Effects ──
 
 /** An observer's viewshed; several `<Viewshed>` are drawn together */
-export function Viewshed(props: ViewshedOptions): ReactNode {
+export const Viewshed = (props: ViewshedOptions): ReactNode => {
   const binding = useContext(MapContext);
   const key = useMemo(() => ({}), []);
   useEffect(() => {
@@ -513,7 +513,7 @@ export function Viewshed(props: ViewshedOptions): ReactNode {
     binding.applyViewsheds();
   }, [binding, key, options]);
   return null;
-}
+};
 
 interface SwipeGroup {
   set(layer: LayerHandle): void;
@@ -526,7 +526,7 @@ export interface SwipeProps extends Omit<SwipeOptions, 'layers'> {
 }
 
 /** The `<Layer>` in it shown on one side of a vertical line only, at `position` CSS pixels from the left */
-export function Swipe(props: SwipeProps): ReactNode {
+export const Swipe = (props: SwipeProps): ReactNode => {
   const map = useMap();
   const layers = useMemo(() => new Set<LayerHandle>(), []);
   const latest = useRef(props);
@@ -561,6 +561,6 @@ export function Swipe(props: SwipeProps): ReactNode {
   );
 
   return createElement(SwipeContext.Provider, { value: group }, props.children);
-}
+};
 
 export type { Camera, GeoMap, LayerHandle, LayerSpec, LonLat, MarkerHandle, PanelHandle, PopupHandle };

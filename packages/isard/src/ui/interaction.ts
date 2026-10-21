@@ -33,7 +33,7 @@ export type KeyAction = { pan: Point } | { zoom: number } | { bearing: number } 
 
 /** The action of a key (`KeyboardEvent.key`), as MapLibre's: arrows pan (with Shift: rotate and tilt), + and - zoom
  * (with Shift: two levels), 0 faces north and levels the view */
-export function keyAction(key: string, shift: boolean): KeyAction | undefined {
+export const keyAction = (key: string, shift: boolean): KeyAction | undefined => {
   switch (key) {
     case 'ArrowLeft':
       return shift ? { bearing: -KEY_BEARING } : { pan: [-KEY_PAN, 0] };
@@ -54,11 +54,11 @@ export function keyAction(key: string, shift: boolean): KeyAction | undefined {
     default:
       return undefined;
   }
-}
+};
 
 /** The camera after a key's action: a pan moves the center by that many CSS pixels on screen (the ground in view,
  * turned with the bearing, stretched by the tilt) */
-export function keyCamera(action: KeyAction, camera: Camera): Partial<Camera> {
+export const keyCamera = (action: KeyAction, camera: Camera): Partial<Camera> => {
   if ('zoom' in action) return { zoom: camera.zoom + action.zoom };
   if ('bearing' in action) return { bearing: camera.bearing + action.bearing };
   if ('pitch' in action) return { pitch: Math.max(0, camera.pitch + action.pitch) };
@@ -74,13 +74,13 @@ export function keyCamera(action: KeyAction, camera: Camera): Partial<Camera> {
   const y = Math.max(0, Math.min(1, mercatorY(lat) + dy));
   const wrapped = ((((x * 360) % 360) + 360) % 360) - 180;
   return { center: [wrapped, latitude(y)] };
-}
+};
 
 /** An element that takes the keys typed in it */
-function editable(target: EventTarget | null): boolean {
+const editable = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
-}
+};
 
 interface Pointer {
   point: Point;

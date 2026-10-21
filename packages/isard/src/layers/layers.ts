@@ -204,7 +204,7 @@ export class NetworkLayer extends Layer {
 }
 
 /** The 25 numbers of a network style for the engine */
-function networkStyle(style: NetworkStyle): Float32Array {
+const networkStyle = (style: NetworkStyle): Float32Array => {
   const { width, halo, max, contour, opacity, haloOpacity, unreachedColor, fade } = style;
   return Float32Array.from([
     ...stops(width),
@@ -216,38 +216,38 @@ function networkStyle(style: NetworkStyle): Float32Array {
     ...parseColor(unreachedColor),
     fade,
   ]);
-}
+};
 
 const EMPTY = new Float64Array(0);
 
 /** Interleaved points as f32 offsets from an origin, and back */
-function pack(points: Float64Array, [ox, oy]: [number, number]): Float32Array {
+const pack = (points: Float64Array, [ox, oy]: [number, number]): Float32Array => {
   const out = new Float32Array(points.length);
   for (let i = 0; i < points.length; i += 2) {
     out[i] = (points[i] ?? 0) - ox;
     out[i + 1] = (points[i + 1] ?? 0) - oy;
   }
   return out;
-}
+};
 
-function unpack(points: Float32Array, [ox, oy]: [number, number]): Float64Array {
+const unpack = (points: Float32Array, [ox, oy]: [number, number]): Float64Array => {
   const out = new Float64Array(points.length);
   for (let i = 0; i < points.length; i += 2) {
     out[i] = (points[i] ?? 0) + ox;
     out[i + 1] = (points[i + 1] ?? 0) + oy;
   }
   return out;
-}
+};
 
 /** Longitudes and latitudes (degrees, interleaved) to Mercator [0, 1], y towards the south */
-function mercatorPoints(lonLat: Float64Array): Float64Array {
+const mercatorPoints = (lonLat: Float64Array): Float64Array => {
   const out = new Float64Array(lonLat.length);
   for (let i = 0; i < lonLat.length; i += 2) {
     out[i] = mercatorX(lonLat[i] ?? 0);
     out[i + 1] = mercatorY(lonLat[i + 1] ?? 0);
   }
   return out;
-}
+};
 
 /** Textured meshes in 3D Tiles */
 export class Tiles3dLayer extends Layer {
@@ -415,22 +415,27 @@ export class GroundLayer extends Layer {
 }
 
 /** A lon/lat box to Mercator min x, min y, max x, max y (y towards the south) */
-function mercatorBox([west, south, east, north]: [number, number, number, number]): [number, number, number, number] {
+const mercatorBox = ([west, south, east, north]: [number, number, number, number]): [
+  number,
+  number,
+  number,
+  number,
+] => {
   const [x0, y1] = toMercator([west, south]);
   const [x1, y0] = toMercator([east, north]);
   return [x0, y0, x1, y1];
-}
+};
 
 // ── The page's own 3D content: custom layers, glTF models ──
 
 /** Reports an error of the page without throwing it here: the console shows it, as an uncaught one */
-function report(error: unknown): void {
+const report = (error: unknown): void => {
   if (typeof reportError === 'function') reportError(error);
   else
     queueMicrotask(() => {
       throw error;
     });
-}
+};
 
 /** What a custom layer gets to draw a frame (`CustomLayerInterface.render`) */
 export interface CustomFrame {
@@ -574,13 +579,13 @@ export interface ModelOptions {
 }
 
 /** The numbers of instances for the engine: longitude, latitude, altitude, heading, pitch, roll, scale */
-export function instanceNumbers(instances: readonly ModelInstance[]): Float64Array {
+export const instanceNumbers = (instances: readonly ModelInstance[]): Float64Array => {
   const out = new Float64Array(instances.length * 7);
   instances.forEach(({ lonLat, altitude = 0, heading = 0, pitch = 0, roll = 0, scale = 1 }, i) => {
     out.set([lonLat[0], lonLat[1], altitude, heading, pitch, roll, scale], i * 7);
   });
   return out;
-}
+};
 
 /** A glTF model drawn at positions, in one instanced draw; `pickFeature` gives the instance's index */
 export class ModelLayer extends Layer {

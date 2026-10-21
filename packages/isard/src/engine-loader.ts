@@ -34,12 +34,12 @@ const engines: { core?: Promise<Bindings>; full?: Promise<Bindings> } = {};
 const modules: { core?: Promise<WebAssembly.Module>; full?: Promise<WebAssembly.Module> } = {};
 
 /** @internal Forgets the engines loaded (tests) */
-export function forgetEngines(): void {
+export const forgetEngines = (): void => {
   for (const kind of ['core', 'full'] as const) {
     delete engines[kind];
     delete modules[kind];
   }
-}
+};
 
 /** The files a map loads at run time, next to the module unless given elsewhere */
 export type AssetFile =
@@ -50,16 +50,20 @@ export type AssetFile =
   | 'basemap.worker.js';
 
 /** The folder the assets are served from for the whole page, as `isard/vite` sets it; undefined: next to the module */
-function pageAssets(): string | undefined {
+const pageAssets = (): string | undefined => {
   const url = (globalThis as { isardAssetsUrl?: unknown }).isardAssetsUrl;
   return typeof url === 'string' ? url : undefined;
-}
+};
 
 /**
  * Where a file of isard is loaded from: its own option, else in the folder `assetsUrl` (the option, or the page's
  * as `isard/vite` sets it), else next to the module (`import.meta.url`)
  */
-export function assetUrl(file: AssetFile, explicit: string | URL | undefined, assetsUrl?: string | URL): string | URL {
+export const assetUrl = (
+  file: AssetFile,
+  explicit: string | URL | undefined,
+  assetsUrl?: string | URL,
+): string | URL => {
   if (explicit) return explicit;
   const folder = assetsUrl ?? pageAssets();
   if (folder) {
@@ -79,20 +83,20 @@ export function assetUrl(file: AssetFile, explicit: string | URL | undefined, as
     default:
       return new URL('./basemap.worker.js', import.meta.url);
   }
-}
+};
 
 /** Where a build of the engine is loaded from: the option, the assets' folder, or next to the module */
-export function engineUrl(
+export const engineUrl = (
   kind: EngineKind,
   options: Pick<GeoMapOptions, 'wasmUrl' | 'coreWasmUrl' | 'assetsUrl'>,
-): string | URL {
+): string | URL => {
   return kind === 'full'
     ? assetUrl('isard_bg.wasm', options.wasmUrl, options.assetsUrl)
     : assetUrl('isard_core_bg.wasm', options.coreWasmUrl, options.assetsUrl);
-}
+};
 
 /** Downloads and compiles a build (once per page, unless it failed: a later call tries again) */
-function compileEngine(kind: EngineKind, url: string | URL): Promise<WebAssembly.Module> {
+const compileEngine = (kind: EngineKind, url: string | URL): Promise<WebAssembly.Module> => {
   const compiled = modules[kind];
   if (compiled) return compiled;
   const compiling = compile(url).catch((error: unknown) => {
@@ -102,10 +106,10 @@ function compileEngine(kind: EngineKind, url: string | URL): Promise<WebAssembly
   });
   modules[kind] = compiling;
   return compiling;
-}
+};
 
 /** A build compiled and instantiated with its bindings (once per page, unless it failed) */
-export function loadEngine(kind: EngineKind, url: string | URL): Promise<Bindings> {
+export const loadEngine = (kind: EngineKind, url: string | URL): Promise<Bindings> => {
   const loaded = engines[kind];
   if (loaded) return loaded;
   const loading = (async () => {
@@ -122,27 +126,27 @@ export function loadEngine(kind: EngineKind, url: string | URL): Promise<Binding
   });
   engines[kind] = loading;
   return loading;
-}
+};
 
 /** The full engine for a map on the core one, resolved in a task of its own, not in the one that instantiated it:
  * the map rebuilt on it there, two shorter tasks */
-export function loadFullEngineLater(url: string | URL): Promise<Bindings> {
+export const loadFullEngineLater = (url: string | URL): Promise<Bindings> => {
   return loadEngine('full', url).then(
     (bindings) => new Promise<Bindings>((resolve) => setTimeout(() => resolve(bindings), 0)),
   );
-}
+};
 
 /** Downloads and compiles the full engine when the page is idle, without running it; a failure is left to the first
  * 3D Tiles layer, which tries again */
-export function preloadFullEngine(url: string | URL, wanted: () => boolean): void {
+export const preloadFullEngine = (url: string | URL, wanted: () => boolean): void => {
   const start = () => {
     if (wanted()) compileEngine('full', url).catch(() => undefined);
   };
   if (typeof requestIdleCallback === 'function') requestIdleCallback(start, { timeout: 2000 });
   else setTimeout(start, 0);
-}
+};
 
-async function compile(url: string | URL): Promise<WebAssembly.Module> {
+const compile = async (url: string | URL): Promise<WebAssembly.Module> => {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`isard: failed to load the engine from ${url}: ${response.status}`);
   try {
@@ -151,23 +155,23 @@ async function compile(url: string | URL): Promise<WebAssembly.Module> {
     // Servers that do not send application/wasm
     return WebAssembly.compile(await response.arrayBuffer());
   }
-}
+};
 
 /** Where the workers load the point cloud module from (`isard_points_bg.wasm`, the LAZ decoder): the option, or next
  * to the module; absolute, the workers being elsewhere */
-export function pointsUrl(options: Pick<GeoMapOptions, 'pointsWasmUrl' | 'assetsUrl'>): string {
+export const pointsUrl = (options: Pick<GeoMapOptions, 'pointsWasmUrl' | 'assetsUrl'>): string => {
   const url = assetUrl('isard_points_bg.wasm', options.pointsWasmUrl, options.assetsUrl);
   const base = typeof document === 'undefined' ? undefined : document.baseURI;
   return base ? new URL(url, base).href : String(url);
-}
+};
 
 /** The decoding workers of 3D Tiles and point clouds, running the full engine's module, unless turned off (`workers:
  * false` or 0, or no workers in this environment) */
-export function startTileLoader(
+export const startTileLoader = (
   module: WebAssembly.Module,
   options: Pick<GeoMapOptions, 'workers' | 'workerUrl' | 'decoders' | 'pointsWasmUrl' | 'assetsUrl'>,
   engine: Engine,
-): TileLoader | undefined {
+): TileLoader | undefined => {
   const { workers: count, workerUrl, decoders } = options;
   const workers = count ?? defaultWorkerCount();
   if (workers === false || workers <= 0 || typeof Worker === 'undefined') return undefined;
@@ -179,11 +183,11 @@ export function startTileLoader(
     engine.textureFormats(),
     pointsUrl(options),
   );
-}
+};
 
 /** The engine of a destroyed map: every method a no-op returning undefined, but the camera (the last one) and the
  * bounds, which late callers read */
-export function destroyedEngine(camera: Camera): Engine {
+export const destroyedEngine = (camera: Camera): Engine => {
   return new Proxy(
     {},
     {
@@ -194,4 +198,4 @@ export function destroyedEngine(camera: Camera): Engine {
       },
     },
   ) as Engine;
-}
+};

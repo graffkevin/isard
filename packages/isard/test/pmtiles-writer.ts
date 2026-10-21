@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { zxyToTileId } from '../src/basemap/pmtiles.ts';
 
-export function varint(value: number): number[] {
+export const varint = (value: number): number[] => {
   let v = value;
   const out: number[] = [];
   do {
@@ -16,7 +16,7 @@ export function varint(value: number): number[] {
     out.push(v > 0 ? b | 0x80 : b);
   } while (v > 0);
   return out;
-}
+};
 
 export interface WrittenTile {
   z: number;
@@ -32,7 +32,7 @@ interface Entry {
   runLength: number;
 }
 
-function directory(entries: Entry[]): number[] {
+const directory = (entries: Entry[]): number[] => {
   const out = [...varint(entries.length)];
   let last = 0;
   for (const e of entries) {
@@ -46,13 +46,13 @@ function directory(entries: Entry[]): number[] {
     out.push(...varint(previous && e.offset === previous.offset + previous.length ? 0 : e.offset + 1));
   });
   return out;
-}
+};
 
 const TYPES = { unknown: 0, mvt: 1, png: 2, jpeg: 3, webp: 4, avif: 5 } as const;
 
 /** An archive of `tiles`; `gzip`: directories, metadata and tiles gzipped; `leafSize`: entries per leaf directory
  * (none by default) */
-export function writePmtiles(
+export const writePmtiles = (
   tiles: WrittenTile[],
   options: {
     tileType?: keyof typeof TYPES;
@@ -61,7 +61,7 @@ export function writePmtiles(
     metadata?: Record<string, unknown>;
     bounds?: [number, number, number, number];
   } = {},
-): Uint8Array<ArrayBuffer> {
+): Uint8Array<ArrayBuffer> => {
   const { tileType = 'mvt', gzip = false, leafSize, metadata = {}, bounds = [-180, -85, 180, 85] } = options;
   const pack = (bytes: Uint8Array) => (gzip ? Bun.gzipSync(bytes as Uint8Array<ArrayBuffer>) : bytes);
   const sorted = tiles
@@ -146,7 +146,7 @@ export function writePmtiles(
     at += c.length;
   }
   return out;
-}
+};
 
 // ── A vector tile writer (protobuf), for the fixture ──
 
@@ -158,7 +158,7 @@ const uint = (field: number, v: number) => [...tag(field, 0), ...varint(v)];
 const command = (id: number, count: number) => varint((count << 3) | id);
 
 /** A layer of features: points (type 1) or lines (type 2) through tile units, with an optional `name` */
-export function mvtLayer(name: string, features: { type: 1 | 2; points: [number, number][]; text?: string }[]) {
+export const mvtLayer = (name: string, features: { type: 1 | 2; points: [number, number][]; text?: string }[]) => {
   const keys = features.some((f) => f.text) ? string(3, 'name') : [];
   const values: number[] = [];
   let next = 0;
@@ -179,7 +179,7 @@ export function mvtLayer(name: string, features: { type: 1 | 2; points: [number,
     return bytes(2, [...tags, ...uint(3, type), ...bytes(4, geometry)]);
   });
   return bytes(3, [...string(1, name), ...encoded.flat(), ...keys, ...values, ...uint(5, 4096), ...uint(15, 2)]);
-}
+};
 
 const PLACES: [string, number, number][] = [
   ['Notre-Dame', 2.3499, 48.853],
@@ -188,7 +188,7 @@ const PLACES: [string, number, number][] = [
 ];
 
 /** The fixture's tiles: levels 0 to 3, the tile over Paris at each level */
-function fixtureTiles(): WrittenTile[] {
+const fixtureTiles = (): WrittenTile[] => {
   const tiles: WrittenTile[] = [];
   for (let z = 0; z <= 3; z += 1) {
     const n = 2 ** z;
@@ -207,7 +207,7 @@ function fixtureTiles(): WrittenTile[] {
     tiles.push({ z, x, y, data: new Uint8Array([...places, ...roads]) });
   }
   return tiles;
-}
+};
 
 if (import.meta.main) {
   const archive = writePmtiles(fixtureTiles(), {

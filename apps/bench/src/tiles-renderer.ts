@@ -60,7 +60,7 @@ const north = new Vector3();
 const up = new Vector3();
 const target = new Vector3();
 
-function setPose(pose: Pose): void {
+const setPose = (pose: Pose): void => {
   const lat = MathUtils.degToRad(pose.lat);
   const lon = MathUtils.degToRad(pose.lon);
   WGS84_ELLIPSOID.getCartographicToPosition(lat, lon, 0, target);
@@ -83,7 +83,7 @@ function setPose(pose: Pose): void {
   camera.far = pose.range * 10 + 2e7;
   camera.updateProjectionMatrix();
   camera.lookAt(target);
-}
+};
 
 // For inspection from the console
 Object.assign(window, { bench: { camera, ground, mesh, renderer } });

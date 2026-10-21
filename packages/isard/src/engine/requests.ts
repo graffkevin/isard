@@ -16,36 +16,36 @@ const listeners = new Set<(rules: HeaderRules) => void>();
  * no headers, stops: `setRequestHeaders('https://data.geopf.fr/private/', { Authorization: 'Bearer …' })`. The
  * server must allow these headers (CORS). For the whole page: every map, the ones to come too
  */
-export function setRequestHeaders(prefix: string, headers?: Record<string, string>): void {
+export const setRequestHeaders = (prefix: string, headers?: Record<string, string>): void => {
   const kept = rules.filter(([p]) => p !== prefix);
   if (headers && Object.keys(headers).length > 0) kept.push([prefix, { ...headers }]);
   kept.sort(([p], [q]) => p.length - q.length);
   setHeaderRules(kept);
   for (const listener of listeners) listener(rules);
-}
+};
 
 /** @internal The rules now */
-export function headerRules(): HeaderRules {
+export const headerRules = (): HeaderRules => {
   return rules;
-}
+};
 
 /** @internal The rules, from the page (a worker's copy) */
-export function setHeaderRules(next: HeaderRules): void {
+export const setHeaderRules = (next: HeaderRules): void => {
   rules = next;
-}
+};
 
 /** @internal Follows the rules (the workers and engines of a map); returns the function that stops */
-export function onHeaderRules(listener: (rules: HeaderRules) => void): () => void {
+export const onHeaderRules = (listener: (rules: HeaderRules) => void): (() => void) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
-}
+};
 
 /** @internal `init` with the headers of the rules matching `url` (unchanged when none does) */
-export function withHeaders<T extends RequestInit>(url: string | URL, init?: T): T {
+export const withHeaders = <T extends RequestInit>(url: string | URL, init?: T): T => {
   const href = String(url);
   const matching = rules.filter(([prefix]) => href.startsWith(prefix));
   if (matching.length === 0) return init ?? ({} as T);
   const headers = new Headers(init?.headers);
   for (const [, set] of matching) for (const [name, value] of Object.entries(set)) headers.set(name, value);
   return { ...(init ?? ({} as T)), headers };
-}
+};

@@ -23,13 +23,13 @@ const FRANCE: [number, number, number, number] = [-5.5, 41, 10, 51.5];
  * 209 715.2 m per pixel at level 0, halved at each level, from the corner (0, 12 000 000)), levels `min` to `max`, over
  * France
  */
-export function lambert93Grid(name: string, min: number, max: number): TileGrid {
+export const lambert93Grid = (name: string, min: number, max: number): TileGrid => {
   const matrices: TileMatrix[] = [];
   for (let level = min; level <= max; level += 1) {
     matrices.push({ id: level, resolution: 209715.2 / 2 ** level, origin: [0, 12000000] });
   }
   return { crs: 'EPSG:2154', matrices, bounds: FRANCE, name };
-}
+};
 
 /**
  * A layer of the Géoplateforme's WMTS as raster options for `addRaster`, crediting the IGN:
@@ -38,10 +38,10 @@ export function lambert93Grid(name: string, min: number, max: number): TileGrid 
  * default; a Lambert-93 layer in its matrix set (`matrixSet: '2154_10cm_6_20'`, a set of 5 or 10 cm, read from the
  * capabilities) or another `grid` (from `wmtsGrid`, its set named) is reprojected by the map
  */
-export function geoplateformeWmts(
+export const geoplateformeWmts = (
   layer: string,
   options: { format?: string; style?: string; matrixSet?: string } & Omit<RasterOptions, 'url'> = {},
-): RasterOptions {
+): RasterOptions => {
   const { format = 'image/png', style = 'normal', matrixSet, ...raster } = options;
   const set = (typeof raster.grid === 'object' ? raster.grid.name : undefined) ?? matrixSet ?? 'PM';
   const lambert = /^2154_(?:5|10)cm_(\d+)_(\d+)$/.exec(set);
@@ -58,7 +58,7 @@ export function geoplateformeWmts(
       `&TILEMATRIXSET=${encodeURIComponent(set)}&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
       `&LAYER=${encodeURIComponent(layer)}&FORMAT=${format}`,
   };
-}
+};
 
 /**
  * Layers of the Géoplateforme's WMS (raster, `wms-r`) as raster options for `addRaster`, crediting the IGN: 256 px
@@ -66,10 +66,10 @@ export function geoplateformeWmts(
  * in EPSG:3857, or in `crs` (`'EPSG:2154'`: the box of each tile in Lambert-93, at the tile's `size`, reprojected by
  * the map; `'EPSG:4326'` is asked for as CRS:84, longitude first)
  */
-export function geoplateformeWms(
+export const geoplateformeWms = (
   layers: string,
   options: { format?: string; styles?: string; crs?: string } & Omit<RasterOptions, 'url'> = {},
-): RasterOptions {
+): RasterOptions => {
   const { format = 'image/png', styles = '', crs = 'EPSG:3857', ...raster } = options;
   const projected = crs !== 'EPSG:3857';
   // WMS 1.3 puts the latitude first in EPSG:4326; {bbox} is x, y
@@ -86,7 +86,7 @@ export function geoplateformeWms(
       `&LAYERS=${encodeURIComponent(layers)}` +
       `&STYLES=${encodeURIComponent(styles)}&FORMAT=${format}`,
   };
-}
+};
 
 /** Features the Géoplateforme's WFS returns per request at most */
 const WFS_PAGE = 5000;
@@ -99,11 +99,11 @@ const WFS_PAGE = 5000;
  * features come in that CRS (the box stays in degrees), the collection naming it in its `crs` member: the feature
  * layers reproject it by themselves
  */
-export async function geoplateformeWfs<P = Properties>(
+export const geoplateformeWfs = async <P = Properties>(
   typeName: string,
   [west, south, east, north]: [number, number, number, number],
   options: { count?: number; signal?: AbortSignal; srsName?: string } = {},
-): Promise<FeatureCollection<P>> {
+): Promise<FeatureCollection<P>> => {
   const limit = Math.max(1, options.count ?? 50_000);
   const page = async (start: number, count: number) => {
     const url = new URL('https://data.geopf.fr/wfs/ows');
@@ -137,7 +137,7 @@ export async function geoplateformeWfs<P = Properties>(
     .flatMap((r) => r.features)
     .filter((f) => f.id === undefined || (!seen.has(f.id) && seen.add(f.id) !== undefined));
   return { ...first, features };
-}
+};
 
 /** Map presets over France, the IGN's data in a word: spread into `GeoMap.create`'s options or named by `preset` */
 export const IGN_PRESETS = {
@@ -161,9 +161,9 @@ export const BATIMENTS_3D_URL = 'https://prd-ign-mut-bat3.s3.sbg.io.cloud.ovh.ne
  * (`cleabs`, `hauteur`, `nature`, `usage_1`…). Its server sends no CORS headers yet: from a page of another origin,
  * through a proxy (`url`)
  */
-export function batiments3d(options: Partial<Tiles3dOptions> = {}): Tiles3dOptions {
+export const batiments3d = (options: Partial<Tiles3dOptions> = {}): Tiles3dOptions => {
   return { url: BATIMENTS_3D_URL, geoid: true, color: '#e4e1d8', maxScreenSpaceError: 16, ...options };
-}
+};
 
 /** What a building of the BD TOPO gives its extrusion */
 export interface BdTopoBuilding {
@@ -174,11 +174,11 @@ export interface BdTopoBuilding {
  * The BD TOPO buildings of a box (west, south, east, north, degrees) as an extrusion layer, ready for
  * `map.addExtrusions`: from the Géoplateforme's WFS, raised to their `hauteur` (`defaultHeight` without one)
  */
-export async function bdtopoBuildings(
+export const bdtopoBuildings = async (
   box: [number, number, number, number],
   options: Partial<ExtrusionOptions<BdTopoBuilding>> & { defaultHeight?: number; signal?: AbortSignal } = {},
-): Promise<ExtrusionOptions<BdTopoBuilding>> {
+): Promise<ExtrusionOptions<BdTopoBuilding>> => {
   const { defaultHeight = 6, signal, ...style } = options;
   const data = await geoplateformeWfs<BdTopoBuilding>('BDTOPO_V3:batiment', box, signal ? { signal } : {});
   return { data, height: (p) => p.hauteur ?? defaultHeight, color: '#e4e1d8', ...style };
-}
+};

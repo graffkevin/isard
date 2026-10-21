@@ -63,7 +63,7 @@ export type LayerChange =
  * The change from one description to the next, or `undefined` when nothing changed. Values are compared by identity:
  * data, functions and arrays given anew at each render are changes (keep them in a memo)
  */
-export function layerChange(prev: LayerSpec, next: LayerSpec): LayerChange | undefined {
+export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | undefined => {
   if (prev.type !== next.type) return { rebuild: true };
   const before = prev as Spec;
   const after = next as Spec;
@@ -81,7 +81,7 @@ export function layerChange(prev: LayerSpec, next: LayerSpec): LayerChange | und
     else return { rebuild: true };
   }
   return changed ? change : undefined;
-}
+};
 
 interface Settable {
   setStyle?(style: Record<string, unknown>): void;
@@ -94,11 +94,11 @@ interface Settable {
 }
 
 /** Applies a change that keeps the layer (`rebuild: false`) */
-export function applyLayerChange(
+export const applyLayerChange = (
   layer: Layer,
   next: LayerSpec,
   change: Extract<LayerChange, { rebuild: false }>,
-): void {
+): void => {
   const target = layer as unknown as Settable;
   const spec = next as Spec;
   const own = change.own;
@@ -117,7 +117,7 @@ export function applyLayerChange(
     }
   }
   if (Object.keys(change.style).length > 0) target.setStyle?.(change.style);
-}
+};
 
 /**
  * The layers of a binding in their declared order: `order` (default 0) from the bottom up, layers of the same order by

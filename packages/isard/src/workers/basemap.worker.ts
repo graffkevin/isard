@@ -96,13 +96,13 @@ export interface Sprite {
 }
 
 /** An image of the sprites and its sheet */
-function spriteIcon(r: Renderer, name: string) {
+const spriteIcon = (r: Renderer, name: string) => {
   for (const sprite of r.sprites) {
     const icon = sprite.icons[name];
     if (icon) return { icon, image: sprite.image };
   }
   return undefined;
-}
+};
 
 const renderers = new Map<string, Renderer>();
 /** Decoded tiles kept by the pool, shared among its workers (a vector tile always goes to the same worker): some
@@ -112,9 +112,9 @@ const CACHE = 96;
 const cache = new Lru<string, Promise<Map<string, TileLayer> | undefined>>(CACHE);
 
 /** The decoded tiles one worker of `workers` keeps */
-export function cacheShare(workers: number): number {
+export const cacheShare = (workers: number): number => {
   return Math.max(16, Math.ceil(CACHE / Math.max(1, workers)));
-}
+};
 /** Requests in progress, and those of them aborted (both forgotten once answered) */
 const active = new Set<number>();
 const aborted = new Set<number>();
@@ -137,7 +137,7 @@ const images = new Lru<string, Promise<ImageBitmap | undefined>>(64, (evicted) =
 );
 
 /** An image of a raster source (shared by every renderer); undefined where the source has none */
-function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | undefined> {
+const image = (url: string, priority: Priority = 'auto'): Promise<ImageBitmap | undefined> => {
   const hit = images.get(url);
   if (hit) return hit;
   const pending = (async () => {
@@ -156,13 +156,13 @@ function image(url: string, priority: Priority = 'auto'): Promise<ImageBitmap | 
   pending.catch(() => images.delete(url));
   images.set(url, pending);
   return pending;
-}
+};
 
 /** `RequestInit` with the fetch priority, which the TypeScript DOM library may not know yet */
 type PriorityInit = RequestInit & { priority?: Priority };
 
 /** A vector tile, decoded (shared by every renderer of its URL); the first request's priority fetches it */
-function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, TileLayer> | undefined> {
+const tile = (url: string, priority: Priority = 'auto'): Promise<Map<string, TileLayer> | undefined> => {
   const hit = cache.get(url);
   if (hit) return hit;
   const pending = (async () => {
@@ -187,10 +187,10 @@ function tile(url: string, priority: Priority = 'auto'): Promise<Map<string, Til
   pending.catch(() => cache.delete(url));
   cache.set(url, pending);
   return pending;
-}
+};
 
 /** The vector tile to draw a raster tile from, and where the raster tile lies in it (tile units) */
-function source(r: Renderer, z: number, x: number, y: number) {
+const source = (r: Renderer, z: number, x: number, y: number) => {
   const vz = Math.max(0, Math.min(z - 1, r.maxzoom));
   const d = z - vz;
   const n = 2 ** Math.max(0, d);
@@ -199,7 +199,7 @@ function source(r: Renderer, z: number, x: number, y: number) {
   // Fraction of the vector tile covered, and the offset in it
   const part = 1 / n;
   return { url, vz, vx, vy, part, ox: (x % n) * part, oy: (y % n) * part };
-}
+};
 
 const value = (layer: StyleLayer, group: 'paint' | 'layout', key: string, ctx: Context, fallback: unknown) => {
   const v = layer[group]?.[key];
@@ -210,18 +210,18 @@ const value = (layer: StyleLayer, group: 'paint' | 'layout', key: string, ctx: C
 };
 
 /** A color with an opacity, for the canvas */
-function paint(c: unknown, opacity: number): string {
+const paint = (c: unknown, opacity: number): string => {
   const rgba = color(c) ?? [0, 0, 0, 1];
   return css([rgba[0], rgba[1], rgba[2], rgba[3] * opacity]);
-}
+};
 
-function shown(layer: StyleLayer, zoom: number): boolean {
+const shown = (layer: StyleLayer, zoom: number): boolean => {
   if (layer.layout?.visibility === 'none') return false;
   return zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24);
-}
+};
 
 /** The image of a fill pattern, cut from the sprite on first use */
-function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
+const patternImage = (r: Renderer, name: string): OffscreenCanvas | undefined => {
   if (r.patterns.has(name)) return r.patterns.get(name);
   const found = spriteIcon(r, name);
   let image: OffscreenCanvas | undefined;
@@ -234,13 +234,13 @@ function patternImage(r: Renderer, name: string): OffscreenCanvas | undefined {
   }
   r.patterns.set(name, image);
   return image;
-}
+};
 
 /** Canvases free for the next tiles, by size: one per tile being drawn at most */
 const canvases = new Map<number, OffscreenCanvas[]>();
 
 /** A blank canvas of `size` pixels and its context, from the free ones if any */
-function takeCanvas(size: number): { canvas: OffscreenCanvas; g: OffscreenCanvasRenderingContext2D } {
+const takeCanvas = (size: number): { canvas: OffscreenCanvas; g: OffscreenCanvasRenderingContext2D } => {
   const canvas = canvases.get(size)?.pop() ?? new OffscreenCanvas(size, size);
   // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
   const g = canvas.getContext('2d', { willReadFrequently: true });
@@ -251,29 +251,29 @@ function takeCanvas(size: number): { canvas: OffscreenCanvas; g: OffscreenCanvas
   g.setLineDash([]);
   g.clearRect(0, 0, size, size);
   return { canvas, g };
-}
+};
 
-function giveCanvas(canvas: OffscreenCanvas): void {
+const giveCanvas = (canvas: OffscreenCanvas): void => {
   const free = canvases.get(canvas.width) ?? [];
   canvases.set(canvas.width, free);
   if (free.length < 4) free.push(canvas);
-}
+};
 
 /**
  * The image of a drawn canvas, its alpha straight (the engine blends straight alpha). An opaque tile (a background
  * of full opacity, as a basemap's) is moved out of the canvas as it is, premultiplied and straight being the same
  * there; another one is read back unpremultiplied, copied
  */
-export function tileImage(
+export const tileImage = (
   canvas: OffscreenCanvas,
   g: OffscreenCanvasRenderingContext2D,
   opaque: boolean,
-): Promise<ImageBitmap> {
+): Promise<ImageBitmap> => {
   if (opaque) return Promise.resolve(canvas.transferToImageBitmap());
   return createImageBitmap(g.getImageData(0, 0, canvas.width, canvas.height), { premultiplyAlpha: 'none' });
-}
+};
 
-async function render(r: Renderer, z: number, x: number, y: number, size: number, id: number, priority?: Priority) {
+const render = async (r: Renderer, z: number, x: number, y: number, size: number, id: number, priority?: Priority) => {
   const s = source(r, z, x, y);
   const layers = await tile(s.url, priority);
   if (aborted.has(id)) return undefined;
@@ -283,9 +283,9 @@ async function render(r: Renderer, z: number, x: number, y: number, size: number
   } finally {
     giveCanvas(canvas);
   }
-}
+};
 
-async function draw(
+const draw = async (
   r: Renderer,
   s: ReturnType<typeof source>,
   layers: Map<string, TileLayer> | undefined,
@@ -297,7 +297,7 @@ async function draw(
   size: number,
   id: number,
   priority?: Priority,
-) {
+) => {
   const zoom = Math.max(0, z - 1);
   // CSS pixels to canvas pixels: the tile is 256 CSS pixels across at its zoom
   const px = size / 256;
@@ -438,32 +438,32 @@ async function draw(
   }
   if (!drawn && !layers) return null;
   return tileImage(canvas, g, opaque);
-}
+};
 
 /** How a layer's text or icon (`prefix`) meets the others: allowed to overlap, ignored by the placement */
-function overlapOf(layer: StyleLayer, prefix: 'text' | 'icon', ctx: Context): CandidateOverlap {
+const overlapOf = (layer: StyleLayer, prefix: 'text' | 'icon', ctx: Context): CandidateOverlap => {
   const allow = Boolean(value(layer, 'layout', `${prefix}-allow-overlap`, ctx, false));
   const ignore = Boolean(value(layer, 'layout', `${prefix}-ignore-placement`, ctx, false));
   if (allow && ignore) return true;
   if (allow) return 'allow';
   return ignore ? 'ignore' : false;
-}
+};
 
 /** A pair of numbers of a style value, `fallback` if it is not one */
-function pair(v: unknown, fallback: [number, number]): [number, number] {
+const pair = (v: unknown, fallback: [number, number]): [number, number] => {
   return Array.isArray(v) ? [Number(v[0] ?? fallback[0]), Number(v[1] ?? fallback[1])] : fallback;
-}
+};
 
 /** Top, right, bottom, left of one to four numbers, as CSS's sides */
-function sides(v: unknown): [number, number, number, number] {
+const sides = (v: unknown): [number, number, number, number] => {
   const n = (Array.isArray(v) ? v : [v]).map((x) => Number(x) || 0);
   const [top = 0, right = top, bottom = top, left = right] = n;
   return [top, right, bottom, left];
-}
+};
 
 /** Points every `spacing` along a line (tile units, x and y interleaved), the first half a spacing in (the middle of a
  * shorter line): each point and the segment it lies on (x, y, x0, y0, x1, y1) */
-export function lineAnchors(line: readonly number[], spacing: number): number[][] {
+export const lineAnchors = (line: readonly number[], spacing: number): number[][] => {
   let length = 0;
   for (let i = 2; i + 1 < line.length; i += 2) {
     length += Math.hypot((line[i] ?? 0) - (line[i - 2] ?? 0), (line[i + 1] ?? 0) - (line[i - 1] ?? 0));
@@ -483,22 +483,22 @@ export function lineAnchors(line: readonly number[], spacing: number): number[][
     walked += d;
   }
   return out;
-}
+};
 
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */
-function lonLat(z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] {
+const lonLat = (z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] => {
   const n = 2 ** z;
   return [longitude((x + px / extent) / n), latitude((y + py / extent) / n)];
-}
+};
 
 /** The icon of a label: its layer's icon properties for the feature */
-function iconOf(
+const iconOf = (
   layer: StyleLayer,
   image: string,
   ctx: Context,
   placement: 'point' | 'line',
   sizeOf: (layer: StyleLayer) => Json,
-): CandidateIcon {
+): CandidateIcon => {
   const alignment = value(layer, 'layout', 'icon-rotation-alignment', ctx, 'auto');
   const fit = String(value(layer, 'layout', 'icon-text-fit', ctx, 'none'));
   const padding = value(layer, 'layout', 'icon-text-fit-padding', ctx, [0, 0, 0, 0]);
@@ -518,9 +518,9 @@ function iconOf(
     color: String(value(layer, 'paint', 'icon-color', ctx, '#000')),
     opacity: Number(value(layer, 'paint', 'icon-opacity', ctx, 1)),
   };
-}
+};
 
-async function labels(
+const labels = async (
   r: Renderer,
   z: number,
   x: number,
@@ -528,7 +528,7 @@ async function labels(
   id: number,
   priority?: Priority,
   zoom = z,
-): Promise<LabelCandidate[]> {
+): Promise<LabelCandidate[]> => {
   const url = r.tiles.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
   const layers = await tile(url, priority);
   if (!layers || aborted.has(id)) return [];
@@ -655,7 +655,7 @@ async function labels(
     }
   });
   return out;
-}
+};
 
 const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
   (self as unknown as Worker).postMessage(message, transfer);
@@ -713,7 +713,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
 };
 
 /** A tile of another layer: the altitudes of a relief tile, or a reprojected raster tile */
-async function decodeTile(data: Extract<BasemapWork, { type: 'heights' | 'reproject' }> & { id: number }) {
+const decodeTile = async (data: Extract<BasemapWork, { type: 'heights' | 'reproject' }> & { id: number }) => {
   const controller = new AbortController();
   controllers.set(data.id, controller);
   try {
@@ -732,4 +732,4 @@ async function decodeTile(data: Extract<BasemapWork, { type: 'heights' | 'reproj
   } finally {
     controllers.delete(data.id);
   }
-}
+};
