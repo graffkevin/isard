@@ -1,0 +1,43 @@
+/**
+ * Viewshed over a textured mesh in React: the photomesh of the Eurométropole de Strasbourg (2022, open data) in 3D
+ * Tiles, on the IGN relief (RGE ALTI), around the cathedral. The mesh's surfaces are drawn into each observer's depth
+ * cube as the relief is: its walls and roofs hide what lies behind them, and are tinted seen or hidden. Only the tiles
+ * the map loaded for its view hide anything, at the detail chosen for the camera. A click on the map adds an observer
+ * where the click meets the mesh, on a roof as on the ground; a click on its pin opens its settings (one popup open at
+ * a time), and the pin drags over the mesh. The observers are those of the viewshed example.
+ */
+import { IsardMap, Layer } from 'isard/react';
+import { createRoot } from 'react-dom/client';
+import { element } from '../../shared/page.ts';
+import { ObserverPins, ObserversPanel, useObservers } from '../viewshed/observers.tsx';
+
+const App = () => {
+  // On the cathedral's square, looking along its front
+  const observers = useObservers([7.7499, 48.5816], { range: 400, direction: 60, fov: 90 });
+
+  return (
+    <>
+      <IsardMap
+        id="map"
+        center={[7.7505, 48.5817]}
+        zoom={17}
+        pitch={60}
+        bearing={70}
+        preset="ign-ortho-3d"
+        // 3D Tiles at once: the engine that draws them from the start, not after the one without them
+        tiles3d
+      >
+        <Layer
+          type="tiles3d"
+          url="https://s3.eu-west-2.wasabisys.com/ems-sgct-photomaillage/ODACIT/EMS_PM2022/tileset.json"
+          // Coarser than the Lille example's: a heavy mesh, drawn six times more from each observer
+          maxScreenSpaceError={16}
+        />
+        <ObserverPins observers={observers} surfaces />
+      </IsardMap>
+      <ObserversPanel title="Viewshed on a mesh" observers={observers} />
+    </>
+  );
+};
+
+createRoot(element('root')).render(<App />);

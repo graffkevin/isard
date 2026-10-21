@@ -6,6 +6,8 @@ colors its street. The page starts in the street, the eye at the cameras: drag t
 along the street (or click it), Z and S for the next and the previous panoramas; **Leave** goes back above. See [panoramas and the
 street-level view](../guide/streetview).
 
+The same in [React](./react/panoramas).
+
 <LiveExample slug="panoramas" height="560px" />
 
 <<< @/../examples/panoramas/main.ts

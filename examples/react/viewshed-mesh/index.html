@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Viewshed on a mesh (React) · Isard</title>
+    <link rel="stylesheet" href="../../shared/page.css" />
+    <style>
+      /* A compact panel: the map stays in view in the docs' frame */
+      .panel {
+        width: 200px;
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+      .panel p {
+        margin: 2px 0;
+      }
+      .panel label:has(input[type="range"]) {
+        display: grid;
+        grid-template-columns: 1fr auto;
+      }
+      .panel label:has(input[type="range"]) input {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        margin: 0;
+      }
+      .panel button {
+        padding: 1px 8px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="../../dist/react/viewshed-mesh/main.js"></script>
+  </body>
+</html>

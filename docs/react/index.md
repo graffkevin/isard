@@ -4,9 +4,27 @@
 unmounts, layers, markers, popups and panels added with their component and removed with it, their props changes
 sent as the least each one needs.
 
-```sh
+::: code-group
+
+```sh [npm]
 npm install isard react react-dom
 ```
+
+```sh [bun]
+bun add isard react react-dom
+```
+
+```sh [yarn]
+yarn add isard react react-dom
+```
+
+```sh [pnpm]
+pnpm add isard react react-dom
+```
+
+:::
+
+<LiveExample slug="react/stops" height="420px" />
 
 ```tsx
 import { IsardMap, Layer, Marker, Popup } from 'isard/react';
@@ -40,8 +58,9 @@ map of the first mount is dropped as it should be.
 | `center`, `zoom`, `pitch`, `bearing` | the camera at creation, then left to the user's gestures |
 | `camera` | a camera the map follows: set again whenever it changes |
 | `basemap`, `hillshade`, `terrain`, `projection`, `minZoom`, `maxZoom`, `maxPitch`, `sky`, `atmosphere`, `background`, `loading` | taken again when they change |
-| `preset`, `body`, `interactive`, the URLs of the engine… | read at creation: a new `key` makes the map anew |
+| `preset`, `body`, `interactive`, the URLs of the engine… | read at creation: a new `key` makes the map anew (`key={bodyName}` to change of body) |
 | `onClick`, `onMove`, `onMoveStart`, `onMoveEnd`, `onHover`, `onHoverFeature`, `onIdle`, `onResize`, `onRender`, `onLeave` | the map's [events](../guide/events) |
+| `hoverPicking` | what `onHoverFeature` picks: `{ layers, radius }` |
 | `onLoad(map)`, `onError(error)` | the map created, or its creation failed (no WebGL2) |
 
 The ref is the `GeoMap` once created, for what has no component (`flyTo`, `pickFeature`, `setFirstPerson`…):
@@ -75,4 +94,4 @@ function Coordinates() {
 ## See also
 
 [Layers](./layers), [markers, popups, panels](./overlays), [viewsheds and swipe](./effects), and the
-[React example](../examples/react).
+[React examples](../examples/react/stops).

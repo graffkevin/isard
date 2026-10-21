@@ -1,0 +1,13 @@
+# Panoramas
+
+Street-level images projected onto the scene: iTowns' immersive sample of Paris (rue Servandoni, a vehicle's five
+cameras at each of its 27 positions), over the BD TOPO buildings raised to take them. From above, the panorama shown
+colors its street. The page starts in the street, the eye at the cameras: drag to look around, the wheel to walk
+along the street (or click it), Z and S for the next and the previous panoramas; **Leave** goes back above. See [panoramas and the
+street-level view](../../guide/streetview).
+
+In React (`isard/react`); the same in [TypeScript](../panoramas).
+
+<LiveExample slug="react/panoramas" height="560px" />
+
+<<< @/../examples/react/panoramas/main.tsx

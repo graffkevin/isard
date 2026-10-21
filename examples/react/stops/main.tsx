@@ -7,7 +7,7 @@ import type { Basemap, LonLat } from 'isard';
 import { IsardMap, Layer, Marker, Popup } from 'isard/react';
 import { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { element } from '../shared/page.ts';
+import { element } from '../../shared/page.ts';
 
 interface Stop {
   id: number;

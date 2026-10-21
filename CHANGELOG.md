@@ -3,6 +3,25 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Added
+
+- `isard/react`: `<Layer>` typed by the properties of its features and its handle by its `type`, a `values` prop
+  (`setValues`) and its `filter` sent by `setFilter`; `<IsardMap hoverPicking>`; `<Control>` and `<CustomLayer>`. Each
+  component in its own file.
+- Every example also in React (`examples/react/`), side by side in the docs (TypeScript and React groups); the live
+  example above the code in the React pages; the install commands for npm, bun, yarn and pnpm.
+
+### Changed
+
+- Arrow functions, array methods and `const` across the TypeScript sources (loops kept where they are hot); blank
+  lines around declarations and before returns, in TypeScript and Rust.
+
+### Fixed
+
+- A marker's popup opened before the marker is added to the map stays open (`Marker.addTo`).
+
 ## [1.1.0] - 2026-10-21
 
 ### Added

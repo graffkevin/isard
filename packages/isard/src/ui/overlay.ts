@@ -270,7 +270,8 @@ export class Marker {
 
   addTo(map: GeoMap): this {
     if (this.map === map) return this;
-    this.remove();
+    // From another map: off it first (its popup with it); a popup opened before the marker is added stays open
+    if (this.map) this.remove();
     this.map = map;
     map.attachOverlay(this, this.element);
 
@@ -623,7 +624,8 @@ export class Panel {
 
   addTo(map: GeoMap): this {
     if (this.map === map) return this;
-    this.remove();
+    // From another map: off it first (its popup with it); a popup opened before the marker is added stays open
+    if (this.map) this.remove();
     this.map = map;
     map.attachOverlay(this, this.element);
 

@@ -2,14 +2,28 @@
 
 ## Install
 
-```sh
-bun add isard
-# or
+::: code-group
+
+```sh [npm]
 npm install isard
 ```
 
+```sh [bun]
+bun add isard
+```
+
+```sh [yarn]
+yarn add isard
+```
+
+```sh [pnpm]
+pnpm add isard
+```
+
+:::
+
 The package is ES modules with their types (your bundler keeps what you use), the engine in two builds
-(`isard_core_bg.wasm`, 225 KB gzipped, and `isard_bg.wasm`, 385 KB with 3D Tiles and point clouds), the point cloud
+(`isard_core_bg.wasm`, 245 KB gzipped, and `isard_bg.wasm`, 416 KB with 3D Tiles and point clouds), the point cloud
 module (`isard_points_bg.wasm`, 43 KB, the LAZ decoder, loaded with the first COPC point cloud) and two workers:
 `decoder.worker.js` decodes 3D Tiles and point clouds, `basemap.worker.js` draws vector basemaps. It needs WebGL2, and runs in every
 current browser.

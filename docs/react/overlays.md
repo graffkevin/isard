@@ -5,6 +5,8 @@ application work in it as anywhere.
 
 ## Marker
 
+<LiveExample slug="react/basic" height="420px" />
+
 ```tsx
 <Marker lonLat={stop.lonLat} draggable onDragEnd={(lonLat) => move(stop.id, lonLat)} />
 <Marker lonLat={[2.35, 48.85]} icon={<img src="/bike.svg" width={24} alt="" />} />
@@ -17,6 +19,8 @@ The default pin, or `icon`: its look, any JSX. `lonLat`, `height`, `base`, `drag
 ## Popup
 
 In a `<Marker>`, a popup opened and closed by a click on the marker; alone, a popup at `lonLat`, open while mounted:
+
+<LiveExample slug="react/stops" height="420px" />
 
 ```tsx
 <Marker lonLat={place.lonLat}>
@@ -40,8 +44,19 @@ In a `<Marker>`, a popup opened and closed by a click on the marker; alone, a po
 
 JSX standing in 3D at a position, `width` metres wide, facing `heading` (see [Panels](../guide/overlays#panels)):
 
+<LiveExample slug="react/panels" height="420px" />
+
 ```tsx
 <Panel lonLat={[2.2945, 48.8584]} width={40} heading={120} height={20}>
   <video src="/tour.mp4" autoPlay muted loop width={640} />
 </Panel>
 ```
+
+## Control
+
+```tsx
+const navigation = useMemo(() => new NavigationControl({ visualizePitch: true }), []);
+<Control control={navigation} position="top-right" />
+```
+
+A control in a corner of the map (`NavigationControl`, `AttributionControl` or yours), removed with its component.

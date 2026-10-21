@@ -5,9 +5,13 @@
  */
 
 import type { Layer } from '../layers/layers.ts';
-import type { LayerSpec } from '../map.ts';
+import type { GeoMap, LayerSpec } from '../map.ts';
 
-type Spec = LayerSpec & Record<string, unknown>;
+/** A layer as a binding describes it: the options of `map.add`, and the values of its features or nodes
+ * (`setValues`: what colors them by a ramp) */
+export type BoundLayerSpec<P = Record<string, unknown>> = LayerSpec<P> & { values?: Float32Array };
+
+type Spec = BoundLayerSpec & Record<string, unknown>;
 
 /** The keys `setStyle` takes, by layer type; `'all'`: every key but the data (the feature layers) */
 const STYLE_KEYS: Record<LayerSpec['type'], 'all' | ReadonlySet<string>> = {
@@ -39,12 +43,12 @@ const STYLE_KEYS: Record<LayerSpec['type'], 'all' | ReadonlySet<string>> = {
 
 /** Keys a layer takes by a method of its own, by layer type */
 const OWN_SETTERS: Partial<Record<LayerSpec['type'], ReadonlySet<string>>> = {
-  lines: new Set(['data']),
-  circles: new Set(['data']),
-  fills: new Set(['data']),
-  symbols: new Set(['data']),
-  extrusions: new Set(['data']),
-  network: new Set(['costs', 'edgeWidths']),
+  lines: new Set(['data', 'filter', 'values']),
+  circles: new Set(['data', 'filter', 'values']),
+  fills: new Set(['data', 'filter', 'values']),
+  symbols: new Set(['data', 'filter']),
+  extrusions: new Set(['data', 'filter', 'values']),
+  network: new Set(['costs', 'edgeWidths', 'values']),
   models: new Set(['instances', 'altitudeReference']),
   ground: new Set(['uniforms', 'textures']),
 };
@@ -63,7 +67,7 @@ export type LayerChange =
  * The change from one description to the next, or `undefined` when nothing changed. Values are compared by identity:
  * data, functions and arrays given anew at each render are changes (keep them in a memo)
  */
-export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | undefined => {
+export const layerChange = (prev: BoundLayerSpec, next: BoundLayerSpec): LayerChange | undefined => {
   if (prev.type !== next.type) return { rebuild: true };
 
   const before = prev as Spec;
@@ -92,6 +96,8 @@ export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | und
 interface Settable {
   setStyle?(style: Record<string, unknown>): void;
   setData?(data: unknown): void;
+  setFilter?(filter: unknown): void;
+  setValues?(values: unknown): void;
   setCosts?(costs: unknown): void;
   setEdgeWidths?(widths: unknown): void;
   setInstances?(instances: unknown, altitudeReference?: unknown): void;
@@ -102,7 +108,7 @@ interface Settable {
 /** Applies a change that keeps the layer (`rebuild: false`) */
 export const applyLayerChange = (
   layer: Layer,
-  next: LayerSpec,
+  next: BoundLayerSpec,
   change: Extract<LayerChange, { rebuild: false }>,
 ): void => {
   const target = layer as unknown as Settable;
@@ -110,6 +116,8 @@ export const applyLayerChange = (
   const own = change.own;
 
   if ('data' in own) target.setData?.(own.data);
+  if ('filter' in own) target.setFilter?.(own.filter);
+  if ('values' in own) target.setValues?.(own.values);
   if ('costs' in own) target.setCosts?.(own.costs);
   if ('edgeWidths' in own) target.setEdgeWidths?.(own.edgeWidths);
   if ('instances' in own || 'altitudeReference' in own) target.setInstances?.(spec.instances, spec.altitudeReference);
@@ -124,6 +132,24 @@ export const applyLayerChange = (
     });
   }
   if (Object.keys(change.style).length > 0) target.setStyle?.(change.style);
+};
+
+/** Adds a layer from its description, its values set */
+export const addBoundLayer = (map: GeoMap, { values, ...spec }: BoundLayerSpec): Layer => {
+  const layer = map.add(spec as LayerSpec);
+
+  if (values) (layer as unknown as Settable).setValues?.(values);
+
+  return layer;
+};
+
+/** A layer made anew from its description in the place of `old`, its values set */
+export const rebuildBoundLayer = (map: GeoMap, old: Layer, { values, ...spec }: BoundLayerSpec): Layer => {
+  const layer = map.rebuildLayer(old, spec as LayerSpec);
+
+  if (values) (layer as unknown as Settable).setValues?.(values);
+
+  return layer;
 };
 
 /**

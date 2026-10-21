@@ -27,7 +27,6 @@ const examples = [
   ['Swipe', 'swipe'],
   ['3D panels', 'panels'],
   ['three.js in the map', 'threejs'],
-  ['React', 'react'],
   ['Vector basemaps', 'vector'],
   ['Lambert-93 data', 'lambert93'],
   ['The Moon', 'moon'],
@@ -122,11 +121,18 @@ export default defineConfig({
       ],
       '/reference/': [{ text: 'Reference', link: '/reference/', items: reference }],
       '/examples/': [
+        { text: 'Examples', items: [{ text: 'All examples', link: '/examples/' }] },
         {
-          text: 'Examples',
+          text: 'TypeScript',
+          collapsed: false,
+          items: examples.map(([text, slug]) => ({ text, link: `/examples/${slug}` })),
+        },
+        {
+          text: 'React',
+          collapsed: false,
           items: [
-            { text: 'All examples', link: '/examples/' },
-            ...examples.map(([text, slug]) => ({ text, link: `/examples/${slug}` })),
+            { text: 'Stops on a line', link: '/examples/react/stops' },
+            ...examples.map(([text, slug]) => ({ text, link: `/examples/react/${slug}` })),
           ],
         },
       ],

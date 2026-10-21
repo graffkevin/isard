@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The globe (React) · Isard</title>
+    <link rel="stylesheet" href="../../shared/page.css" />
+    <style>
+      body { background: #000; }
+      .arrow {
+        position: absolute;
+        top: 50%;
+        z-index: 3;
+        width: 44px;
+        height: 44px;
+        margin-top: -22px;
+        border: 1px solid rgb(255 255 255 / 0.35);
+        border-radius: 50%;
+        background: rgb(0 0 0 / 0.35);
+        color: #fff;
+        font: 26px / 1 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .arrow:hover { background: rgb(255 255 255 / 0.15); }
+      #previous { left: 12px; }
+      #next { right: 12px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="../../dist/react/globe/main.js"></script>
+  </body>
+</html>

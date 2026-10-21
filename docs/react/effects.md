@@ -6,6 +6,8 @@ An observer's viewshed, with the options of `map.setViewshed` (`position`, `heig
 `fov`, `verticalFov`, `visibleColor`, `hiddenColor`, `opacity`, `coneColor`; see the [viewshed](../examples/viewshed)
 example); several `<Viewshed>` are drawn together, each one added and removed with its component:
 
+<LiveExample slug="react/viewshed" height="480px" />
+
 ```tsx
 {observers.map((o) => (
   <Viewshed key={o.id} position={o.lonLat} height={o.height} range={800} direction={o.heading} fov={90} />
@@ -18,6 +20,8 @@ The options are compared by value: a new position array at each render is no cha
 
 The `<Layer>` in a `<Swipe>` show on one side of a vertical line only, `position` CSS pixels from the left of the map,
 the layers beneath them on the other side (see [Swipe](../layers/#comparing-two-layers-swipe)):
+
+<LiveExample slug="react/swipe" height="420px" />
 
 ```tsx
 const [x, setX] = useState(400);
