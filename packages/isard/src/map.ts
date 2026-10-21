@@ -222,7 +222,7 @@ export class GeoMap {
   /** Stops watching the device pixel ratio */
   private unwatchRatio: (() => void) | undefined;
   /** Stops following the page's request headers (`setRequestHeaders`) */
-  private readonly unwatchHeaders = onHeaderRules((rules) => sendHeaders(this.engine, rules));
+  private unwatchHeaders: () => void = () => undefined;
   /** Stops listening to the canvas's context loss and restoration */
   private readonly unwatchContext: () => void;
 
@@ -292,6 +292,8 @@ export class GeoMap {
       globeColor: this.earth ? SEA['osm-positron'] : rgb(body.color),
     };
     this.#engine = this.createEngine();
+    // Once it has an engine: a map whose creation failed before is not left following them
+    this.unwatchHeaders = onHeaderRules((rules) => sendHeaders(this.#engine, rules));
     // The browser may take the GPU away (driver reset, background tab on mobile): the map waits, then rebuilds
     const lost = (event: Event) => {
       event.preventDefault();
