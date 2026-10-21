@@ -38,8 +38,8 @@ GeoMap.create(container, { basemap: 'ign-plan-grey-vector' });
 | `'ign-plan-grey'`, `'ign-plan'` | PLAN.IGN raster tiles (WMTS), grey or in colour |
 | `'ign-ortho'` | the orthophotos (20 cm in France, worldwide imagery at low zoom) |
 
-The names before 0.2 (`'plan'`, `'plan-grey'`, `'ortho'`, `'plan-vector'`, `'plan-grey-vector'`) still work, with a
-warning. The PLAN.IGN styles are also `PLAN_STYLES.grey` and `PLAN_STYLES.standard`, for `vectorTiles()`:
+The names before 0.2 (`'plan'`, `'plan-grey'`, `'ortho'`, `'plan-vector'`, `'plan-grey-vector'`) throw an error
+naming the new one. The PLAN.IGN styles are also `PLAN_STYLES.grey` and `PLAN_STYLES.standard`, for `vectorTiles()`:
 
 ```ts
 const tiles = map.vectorTiles({ style: PLAN_STYLES.standard });

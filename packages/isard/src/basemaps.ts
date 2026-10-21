@@ -1,7 +1,7 @@
 /** The basemaps by name: OpenFreeMap's vector styles (OpenStreetMap data, worldwide) and the Géoplateforme's (IGN,
  * France), the credits of the sources, and the relief of each body */
 import { geoplateformeWmts, IGN_ATTRIBUTION } from './geoplateforme.ts';
-import type { Basemap, BasemapName, LegacyBasemap, RasterOptions } from './types.ts';
+import type { BasemapName, RasterOptions } from './types.ts';
 
 export { IGN_ATTRIBUTION };
 
@@ -14,26 +14,14 @@ export const BASEMAPS: Record<'ign-plan' | 'ign-plan-grey' | 'ign-ortho', Raster
   'ign-ortho': geoplateformeWmts('ORTHOIMAGERY.ORTHOPHOTOS', { format: 'image/jpeg' }),
 };
 
-/** The former names of the Géoplateforme basemaps, still accepted */
-const LEGACY: Record<LegacyBasemap, BasemapName> = {
+/** The former names of the Géoplateforme basemaps (before 0.5), and their names now: an error tells it */
+export const RENAMED_BASEMAPS: Record<string, BasemapName> = {
   plan: 'ign-plan',
   'plan-grey': 'ign-plan-grey',
   ortho: 'ign-ortho',
   'plan-vector': 'ign-plan-vector',
   'plan-grey-vector': 'ign-plan-grey-vector',
 };
-const warned = new Set<string>();
-
-/** A basemap by its current name: a former one is warned about once, then taken under its new name */
-export function basemapName(basemap: Basemap): BasemapName {
-  const renamed = LEGACY[basemap as LegacyBasemap];
-  if (!renamed) return basemap as BasemapName;
-  if (!warned.has(basemap)) {
-    warned.add(basemap);
-    console.warn(`isard: the basemap '${basemap}' is deprecated, it is now named '${renamed}'`);
-  }
-  return renamed;
-}
 
 /** Credits of OpenFreeMap's basemaps, as its TileJSON gives them */
 export const OPENFREEMAP_ATTRIBUTION =

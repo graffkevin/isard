@@ -26,14 +26,8 @@ export type BasemapName =
   | 'ign-plan-grey-vector'
   | 'none';
 
-/**
- * @deprecated The former names of the Géoplateforme basemaps, still accepted (with a warning): the same names with the
- * `ign-` prefix (`'plan-grey'` is `'ign-plan-grey'`)
- */
-export type LegacyBasemap = 'plan' | 'plan-grey' | 'plan-vector' | 'plan-grey-vector' | 'ortho';
-
-/** A basemap by name (see `BasemapName`; the former names of `LegacyBasemap` are deprecated) */
-export type Basemap = BasemapName | LegacyBasemap;
+/** A basemap by name (see `BasemapName`) */
+export type Basemap = BasemapName;
 
 /**
  * The Earth's named terrain models. `'terrain-tiles'`: worldwide, the Terrain Tiles of AWS's open data registry

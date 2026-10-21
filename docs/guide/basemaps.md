@@ -21,8 +21,8 @@ The vector basemaps (OpenFreeMap's and PLAN.IGN's) have their areas and roads dr
 your layers, from the glyphs of their style. OpenFreeMap is free and needs no key; Positron is the default because it
 recedes: light greys, few colours and labels, so what you draw over it reads first (the role `'plan-grey'` had before).
 
-The Géoplateforme's basemaps had shorter names before 0.2: `'plan'`, `'plan-grey'`, `'ortho'`, `'plan-vector'` and
-`'plan-grey-vector'` are still accepted, with a warning, as the same names with the `ign-` prefix (`LegacyBasemap`).
+The Géoplateforme's basemaps had shorter names before 0.2 (`'plan'`, `'plan-grey'`, `'ortho'`, `'plan-vector'`,
+`'plan-grey-vector'`): they now throw an error naming the new one, the same with the `ign-` prefix.
 All of the Géoplateforme's data (basemaps, hillshade, relief, WMTS, WMS and WFS layers) is gathered in
 [Géoplateforme (IGN) data](./geoplateforme).
 

@@ -225,13 +225,9 @@ describe('options', () => {
     map.setTerrain('ign');
     map.setBasemap('none', 0.4);
     expect(credits(container)).toBe(`${IGN_ATTRIBUTION} | Mine`);
-    // 'ortho' is now 'ign-ortho', with a warning
-    const warn = mock(() => undefined);
-    const original = console.warn;
-    console.warn = warn;
-    map.setBasemap('ortho');
-    console.warn = original;
-    expect(warn).toHaveBeenCalledTimes(1);
+    // A former name throws, naming the new one
+    expect(() => map.setBasemap('ortho' as never)).toThrow("is now named 'ign-ortho'");
+    map.setBasemap('ign-ortho');
     expect(String(engine.last('addRaster')?.[0])).toContain('ORTHOIMAGERY.ORTHOPHOTOS');
     expect((engine.last('setGlobeColor') as number[]).map((v) => Math.round(v * 255))).toEqual([10, 59, 89]);
   });
@@ -856,15 +852,13 @@ describe('defaultEasing', () => {
 });
 
 describe('layers', () => {
-  test("a raster's style: either value alone keeps the other; the positional form still works", async () => {
+  test("a raster's style: either value alone keeps the other", async () => {
     const { map, engine } = await create();
     const raster = map.addRaster({ url: 'https://tiles.example/{z}/{x}/{y}.png', opacity: 0.8, saturation: 0.5 });
     raster.setStyle({ opacity: 0.3 });
     expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.3, 0.5]);
     raster.setStyle({ saturation: 0 });
     expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.3, 0]);
-    raster.setStyle(0.6);
-    expect(engine.last('setRasterStyle')).toEqual([raster.id, 0.6, 1]);
   });
 
   test('map.add: a layer by its type and options, the same as its add… method; an unknown type throws', async () => {

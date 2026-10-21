@@ -5,7 +5,7 @@
  * the camera animations in animation.ts.
  */
 import { easeTo, flyTo, type Step } from './animation.ts';
-import { BASEMAPS, basemapName, HILLSHADE, SEA } from './basemaps.ts';
+import { BASEMAPS, HILLSHADE, RENAMED_BASEMAPS, SEA } from './basemaps.ts';
 import { AttributionControl, type Control, type ControlPosition } from './controls.ts';
 import {
   destroyedEngine,
@@ -128,11 +128,12 @@ const MAX_POLLS = 30;
 
 /** The name of a basemap, checked: an unknown one throws */
 function checkBasemap(basemap: Basemap): BasemapName {
-  const name = basemapName(basemap);
-  if (name !== 'none' && !(name in VECTOR_BASEMAPS) && !(name in BASEMAPS)) {
+  const renamed = RENAMED_BASEMAPS[basemap];
+  if (renamed) throw new Error(`isard: the basemap '${basemap}' is now named '${renamed}'`);
+  if (basemap !== 'none' && !(basemap in VECTOR_BASEMAPS) && !(basemap in BASEMAPS)) {
     throw new Error(`isard: unknown basemap '${basemap}'`);
   }
-  return name;
+  return basemap;
 }
 
 /** A map (see `GeoMap.create`); layers take it as their host */
@@ -1007,7 +1008,7 @@ export class GeoMap {
   // ── Layers ──
 
   /** Replaces the basemap and the IGN hillshade, under the other layers (hillshade by default: 0, none). The former
-   * names of the Géoplateforme basemaps (`LegacyBasemap`) are taken under their new ones */
+   * names of the Géoplateforme basemaps throw, naming the new ones */
   setBasemap(basemap: Basemap, hillshade = 0): void {
     const name = checkBasemap(basemap);
     if (this.basemap && this.hasLayer(this.basemap)) this.basemap.remove();

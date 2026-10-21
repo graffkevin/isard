@@ -99,13 +99,9 @@ export class RasterLayer extends Layer {
   }
 
   /** Changes the opacity or saturation, the other kept */
-  setStyle(style: Partial<RasterStyle>): void;
-  /** @deprecated Positional form (saturation back to 1 when not given): `setStyle({ opacity, saturation })` */
-  setStyle(opacity: number, saturation?: number): void;
-  setStyle(style: Partial<RasterStyle> | number, saturation = 1): void {
-    const changed = typeof style === 'number' ? { opacity: style, saturation } : style;
-    this.options.opacity = changed.opacity ?? this.options.opacity;
-    this.options.saturation = changed.saturation ?? this.options.saturation;
+  setStyle(style: Partial<RasterStyle>): void {
+    this.options.opacity = style.opacity ?? this.options.opacity;
+    this.options.saturation = style.saturation ?? this.options.saturation;
     this.map.engine.setRasterStyle(this.id, this.options.opacity, this.options.saturation);
     this.map.requestRender();
   }

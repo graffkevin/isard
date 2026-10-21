@@ -2,7 +2,6 @@
  * Controls: elements in a corner of the map. A control is anything with `onAdd` and `onRemove`, as in MapLibre, so
  * applications write their own; the navigation buttons and the attribution are built in.
  */
-import { IGN_ATTRIBUTION } from './geoplateforme.ts';
 import type { GeoMap } from './map.ts';
 
 export type ControlPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -91,10 +90,6 @@ export class NavigationControl implements Control {
     this.stopListening = undefined;
   }
 }
-
-/** @deprecated The Géoplateforme's credits, now `IGN_ATTRIBUTION`: the attribution control shows those of the sources
- * in use */
-export const DEFAULT_ATTRIBUTION = IGN_ATTRIBUTION;
 
 export interface AttributionOptions {
   /** Folded into a small (i) button that shows the text on click (default: when the map is narrower than 640 px) */

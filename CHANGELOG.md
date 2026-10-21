@@ -5,6 +5,15 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ## [Unreleased]
 
+### Removed
+
+The forms deprecated since 0.4 to 0.6, for an API to keep from 1.0 on:
+
+- The former names of the Géoplateforme basemaps (`'plan'`, `'plan-grey'`, `'plan-vector'`, `'plan-grey-vector'`,
+  `'ortho'`, and the `LegacyBasemap` type): an error names the new one (`'ign-plan'`…).
+- The positional `RasterLayer.setStyle(opacity, saturation)`: `setStyle({ opacity, saturation })`.
+- `DEFAULT_ATTRIBUTION`: `IGN_ATTRIBUTION`.
+
 ### Added
 
 - `isard/vite`, a Vite plugin: nothing else to configure for a Vite application (the package kept out of the

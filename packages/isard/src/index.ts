@@ -17,7 +17,6 @@ export {
   type AttributionOptions,
   type Control,
   type ControlPosition,
-  DEFAULT_ATTRIBUTION,
   NavigationControl,
   type NavigationOptions,
 } from './controls.ts';
@@ -128,7 +127,6 @@ export type {
   FirstPersonView,
   FlyToOptions,
   GeoMapOptions,
-  LegacyBasemap,
   LoadingMode,
   LonLat,
   MapEvents,
