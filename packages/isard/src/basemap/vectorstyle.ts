@@ -121,20 +121,26 @@ export const css = ([r, g, b, a]: [number, number, number, number]): string => {
 /** Factor between two stops: linear, or exponential of `base` */
 const factor = (x: number, x0: number, x1: number, base = 1): number => {
   const d = x1 - x0;
+
   if (d === 0) return 0;
+
   const t = x - x0;
+
   return base === 1 ? t / d : (base ** t - 1) / (base ** d - 1);
 };
 
 const mix = (a: unknown, b: unknown, t: number): unknown => {
   if (typeof a === 'number' && typeof b === 'number') return a + (b - a) * t;
+
   const ca = color(a);
   const cb = color(b);
+
   if (ca && cb)
     return css(
       [0, 1, 2, 3].map((i) => (ca[i] ?? 0) + ((cb[i] ?? 0) - (ca[i] ?? 0)) * t) as [number, number, number, number],
     );
   if (Array.isArray(a) && Array.isArray(b)) return a.map((v, i) => mix(v, b[i], t));
+
   return t < 0.5 ? a : b;
 };
 
@@ -157,19 +163,25 @@ const legacy = (f: LegacyFunction, ctx: Context): unknown => {
   const stops = f.stops;
   const type =
     f.type ?? (f.property === undefined || typeof stops[0]?.[0] === 'number' ? 'exponential' : 'categorical');
+
   if (type === 'identity') return input ?? f.default;
   if (type === 'categorical') return stops.find(([k]) => k === input)?.[1] ?? f.default;
   if (typeof input !== 'number' || !stops.length) return f.default ?? stops[0]?.[1];
+
   // Zoom-and-property stops ({ zoom, value } keys) are taken at their zoom only
   const key = (s: [Json, Json]) =>
     typeof s[0] === 'object' && s[0] !== null ? Number((s[0] as { zoom?: number }).zoom) : Number(s[0]);
   const first = stops[0];
+
   if (!first) return f.default;
   if (input <= key(first)) return first[1];
+
   const at = stops.findIndex((s1, i) => i > 0 && Boolean(stops[i - 1]) && Boolean(s1) && input < key(s1));
   const [s0, s1] = [stops[at - 1], stops[at]];
+
   if (at < 0 || !s0 || !s1) return stops.at(-1)?.[1];
   if (type === 'interval') return s0[1];
+
   return mix(s0[1], s1[1], factor(input, key(s0), key(s1), f.base ?? 1));
 };
 
@@ -177,6 +189,7 @@ const legacy = (f: LegacyFunction, ctx: Context): unknown => {
 
 const get = (ctx: Context, key: unknown): unknown => {
   if (key === '$type') return ctx.type;
+
   return typeof key === 'string' ? ctx.properties[key] : undefined;
 };
 
@@ -258,11 +271,15 @@ const str = (v: unknown) => (v === undefined || v === null ? '' : String(v));
 export const evaluate = (e: Json, ctx: Context): unknown => {
   if (isFunction(e)) return legacy(e, ctx);
   if (!Array.isArray(e)) return e;
+
   const [op, ...args] = e;
+
   if (typeof op !== 'string') return e;
+
   const ev = (i: number) => evaluate(args[i] ?? null, ctx);
   const num = (i: number) => Number(ev(i));
   const nums = () => args.map((_, i) => num(i));
+
   switch (op) {
     case 'literal':
       return args[0];
@@ -294,7 +311,9 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
         'max-fraction-digits'?: number;
       };
       const n = num(0);
+
       if (!Number.isFinite(n)) return '';
+
       return n.toLocaleString(options.locale, {
         minimumFractionDigits: options['min-fraction-digits'],
         maximumFractionDigits: options['max-fraction-digits'],
@@ -304,14 +323,17 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
       for (let i = 0; i < args.length; i += 1) {
         const v = ev(i);
         const n = typeof v === 'string' && v.trim() === '' ? Number.NaN : Number(v);
+
         if (v !== null && v !== undefined && !Number.isNaN(n)) return n;
       }
+
       return 0;
     }
     case 'to-string':
       return str(ev(0));
     case 'to-boolean': {
       const v = ev(0);
+
       return !(v === '' || v === 0 || v === false || v === null || v === undefined || Number.isNaN(v));
     }
     case 'to-color':
@@ -325,23 +347,30 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
         string: (v) => typeof v === 'string',
         boolean: (v) => typeof v === 'boolean',
       };
+
       for (let i = 0; i < args.length; i += 1) {
         const v = ev(i);
+
         if (types[op]?.(v)) return v;
       }
+
       return args.length ? ev(args.length - 1) : null;
     }
     case 'typeof': {
       const v = ev(0);
+
       if (v === null || v === undefined) return 'null';
+
       return Array.isArray(v) ? 'array' : typeof v;
     }
     case 'length': {
       const v = ev(0);
+
       return typeof v === 'string' || Array.isArray(v) ? v.length : 0;
     }
     case 'at': {
       const v = ev(1);
+
       return Array.isArray(v) ? (v[num(0)] ?? null) : null;
     }
     case 'upcase':
@@ -351,8 +380,10 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
     case 'coalesce':
       for (let i = 0; i < args.length; i += 1) {
         const v = ev(i);
+
         if (v !== undefined && v !== null) return v;
       }
+
       return null;
     case '!':
       return !ev(0);
@@ -375,11 +406,14 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
     case 'in': {
       const haystack = ev(1);
       const needle = ev(0);
+
       if (typeof haystack === 'string') return haystack.includes(String(needle));
+
       return Array.isArray(haystack) && haystack.includes(needle as Json);
     }
     case 'case': {
       const hit = args.findIndex((_, i) => i % 2 === 0 && i + 1 < args.length && Boolean(ev(i)));
+
       return hit < 0 ? ev(args.length - 1) : ev(hit + 1);
     }
     case 'match': {
@@ -390,15 +424,18 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
           i + 1 < args.length &&
           (Array.isArray(label) ? label.includes(input as Json) : label === input),
       );
+
       return hit < 0 ? ev(args.length - 1) : ev(hit + 1);
     }
     case 'step': {
       const input = num(0);
       let out = ev(1);
+
       for (let i = 2; i + 1 < args.length; i += 2) {
         if (input >= Number(args[i])) out = ev(i + 1);
         else break;
       }
+
       return out;
     }
     case 'interpolate':
@@ -412,11 +449,15 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
         args[3 + 2 * k] ?? null,
       ]);
       const first = stops[0];
+
       if (!first) return null;
       if (input <= first[0]) return evaluate(first[1], ctx);
+
       const at = stops.findIndex((s1, i) => i > 0 && input < s1[0]);
       const [s0, s1] = [stops[at - 1], stops[at]];
+
       if (at < 0 || !s0 || !s1) return evaluate(stops.at(-1)?.[1] ?? null, ctx);
+
       return mix(evaluate(s0[1], ctx), evaluate(s1[1], ctx), factor(input, s0[0], s1[0], base));
     }
     case 'rgb':
@@ -465,6 +506,7 @@ export const evaluate = (e: Json, ctx: Context): unknown => {
         warned.add(op);
         console.warn(`isard: the style expression "${op}" is not supported`);
       }
+
       return null;
   }
 };
@@ -477,15 +519,18 @@ const LEGACY_COMPARISONS = new Set(['==', '!=', '<', '<=', '>', '>=']);
  * `["has", "key"]`; a key and literal values, as MapLibre tells them from expressions */
 const isLegacyLeaf = (f: Json[]): boolean => {
   const [op, a, ...rest] = f;
+
   if (typeof op !== 'string' || typeof a !== 'string' || rest.some(Array.isArray)) return false;
   if (LEGACY_COMPARISONS.has(op)) return f.length === 3;
   if (op === 'in') return f.length !== 3 || !Array.isArray(f[2]);
+
   return op === '!in' || op === 'has' || op === '!has';
 };
 
 const legacyFilter = (f: Json[], ctx: Context): boolean => {
   const [op, key, ...rest] = f;
   const v = get(ctx, key);
+
   switch (op) {
     case '==':
       return v === rest[0];
@@ -520,26 +565,36 @@ const compiled = new WeakMap<Json[], Test>();
 /** A filter as a function: `all`, `any`, `none` of their parts, each part legacy or an expression (they may mix) */
 const compile = (f: Json): Test => {
   if (!Array.isArray(f)) return () => Boolean(f);
+
   const hit = compiled.get(f);
+
   if (hit) return hit;
+
   const make = (): Test => {
     const op = f[0];
+
     if (op === 'all' || op === 'any' || op === 'none') {
       const parts = f.slice(1).map(compile);
+
       if (op === 'all') return (ctx) => parts.every((p) => p(ctx));
       if (op === 'any') return (ctx) => parts.some((p) => p(ctx));
+
       return (ctx) => !parts.some((p) => p(ctx));
     }
     if (isLegacyLeaf(f)) return (ctx) => legacyFilter(f, ctx);
+
     return (ctx) => Boolean(evaluate(f, ctx));
   };
   const test = make();
+
   compiled.set(f, test);
+
   return test;
 };
 
 export const filter = (f: Json | undefined, ctx: Context): boolean => {
   if (f === undefined || f === null) return true;
+
   return compile(f)(ctx);
 };
 
@@ -548,6 +603,7 @@ export const isFeatureDependent = (e: Json | undefined): boolean => {
   if (e !== undefined && isFunction(e)) return e.property !== undefined;
   if (!Array.isArray(e)) return false;
   if (['get', 'has', '!has', 'geometry-type', 'properties', 'id'].includes(e[0] as string)) return true;
+
   return e.some((x) => isFeatureDependent(x));
 };
 
@@ -557,14 +613,18 @@ export const text = (field: Json | undefined, ctx: Context): string => {
   if (typeof field === 'string') {
     return field.replace(/\{([^}]+)\}/g, (_, key: string) => {
       const v = ctx.properties[key];
+
       return v === undefined ? '' : String(v);
     });
   }
+
   const v = evaluate(field, ctx);
+
   if (Array.isArray(v)) {
     // A `format` value: its strings
     return v.filter((x) => typeof x === 'string').join('');
   }
+
   return v === undefined || v === null ? '' : String(v);
 };
 
@@ -584,7 +644,9 @@ export const zoomStops = (e: Json): [number, number][] => {
   const stopInputs = (x: Json[]) => x.filter((_, i) => i >= 3 && i % 2 === 1).map(Number);
   const walk = (x: Json) => {
     if (!Array.isArray(x)) return;
+
     const zoomInput = (input: Json | undefined) => Array.isArray(input) && input[0] === 'zoom';
+
     if ((x[0] === 'interpolate' || x[0] === 'interpolate-hcl' || x[0] === 'interpolate-lab') && zoomInput(x[2])) {
       stopInputs(x).forEach((t) => {
         zooms.add(t);
@@ -597,11 +659,17 @@ export const zoomStops = (e: Json): [number, number][] => {
     }
     x.forEach(walk);
   };
+
   walk(e);
+
   const finite = [...zooms].filter(Number.isFinite);
+
   if (finite.length === 0) finite.push(0);
+
   const [lo, hi] = [Math.min(...finite), Math.max(...finite)];
+
   finite.push(...Array.from({ length: Math.floor(hi) - Math.ceil(lo) + 1 }, (_, i) => Math.ceil(lo) + i));
+
   return [...new Set(finite)]
     .sort((a, b) => a - b)
     .map((zoom) => [zoom, Number(evaluate(e, { zoom, properties: {}, type: 'Unknown' }))]);

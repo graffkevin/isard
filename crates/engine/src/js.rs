@@ -7,10 +7,12 @@ use wasm_bindgen::JsValue;
 /// A plain object from key-value pairs
 pub fn object(entries: &[(&str, JsValue)]) -> JsValue {
     let out = Object::new();
+
     for (key, value) in entries {
         // Setting a property on a fresh plain object cannot fail
         let _ = Reflect::set(&out, &JsValue::from_str(key), value);
     }
+
     out.into()
 }
 
@@ -47,10 +49,13 @@ pub fn request_headers(init: &web_sys::RequestInit, url: &str, extra: &[(&str, &
             .flat_map(|(_, headers)| headers.iter().cloned())
             .collect()
     });
+
     if matching.is_empty() && extra.is_empty() {
         return Ok(());
     }
+
     let headers = web_sys::Headers::new()?;
+
     for (name, value) in &matching {
         headers.set(name, value)?;
     }
@@ -58,6 +63,7 @@ pub fn request_headers(init: &web_sys::RequestInit, url: &str, extra: &[(&str, &
         headers.set(name, value)?;
     }
     init.set_headers(&headers);
+
     Ok(())
 }
 

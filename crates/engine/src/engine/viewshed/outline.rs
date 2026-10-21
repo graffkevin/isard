@@ -65,13 +65,18 @@ impl Outline {
         let program = objects.program(VERTEX, FRAGMENT)?;
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
+
         objects.keep();
+
         let uniforms = gl::uniforms(gl, program, ["u_matrix", "u_viewport", "u_width", "u_color"]);
+
         // SAFETY: layout of a vertex array just created on the live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+
             let stride = (STRIDE * 4) as i32;
+
             for (location, size, offset) in [(0, 3, 0), (1, 3, 12), (2, 2, 24)] {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, offset);
@@ -79,6 +84,7 @@ impl Outline {
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
         }
+
         Ok(Self {
             program,
             uniforms,
@@ -109,7 +115,9 @@ impl Outline {
         if segments.is_empty() {
             return;
         }
+
         let mut vertices = Vec::with_capacity(segments.len() * 6 * STRIDE);
+
         for [from, to] in segments {
             for (along, across) in [
                 (0.0, -1.0),
@@ -123,8 +131,10 @@ impl Outline {
                 vertices.extend([along, across]);
             }
         }
+
         let [matrix, viewport, width_u, color_u] = &self.uniforms;
         let [r, g, b] = color;
+
         // SAFETY: draws with objects owned by the outline; the state set back after
         unsafe {
             gl.use_program(Some(self.program));
@@ -157,11 +167,14 @@ pub(super) fn segments(eye: DVec3, cone: &Cone, range: f64, out: &mut Vec<[DVec3
     let [right, _, forward] = cone.axes();
     let (tx, _) = cone.tangents();
     let at = |x: f64| eye + (right * x * tx + forward).normalize() * range;
+
     for x in [-1.0, 0.0, 1.0] {
         out.push([eye, at(x)]);
     }
+
     for step in 0..STEPS {
         let (s, t) = (step as f64 / STEPS as f64, (step + 1) as f64 / STEPS as f64);
+
         out.push([at(2.0 * s - 1.0), at(2.0 * t - 1.0)]);
     }
 }

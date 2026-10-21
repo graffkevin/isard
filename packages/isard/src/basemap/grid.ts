@@ -68,14 +68,17 @@ interface Resolved {
 /** A box of the CRS around points of it (x, y, x, y…), NaN ignored; undefined without any */
 const box = (points: ArrayLike<number>): [number, number, number, number] | undefined => {
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+
   for (let k = 0; k + 1 < points.length; k += 2) {
     const [x, y] = [points[k] as number, points[k + 1] as number];
+
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     x0 = Math.min(x0, x);
     y0 = Math.min(y0, y);
     x1 = Math.max(x1, x);
     y1 = Math.max(y1, y);
   }
+
   return x0 <= x1 ? [x0, y0, x1, y1] : undefined;
 };
 
@@ -104,11 +107,15 @@ export const resolveGrid = (grid: TileGrid): Resolved => {
       steps.flatMap((j) => crs.forward([w + ((e - w) * i) / 8, s + ((n - s) * j) / 8])),
     );
     const b = box(points);
+
     if (!b) return undefined;
+
     const margin = 0.01 * Math.max(b[2] - b[0], b[3] - b[1]);
+
     return [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
   };
   const extent = grid.bounds ? projected(grid.bounds) : undefined;
+
   return { crs, matrices, bounds: grid.bounds, extent };
 };
 
@@ -118,8 +125,10 @@ export const equirectangularGrid = (minLevel: number, maxLevel: number): TileGri
   const matrices = Array.from({ length: maxLevel - minLevel + 1 }, (_, i): TileMatrix => {
     const level = minLevel + i;
     const n = 2 ** level;
+
     return { id: level, resolution: 180 / 256 / n, origin: [-180, 90], matrixWidth: 2 * n, matrixHeight: n };
   });
+
   return { crs: 'EPSG:4326', matrices };
 };
 
@@ -149,6 +158,7 @@ const pixelSize = (points: Float64Array, size: number): [number, number] => {
   const d = (p: number, q: number) =>
     Math.hypot((points[q] as number) - (points[p] as number), (points[q + 1] as number) - (points[p + 1] as number));
   const step = (2 * size) / N;
+
   return [d(at(c - 1, c), at(c + 1, c)) / step, d(at(c, c - 1), at(c, c + 1)) / step];
 };
 
@@ -159,32 +169,41 @@ const pixelSize = (points: Float64Array, size: number): [number, number] => {
 const sampled = (points: Float64Array, size: number, clip: number[]): [number, number, number, number] | undefined => {
   const at = (i: number, j: number, k: number) => points[2 * (j * (N + 1) + i) + k] as number;
   const centers: number[] = [];
+
   for (let j = 1; j < N; j += 1) for (let i = 1; i < N; i += 1) centers.push(at(i, j, 0), at(i, j, 1));
+
   const cell = size / N;
   const add = (px: number, py: number) => {
     const [fx, fy] = [px / cell, py / cell];
     const [i, j] = [Math.min(N - 1, Math.floor(fx)), Math.min(N - 1, Math.floor(fy))];
     const [tx, ty] = [fx - i, fy - j];
+
     for (const k of [0, 1]) {
       const top = at(i, j, k) + (at(i + 1, j, k) - at(i, j, k)) * tx;
       const bottom = at(i, j + 1, k) + (at(i + 1, j + 1, k) - at(i, j + 1, k)) * tx;
+
       centers.push(top + (bottom - top) * ty);
     }
   };
+
   for (let p = 0.5; p < size; p += 1) {
     add(p, 0.5);
     add(p, size - 0.5);
     add(0.5, p);
     add(size - 0.5, p);
   }
+
   const b = box(centers);
+
   if (!b) return undefined;
+
   const out: [number, number, number, number] = [
     Math.max(b[0], clip[0] as number),
     Math.max(b[1], clip[1] as number),
     Math.min(b[2], clip[2] as number),
     Math.min(b[3], clip[3] as number),
   ];
+
   return out[0] <= out[2] && out[1] <= out[3] ? out : undefined;
 };
 
@@ -194,52 +213,72 @@ const sampled = (points: Float64Array, size: number, clip: number[]): [number, n
  */
 export const planTile = (g: Resolved, url: string, z: number, x: number, y: number, size: number): Job | null => {
   const tiles = 2 ** z;
+
   if (g.bounds) {
     const [w, s, e, n] = g.bounds;
+
     if (longitude((x + 1) / tiles) <= w || longitude(x / tiles) >= e) return null;
     if (latitude(y / tiles) <= s || latitude((y + 1) / tiles) >= n) return null;
   }
+
   // The mesh in the source CRS
   const points = new Float64Array(2 * (N + 1) ** 2);
+
   for (let j = 0; j <= N; j += 1) {
     const lat = latitude((y + j / N) / tiles);
+
     for (let i = 0; i <= N; i += 1) {
       const [px = Number.NaN, py = Number.NaN] = g.crs.forward([longitude((x + i / N) / tiles), lat]);
+
       points[2 * (j * (N + 1) + i)] = px;
       points[2 * (j * (N + 1) + i) + 1] = py;
     }
   }
+
   const outer = box(points);
+
   if (!outer) return null;
+
   const e = g.extent;
   const b: [number, number, number, number] = e
     ? [Math.max(outer[0], e[0]), Math.max(outer[1], e[1]), Math.min(outer[2], e[2]), Math.min(outer[3], e[3])]
     : outer;
+
   if (e && (b[0] >= b[2] || b[1] >= b[3])) return null;
+
   const mesh = new Float32Array(points.length);
+
   if (g.matrices.length === 0) {
     // One image of the tile's box, a pixel larger on each side
     const [sx, sy] = pixelSize(points, size);
     const m = Number.isFinite(sx + sy) ? Math.max(sx, sy) : 0;
     const [x0, y0, x1, y1] = [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
+
     for (let k = 0; k < points.length; k += 2) {
       mesh[k] = (((points[k] as number) - x0) / (x1 - x0)) * size;
       mesh[k + 1] = ((y1 - (points[k + 1] as number)) / (y1 - y0)) * size;
     }
+
     const source = { url: sourceUrl(url, z, x, y, [x0, y0, x1, y1], size, size), x: 0, y: 0, w: size, h: size };
+
     return { size, width: size, height: size, sources: [source], n: N, mesh };
   }
+
   // The level of the same pixel size, along the axis the grid stretches least (up to MAX_BOOST levels finer)
   const [sx, sy] = pixelSize(points, size);
   const across = Math.max(sx, sy);
   const target = Number.isFinite(across) ? Math.max(Math.min(sx, sy), across / 2 ** MAX_BOOST) : (b[2] - b[0]) / size;
   // Where the pixels of the tile are sampled: the centers of its edge pixels and the mesh, within the source's extent
   const centers = sampled(points, size, b);
+
   if (!centers) return null;
+
   const best = g.matrices.reduce((found, m, i) => {
     const r = g.matrices[found]?.resolution ?? m.resolution;
+
     return Math.abs(Math.log2(m.resolution / target)) < Math.abs(Math.log2(r / target)) ? i : found;
   }, 0);
+
   for (let level = best; level >= 0; level -= 1) {
     const m = g.matrices[level] as Matrix;
     const [ox, oy] = m.origin;
@@ -251,23 +290,31 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
     const c1 = Math.min(m.matrixWidth - 1, l1, Math.floor(((centers[2] - ox) / res + 0.5 - 1e-3) / tw));
     const t0 = Math.max(0, r0, Math.floor(((oy - centers[3]) / res - 0.5 + 1e-3) / th));
     const t1 = Math.min(m.matrixHeight - 1, r1, Math.floor(((oy - centers[1]) / res + 0.5 - 1e-3) / th));
+
     if (c0 > c1 || t0 > t1) return null;
+
     const [width, height] = [(c1 - c0 + 1) * tw, (t1 - t0 + 1) * th];
+
     if (width * height > MAX_MOSAIC) continue;
+
     const sources = Array.from({ length: t1 - t0 + 1 }, (_, r) => t0 + r).flatMap((row) =>
       Array.from({ length: c1 - c0 + 1 }, (_, c): Placed => {
         const col = c0 + c;
         const bbox = [ox + col * tw * res, oy - (row + 1) * th * res, ox + (col + 1) * tw * res, oy - row * th * res];
         const placed = { x: (col - c0) * tw, y: (row - t0) * th, w: tw, h: th };
+
         return { url: sourceUrl(url, m.id, col, row, bbox, tw, th), ...placed };
       }),
     );
+
     for (let k = 0; k < points.length; k += 2) {
       mesh[k] = ((points[k] as number) - ox) / res - c0 * tw;
       mesh[k + 1] = (oy - (points[k + 1] as number)) / res - t0 * th;
     }
+
     return { size, width, height, sources, n: N, mesh };
   }
+
   return null;
 };
 
@@ -278,11 +325,14 @@ export const planTile = (g: Resolved, url: string, z: number, x: number, y: numb
 export const gridZooms = (g: Resolved): { minZoom: number; maxZoom: number } => {
   const coarse = g.matrices[0];
   const fine = g.matrices.at(-1);
+
   if (!coarse || !fine) return { minZoom: 0, maxZoom: 19 };
+
   const middle = (): readonly number[] => {
     const [l0, r0, l1, r1] = coarse.limits ?? [0, 0, coarse.matrixWidth - 1, coarse.matrixHeight - 1];
     const span = coarse.resolution * coarse.tileWidth;
     const [cx, cy] = [(l0 + l1 + 1) / 2, (r0 + r1 + 1) / 2];
+
     return Number.isFinite(cx + cy)
       ? g.crs.inverse([coarse.origin[0] + cx * span, coarse.origin[1] - cy * span])
       : [0, 0];
@@ -294,7 +344,9 @@ export const gridZooms = (g: Resolved): { minZoom: number; maxZoom: number } => 
   const p = g.crs.forward([longitude(mx), latitude(my)]);
   const q = g.crs.forward([longitude(mx + d), latitude(my)]);
   const zero = Math.hypot((q[0] ?? 0) - (p[0] ?? 0), (q[1] ?? 0) - (p[1] ?? 0)) / (d * 256);
+
   if (!(zero > 0)) return { minZoom: 0, maxZoom: 19 };
+
   return {
     minZoom: Math.max(0, Math.floor(Math.log2(zero / coarse.resolution)) - 2),
     maxZoom: Math.max(0, Math.round(Math.log2(zero / fine.resolution))),
@@ -317,12 +369,17 @@ export type RemoteReprojection = (
  */
 export const gridLoader = (url: string, grid: Resolved, size: number, remote?: RemoteReprojection): Draw => {
   let local: ReturnType<typeof resampler>['draw'] | undefined;
+
   return async (z, x, y, signal) => {
     const job = planTile(grid, url, z, x, y, size);
+
     if (!job) return null;
+
     const drawn = remote?.(job, [z, x, y], signal);
+
     if (drawn) return drawn;
     local ??= resampler().draw;
+
     return local(job, signal);
   };
 };

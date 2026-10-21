@@ -59,6 +59,7 @@ element<HTMLInputElement>('edl').addEventListener('change', (e) => {
 
 map.on('render', () => {
   const s = cloud.stats();
+
   if (s && 'points' in s) {
     element('stats').textContent = `${(s.points / 1e6).toFixed(2)} M points in ${s.nodes} nodes, ${s.inFlight} loading`;
   }
@@ -67,6 +68,7 @@ map.on('render', () => {
 map.hoverPicking = { layers: [cloud], radius: 3 };
 map.on('hoverfeature', ({ hit }) => {
   const p = hit?.feature?.properties as { classification: number; altitude: number } | undefined;
+
   element('info').textContent = p
     ? `${names[p.classification] ?? `class ${p.classification}`}, ${p.altitude.toFixed(1)} m (IGN69)`
     : ' ';

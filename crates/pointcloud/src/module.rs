@@ -14,5 +14,6 @@ pub fn decode_copc(chunk: &[u8], laz: &[u8], layout: &[f64], grid: &[f64], count
     let layout = Layout::parse(layout).map_err(error)?;
     let grid = Grid::parse(grid).map_err(error)?;
     let records = crate::laz::decompress(chunk, laz, layout.record_length, count as usize).map_err(error)?;
+
     vertices(&records, &layout, &grid).map_err(error)
 }

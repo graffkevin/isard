@@ -55,7 +55,10 @@ map.addSymbols({
 map.hoverPicking = { layers: [fills] };
 map.on('hoverfeature', ({ hit }) => {
   const index = hit?.index;
+
   hovered.setFilter((_, i) => i === index);
+
   const p = hit?.feature?.properties as Commune | undefined;
+
   element('info').textContent = p ? `${p.nom_officiel}: ${p.population.toLocaleString('en')} inhabitants` : ' ';
 });

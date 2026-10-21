@@ -36,17 +36,21 @@ export interface Topology {
  */
 export const parseTopoJson = <P = Properties>(topology: Topology, name?: string): FeatureCollection<P> => {
   const object = name === undefined ? Object.values(topology.objects)[0] : topology.objects[name];
+
   if (!object) throw new Error(`isard: no TopoJSON object ${name ?? ''}`);
+
   const { scale = [1, 1], translate = [0, 0] } = topology.transform ?? {};
   const quantized = topology.transform !== undefined;
   const at = (p: number[]): Position => [p[0] ?? 0, p[1] ?? 0, ...p.slice(2)];
   // The arcs decoded once
   const arcs = topology.arcs.map((arc) => {
     let [x, y] = [0, 0];
+
     return arc.map((p): Position => {
       if (!quantized) return at(p);
       x += p[0] ?? 0;
       y += p[1] ?? 0;
+
       return [x * scale[0] + translate[0], y * scale[1] + translate[1], ...p.slice(2)];
     });
   });
@@ -55,11 +59,14 @@ export const parseTopoJson = <P = Properties>(topology: Topology, name?: string)
   /** A line from arcs, each after the first without its first point (the last of the one before) */
   const stitch = (indices: number[]): Position[] => {
     const out: Position[] = [];
+
     indices.forEach((i) => {
       const arc = arcs[i < 0 ? ~i : i] ?? [];
       const points = i < 0 ? [...arc].reverse() : arc;
+
       out.push(...(out.length > 0 ? points.slice(1) : points));
     });
+
     return out;
   };
   const geometry = (g: TopoGeometry): Geometry | null => {
@@ -92,5 +99,6 @@ export const parseTopoJson = <P = Properties>(topology: Topology, name?: string)
     ...(g.id === undefined ? {} : { id: g.id }),
   });
   const features = object.type === 'GeometryCollection' ? (object.geometries ?? []).map(feature) : [feature(object)];
+
   return { type: 'FeatureCollection', features };
 };

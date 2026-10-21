@@ -25,13 +25,18 @@ color.addEventListener('input', () => city.setStyle({ color: color.value }));
 const popup = new Popup({ maxWidth: '260px' });
 map.on('click', ({ point, lonLat }) => {
   const hit = map.pickFeature(point, { layers: [city] });
+
   if (!hit?.feature || !lonLat) {
     popup.remove();
+
     return;
   }
+
   const table = document.createElement('table');
+
   Object.entries(hit.feature.properties ?? {}).forEach(([name, value]) => {
     const row = table.insertRow();
+
     row.insertCell().textContent = name;
     row.insertCell().textContent = typeof value === 'number' ? String(Math.round(value * 1e6) / 1e6) : String(value);
   });

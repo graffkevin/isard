@@ -61,8 +61,10 @@ class Emitter<E> {
 
   on<K extends keyof E>(type: K, listener: (event: E[K]) => void): () => void {
     const set = this.listeners[type] ?? new Set();
+
     this.listeners[type] = set;
     set.add(listener);
+
     return () => set.delete(listener);
   }
 
@@ -91,25 +93,32 @@ const place = (
     point[0] < size[0] + MARGIN &&
     point[1] > -MARGIN &&
     point[1] < size[1] + MARGIN;
+
   if (!visible) {
     element.style.display = 'none';
+
     return undefined;
   }
   element.style.display = '';
+
   // Whole pixels: a fractional translation blurs text and icons
   const x = Math.round(point[0] + offset[0]);
   const y = Math.round(point[1] + offset[1]);
+
   element.style.transform = `translate(${x}px, ${y}px) ${ANCHOR_TRANSLATE[anchor]}`;
+
   return point;
 };
 
 /** Round pin, its tip at the bottom: the default marker */
 const pin = (): HTMLElement => {
   const element = document.createElement('div');
+
   element.innerHTML =
     '<svg class="isard-marker-pin" width="25" height="34" viewBox="0 0 25 34" aria-hidden="true">' +
     '<path fill="currentColor" stroke="rgb(0 0 0 / 0.25)" d="M12.5 33.5C12.5 33.5 .5 20.6 .5 12.5a12 12 0 0 1 24 0' +
     'c0 8.1-12 21-12 21z"/><circle cx="12.5" cy="12.5" r="4.5" fill="#fff"/></svg>';
+
   return element;
 };
 
@@ -194,6 +203,7 @@ export class Marker {
     this.map?.positionOverlay(this);
     // An open popup of the marker goes with it
     if (this.popup?.isOpen()) this.popup.setLonLat(this.lonLat);
+
     return this;
   }
 
@@ -208,18 +218,21 @@ export class Marker {
     this.base = Number.isFinite(base) ? Math.min(base, this.height) : 0;
     this.popup?.setHeight(this.height);
     this.map?.positionOverlay(this);
+
     return this;
   }
 
   setOffset(offset: Point): this {
     this.offset = [offset[0], offset[1]];
     this.map?.positionOverlay(this);
+
     return this;
   }
 
   setDraggable(draggable: boolean): this {
     this.draggable = draggable;
     this.element.classList.toggle('isard-marker-draggable', draggable);
+
     return this;
   }
 
@@ -233,6 +246,7 @@ export class Marker {
     this.popup?.remove();
     this.popup = popup;
     popup?.setHeight(this.height);
+
     return this;
   }
 
@@ -245,6 +259,7 @@ export class Marker {
     if (!this.popup || !this.map) return this;
     if (this.popup.isOpen()) this.popup.remove();
     else this.popup.setLonLat(this.lonLat).addTo(this.map);
+
     return this;
   }
 
@@ -258,6 +273,7 @@ export class Marker {
     this.remove();
     this.map = map;
     map.attachOverlay(this, this.element);
+
     return this;
   }
 
@@ -268,20 +284,26 @@ export class Marker {
     this.grab = undefined;
     this.dragging = false;
     this.element.classList.remove('isard-marker-dragging');
+
     return this;
   }
 
   /** @internal */
   position(size: Point): void {
     if (!this.map) return;
+
     const top = place(this.map, this.element, this.lonLat, this.height, this.anchor, this.offset, size);
     const ground = top && this.height !== this.base ? this.map.project(this.lonLat, this.base) : undefined;
+
     if (!top || !ground) {
       this.stem.style.display = 'none';
+
       return;
     }
+
     // From the anchor down to what it stands on, a line turned toward it
     const [dx, dy] = [ground[0] - top[0], ground[1] - top[1]];
+
     this.stem.style.display = '';
     this.stem.style.height = `${Math.hypot(dx, dy)}px`;
     this.stem.style.transform = `rotate(${Math.atan2(dy, dx) - Math.PI / 2}rad)`;
@@ -289,15 +311,18 @@ export class Marker {
 
   private local(e: PointerEvent): Point | undefined {
     const rect = this.map?.getCanvas().getBoundingClientRect();
+
     return rect && [e.clientX - rect.left, e.clientY - rect.top];
   }
 
   private down(e: PointerEvent): void {
     this.swallowClick = false;
     if (!this.draggable || !this.map || e.button !== 0) return;
+
     // The gap to the position on the ground, below a raised marker
     const point = this.map.project(this.lonLat);
     const at = this.local(e);
+
     if (!point || !at) return;
     // The map must not start panning under the marker
     e.stopPropagation();
@@ -310,12 +335,17 @@ export class Marker {
 
   private move(e: PointerEvent): void {
     const at = this.local(e);
+
     if (!this.grab || !this.map || !at) return;
     e.stopPropagation();
+
     const { start, gap } = this.grab;
+
     if (!this.dragging && Math.hypot(at[0] - start[0], at[1] - start[1]) < DRAG_TOLERANCE) return;
+
     // On the relief: the ground under the point, read back from the picking pass
     const lonLat = this.map.unproject([at[0] - gap[0], at[1] - gap[1]]);
+
     if (!lonLat) return;
     if (!this.dragging) {
       this.dragging = true;
@@ -343,6 +373,7 @@ export class Marker {
       this.swallowClick = false;
       e.stopImmediatePropagation();
       e.preventDefault();
+
       return;
     }
     if (this.popup) this.togglePopup();
@@ -391,7 +422,9 @@ export class Popup {
     this.container.className = `isard-popup isard-popup-anchor-${this.anchor}`;
     if (options.className) this.container.classList.add(...options.className.split(/\s+/).filter(Boolean));
     this.container.style.maxWidth = options.maxWidth ?? '240px';
+
     const tip = document.createElement('div');
+
     tip.className = 'isard-popup-tip';
     this.content = document.createElement('div');
     this.content.className = 'isard-popup-content';
@@ -419,12 +452,14 @@ export class Popup {
   setLonLat(lonLat: LonLat): this {
     this.lonLat = [lonLat[0], lonLat[1]];
     this.map?.positionOverlay(this);
+
     return this;
   }
 
   setOffset(offset: Point): this {
     this.offset = [offset[0], offset[1]];
     this.map?.positionOverlay(this);
+
     return this;
   }
 
@@ -436,13 +471,16 @@ export class Popup {
   setHeight(height: number): this {
     this.height = Number.isFinite(height) ? height : 0;
     this.map?.positionOverlay(this);
+
     return this;
   }
 
   /** Content from an HTML string: only for trusted HTML (use `setText` for user or remote data) */
   setHTML(html: string): this {
     const template = document.createElement('template');
+
     template.innerHTML = html;
+
     return this.setDOMContent(template.content);
   }
 
@@ -454,6 +492,7 @@ export class Popup {
     this.content.replaceChildren(node);
     if (this.closeButton) this.content.append(this.closeButton);
     this.map?.positionOverlay(this);
+
     return this;
   }
 
@@ -478,6 +517,7 @@ export class Popup {
       });
     }
     this.events.emit('open', { target: this });
+
     return this;
   }
 
@@ -488,6 +528,7 @@ export class Popup {
     this.map.detachOverlay(this, this.container);
     this.map = undefined;
     this.events.emit('close', { target: this });
+
     return this;
   }
 
@@ -516,6 +557,7 @@ export interface PanelOptions {
 const multiply = (a: ArrayLike<number>, b: ArrayLike<number>): number[] =>
   Array.from({ length: 16 }, (_, i) => {
     const [c, r] = [Math.floor(i / 4), i % 4];
+
     return [0, 1, 2, 3].reduce((sum, k) => sum + (a[k * 4 + r] ?? 0) * (b[c * 4 + k] ?? 0), 0);
   });
 
@@ -556,6 +598,7 @@ export class Panel {
   setLonLat(lonLat: LonLat): this {
     this.lonLat = [lonLat[0], lonLat[1]];
     this.map?.positionOverlay(this);
+
     return this;
   }
 
@@ -566,6 +609,7 @@ export class Panel {
     this.pitch = placement.pitch ?? this.pitch;
     this.height = placement.height ?? this.height;
     this.map?.positionOverlay(this);
+
     return this;
   }
 
@@ -573,6 +617,7 @@ export class Panel {
   resize(): this {
     this.size = undefined;
     this.map?.positionOverlay(this);
+
     return this;
   }
 
@@ -581,6 +626,7 @@ export class Panel {
     this.remove();
     this.map = map;
     map.attachOverlay(this, this.element);
+
     return this;
   }
 
@@ -588,14 +634,17 @@ export class Panel {
     this.map?.detachOverlay(this, this.element);
     this.map = undefined;
     this.size = undefined;
+
     return this;
   }
 
   /** @internal */
   position(viewport: Point): void {
     const map = this.map;
+
     if (!map) return;
     this.size ??= [this.element.offsetWidth || 300, this.element.offsetHeight || 150];
+
     const [w, h] = this.size;
     const ground = map.elevationAt(this.lonLat) ?? 0;
     const local = map.engine.localMatrix(this.lonLat[0], this.lonLat[1], ground);
@@ -616,15 +665,19 @@ export class Panel {
     const clip = multiply(local, toLocal);
     // Behind the camera (its center): hidden
     const centerW = (clip[3] ?? 0) * (w / 2) + (clip[7] ?? 0) * (h / 2) + (clip[15] ?? 0);
+
     // Hidden without touching its display (the page's layout of its content)
     if (!(centerW > 0)) {
       this.element.style.visibility = 'hidden';
+
       return;
     }
     this.element.style.visibility = '';
+
     // Its depth axis the identity, out of the rest: its points have no depth, and a transform that cannot be
     // inverted is not drawn
     const m = multiply(toScreen, clip);
+
     m.splice(8, 4, 0, 0, 1, 0);
     [2, 6, 14].forEach((k) => {
       m[k] = 0;

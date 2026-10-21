@@ -9,12 +9,17 @@ const FIELDS = ['name', 'cmt', 'desc', 'src', 'sym', 'type', 'number'];
 
 const properties = (element: XmlElement): Properties => {
   const out: Properties = {};
+
   FIELDS.forEach((key) => {
     const value = childText(element, key);
+
     if (value !== undefined) out[key] = key === 'number' ? Number(value) : value;
   });
+
   const link = child(element, 'link')?.attributes.href;
+
   if (link !== undefined) out.link = link;
+
   return out;
 };
 
@@ -22,9 +27,12 @@ const properties = (element: XmlElement): Properties => {
 const point = (element: XmlElement): { position: Position; time: string | undefined } | undefined => {
   const lon = Number(element.attributes.lon);
   const lat = Number(element.attributes.lat);
+
   if (!Number.isFinite(lon) || !Number.isFinite(lat) || element.attributes.lon === undefined) return undefined;
+
   const ele = childText(element, 'ele');
   const position: Position = ele !== undefined && Number.isFinite(Number(ele)) ? [lon, lat, Number(ele)] : [lon, lat];
+
   return { position, time: childText(element, 'time') };
 };
 
@@ -32,6 +40,7 @@ const point = (element: XmlElement): { position: Position; time: string | undefi
 const line = (points: XmlElement[]): { coordinates: Position[]; times: string[] | undefined } => {
   const read = points.map(point).filter((p) => p !== undefined);
   const times = read.map((p) => p.time);
+
   return {
     coordinates: read.map((p) => p.position),
     times: read.length > 0 && times.every((t) => t !== undefined) ? (times as string[]) : undefined,
@@ -49,13 +58,16 @@ export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => 
   const features: Feature<P>[] = [];
   const add = (geometry: Geometry, props: Properties) =>
     features.push({ type: 'Feature', geometry, properties: props as P });
+
   children(root, 'wpt').forEach((wpt) => {
     const p = point(wpt);
+
     if (!p) return;
     add({ type: 'Point', coordinates: p.position }, { ...properties(wpt), ...(p.time ? { time: p.time } : {}) });
   });
   children(root, 'rte').forEach((rte) => {
     const { coordinates, times } = line(children(rte, 'rtept'));
+
     if (coordinates.length >= 2)
       add({ type: 'LineString', coordinates }, { ...properties(rte), ...(times ? { times } : {}) });
   });
@@ -64,8 +76,11 @@ export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => 
       .map((s) => line(children(s, 'trkpt')))
       .filter((s) => s.coordinates.length >= 2);
     const [first] = segments;
+
     if (!first) return;
+
     const props = properties(trk);
+
     if (segments.length === 1) {
       add(
         { type: 'LineString', coordinates: first.coordinates },
@@ -73,8 +88,10 @@ export const parseGpx = <P = Properties>(text: string): FeatureCollection<P> => 
       );
     } else {
       const times = segments.every((s) => s.times) ? { times: segments.map((s) => s.times) } : {};
+
       add({ type: 'MultiLineString', coordinates: segments.map((s) => s.coordinates) }, { ...props, ...times });
     }
   });
+
   return { type: 'FeatureCollection', features };
 };

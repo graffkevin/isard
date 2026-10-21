@@ -30,12 +30,14 @@ class FakeWorker {
   /** Fails to load; returns whether the default handling was prevented */
   crash(message = 'boom'): boolean {
     let prevented = false;
+
     this.onerror?.({
       message,
       preventDefault() {
         prevented = true;
       },
     } as ErrorEvent);
+
     return prevented;
   }
   /** The ids of the tiles it was asked for */
@@ -65,6 +67,7 @@ beforeEach(() => {
 describe('workers', () => {
   test('start with the first tile, each initialized with the module, decoders and texture formats', () => {
     const l = loader(3);
+
     expect(FakeWorker.all.length).toBe(0);
     quiet(l.load(1, 'a.glb', transform, true, false));
     expect(FakeWorker.all.length).toBe(3);
@@ -80,10 +83,13 @@ describe('workers', () => {
 
   test('a load message carries the request; the priority only when given', () => {
     const l = loader(1);
+
     quiet(l.load(7, 'a.glb', transform, false, true, 'high'));
     quiet(l.load(8, 'b.glb', transform, true, false, 'low'));
     quiet(l.load(9, 'c.glb', transform, true, false));
+
     const [, high, low, none] = worker(0).messages;
+
     expect(high).toEqual({ type: 'load', id: 7, url: 'a.glb', transform, yUp: false, reload: true, priority: 'high' });
     expect(low).toMatchObject({ id: 8, priority: 'low', reload: false, yUp: true });
     expect(none).toEqual({ type: 'load', id: 9, url: 'c.glb', transform, yUp: true, reload: false });
@@ -93,6 +99,7 @@ describe('workers', () => {
 
   test('requests go to the least busy worker; an answer frees its worker', () => {
     const l = loader(2);
+
     [1, 2, 3].forEach((id) => {
       quiet(l.load(id, `${id}.glb`, transform, true, false));
     });
@@ -112,6 +119,7 @@ describe('answers', () => {
     const l = loader(1);
     const a = l.load(1, 'a.glb', transform, true, false);
     const b = l.load(2, 'b.glb', transform, true, false);
+
     worker(0).reply({ type: 'error', id: 2, error: 'HTTP 404', aborted: false });
     worker(0).reply({ type: 'tile', id: 1, tile });
     expect(await a).toBe(tile);
@@ -122,8 +130,11 @@ describe('answers', () => {
   test('an aborted tile rejects with an AbortError', async () => {
     const l = loader(1);
     const a = l.load(5, 'a.glb', transform, true, false);
+
     worker(0).reply({ type: 'error', id: 5, error: 'AbortError', aborted: true });
+
     const error = await a.catch((e: unknown) => e);
+
     expect(error).toBeInstanceOf(DOMException);
     expect((error as DOMException).name).toBe('AbortError');
     l.destroy();
@@ -132,6 +143,7 @@ describe('answers', () => {
   test('answers to unknown or settled requests are ignored', async () => {
     const l = loader(1);
     const a = l.load(1, 'a.glb', transform, true, false);
+
     worker(0).reply({ type: 'tile', id: 99, tile });
     worker(0).reply({ type: 'tile', id: 1, tile });
     worker(0).reply({ type: 'error', id: 1, error: 'late', aborted: false });
@@ -143,6 +155,7 @@ describe('answers', () => {
 describe('abort', () => {
   test('goes to the worker loading the tile, only while it is pending', () => {
     const l = loader(2);
+
     quiet(l.load(1, 'a.glb', transform, true, false));
     quiet(l.load(2, 'b.glb', transform, true, false));
     l.abort(2);
@@ -150,7 +163,9 @@ describe('abort', () => {
     expect(worker(0).messages.some((m) => m.type === 'abort')).toBe(false);
     // Done or never asked: nothing sent
     worker(0).reply({ type: 'tile', id: 1, tile });
+
     const before = worker(0).messages.length;
+
     l.abort(1);
     l.abort(42);
     expect(worker(0).messages.length).toBe(before);
@@ -163,8 +178,11 @@ describe('failures', () => {
     const l = loader(2);
     const a = l.load(1, 'a.glb', transform, true, false);
     const b = l.load(2, 'b.glb', transform, true, false);
+
     expect(worker(0).crash('404')).toBe(true);
+
     const error = (await a.catch((e: unknown) => e)) as Error;
+
     expect(error.message).toContain('the decoding worker decoder.js failed: 404');
     expect(error.message).toContain('workerUrl');
     expect(worker(0).terminated).toBe(true);
@@ -180,6 +198,7 @@ describe('failures', () => {
   test('an unreadable message fails the worker too', async () => {
     const l = loader(1);
     const a = l.load(1, 'a.glb', transform, true, false);
+
     worker(0).onmessageerror?.();
     await expect(a).rejects.toThrow('sent an unreadable message');
     l.destroy();
@@ -188,10 +207,15 @@ describe('failures', () => {
   test('with every worker failed, requests fail at once and no worker restarts', async () => {
     const l = loader(1);
     const a = l.load(1, 'a.glb', transform, true, false);
+
     worker(0).crash('');
+
     const first = (await a.catch((e: unknown) => e)) as Error;
+
     expect(first.message).toContain('the decoding worker decoder.js failed.');
+
     const again = await l.load(2, 'b.glb', transform, true, false).catch((e: unknown) => e);
+
     expect(again).toBe(first);
     expect(FakeWorker.all.length).toBe(1);
   });
@@ -204,6 +228,7 @@ describe('point clouds', () => {
     const layout = new Float64Array(8);
     const grid = new Float64Array(30);
     const done = l.loadPoints(5, 'c.copc.laz', 100, 20, laz, layout, grid, 7, 'low');
+
     expect(worker(0).messages[1]).toEqual({
       type: 'points',
       id: 5,
@@ -216,7 +241,9 @@ describe('point clouds', () => {
       count: 7,
       priority: 'low',
     });
+
     const vertices = new Uint8Array(140);
+
     worker(0).reply({ type: 'points', id: 5, vertices });
     expect(await done).toBe(vertices);
     l.destroy();
@@ -228,6 +255,7 @@ describe('destroy', () => {
     const l = loader(2);
     const a = l.load(1, 'a.glb', transform, true, false);
     const b = l.load(2, 'b.glb', transform, true, false);
+
     l.destroy();
     await expect(a).rejects.toThrow('loader destroyed');
     await expect(b).rejects.toThrow('loader destroyed');

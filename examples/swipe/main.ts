@@ -17,16 +17,19 @@ const line = element('line');
 const place = (x: number) => {
   const width = map.getContainer().clientWidth;
   const position = Math.max(0, Math.min(width, x));
+
   line.style.left = `${position}px`;
   map.setSwipe({ position, layers: [old] });
 };
 line.addEventListener('pointerdown', (e) => {
   line.setPointerCapture(e.pointerId);
+
   const move = (m: PointerEvent) => place(m.clientX - map.getContainer().getBoundingClientRect().left);
   const up = () => {
     line.removeEventListener('pointermove', move);
     line.removeEventListener('pointerup', up);
   };
+
   line.addEventListener('pointermove', move);
   line.addEventListener('pointerup', up);
   e.preventDefault();

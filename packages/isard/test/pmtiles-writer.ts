@@ -10,11 +10,14 @@ import { zxyToTileId } from '../src/basemap/pmtiles.ts';
 export const varint = (value: number): number[] => {
   let v = value;
   const out: number[] = [];
+
   do {
     const b = v % 128;
+
     v = Math.floor(v / 128);
     out.push(v > 0 ? b | 0x80 : b);
   } while (v > 0);
+
   return out;
 };
 
@@ -34,6 +37,7 @@ interface Entry {
 
 const directory = (entries: Entry[]): number[] => {
   const out = [...varint(entries.length)];
+
   entries.forEach((e, i) => {
     out.push(...varint(e.tileId - (entries[i - 1]?.tileId ?? 0)));
   });
@@ -45,8 +49,10 @@ const directory = (entries: Entry[]): number[] => {
   });
   entries.forEach((e, i) => {
     const previous = entries[i - 1];
+
     out.push(...varint(previous && e.offset === previous.offset + previous.length ? 0 : e.offset + 1));
   });
+
   return out;
 };
 
@@ -72,9 +78,11 @@ export const writePmtiles = (
   // Tile data, identical consecutive tiles as one run
   const entries: Entry[] = [];
   const chunks: Uint8Array[] = [];
+
   sorted.forEach((t) => {
     const last = entries[entries.length - 1];
     const lastData = chunks[chunks.length - 1];
+
     if (
       last &&
       lastData &&
@@ -82,11 +90,13 @@ export const writePmtiles = (
       Buffer.compare(Buffer.from(lastData), Buffer.from(t.data)) === 0
     ) {
       last.runLength += 1;
+
       return;
     }
     entries.push({ tileId: t.id, offset: last ? last.offset + last.length : 0, length: t.data.length, runLength: 1 });
     chunks.push(t.data);
   });
+
   const offset = chunks.reduce((sum, c) => sum + c.length, 0);
   const leaves: number[] = [];
   const leafEntries = (size: number): Entry[] =>
@@ -94,7 +104,9 @@ export const writePmtiles = (
       (part) => {
         const bytes = pack(new Uint8Array(directory(part)));
         const entry = { tileId: part[0]?.tileId ?? 0, offset: leaves.length, length: bytes.length, runLength: 0 };
+
         leaves.push(...bytes);
+
         return entry;
       },
     );
@@ -102,13 +114,16 @@ export const writePmtiles = (
   const meta = pack(new TextEncoder().encode(JSON.stringify(metadata)));
   const header = new Uint8Array(127);
   const view = new DataView(header.buffer);
+
   header.set(new TextEncoder().encode('PMTiles'), 0);
   header[7] = 3;
+
   const rootOffset = 127;
   const metaOffset = rootOffset + root.length;
   const leafOffset = metaOffset + meta.length;
   const dataOffset = leafOffset + leaves.length;
   const u64 = (at: number, v: number) => view.setBigUint64(at, BigInt(v), true);
+
   u64(8, rootOffset);
   u64(16, root.length);
   u64(24, metaOffset);
@@ -124,7 +139,9 @@ export const writePmtiles = (
   header[97] = gzip ? 2 : 1;
   header[98] = gzip ? 2 : 1;
   header[99] = TYPES[tileType];
+
   const zooms = sorted.map((t) => t.z);
+
   header[100] = Math.min(...zooms);
   header[101] = Math.max(...zooms);
   bounds.forEach((d, i) => {
@@ -133,15 +150,19 @@ export const writePmtiles = (
   header[118] = Math.min(...zooms);
   view.setInt32(119, Math.round(((bounds[0] + bounds[2]) / 2) * 1e7), true);
   view.setInt32(123, Math.round(((bounds[1] + bounds[3]) / 2) * 1e7), true);
+
   const out = new Uint8Array(dataOffset + offset);
+
   out.set(header, 0);
   out.set(root, rootOffset);
   out.set(meta, metaOffset);
   out.set(leaves, leafOffset);
   chunks.reduce((at, c) => {
     out.set(c, at);
+
     return at + c.length;
   }, dataOffset);
+
   return out;
 };
 
@@ -161,19 +182,25 @@ export const mvtLayer = (name: string, features: { type: 1 | 2; points: [number,
   let next = 0;
   const encoded = features.map(({ type, points, text }) => {
     const geometry: number[] = [];
+
     points.reduce<[number, number]>(
       ([x, y], [px, py], i) => {
         if (type === 1 || i === 0) geometry.push(...command(1, 1));
         else if (i === 1) geometry.push(...command(2, points.length - 1));
         geometry.push(...varint(zigzag(px - x)), ...varint(zigzag(py - y)));
+
         return [px, py];
       },
       [0, 0],
     );
+
     const tags = text ? bytes(2, [0, next++]) : [];
+
     if (text) values.push(...bytes(4, string(1, text)));
+
     return bytes(2, [...tags, ...uint(3, type), ...bytes(4, geometry)]);
   });
+
   return bytes(3, [...string(1, name), ...encoded.flat(), ...keys, ...values, ...uint(5, 4096), ...uint(15, 2)]);
 };
 
@@ -199,6 +226,7 @@ const fixtureTiles = (): WrittenTile[] => {
       PLACES.map(([text, lon, lat]) => ({ type: 1 as const, points: [local(lon, lat)], text })),
     );
     const roads = mvtLayer('roads', [{ type: 2, points: PLACES.map(([, lon, lat]) => local(lon, lat)) }]);
+
     return { z, x, y, data: new Uint8Array([...places, ...roads]) };
   });
 };
@@ -215,6 +243,7 @@ if (import.meta.main) {
     },
   });
   const path = join(import.meta.dir, 'fixtures/tiny.pmtiles');
+
   writeFileSync(path, archive);
   console.log(`${path}: ${archive.length} bytes`);
 }

@@ -51,10 +51,12 @@ export const resample = (
   const out = new Uint8ClampedArray(size * size * 4);
   const cell = size / n;
   const stride = n + 1;
+
   for (let row = 0; row < size; row += 1) {
     const fy = (row + 0.5) / cell;
     const j = Math.min(n - 1, Math.floor(fy));
     const ty = fy - j;
+
     for (let col = 0; col < size; col += 1) {
       const fx = (col + 0.5) / cell;
       const i = Math.min(n - 1, Math.floor(fx));
@@ -79,7 +81,9 @@ export const resample = (
       // Pixel centers at half pixels: the four around (u, v)
       const sx = u - 0.5;
       const sy = v - 0.5;
+
       if (!(sx > -1 && sy > -1 && sx < width && sy < height)) continue;
+
       const x0 = Math.floor(sx);
       const y0 = Math.floor(sy);
       const kx = sx - x0;
@@ -88,25 +92,32 @@ export const resample = (
       let g = 0;
       let bl = 0;
       let alpha = 0;
+
       for (let k = 0; k < 4; k += 1) {
         const x = x0 + (k & 1);
         const y = y0 + (k >> 1);
+
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
+
         const p = 4 * (y * width + x);
         const wa = (k & 1 ? kx : 1 - kx) * (k >> 1 ? ky : 1 - ky) * (source[p + 3] as number);
+
         r += wa * (source[p] as number);
         g += wa * (source[p + 1] as number);
         bl += wa * (source[p + 2] as number);
         alpha += wa;
       }
       if (alpha <= 0) continue;
+
       const q = 4 * (row * size + col);
+
       out[q] = r / alpha;
       out[q + 1] = g / alpha;
       out[q + 2] = bl / alpha;
       out[q + 3] = alpha;
     }
   }
+
   return out;
 };
 
@@ -120,6 +131,7 @@ export type DrawJob = (job: Job, signal: AbortSignal) => Promise<ImageBitmap | n
  */
 export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => void; cache: { capacity: number } } => {
   type Image = Promise<ImageBitmap | null>;
+
   /** Tiles being drawn from each source image: an evicted one is closed once none is */
   const users = new Map<Image, number>();
   const evicted = new Set<Image>();
@@ -139,6 +151,7 @@ export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
   const cache = new Lru<string, Image>(cached, drop);
   const release = (image: Image) => {
     const count = (users.get(image) ?? 1) - 1;
+
     if (count > 0) users.set(image, count);
     else {
       users.delete(image);
@@ -149,33 +162,45 @@ export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
     const load = (): Image => {
       const loading = (async () => {
         const response = await fetch(url, withHeaders(url));
+
         if (response.status === 404 || response.status === 204 || response.status === 410) return null;
         if (!response.ok) throw new Error(`isard: ${response.status} for a raster to reproject`);
+
         return createImageBitmap(await response.blob());
       })();
+
       // A failure is not kept: the engine's retry fetches again
       loading.catch(() => cache.delete(url));
       cache.set(url, loading);
+
       return loading;
     };
     const image = cache.get(url) ?? load();
+
     users.set(image, (users.get(image) ?? 0) + 1);
+
     return image;
   };
   const draw: DrawJob = async (job, signal) => {
     const pending = job.sources.map((s) => [s, fetchImage(s.url)] as const);
+
     try {
       const images = await Promise.all(pending.map(async ([s, image]) => [s, await image] as const));
+
       signal.throwIfAborted();
       if (!images.some(([, image]) => image)) return null;
+
       const canvas = new OffscreenCanvas(job.width, job.height);
       const context = canvas.getContext('2d', { willReadFrequently: true });
+
       if (!context) throw new Error('isard: no 2D canvas to reproject the tiles');
       images.forEach(([s, image]) => {
         if (image) context.drawImage(image, s.x, s.y, s.w, s.h);
       });
+
       const mosaic = context.getImageData(0, 0, job.width, job.height).data;
       const pixels = resample(mosaic, job.width, job.height, job.mesh, job.n, job.size);
+
       return createImageBitmap(new ImageData(pixels, job.size, job.size), { premultiplyAlpha: 'none' });
     } finally {
       pending.forEach(([, image]) => {
@@ -183,6 +208,7 @@ export const resampler = (cached = SOURCE_CACHE): { draw: DrawJob; close: () => 
       });
     }
   };
+
   return {
     draw,
     cache,

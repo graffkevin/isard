@@ -39,15 +39,19 @@ describe('keyCamera', () => {
     const c = camera({ center: [0, 0], zoom: 0 });
     // The world is 512 px at zoom 0: 128 px east is 90 degrees
     const east = keyCamera({ pan: [128, 0] }, c).center ?? [0, 0];
+
     expect(east[0]).toBeCloseTo(90, 6);
     expect(east[1]).toBeCloseTo(0, 6);
+
     const north = keyCamera({ pan: [0, -100] }, camera()).center ?? [0, 0];
+
     expect(north[0]).toBeCloseTo(2, 9);
     expect(north[1]).toBeGreaterThan(48);
   });
 
   test('the bearing turns the pan: up goes east when facing east', () => {
     const center = keyCamera({ pan: [0, -100] }, camera({ bearing: 90 })).center ?? [0, 0];
+
     expect(center[0]).toBeGreaterThan(2);
     expect(center[1]).toBeCloseTo(48, 9);
   });
@@ -55,8 +59,11 @@ describe('keyCamera', () => {
   test('the tilt stretches vertical pans; longitudes wrap', () => {
     const flat = keyCamera({ pan: [0, -100] }, camera()).center ?? [0, 0];
     const tilted = keyCamera({ pan: [0, -100] }, camera({ pitch: 60 })).center ?? [0, 0];
+
     expect(tilted[1] - 48).toBeCloseTo((flat[1] - 48) * 2, 3);
+
     const wrapped = keyCamera({ pan: [256, 0] }, camera({ center: [179, 0], zoom: 0 })).center ?? [0, 0];
+
     expect(wrapped[0]).toBeCloseTo(-1, 6);
   });
 });

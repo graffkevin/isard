@@ -134,6 +134,7 @@ impl Atmosphere {
     pub fn fog(&self, view: &View) -> ([f32; 3], [f32; 2]) {
         let far = view.far as f32;
         let blend = self.fog_ground_blend.clamp(0.0, 1.0);
+
         (self.fog, [far * (1.0 - blend), far])
     }
 }
@@ -189,7 +190,9 @@ impl Sky {
             ["u_inverse", "u_sky", "u_horizon", "u_fog", "u_blend", "u_factor"],
         );
         let vao = objects.vertex_array()?;
+
         objects.keep();
+
         Ok(Self {
             program,
             uniforms,
@@ -205,11 +208,15 @@ impl Sky {
     /// `depth`: how far under the datum the lowest ground lies (pixels, `globe::depth`)
     pub fn draw(&self, gl: &glow::Context, view: &View, depth: f64) {
         self.draw_atmosphere(gl, view);
+
         let g = &view.globe;
+
         if !self.enabled || g.factor <= 0.0 {
             return;
         }
+
         let [inverse, eye, radius, depth_at, east, north, up, factor, halo] = &self.uniforms;
+
         // SAFETY: draw with objects owned by the sky
         unsafe {
             gl.use_program(Some(self.program));
@@ -246,10 +253,13 @@ impl Sky {
             return;
         };
         let factor = if self.enabled { view.globe.factor } else { 0.0 };
+
         if factor >= 1.0 {
             return;
         }
+
         let [inverse, sky, horizon, fog, blend, factor_u] = &self.atmosphere_uniforms;
+
         // SAFETY: draw with objects owned by the sky
         unsafe {
             gl.use_program(Some(self.atmosphere_program));
@@ -275,6 +285,7 @@ mod tests {
     #[test]
     fn the_sky_takes_the_field_of_view_of_the_camera() {
         let shader = atmosphere();
+
         assert!(shader.contains("const float FOV = 0.6435011"), "{shader}");
         assert!(shader.contains("const float HALF_FOV = 0.32175"), "{shader}");
     }

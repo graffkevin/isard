@@ -79,6 +79,7 @@ export const imageServerTerrain = (url: string, earth: boolean, radius: number):
             'UNIT["Meter",1]]',
         }),
       );
+
   return (
     `${url.replace(/\/$/, '')}/exportImage?f=image&format=bsq&pixelType=F32&size=256,256` +
     `&bboxSR=${crs}&imageSR=${crs}&bbox={bbox}`

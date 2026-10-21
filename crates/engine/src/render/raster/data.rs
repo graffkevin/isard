@@ -16,6 +16,7 @@ const NO_DATA_MARGIN: f64 = 800.0;
 #[must_use]
 pub fn unpack_depth(pixel: [u8; 4]) -> f64 {
     let [r, g, b, _] = pixel.map(|c| f64::from(c) / 255.0);
+
     r + g / 255.0 + b / 65025.0
 }
 
@@ -35,6 +36,7 @@ pub fn bbox(tile: TileId, body: &Body) -> String {
     let (min, max) = tile.bounds();
     let x = |m: f64| -half + m * 2.0 * half;
     let y = |m: f64| half - m * 2.0 * half;
+
     format!("{},{},{},{}", x(min.x), y(max.y), x(max.x), y(min.y))
 }
 
@@ -49,6 +51,7 @@ const TERRAIN_MAX_Z: u8 = 15;
 pub fn terrain_levels(body: &Body, max_z: Option<u8>) -> (u8, u8) {
     let coarser = body.relief_scale().log2().round().clamp(0.0, f64::from(TERRAIN_MIN_Z));
     let min_z = TERRAIN_MIN_Z - coarser as u8;
+
     (min_z, max_z.unwrap_or(TERRAIN_MAX_Z).clamp(min_z, TERRAIN_MAX_Z))
 }
 
@@ -84,6 +87,7 @@ pub fn fill_no_data(heights: &mut [f32], below: f32) {
         .filter(|&h| h > below && h.is_finite())
         .fold(f32::INFINITY, f32::min);
     let fill = if lowest.is_finite() { lowest } else { 0.0 };
+
     for h in heights {
         if *h <= below || !h.is_finite() {
             *h = fill;
@@ -99,8 +103,10 @@ pub fn to_ellipsoid(tile: TileId, heights: &mut [f32]) {
     let lons: Vec<f64> = (0..size)
         .map(|i| lon_lat(glam::DVec2::new(at(i, min.x, max.x), 0.5)).x)
         .collect();
+
     for (row, line) in heights.chunks_exact_mut(size).enumerate() {
         let lat = lon_lat(glam::DVec2::new(0.5, at(row, min.y, max.y))).y;
+
         for (h, &lon) in line.iter_mut().zip(&lons) {
             *h += geoid::height(lon, lat) as f32;
         }
@@ -111,13 +117,16 @@ pub fn to_ellipsoid(tile: TileId, heights: &mut [f32]) {
 pub fn subsample(heights: &[f32]) -> Box<[f32]> {
     let block = TILE as usize / CPU_HEIGHTS;
     let mut out = vec![0f32; CPU_HEIGHTS * CPU_HEIGHTS];
+
     for (k, value) in out.iter_mut().enumerate() {
         let (bx, by) = (k % CPU_HEIGHTS * block, k / CPU_HEIGHTS * block);
         let sum: f32 = (0..block)
             .flat_map(|y| (0..block).map(move |x| heights[(by + y) * TILE as usize + bx + x]))
             .sum();
+
         *value = sum / (block * block) as f32;
     }
+
     out.into_boxed_slice()
 }
 
@@ -132,8 +141,10 @@ mod tests {
             let e = [z, z * 255.0, z * 65025.0].map(f64::fract);
             let r = e[0] - e[1] / 255.0;
             let g = e[1] - e[2] / 255.0;
+
             [r, g, e[2], 1.0].map(|c| (c * 255.0).round() as u8)
         };
+
         for z in [0.0, 0.25, 0.5, 0.731, 0.999] {
             assert!((unpack_depth(pack(z)) - z).abs() < 1e-5, "{z}");
         }
@@ -152,24 +163,31 @@ mod tests {
     #[test]
     fn urls_fill_the_template() {
         let t = TileId::new(3, 4, 2);
+
         assert_eq!(
             tile_url("https://t/{z}/{x}/{y}.png", t, &Body::EARTH),
             "https://t/3/4/2.png"
         );
+
         // The whole world at level 0: EPSG:3857 on the Earth, as written before the bodies
         let b = bbox(TileId::new(0, 0, 0), &Body::EARTH);
+
         assert_eq!(
             b,
             "-20037508.342789244,-20037508.342789244,20037508.342789244,20037508.342789244"
         );
+
         let v: Vec<f64> = bbox(t, &Body::EARTH).split(',').map(|s| s.parse().unwrap()).collect();
+
         assert!(v[0] < v[2] && v[1] < v[3]);
+
         // The Moon's Mercator metres: its half circumference
         let moon: Vec<f64> = bbox(TileId::new(1, 1, 0), &Body::MOON)
             .split(',')
             .map(|s| s.parse().unwrap())
             .collect();
         let half = std::f64::consts::PI * 1_737_400.0;
+
         assert!(moon[0].abs() < 1e-6 && moon[1].abs() < 1e-6, "{moon:?}");
         assert!(
             (moon[2] - half).abs() < 1e-6 && (moon[3] - half).abs() < 1e-6,
@@ -180,11 +198,16 @@ mod tests {
     #[test]
     fn no_data_takes_the_lowest_altitude() {
         let below = no_data(&Body::EARTH);
+
         assert_eq!(below, -1250.0);
+
         let mut h = vec![12.0, -99_999.0, 5.0, f32::NAN, 30.0];
+
         fill_no_data(&mut h, below);
         assert_eq!(h, vec![12.0, 5.0, 5.0, 5.0, 30.0]);
+
         let mut all = vec![-99_999.0; 4];
+
         fill_no_data(&mut all, below);
         assert_eq!(all, vec![0.0; 4]);
     }
@@ -193,9 +216,12 @@ mod tests {
     fn deep_ground_of_other_bodies_is_data() {
         // Hellas and the South Pole-Aitken basin lie 8 and 9 km deep: data there; the 16-bit no-data is not
         let mut mars = vec![-8201.0, 21_241.0, -32_768.0, -1500.0];
+
         fill_no_data(&mut mars, no_data(&Body::MARS));
         assert_eq!(mars, vec![-8201.0, 21_241.0, -8201.0, -1500.0]);
+
         let mut moon = vec![-9126.0, 10_767.0, -3.4e38];
+
         fill_no_data(&mut moon, no_data(&Body::MOON));
         assert_eq!(moon, vec![-9126.0, 10_767.0, -9126.0]);
     }
@@ -207,11 +233,13 @@ mod tests {
         assert_eq!(terrain_levels(&Body::EARTH, Some(20)), (6, 15));
         assert_eq!(terrain_levels(&Body::MOON, Some(8)), (3, 8));
         assert_eq!(terrain_levels(&Body::MARS, Some(8)), (3, 8));
+
         // A body flatter than the Earth starts at level 6 all the same
         let flat = Body {
             relief: (-10.0, 10.0),
             ..Body::MOON
         };
+
         assert_eq!(terrain_levels(&flat, None), (6, 15));
     }
 
@@ -219,6 +247,7 @@ mod tests {
     fn the_mask_marks_no_data() {
         // Ten pixels: the 2nd and the 10th invalid (bits 0), the mask's last byte only partly used
         let mut h: Vec<f32> = (0..10).map(|k| k as f32 * 100.0).collect();
+
         apply_mask(&mut h, &[0b1011_1111, 0b1000_0000]);
         assert!(h[1].is_nan() && h[9].is_nan());
         assert_eq!(h.iter().filter(|v| v.is_nan()).count(), 2);
@@ -233,6 +262,7 @@ mod tests {
         let size = TILE as usize;
         let heights: Vec<f32> = (0..size * size).map(|k| (k % size / 8) as f32).collect();
         let s = subsample(&heights);
+
         assert_eq!(s.len(), CPU_HEIGHTS * CPU_HEIGHTS);
         // Columns of 8 pixels of the same value: each block keeps it
         assert_eq!(s[0], 0.0);
@@ -247,6 +277,7 @@ mod tests {
         let m = geo::camera::mercator(2.35, 48.85);
         let tile = TileId::new(10, (m.x * f64::from(n)) as u32, (m.y * f64::from(n)) as u32);
         let mut h = vec![0f32; (TILE * TILE) as usize];
+
         to_ellipsoid(tile, &mut h);
         assert!(h.iter().all(|&v| v > 30.0 && v < 60.0), "{}", h[0]);
     }

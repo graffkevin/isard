@@ -29,12 +29,14 @@ const INFO =
 
 const button = (className: string, label: string, icon: string, onClick: () => void): HTMLButtonElement => {
   const element = document.createElement('button');
+
   element.type = 'button';
   element.className = className;
   element.title = label;
   element.setAttribute('aria-label', label);
   element.innerHTML = icon;
   element.addEventListener('click', onClick);
+
   return element;
 };
 
@@ -58,8 +60,11 @@ export class NavigationControl implements Control {
 
   onAdd(map: GeoMap): HTMLElement {
     const group = document.createElement('div');
+
     group.className = 'isard-ctrl-group';
+
     const zoomBy = (delta: number) => map.easeTo({ zoom: map.getCamera().zoom + delta }, 300);
+
     if (this.options.showZoom) {
       group.append(
         button('isard-ctrl-zoom-in', 'Zoom in', PLUS, () => zoomBy(1)),
@@ -73,15 +78,18 @@ export class NavigationControl implements Control {
       const needle = compass.firstElementChild as SVGElement;
       const turn = () => {
         const { bearing, pitch } = map.getCamera();
+
         // Seen from above when tilted: the needle lies back with the ground, squashed by cos(pitch)
         needle.style.transform = this.options.visualizePitch
           ? `scale(${1 / Math.cos((pitch * Math.PI) / 180) ** 0.5}) rotateX(${pitch}deg) rotateZ(${-bearing}deg)`
           : `rotate(${-bearing}deg)`;
       };
+
       turn();
       this.stopListening = map.on('move', turn);
       group.append(compass);
     }
+
     return group;
   }
 
@@ -108,9 +116,13 @@ export class AttributionControl implements Control {
 
   onAdd(map: GeoMap): HTMLElement {
     const element = document.createElement('div');
+
     element.className = 'isard-attrib';
+
     const inner = document.createElement('div');
+
     inner.className = 'isard-attrib-inner';
+
     const custom = this.options.customAttribution ?? [];
     const render = () => {
       inner.innerHTML = [...map.attributions(), ...(typeof custom === 'string' ? [custom] : custom)].join(' | ');
@@ -119,30 +131,38 @@ export class AttributionControl implements Control {
         link.rel = 'noopener noreferrer';
       });
     };
+
     render();
     this.stopListening = map.onAttributionChange(render);
+
     const toggle = button('isard-attrib-button', 'Toggle attribution', INFO, () =>
       toggle.setAttribute('aria-expanded', String(element.classList.toggle('isard-attrib-open'))),
     );
+
     toggle.setAttribute('aria-expanded', 'false');
     element.append(inner, toggle);
+
     const { compact } = this.options;
+
     if (compact !== undefined) {
       element.classList.toggle('isard-attrib-compact', compact);
     } else {
       // Follows the map's width; a narrowed map folds the text, starting closed
       const fold = () => {
         const narrow = map.getContainer().clientWidth < 640;
+
         if (narrow !== element.classList.contains('isard-attrib-compact')) {
           element.classList.remove('isard-attrib-open');
           toggle.setAttribute('aria-expanded', 'false');
         }
         element.classList.toggle('isard-attrib-compact', narrow);
       };
+
       fold();
       this.observer = new ResizeObserver(fold);
       this.observer.observe(map.getContainer());
     }
+
     return element;
   }
 

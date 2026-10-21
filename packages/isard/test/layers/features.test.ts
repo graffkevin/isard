@@ -18,6 +18,7 @@ describe('features', () => {
         [14, 5],
       ]),
     ).toEqual([10, 14, 14, 14, 1, 5, 5, 5]);
+
     const many = stops([
       [0, 0],
       [1, 1],
@@ -25,6 +26,7 @@ describe('features', () => {
       [3, 3],
       [6, 6],
     ]);
+
     expect(many.slice(0, 4)).toEqual([0, 2, 4, 6]);
     expect(many.slice(4)).toEqual([0, 2, 4, 6]);
   });
@@ -34,6 +36,7 @@ describe('features', () => {
       [10, 2],
       [12, 6],
     ];
+
     expect(interpolate(s, 5)).toBe(2);
     expect(interpolate(s, 11)).toBe(4);
     expect(interpolate(s, 20)).toBe(6);
@@ -46,6 +49,7 @@ describe('features', () => {
       [10, '#000'],
       [0, '#fff'],
     ]);
+
     expect([min, max]).toEqual([0, 10]);
     expect([...rgba.subarray(0, 4)]).toEqual([255, 255, 255, 255]);
     expect([...rgba.subarray(255 * 4)]).toEqual([0, 0, 0, 255]);

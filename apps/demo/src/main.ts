@@ -33,7 +33,9 @@ const projection: Projection = params.get('projection') === 'mercator' ? 'mercat
 
 const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const found = document.getElementById(id);
+
   if (!found) throw new Error(`#${id} missing from the page`);
+
   return found as T;
 };
 
@@ -52,6 +54,7 @@ const popup = new Popup({ offset: [0, -34] });
 const pin = new Marker({ draggable: true }).setLonLat(PARIS).setPopup(popup).addTo(map);
 const where = () => {
   const [lon, lat] = pin.getLonLat();
+
   popup.setHTML(
     `<strong>Pin</strong><br>${lon.toFixed(5)}, ${lat.toFixed(5)}<br><small>Drag the pin to move it</small>`,
   );
@@ -67,8 +70,10 @@ const buttons = <T extends string>(
   pick: (option: T) => void,
 ): void => {
   const row = element(parent);
+
   options.forEach((option) => {
     const button = document.createElement('button');
+
     button.type = 'button';
     button.textContent = option;
     button.classList.toggle('on', option === initial);
@@ -147,7 +152,9 @@ const stats = element('stats');
 setInterval(() => {
   // An idle map draws nothing: the counter must drop to 0
   const now = performance.now();
+
   while (frames.length > 0 && (frames[0] ?? now) < now - 1000) frames.shift();
+
   const camera = map.getCamera();
   const raster = map.stats().map((l) => {
     const extra = [
@@ -155,9 +162,11 @@ setInterval(() => {
       l.cooling ? `${l.cooling} retrying` : '',
       l.missing ? `${l.missing} missing` : '',
     ].filter(Boolean);
+
     return `layer ${l.id}    ${l.drawn} drawn (${l.standIns} blurry), ${l.loaded} kept, ${l.inFlight} loading${extra.length ? `, ${extra.join(', ')}` : ''}`;
   });
   const m = mesh?.stats();
+
   stats.textContent = [
     `zoom       ${camera.zoom.toFixed(2)}`,
     `fps        ${frames.length}`,

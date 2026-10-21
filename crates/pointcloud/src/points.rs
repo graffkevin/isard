@@ -49,6 +49,7 @@ impl Layout {
     pub fn numbers(&self) -> [f64; 8] {
         let [sx, sy, sz] = self.scale;
         let [ox, oy, oz] = self.offset;
+
         [
             f64::from(self.format),
             self.record_length as f64,
@@ -70,12 +71,14 @@ impl Layout {
             scale: [sx, sy, sz],
             offset: [ox, oy, oz],
         };
+
         if !(6.0..=8.0).contains(&format) || layout.record_length < layout.minimum() || length > 1024.0 {
             return Err(bad());
         }
         if !numbers.iter().all(|v| v.is_finite()) {
             return Err(bad());
         }
+
         Ok(layout)
     }
 
@@ -97,9 +100,11 @@ impl Layout {
 /// are scaled to 8; a chunk whose colors all fit in 8 bits holds 8-bit colors (some writers store them so)
 pub fn vertices(records: &[u8], layout: &Layout, grid: &Grid) -> Result<Vec<u8>, String> {
     let length = layout.record_length;
+
     if length < layout.minimum() || !records.len().is_multiple_of(length) {
         return Err("point records of a wrong size".into());
     }
+
     let count = records.len() / length;
     let rgb_at = |r: &[u8], i: usize| u16_at(r, 30 + 2 * i).unwrap_or(0);
     let shift = if layout.has_rgb() && records.chunks(length).all(|r| (0..3).all(|i| rgb_at(r, i) <= 255)) {
@@ -108,6 +113,7 @@ pub fn vertices(records: &[u8], layout: &Layout, grid: &Grid) -> Result<Vec<u8>,
         8
     };
     let mut out = Vec::with_capacity(count * STRIDE);
+
     for r in records.chunks(length) {
         let [x, y, z] =
             [0, 1, 2].map(|i| f64::from(i32_at(r, i * 4).unwrap_or(0)) * layout.scale[i] + layout.offset[i]);
@@ -123,8 +129,10 @@ pub fn vertices(records: &[u8], layout: &Layout, grid: &Grid) -> Result<Vec<u8>,
             intensity: u16_at(r, 12).unwrap_or(0),
             returns: [returns & 0x0f, returns >> 4],
         };
+
         push(&mut out, p, &attributes);
     }
+
     Ok(out)
 }
 
@@ -136,6 +144,7 @@ mod tests {
     /// A grid where the CRS is ECEF itself around the origin: base = (x, y, 0), up = z
     fn identity() -> Grid {
         let nodes = Grid::nodes([0.0, 0.0], [100.0, 100.0], 2);
+
         Grid {
             min: [0.0, 0.0],
             max: [100.0, 100.0],
@@ -148,6 +157,7 @@ mod tests {
 
     fn record(format: u8, x: i32, rgb: [u16; 3]) -> Vec<u8> {
         let mut r = vec![0u8; [30, 36, 38][usize::from(format - 6)]];
+
         r[0..4].copy_from_slice(&x.to_le_bytes());
         r[4..8].copy_from_slice(&200i32.to_le_bytes());
         r[8..12].copy_from_slice(&(-50i32).to_le_bytes());
@@ -159,6 +169,7 @@ mod tests {
                 r[30 + 2 * i..32 + 2 * i].copy_from_slice(&c.to_le_bytes());
             }
         }
+
         r
     }
 
@@ -175,8 +186,11 @@ mod tests {
     fn records_become_vertices() {
         let records = [record(7, 100, [65535, 32768, 0]), record(7, 300, [256, 0, 0])].concat();
         let v = vertices(&records, &layout(7), &identity()).unwrap();
+
         assert_eq!(v.len(), 2 * STRIDE);
+
         let f = |at: usize| f32::from_le_bytes(v[at..at + 4].try_into().unwrap());
+
         // x = 100 × 0.1 + 10, y = 20, z = -5 + 5
         assert_eq!([f(0), f(4), f(8)], [20.0, 20.0, 0.0]);
         assert_eq!(&v[COLOR..COLOR + 4], &[255, 128, 0, 6]);
@@ -189,15 +203,19 @@ mod tests {
     fn colors_on_8_bits_are_kept() {
         let records = [record(8, 0, [200, 100, 50]), record(8, 1, [255, 0, 0])].concat();
         let v = vertices(&records, &layout(8), &identity()).unwrap();
+
         assert_eq!(&v[COLOR..COLOR + 3], &[200, 100, 50]);
+
         // Without colors: white
         let v = vertices(&record(6, 0, [0; 3]), &layout(6), &identity()).unwrap();
+
         assert_eq!(&v[COLOR..COLOR + 4], &[255, 255, 255, 6]);
     }
 
     #[test]
     fn layouts_are_checked() {
         let l = layout(7);
+
         assert_eq!(Layout::parse(&l.numbers()).unwrap(), l);
         assert!(Layout::parse(&[5.0, 30.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]).is_err());
         assert!(Layout::parse(&[7.0, 30.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]).is_err());

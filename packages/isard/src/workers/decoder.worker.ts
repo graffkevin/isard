@@ -23,6 +23,7 @@ const reply = (message: WorkerReply, transfer: Transferable[] = []): void => pos
 
 addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   const message = event.data;
+
   switch (message.type) {
     case 'headers':
       setHeaderRules(message.rules);
@@ -54,9 +55,11 @@ const load = async (
   priority: 'high' | 'low' | undefined,
 ): Promise<void> => {
   const controller = new AbortController();
+
   controllers.set(id, controller);
   try {
     await ready;
+
     // A retried tile bypasses the HTTP cache: it may hold the error
     // Fetch priority (tiles in view first): not yet in TypeScript's lib
     const init: RequestInit & { priority?: 'high' | 'low' } = {
@@ -65,25 +68,33 @@ const load = async (
       ...(priority ? { priority } : {}),
     };
     const response = await fetch(url, withHeaders(url, init));
+
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
     const bytes = new Uint8Array(await response.arrayBuffer());
     // Draco geometry first (its module loads on first use), then the tile itself
     const requests = dracoRequests(bytes);
     const draco = requests.length > 0 ? await decodeDraco(decoders, requests) : undefined;
     const tile = decodeTile(bytes, transform, yUp, draco);
+
     // An image shared by primitives (instanced meshes) is decoded once: the engine then shares its texture
     type Image = NonNullable<(typeof tile.primitives)[number]['image']>;
+
     const decoded = new Map<Image, Promise<Pick<DecodedPrimitive, 'bitmap' | 'texture'>>>();
     const decode = (image: Image, mime: string | undefined) => {
       const cached = decoded.get(image);
+
       if (cached) return cached;
+
       const pending =
         mime === 'image/ktx2'
           ? transcodeKtx2(decoders, formats, image).then((texture) => ({ bitmap: null, texture }))
           : createImageBitmap(new Blob([image], { type: mime ?? '' }), { premultiplyAlpha: 'none' }).then((bitmap) => ({
               bitmap,
             }));
+
       decoded.set(image, pending);
+
       return pending;
     };
     const vertices = tile.points ?? [];
@@ -100,6 +111,7 @@ const load = async (
     );
     // Each object once: a buffer or bitmap listed twice makes the transfer throw
     const transfer = new Set<Transferable>();
+
     primitives.forEach((p) => {
       transfer.add(p.vertices.buffer);
       transfer.add(p.indices.buffer);
@@ -113,12 +125,14 @@ const load = async (
     vertices.forEach((v) => {
       transfer.add(v.buffer);
     });
+
     const decodedTile = {
       anchor: tile.anchor,
       primitives,
       ...(vertices.length > 0 ? { points: vertices } : {}),
       ...(tile.properties ? { properties: tile.properties } : {}),
     };
+
     reply({ type: 'tile', id, tile: decodedTile }, [...transfer]);
   } catch (error) {
     reply({ type: 'error', id, error: String(error), aborted: controller.signal.aborted });
@@ -134,6 +148,7 @@ const BUSY_PAUSE_MS = 1000;
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, ms);
+
     signal.addEventListener('abort', () => {
       clearTimeout(timer);
       reject(new DOMException('aborted', 'AbortError'));
@@ -155,20 +170,25 @@ const fetchRange = async (
       ...(priority ? { priority } : {}),
     };
     const response = await fetch(url, withHeaders(url, init));
+
     if (response.status === 429 && attempt < BUSY_ATTEMPTS) {
       const after = Number(response.headers.get('Retry-After'));
+
       await sleep(after > 0 ? after * 1000 : BUSY_PAUSE_MS * 2 ** (attempt - 1), signal);
       continue;
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (response.status !== 206) {
       const length = Number(response.headers.get('Content-Length'));
+
       if (!(length <= size)) {
         await response.body?.cancel();
         throw new Error('the server ignores range requests (HTTP 206 expected)');
       }
+
       return new Uint8Array(await response.arrayBuffer()).subarray(offset, offset + size);
     }
+
     return new Uint8Array(await response.arrayBuffer());
   }
 };
@@ -177,6 +197,7 @@ const fetchRange = async (
 const loadPoints = async (message: Extract<WorkerRequest, { type: 'points' }>): Promise<void> => {
   const { id, url, offset, size, laz, layout, grid, count, priority } = message;
   const controller = new AbortController();
+
   controllers.set(id, controller);
   try {
     points ??= initPoints({ module_or_path: pointsUrl }).catch((error: unknown) => {
@@ -184,8 +205,10 @@ const loadPoints = async (message: Extract<WorkerRequest, { type: 'points' }>): 
       points = undefined;
       throw error;
     });
+
     const [bytes] = await Promise.all([fetchRange(url, offset, size, controller.signal, priority), points]);
     const vertices = decodeCopc(bytes, laz, layout, grid, count) as Uint8Array<ArrayBuffer>;
+
     reply({ type: 'points', id, vertices }, [vertices.buffer]);
   } catch (error) {
     reply({ type: 'error', id, error: String(error), aborted: controller.signal.aborted });

@@ -41,10 +41,12 @@ impl Grid {
             self.side as f64,
             self.vertical_scale,
         ];
+
         for (b, u) in self.base.iter().zip(&self.up) {
             out.extend(b.to_array());
             out.extend(u.to_array());
         }
+
         out
     }
 
@@ -53,19 +55,25 @@ impl Grid {
         let bad = || "bad point cloud grid".to_owned();
         let [x0, y0, x1, y1, side, vertical_scale] =
             numbers.get(..HEAD).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
+
         if !(2.0..=MAX_SIDE as f64).contains(&side) || side.fract() != 0.0 {
             return Err(bad());
         }
+
         let side = side as usize;
         let nodes = numbers.get(HEAD..).ok_or_else(bad)?;
+
         if nodes.len() != side * side * 6 || !numbers.iter().all(|v| v.is_finite()) || x1 <= x0 || y1 <= y0 {
             return Err(bad());
         }
+
         let (mut base, mut up) = (Vec::new(), Vec::new());
+
         for n in nodes.as_chunks::<6>().0 {
             base.push(DVec3::new(n[0], n[1], n[2]));
             up.push(DVec3::new(n[3], n[4], n[5]));
         }
+
         Ok(Self {
             min: [x0, y0],
             max: [x1, y1],
@@ -80,6 +88,7 @@ impl Grid {
     #[must_use]
     pub fn nodes(min: [f64; 2], max: [f64; 2], side: usize) -> Vec<[f64; 2]> {
         let step = |i: usize, a: f64, b: f64| a + (b - a) * i as f64 / (side - 1) as f64;
+
         (0..side * side)
             .map(|k| [step(k % side, min[0], max[0]), step(k / side, min[1], max[1])])
             .collect()
@@ -98,8 +107,10 @@ impl Grid {
         let mix = |nodes: &[DVec3]| {
             let bottom = nodes[at(0, 0)].lerp(nodes[at(1, 0)], s);
             let top = nodes[at(0, 1)].lerp(nodes[at(1, 1)], s);
+
             bottom.lerp(top, t)
         };
+
         mix(&self.base) + mix(&self.up) * (z * self.vertical_scale)
     }
 }
@@ -112,6 +123,7 @@ mod tests {
     /// A grid over a square of plate carrée degrees standing for a projected CRS: lon = x, lat = y
     fn degrees(min: [f64; 2], max: [f64; 2], side: usize, anchor: DVec3) -> Grid {
         let nodes = Grid::nodes(min, max, side);
+
         Grid {
             min,
             max,
@@ -131,10 +143,12 @@ mod tests {
         let anchor = geodesy::to_ecef(2.35, 48.853, 0.0);
         let (min, max) = ([2.343, 48.849], [2.357, 48.858]);
         let grid = degrees(min, max, 9, anchor);
+
         for (k, z) in [(0, 0.0), (1, 35.0), (2, 120.0), (3, -20.0)] {
             let (x, y) = (2.3431 + 0.0037 * f64::from(k), 48.8491 + 0.0021 * f64::from(k));
             let exact = geodesy::to_ecef(x, y, z) - anchor;
             let error = (grid.point(x, y, z) - exact).length();
+
             assert!(error < 1e-3, "{error} m at {x}, {y}, {z}");
         }
         // The numbers handed over give back the grid
@@ -147,6 +161,7 @@ mod tests {
         let grid = degrees([2.343, 48.849], [2.357, 48.858], 3, anchor);
         let (x, y) = (2.3425, 48.8586);
         let error = (grid.point(x, y, 10.0) - (geodesy::to_ecef(x, y, 10.0) - anchor)).length();
+
         assert!(error < 0.05, "{error}");
     }
 
@@ -154,17 +169,26 @@ mod tests {
     fn malformed_numbers_are_errors() {
         let grid = degrees([0.0, 0.0], [1.0, 1.0], 2, DVec3::ZERO);
         let numbers = grid.numbers();
+
         assert!(Grid::parse(&numbers[..10]).is_err());
+
         let mut bad = numbers.clone();
+
         bad[4] = 1.0;
         assert!(Grid::parse(&bad).is_err());
+
         let mut bad = numbers.clone();
+
         bad[4] = 2.5;
         assert!(Grid::parse(&bad).is_err());
+
         let mut bad = numbers.clone();
+
         bad[9] = f64::NAN;
         assert!(Grid::parse(&bad).is_err());
+
         let mut bad = numbers;
+
         bad[2] = -1.0;
         assert!(Grid::parse(&bad).is_err());
     }

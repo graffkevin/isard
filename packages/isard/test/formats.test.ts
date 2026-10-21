@@ -12,6 +12,7 @@ describe('parseXml', () => {
       <a:doc xmlns:a="urn:a" x:id='1 &amp; 2' b="&#x3c;&#62;"><item>A &lt;b&gt; &quot;c&quot; &#233;</item>
         <empty/><item><![CDATA[<raw> & ]]>tail</item><b:item>third</b:item>
       </a:doc>`);
+
     expect(root.name).toBe('doc');
     expect(root.attributes).toEqual({ a: 'urn:a', id: '1 & 2', b: '<>' });
     expect(descendants(root, 'item').map((i) => i.text)).toEqual(['A <b> "c" é', '<raw> & tail', 'third']);
@@ -21,6 +22,7 @@ describe('parseXml', () => {
 
   test('lenient: a stray closing tag ignored, an unclosed element ended by its parent, unknown entities kept', () => {
     const root = parseXml('<r><a><b>1</b></c></a><d>&nbsp;<</d><e>2</r>');
+
     expect(root.children.map((c) => c.name)).toEqual(['a', 'd', 'e']);
     expect(childText(root, 'd')).toBe('&nbsp;<');
     expect(childText(root, 'e')).toBe('2');
@@ -84,7 +86,9 @@ describe('parseKml', () => {
       'Track',
       'Nowhere',
     ]);
+
     const [pantheon] = features;
+
     expect(pantheon?.id).toBe('p1');
     expect(pantheon?.geometry).toEqual({ type: 'Point', coordinates: [2.3461, 48.8462, 35] });
     expect(pantheon?.properties).toMatchObject({
@@ -114,7 +118,9 @@ describe('parseKml', () => {
         [2.36, 48.86],
       ],
     });
+
     const block = features[2]?.geometry as { type: string; coordinates: number[][][] };
+
     expect(block.type).toBe('Polygon');
     expect(block.coordinates.map((ring) => ring.length)).toEqual([5, 4]);
     expect(features[3]?.geometry?.type).toBe('GeometryCollection');
@@ -232,6 +238,7 @@ describe('parseTopoJson', () => {
 
   test('arcs decoded (deltas, scale, translation) and stitched, reversed with ~i; ids and properties kept', () => {
     const { features } = parseTopoJson(topology);
+
     expect(features.length).toBe(4);
     expect(features[0]).toMatchObject({ id: 'west', properties: { n: 1 } });
     expect(features[0]?.geometry).toEqual({
@@ -266,6 +273,7 @@ describe('parseTopoJson', () => {
         [11, 41],
       ],
     });
+
     const plain: Topology = {
       type: 'Topology',
       arcs: [
@@ -276,6 +284,7 @@ describe('parseTopoJson', () => {
       ],
       objects: { l: { type: 'MultiLineString', arcs: [[~0]] } },
     };
+
     expect(parseTopoJson(plain).features[0]?.geometry).toEqual({
       type: 'MultiLineString',
       coordinates: [

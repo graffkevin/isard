@@ -71,14 +71,18 @@ const EARTH_HALO = Float32Array.of(0.42, 0.66, 1, 1);
 /** A body from the option, its defaults filled in */
 export const bodySettings = (body: CelestialBody | undefined): Required<BodyOptions> => {
   if (body === undefined || typeof body === 'string') return BODIES[body ?? 'earth'];
+
   const relief: [number, number] = [-0.01 * body.radius, 0.01 * body.radius];
+
   return { flattening: 0, atmosphere: false, color: '#808080', relief, ...body };
 };
 
 /** The halo of an atmosphere for the engine (RGB 0-1 and its strength, the color's alpha): undefined for none */
 export const haloSettings = (atmosphere: boolean | string): Float32Array | undefined => {
   if (atmosphere === true) return EARTH_HALO;
+
   const color = atmosphere === false ? undefined : parseCssColor(atmosphere);
+
   return color && Float32Array.from(color);
 };
 
@@ -89,6 +93,7 @@ export const haloSettings = (atmosphere: boolean | string): Float32Array | undef
 /** The relief options of the option on */
 const terrainOptions = (terrain: true | TerrainModel | TerrainOptions): TerrainOptions => {
   if (typeof terrain === 'string') return { model: terrain };
+
   return terrain === true ? {} : terrain;
 };
 
@@ -99,14 +104,18 @@ export const terrainSettings = (
   terrainLoader: (url: string, encoding: PngEncoding, floor?: number) => TerrainLoader,
 ): Settings['terrain'] => {
   if (!terrain) return undefined;
+
   const options = terrainOptions(terrain);
   const earth = (body ?? 'earth') === 'earth';
   const exaggeration = options.exaggeration ?? 1;
+
   if (options.url === undefined && earth) {
     if (options.model === 'ign') {
       const geoid = options.geoid ?? true;
+
       return { url: TERRAIN_URL, exaggeration, maxZoom: options.maxZoom ?? 15, geoid, attribution: IGN_ATTRIBUTION };
     }
+
     return {
       url: TERRAIN_TILES.url,
       exaggeration,
@@ -117,10 +126,14 @@ export const terrainSettings = (
       attribution: TERRAIN_TILES_ATTRIBUTION,
     };
   }
+
   const preset = body === 'moon' || body === 'mars' ? BODY_TERRAINS[body] : undefined;
   const url = options.url ?? preset?.url;
+
   if (url === undefined) throw new Error('isard: the relief of this body needs a url');
+
   const encoding = options.encoding ?? 'float32';
+
   // PNG encodings are fetched tile by tile: a {bbox} or an image service would be fetched as it is
   if (
     encoding !== 'float32' &&
@@ -128,6 +141,7 @@ export const terrainSettings = (
   ) {
     throw new Error(`isard: the '${encoding}' terrain encoding takes a tile URL with {z}, {x} and {y} (${url})`);
   }
+
   return {
     url: IMAGE_SERVER.test(url) ? imageServerTerrain(url, earth, radius) : url,
     exaggeration,
@@ -142,6 +156,7 @@ export const terrainSettings = (
 /** Sky settings for the engine: colors (RGB 0-1) and blends, MapLibre's defaults */
 export const atmosphereSettings = (options: AtmosphereOptions | undefined): Float32Array | undefined => {
   if (!options) return undefined;
+
   return Float32Array.from([
     ...rgb(options.skyColor ?? '#9cc7ec'),
     ...rgb(options.horizonColor ?? '#e8f1f8'),
@@ -155,5 +170,6 @@ export const atmosphereSettings = (options: AtmosphereOptions | undefined): Floa
 /** A CSS color to RGB 0-1 (its alpha dropped); black if unknown */
 export const rgb = (color: string): [r: number, g: number, b: number] => {
   const [r, g, b] = parseCssColor(color) ?? [0, 0, 0, 1];
+
   return [r, g, b];
 };

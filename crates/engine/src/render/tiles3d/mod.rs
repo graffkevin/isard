@@ -52,6 +52,7 @@ void main() {
 fn light_at(anchor: glam::DVec3) -> glam::DVec3 {
     let g = geo::geodesy::from_ecef(anchor);
     let [east, north, up] = geo::geodesy::enu(g.x, g.y);
+
     (-0.35 * east + 0.35 * north + 0.87 * up).normalize()
 }
 
@@ -131,7 +132,9 @@ thread_local! {
 pub(crate) fn next_request() -> u32 {
     NEXT_REQUEST.with(|n| {
         let id = n.get();
+
         n.set(id.wrapping_add(1).max(1));
+
         id
     })
 }
@@ -217,6 +220,7 @@ impl Tiles3dLayer {
             Err(e) => {
                 // SAFETY: the program just made, not used
                 unsafe { gl.delete_program(program) };
+
                 return Err(e);
             }
         };
@@ -249,23 +253,28 @@ impl Tiles3dLayer {
             scratch: tileset::Scratch::default(),
             redraw: redraw.clone(),
         };
+
         layer.fetch_root(0.0);
+
         Ok(layer)
     }
 
     /// Fetches the root tileset after `delay_ms`: it arrives as the virtual tile `ROOT`
     fn fetch_root(&self, delay_ms: f64) {
         let (inbox, redraw, url) = (self.inbox.clone(), self.redraw.clone(), self.url.clone());
+
         wasm_bindgen_futures::spawn_local(async move {
             if delay_ms > 0.0 {
                 js::sleep(delay_ms as i32).await;
             }
+
             // After a failure, past the HTTP cache (it may hold the error)
             // Nothing shows before the root tileset: urgent
             let arrival = match fetch_bytes(&url, None, delay_ms > 0.0, "high").await {
                 Ok(bytes) => Arrival::Tileset(bytes, url),
                 Err(_) => Arrival::Failed,
             };
+
             inbox.borrow_mut().push((ROOT, 0, arrival));
             redraw();
         });
@@ -281,7 +290,9 @@ impl Tiles3dLayer {
             Some(ms) => format!("retried in {} s", ms / 1000.0),
             None => "given up".to_owned(),
         };
+
         web_sys::console::error_1(&JsValue::from_str(&format!("3D Tiles {}: {error}; {next}", self.url)));
+
         match delay {
             Some(ms) => {
                 self.root = Root::Loading(attempt + 1);
@@ -294,6 +305,7 @@ impl Tiles3dLayer {
     fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let now = js_sys::Date::now();
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
+
         for (tile, id, arrival) in arrivals {
             if tile == ROOT {
                 match arrival {
@@ -309,8 +321,10 @@ impl Tiles3dLayer {
                 }
                 continue;
             }
+
             // Only the answer to the current request of a tile counts (not one that was aborted, then asked again)
             let current = self.states.is_current(tile, id);
+
             match arrival {
                 Arrival::Tileset(json, url) if current => {
                     if let Err(e) = self.graft(&json, &url, Some(tile)) {
@@ -328,23 +342,28 @@ impl Tiles3dLayer {
                 stale => discard(stale),
             }
         }
+
         // Uploads within the frame's time budget (at least one), the rest waits for the next frames
         let start = crate::js::now();
         let mut uploaded = 0;
+
         while uploaded == 0 || crate::js::now() - start < budget_ms {
             let Some((tile, arrival)) = self.queue.pop_front() else {
                 break;
             };
+
             uploaded += 1;
             if !matches!(self.states.get(tile), Some(State::Loading(_))) {
                 discard(arrival);
                 continue;
             }
+
             let uploaded = match arrival {
                 Arrival::Mesh(mesh, images) => upload(gl, &mesh, images, frame),
                 Arrival::Decoded(tile) => upload_decoded(gl, raw, &tile, frame).map_err(|e| {
                     // The images not uploaded are closed
                     discard(Arrival::Decoded(tile));
+
                     format!("{e:?}")
                 }),
                 other => {
@@ -352,11 +371,13 @@ impl Tiles3dLayer {
                     continue;
                 }
             };
+
             match uploaded {
                 Ok(mut gpu) => {
                     if self.geoid {
                         // Altitudes, not heights above the ellipsoid: the tile raised by the geoid under its anchor
                         let g = geo::geodesy::from_ecef(gpu.anchor);
+
                         gpu.anchor = geo::geodesy::to_ecef(g.x, g.y, g.z + geo::geoid::height(g.x, g.y));
                     }
                     if !gpu.points.is_empty() && self.points.is_none() {
@@ -379,17 +400,23 @@ impl Tiles3dLayer {
     /// Adds a tileset: the root one (`parent` None) or an external one (or implicit subtree) under `parent`
     fn graft(&mut self, json: &[u8], url: &str, parent: Option<usize>) -> Result<(), String> {
         let added = self.tree.add(json, url, parent);
+
         if let Some(p) = parent {
             self.states.replace(p, State::Empty);
         }
+
         let root = added?;
+
         if parent.is_none() {
             self.root = Root::Ready(root);
         }
+
         let nodes = &self.tree.nodes;
+
         self.states.grow(nodes.len(), |i| {
             matches!(nodes[i].content, Content::None | Content::Unsupported)
         });
+
         Ok(())
     }
 
@@ -414,8 +441,10 @@ impl Tiles3dLayer {
             if let Err(e) = self.graft(&[], "", Some(tile)) {
                 web_sys::console::warn_1(&JsValue::from_str(&format!("3D Tiles {}: {e}", self.url)));
             }
+
             return;
         }
+
         let Some(node) = self.tree.nodes.get(tile) else {
             return;
         };
@@ -430,6 +459,7 @@ impl Tiles3dLayer {
         let priority = if urgent { "high" } else { "low" };
         let id = next_request();
         let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
+
         // Meshes go to the worker pool when there is one: fetched and decoded off the main thread
         if !is_tileset
             && let Some(promise) = self
@@ -447,15 +477,19 @@ impl Tiles3dLayer {
                     // Aborted downloads land here too: no warning (the tile is no longer waited for)
                     Err(_) => Arrival::Failed,
                 };
+
                 inbox.borrow_mut().push((tile, id, arrival));
                 redraw();
             });
+
             return;
         }
+
         let Ok(controller) = web_sys::AbortController::new() else {
             return;
         };
         let signal = controller.signal();
+
         self.states.replace(
             tile,
             State::Loading(Loading {
@@ -472,17 +506,21 @@ impl Tiles3dLayer {
                 Ok(bytes) => match decode::decode(&bytes, &transform, y_up, &[]) {
                     Ok(mesh) => {
                         let images = decode_images(&mesh).await;
+
                         Arrival::Mesh(mesh, images)
                     }
                     Err(e) => {
                         web_sys::console::warn_1(&JsValue::from_str(&format!("{url}: {e}")));
+
                         Arrival::Failed
                     }
                 },
                 Err(_) => Arrival::Failed,
             };
+
             if signal.aborted() {
                 discard(arrival);
+
                 return;
             }
             inbox.borrow_mut().push((tile, id, arrival));
@@ -500,6 +538,7 @@ impl Tiles3dLayer {
         loading: Profile,
     ) -> bool {
         self.receive(gl, raw, frame, loading.upload_budget_ms);
+
         let root = match self.root {
             Root::Ready(root) => root,
             // The first attempt counts as loading; while retrying, or given up, the layer does not hold the map back
@@ -510,6 +549,7 @@ impl Tiles3dLayer {
         let states = &self.states;
         let mut selection = std::mem::take(&mut self.selection);
         let ready = |i| states.readiness(i, now);
+
         tileset::select_into(
             &self.tree,
             root,
@@ -519,14 +559,18 @@ impl Tiles3dLayer {
             &mut selection,
             &mut self.scratch,
         );
+
         // Downloads of tiles that left the view are aborted
         let mut stale = std::mem::take(&mut self.stale);
+
         self.states.take_stale(&selection.visible, &mut stale);
         for loading in stale.drain(..) {
             self.abort(&loading);
         }
         self.stale = stale;
+
         let mut requests = std::mem::take(&mut self.requests);
+
         self.states.plan_requests(
             &selection.request,
             &selection.prefetch,
@@ -538,6 +582,7 @@ impl Tiles3dLayer {
         // and the prefetched siblings are not
         for (rank, &i) in requests.iter().enumerate() {
             let urgent = rank < URGENT_REQUESTS && !selection.prefetch.contains(&i);
+
             self.request(i, urgent);
         }
         self.requests = requests;
@@ -549,12 +594,14 @@ impl Tiles3dLayer {
         self.evict(gl, frame);
         self.render(gl, view, &selection.draw, &selection.backfill);
         self.render_points(gl, view, pixel_ratio, &selection.draw, &selection.backfill);
+
         let prefetching = selection
             .prefetch
             .iter()
             .filter(|&&i| self.states.is_loading(i))
             .count();
         let (in_flight, loaded, gpu_bytes) = self.states.counts();
+
         self.stats = Tiles3dStats {
             drawn: selection.draw.len() + selection.backfill.len(),
             loaded,
@@ -567,6 +614,7 @@ impl Tiles3dLayer {
         if !self.queue.is_empty() {
             (self.redraw)();
         }
+
         in_flight > prefetching || !self.queue.is_empty()
     }
 
@@ -584,12 +632,15 @@ impl Tiles3dLayer {
     /// values (its own fragments included, so its surface still sorts by depth)
     fn render(&self, gl: &glow::Context, view: &View, tiles: &[usize], backfill: &[usize]) {
         let [matrix, texture, textured, opacity, color, light] = &self.uniforms;
+
         // SAFETY: draws with objects owned by this layer
         unsafe {
             gl.use_program(Some(self.program));
             gl.uniform_1_i32(texture.as_ref(), 0);
             gl.uniform_1_f32(opacity.as_ref(), self.opacity);
+
             let [r, g, b] = self.color.unwrap_or([1.0; 3]);
+
             gl.uniform_4_f32(color.as_ref(), r, g, b, if self.color.is_some() { 1.0 } else { 0.0 });
             gl.active_texture(glow::TEXTURE0);
             gl.enable(glow::DEPTH_TEST);
@@ -601,20 +652,28 @@ impl Tiles3dLayer {
             gl.enable(glow::STENCIL_TEST);
             gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
             gl.stencil_func(glow::ALWAYS, 255, 0xff);
+
             let levels = backfill
                 .iter()
                 .map(|&i| (i, Some((self.tree.nodes[i].depth + 1).min(254) as i32)));
+
             for (i, level) in tiles.iter().map(|&i| (i, None)).chain(levels) {
                 let Some(State::Ready(mesh)) = self.states.get(i) else {
                     continue;
                 };
+
                 if let Some(level) = level {
                     gl.stencil_func(glow::GEQUAL, level, 0xff);
                 }
+
                 let m = view.view_proj * view.ecef_matrix(mesh.anchor);
+
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&m));
+
                 let l = light_at(mesh.anchor);
+
                 gl.uniform_3_f32(light.as_ref(), l.x as f32, l.y as f32, l.z as f32);
+
                 for p in &mesh.primitives {
                     gl.uniform_1_f32(textured.as_ref(), if p.texture.is_some() { 1.0 } else { 0.0 });
                     gl.bind_texture(glow::TEXTURE_2D, p.texture);
@@ -648,6 +707,7 @@ impl Tiles3dLayer {
                 let g = geo::geodesy::from_ecef(mesh.anchor);
                 let up = geo::geodesy::enu(g.x, g.y)[2];
                 let matrix = view.view_proj * view.ecef_matrix(mesh.anchor);
+
                 mesh.points.iter().map(move |points| Draw {
                     points,
                     matrix,
@@ -657,9 +717,11 @@ impl Tiles3dLayer {
                 })
             })
             .collect();
+
         if draws.is_empty() {
             return;
         }
+
         let look = Look {
             color_by: ColorBy::Rgb,
             size: self.point_size,
@@ -670,6 +732,7 @@ impl Tiles3dLayer {
             classes: false,
             lit: true,
         };
+
         program.draw(gl, pixel_ratio, &look, &draws, None);
     }
 }
@@ -693,8 +756,11 @@ impl Layer for Tiles3dLayer {
         let gl = frame.gl;
         let [matrix, base_u, count_u, layer_u] = &self.pick_uniforms;
         let mut picked = self.picked.borrow_mut();
+
         picked.clear();
+
         let mut base = 0u32;
+
         // SAFETY: draws with objects owned by this layer; the state set back after
         unsafe {
             gl.use_program(Some(self.pick_program));
@@ -709,12 +775,15 @@ impl Layer for Tiles3dLayer {
                     continue;
                 };
                 let count = mesh.feature_count.max(1);
+
                 // 24 bits of handles in all
                 if base.saturating_add(count) >= (1 << 24) - 1 {
                     break;
                 }
                 picked.push((base, i));
+
                 let m = frame.view.view_proj * frame.view.ecef_matrix(mesh.anchor);
+
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&m));
                 gl.uniform_1_f32(base_u.as_ref(), base as f32);
                 gl.uniform_1_f32(count_u.as_ref(), count as f32);
@@ -750,6 +819,7 @@ impl Layer for Tiles3dLayer {
         if let Some(points) = &self.points {
             points.delete(gl);
         }
+
         // SAFETY: the programs are owned by this layer, not used afterwards
         unsafe {
             gl.delete_program(self.program);
@@ -784,6 +854,7 @@ impl Drop for Tiles3dLayer {
         for (_, arrival) in self.queue.drain(..) {
             discard(arrival);
         }
+
         for (_, _, arrival) in self.inbox.borrow_mut().drain(..) {
             discard(arrival);
         }
@@ -824,6 +895,7 @@ impl Engine {
     #[must_use]
     pub fn texture_formats(&self) -> JsValue {
         let has = |names: &[&str]| names.iter().any(|n| self.raw.get_extension(n).ok().flatten().is_some());
+
         js::object(&[
             ("astc", has(&["WEBGL_compressed_texture_astc"]).into()),
             ("bptc", has(&["EXT_texture_compression_bptc"]).into()),
@@ -838,7 +910,9 @@ impl Engine {
     #[wasm_bindgen(js_name = addTiles3d)]
     pub fn add_tiles3d(&mut self, url: String, max_error: f64, geoid: Option<bool>) -> Result<u32, JsValue> {
         let mut layer = Tiles3dLayer::new(&self.gl, url, max_error, self.loader.clone(), &self.redraw)?;
+
         layer.geoid = geoid.unwrap_or(false);
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -885,8 +959,10 @@ impl Engine {
         let properties = mesh.properties.as_ref().map_or(JsValue::UNDEFINED, |list| {
             js_sys::Reflect::get_u32(list, feature).unwrap_or(JsValue::UNDEFINED)
         });
+
         out.push(&properties);
         out.push(&JsValue::from(feature));
+
         out.into()
     }
 
@@ -896,6 +972,7 @@ impl Engine {
     pub fn tiles3d_stats(&self, id: u32) -> JsValue {
         self.layer::<Tiles3dLayer>(id).map_or(JsValue::UNDEFINED, |layer| {
             let s = layer.stats;
+
             js::object(&[
                 ("drawn", s.drawn.into()),
                 ("loaded", s.loaded.into()),

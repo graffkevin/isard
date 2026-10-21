@@ -143,13 +143,16 @@ pub fn instance_matrices(
     out: &mut Vec<f32>,
 ) {
     out.clear();
+
     for instance in instances {
         if !instance.valid() {
             out.extend([0.0; 16]);
             continue;
         }
+
         let altitude = instance.altitude + ground(instance.lon, instance.lat).unwrap_or(0.0);
         let local = view.enu_matrix(DVec3::new(instance.lon, instance.lat, altitude)) * instance.matrix(anchor);
+
         if view.globe.factor > 0.0 && !view.faces_camera(local.w_axis.truncate()) {
             out.extend([0.0; 16]);
             continue;
@@ -206,7 +209,9 @@ impl ModelLayer {
         let program = objects.program(&vertex, &gl::fragment_shader(&[FRAGMENT]))?;
         let pick_program = objects.program(&vertex, &gl::fragment_shader(&[PICK_FRAGMENT]))?;
         let buffer = objects.buffer()?;
+
         objects.keep();
+
         let mut layer = Self {
             uniforms: gl::uniforms(
                 gl,
@@ -226,7 +231,9 @@ impl ModelLayer {
             matrices: Vec::new(),
             redraw: redraw.clone(),
         };
+
         layer.model = layer.load();
+
         Ok(layer)
     }
 
@@ -238,6 +245,7 @@ impl ModelLayer {
             *inbox.borrow_mut() = Some(arrival);
             redraw();
         };
+
         if let Some(promise) = self
             .loader
             .as_ref()
@@ -249,29 +257,35 @@ impl ModelLayer {
                     Err(e) => Arrival::Failed(format!("{e:?}")),
                 });
             });
+
             return Model::Loading(id, None);
         }
+
         let Ok(controller) = web_sys::AbortController::new() else {
             return Model::Failed;
         };
         let signal = controller.signal();
+
         wasm_bindgen_futures::spawn_local(async move {
             let arrival = match fetch_bytes(&url, Some(&signal), false, "high").await {
                 Ok(bytes) => match decode::decode(&bytes, &DMat4::IDENTITY, true, &[]) {
                     Ok(mesh) => {
                         let images = decode_images(&mesh).await;
+
                         Arrival::Mesh(mesh, images)
                     }
                     Err(e) => Arrival::Failed(e),
                 },
                 Err(e) => Arrival::Failed(format!("{e:?}")),
             };
+
             if signal.aborted() {
                 discard(arrival);
             } else {
                 deliver(arrival);
             }
         });
+
         Model::Loading(id, Some(controller))
     }
 
@@ -284,10 +298,12 @@ impl ModelLayer {
             Arrival::Mesh(mesh, images) => upload(gl, &mesh, images, frame),
             Arrival::Decoded(tile) => upload_decoded(gl, raw, &tile, frame).map_err(|e| {
                 discard(Arrival::Decoded(tile));
+
                 format!("{e:?}")
             }),
             Arrival::Failed(e) => Err(e),
         };
+
         self.model = match uploaded {
             Ok(mesh) => {
                 // SAFETY: setup of the arrays just uploaded: four columns of a matrix per instance
@@ -295,6 +311,7 @@ impl ModelLayer {
                     for p in &mesh.primitives {
                         gl.bind_vertex_array(Some(p.vao));
                         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
+
                         for column in 0..4 {
                             gl.enable_vertex_attrib_array(2 + column);
                             gl.vertex_attrib_pointer_f32(2 + column, 4, glow::FLOAT, false, 64, 16 * column as i32);
@@ -303,10 +320,12 @@ impl ModelLayer {
                     }
                     gl.bind_vertex_array(None);
                 }
+
                 Model::Ready(mesh)
             }
             Err(e) => {
                 web_sys::console::error_1(&JsValue::from_str(&format!("Model {}: {e}", self.url)));
+
                 Model::Failed
             }
         };
@@ -317,11 +336,14 @@ impl ModelLayer {
         let relief = frame.relief.filter(|_| self.ground);
         let ground = |lon, lat| {
             let (source, exaggeration) = relief?;
+
             source
                 .altitude(geo::camera::mercator(lon, lat))
                 .map(|h| h * f64::from(exaggeration))
         };
+
         instance_matrices(frame.view, &self.instances, anchor, ground, out);
+
         // SAFETY: upload into a buffer owned by this layer
         unsafe {
             frame.gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
@@ -338,23 +360,30 @@ impl ModelLayer {
         let count = self.instances.len() as i32;
         // The models hide one another and what is drawn after them, and are hidden by the hills
         let _depth = DepthState::solid(gl);
+
         // SAFETY: draws with objects owned by this layer and its mesh
         unsafe {
             if let Some(layer) = pick {
                 let [matrix, ordinal] = &self.pick_uniforms;
+
                 gl.use_program(Some(self.pick_program));
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
                 gl.uniform_1_f32(ordinal.as_ref(), f32::from(layer));
             } else {
                 let [matrix, texture, _, _, eye] = &self.uniforms;
+
                 gl.use_program(Some(self.program));
                 gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
                 gl.uniform_1_i32(texture.as_ref(), 0);
+
                 let e = view.eye.as_vec3();
+
                 gl.uniform_3_f32(eye.as_ref(), e.x, e.y, e.z);
                 gl.active_texture(glow::TEXTURE0);
             }
+
             let [_, _, textured, color, _] = &self.uniforms;
+
             for p in &mesh.primitives {
                 if pick.is_none() {
                     gl.uniform_1_f32(textured.as_ref(), if p.texture.is_some() { 1.0 } else { 0.0 });
@@ -372,18 +401,23 @@ impl ModelLayer {
 impl Layer for ModelLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
         self.receive(frame.gl, frame.raw, frame.number);
+
         let mesh = match &self.model {
             Model::Ready(mesh) => mesh,
             Model::Loading(..) => return true,
             Model::Failed => return false,
         };
+
         if self.instances.is_empty() {
             return false;
         }
+
         let mut matrices = std::mem::take(&mut self.matrices);
+
         self.upload_matrices(frame, mesh.anchor, &mut matrices);
         self.render(frame, mesh, None);
         self.matrices = matrices;
+
         false
     }
 
@@ -408,6 +442,7 @@ impl Layer for ModelLayer {
         if let Model::Ready(mesh) = std::mem::replace(&mut self.model, Model::Failed) {
             delete_mesh(gl, &mesh);
         }
+
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
             gl.delete_program(self.program);
@@ -438,6 +473,7 @@ impl Drop for ModelLayer {
     /// Stops the download and frees the decoded images still waiting
     fn drop(&mut self) {
         self.abort();
+
         if let Some(arrival) = self.inbox.borrow_mut().take() {
             discard(arrival);
         }
@@ -474,6 +510,7 @@ impl Engine {
             self.loader.clone(),
             &self.redraw,
         )?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -518,16 +555,23 @@ mod tests {
     fn the_front_faces_the_heading() {
         // Heading 0: front north, up up, left west; 90: front east, left north
         let m = instance(0.0, 0.0, 0.0, 1.0).matrix(DVec3::ZERO);
+
         assert!(close(m.transform_vector3(FRONT), DVec3::Y));
         assert!(close(m.transform_vector3(UP), DVec3::Z));
         assert!(close(m.transform_vector3(LEFT), DVec3::NEG_X));
+
         let m = instance(90.0, 0.0, 0.0, 1.0).matrix(DVec3::ZERO);
+
         assert!(close(m.transform_vector3(FRONT), DVec3::X));
         assert!(close(m.transform_vector3(LEFT), DVec3::Y));
+
         // Pitch 90 points the nose up; roll 90 lays the right side down (up to the east when facing north)
         let m = instance(0.0, 90.0, 0.0, 1.0).matrix(DVec3::ZERO);
+
         assert!(close(m.transform_vector3(FRONT), DVec3::Z));
+
         let m = instance(0.0, 0.0, 90.0, 1.0).matrix(DVec3::ZERO);
+
         assert!(close(m.transform_vector3(UP), DVec3::X));
     }
 
@@ -536,17 +580,22 @@ mod tests {
         // Decoded positions are relative to the anchor: the model's origin is at -anchor, where the instance stands
         let anchor = DVec3::new(1.0, -2.0, 3.0);
         let m = instance(30.0, 10.0, -5.0, 2.5).matrix(anchor);
+
         assert!(close(m.transform_point3(-anchor), DVec3::ZERO));
+
         // A point 1 m above the origin: 2.5 m up, whatever the heading (pitch and roll off)
         let m = instance(123.0, 0.0, 0.0, 2.5).matrix(anchor);
+
         assert!(close(m.transform_point3(-anchor + UP), DVec3::new(0.0, 0.0, 2.5)));
     }
 
     #[test]
     fn instances_land_where_the_ground_is() {
         let mut camera = Camera::new(2.424_573, 48.845_726, 16.0);
+
         camera.width = 800.0;
         camera.height = 600.0;
+
         let view = camera.view();
         let instances = Instance::parse(&[
             2.424_573,
@@ -572,29 +621,40 @@ mod tests {
             0.0,
             3.0,
         ]);
+
         assert_eq!(instances.len(), 3);
+
         let mut out = Vec::new();
+
         // The relief 100 m high everywhere
         instance_matrices(&view, &instances, DVec3::ZERO, |_, _| Some(100.0), &mut out);
         assert_eq!(out.len(), 48);
+
         let k = view.pixels_per_metre(48.845_726);
+
         // The first stands at the center, 110 m up; the second is all zeros
         assert!((f64::from(out[12])).abs() < 1e-3 && (f64::from(out[13])).abs() < 1e-3);
         assert!((f64::from(out[14]) - 110.0 * k).abs() < 1e-3);
         assert!(out[16..32].iter().all(|&v| v == 0.0));
+
         // The third where the plane puts its position, 3 m to a metre of its frame
         let at = view.position(mercator(2.425, 48.846), 0.0);
+
         assert!((f64::from(out[44]) - at.x).abs() < 1e-2 && (f64::from(out[45]) - at.y).abs() < 1e-2);
+
         let column = DVec3::new(f64::from(out[32]), f64::from(out[33]), f64::from(out[34]));
+
         assert!((column.length() / (3.0 * view.pixels_per_metre(48.846)) - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn instances_behind_the_globe_are_left_out() {
         let mut camera = Camera::new(2.4, 48.8, 1.5);
+
         camera.globe = true;
         camera.width = 800.0;
         camera.height = 600.0;
+
         let view = camera.view();
         let near = instance(0.0, 0.0, 0.0, 1.0);
         let far = Instance {
@@ -603,6 +663,7 @@ mod tests {
             ..near
         };
         let mut out = Vec::new();
+
         instance_matrices(&view, &[near, far], DVec3::ZERO, |_, _| None, &mut out);
         assert!(out[..16].iter().any(|&v| v != 0.0));
         assert!(out[16..].iter().all(|&v| v == 0.0));

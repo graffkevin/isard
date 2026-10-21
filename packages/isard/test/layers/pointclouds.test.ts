@@ -11,6 +11,7 @@ const wkt = (file: string, start: string): string => {
   const text = new TextDecoder('latin1').decode(bytes);
   const from = text.indexOf(start);
   const end = text.indexOf('\0', from);
+
   return text.slice(from, end < 0 ? undefined : end);
 };
 
@@ -20,11 +21,15 @@ const AUTZEN = wkt('autzen_header.bin', 'COMPD_CS');
 describe('the CRS of a WKT', () => {
   test('LiDAR HD: Lambert-93 in metres, its altitudes on the geoid', () => {
     expect(wktCrs(PARIS)).toEqual({ code: 2154, verticalScale: 1 });
+
     const crs = pointCloudCrs(PARIS, {});
+
     expect(crs.geoid).toBe(true);
     expect(crs.verticalScale).toBe(1);
+
     // Notre-Dame de Paris
     const [lon = 0, lat = 0] = crs.inverse(Float64Array.of(652_299, 6_861_633));
+
     expect(lon).toBeCloseTo(2.3499, 3);
     expect(lat).toBeCloseTo(48.853, 3);
     expect(pointCloudCrs(PARIS, { geoid: false, verticalScale: 2 })).toMatchObject({ geoid: false, verticalScale: 2 });
@@ -34,14 +39,18 @@ describe('the CRS of a WKT', () => {
     expect(wktCrs(AUTZEN)).toEqual({ code: 2992, verticalScale: 0.304800609601219 });
     // Not built in: the page gives it
     expect(() => pointCloudCrs(AUTZEN, {})).toThrow("crs` (proj4('EPSG:2992'))");
+
     const metres = lambertConformalConic({ lat0: 41.75, lon0: -120.5, lat1: 43, lat2: 45.5, x0: 400000, y0: 0 });
     const feet = {
       forward: ([lon, lat]: [number, number]) => metres.forward([lon, lat]).map((v) => v / 0.3048),
       inverse: ([x, y]: [number, number]) => metres.inverse([x * 0.3048, y * 0.3048]),
     };
     const crs = pointCloudCrs(AUTZEN, { crs: feet });
+
     expect(crs.geoid).toBe(false);
+
     const [lon = 0, lat = 0] = crs.inverse(Float64Array.of(637_905, 851_210));
+
     // Autzen Stadium, Eugene (Oregon)
     expect(lon).toBeCloseTo(-123.07, 1);
     expect(lat).toBeCloseTo(44.06, 1);
@@ -62,6 +71,7 @@ describe('the CRS of a WKT', () => {
 describe('classes', () => {
   test('the palette: the defaults, the page over them, unknown classes grey', () => {
     const p = classPalette({ 2: { color: '#ff0000' }, 6: { visible: false } });
+
     expect([...p.subarray(8, 12)]).toEqual([255, 0, 0, 255]);
     expect(p[6 * 4 + 3]).toBe(0);
     // Noise hidden by default, ground brown

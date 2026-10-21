@@ -41,6 +41,7 @@ impl Grid {
         // A little under the limit: the rounding of the division never adds a square past it
         let size = size.max(extent.max_element() / f64::from(MAX_SIDE - 2));
         let squares = |e: f64| ((e / size) as u32).saturating_add(1).min(MAX_SIDE);
+
         Self {
             min,
             size,
@@ -69,6 +70,7 @@ impl Grid {
             (c.x.max(0.0) as u32).min(self.cols - 1),
             (c.y.max(0.0) as u32).min(self.rows - 1),
         );
+
         j * self.cols + i
     }
 }
@@ -110,11 +112,13 @@ fn line_of<'a>(
         && e + 1 < lines.start.len()
     {
         let (s, t) = (lines.start[e] as usize, lines.start[e + 1] as usize);
+
         if t >= s + 2 && t <= lines.points.len() {
             return &lines.points[s..t];
         }
     }
     *ends = [nodes[edges[e * 2] as usize], nodes[edges[e * 2 + 1] as usize]];
+
     ends
 }
 
@@ -126,6 +130,7 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
     // Points that are not numbers are left out (and the pieces that reach them)
     let (mut min, mut max) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
     let mut ends = [DVec2::ZERO; 2];
+
     for e in 0..edge_count {
         for &p in line_of(e, nodes, edges, lines, &mut ends) {
             if p.is_finite() {
@@ -134,6 +139,7 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
             }
         }
     }
+
     let extent = max - min;
     let grid = Grid::over(min, max, (extent.x.max(extent.y) / SQUARES_ACROSS).max(MIN_SQUARE));
     let size = grid.size;
@@ -143,6 +149,7 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
     let f32s = |p: DVec2| [p.x as f32, p.y as f32];
     let each = |visit: &mut dyn FnMut(u32, Piece)| {
         let mut ends = [DVec2::ZERO; 2];
+
         for e in 0..edge_count {
             let points = line_of(e, nodes, edges, lines, &mut ends);
             let total: f64 = points
@@ -151,15 +158,18 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
                 .map(|w| w[0].distance(w[1]))
                 .sum();
             let mut along = 0.0;
+
             for w in points.windows(2).filter(|w| finite(w)) {
                 let length = w[0].distance(w[1]);
                 let parts = (length / size).ceil().max(1.0) as usize;
+
                 for k in 0..parts {
                     let (t0, t1) = (k as f64 / parts as f64, (k + 1) as f64 / parts as f64);
                     let (a, b) = (w[0].lerp(w[1], t0), w[0].lerp(w[1], t1));
                     let fraction = |t: f64| {
                         if total > 0.0 { (along + length * t) / total } else { t }
                     };
+
                     visit(
                         grid.square((a + b) / 2.0),
                         Piece {
@@ -176,16 +186,20 @@ pub fn build(nodes: &[DVec2], edges: &[u32], lines: Option<&Lines>, origin: DVec
     };
     let squares = grid.len();
     let mut start = vec![0u32; squares + 1];
+
     each(&mut |s, _| start[s as usize + 1] += 1);
     for s in 0..squares {
         start[s + 1] += start[s];
     }
+
     let mut fill = start.clone();
     let mut pieces = vec![Piece::default(); start[squares] as usize];
+
     each(&mut |s, piece| {
         pieces[fill[s as usize] as usize] = piece;
         fill[s as usize] += 1;
     });
+
     Pieces { grid, start, pieces }
 }
 
@@ -211,15 +225,19 @@ pub fn visible(grid: &Grid, start: &[u32], view: &View, heights: (f64, f64), shi
 #[must_use]
 pub fn squares_in_view(grid: &Grid, view: &View, heights: (f64, f64), shift: f64, margin: f64, far: bool) -> Vec<u32> {
     let mut squares = Vec::new();
+
     squares_in_view_into(grid, view, (heights, shift, margin, far), &mut squares);
+
     squares
 }
 
 /// `squares_in_view` into `out` (cleared first), with (heights, shift, margin, far)
 fn squares_in_view_into(grid: &Grid, view: &View, (heights, shift, margin, far): Look, out: &mut Vec<u32>) {
     out.clear();
+
     let reach = 0.5 + margin.max(0.0) / grid.size;
     let planes = if far { ALL_PLANES } else { NO_FAR_PLANE };
+
     visit(
         grid,
         view,
@@ -247,9 +265,11 @@ pub struct Visible {
 impl Visible {
     fn key(view: &View, ((low, high), shift, margin, far): Look) -> [u64; 26] {
         let mut key = [0u64; 26];
+
         for (k, v) in view.view_proj.to_cols_array().into_iter().enumerate() {
             key[k] = v.to_bits();
         }
+
         let rest = [
             view.center.x,
             view.center.y,
@@ -262,9 +282,11 @@ impl Visible {
             margin,
             f64::from(u8::from(far)),
         ];
+
         for (k, v) in rest.into_iter().enumerate() {
             key[16 + k] = v.to_bits();
         }
+
         key
     }
 
@@ -272,11 +294,13 @@ impl Visible {
     /// out again only for another view or look
     pub fn update(&mut self, grid: &Grid, start: &[u32], view: &View, look: Look) -> &[(u32, u32)] {
         let key = Self::key(view, look);
+
         if self.key != Some(key) {
             squares_in_view_into(grid, view, look, &mut self.squares);
             ranges_into(&self.squares, start, &mut self.ranges);
             self.key = Some(key);
         }
+
         &self.ranges
     }
 
@@ -309,20 +333,25 @@ impl Visible {
 #[must_use]
 pub fn ranges(squares: &[u32], start: &[u32]) -> Vec<(u32, u32)> {
     let mut out = Vec::new();
+
     ranges_into(squares, start, &mut out);
+
     out
 }
 
 /// `ranges` into `out` (cleared first)
 pub fn ranges_into(squares: &[u32], start: &[u32], out: &mut Vec<(u32, u32)>) {
     out.clear();
+
     for &s in squares {
         let (Some(&first), Some(&end)) = (start.get(s as usize), start.get(s as usize + 1)) else {
             continue;
         };
+
         if first >= end {
             continue;
         }
+
         match out.last_mut() {
             Some(last) if last.1 == first => last.1 = end,
             _ => out.push((first, end)),
@@ -335,19 +364,24 @@ pub fn ranges_into(squares: &[u32], start: &[u32], out: &mut Vec<(u32, u32)>) {
 #[must_use]
 pub fn sort_by_square(square_of: &[u32], squares: usize) -> (Vec<u32>, Vec<u32>) {
     let mut start = vec![0u32; squares + 1];
+
     for &s in square_of {
         start[(s as usize).min(squares.saturating_sub(1)) + 1] += 1;
     }
     for s in 0..squares {
         start[s + 1] += start[s];
     }
+
     let mut fill = start.clone();
     let mut order = vec![0u32; square_of.len()];
+
     for (item, &s) in square_of.iter().enumerate() {
         let s = (s as usize).min(squares.saturating_sub(1));
+
         order[fill[s] as usize] = item as u32;
         fill[s] += 1;
     }
+
     (order, start)
 }
 
@@ -359,16 +393,20 @@ type Bounds = ((f64, f64), f64, f64, u8);
 fn visit(grid: &Grid, view: &View, bounds: Bounds, block: (u32, u32, u32, u32), out: &mut Vec<u32>) {
     let (heights, shift, reach, planes) = bounds;
     let (x0, y0, x1, y1) = block;
+
     if x0 >= x1 || y0 >= y1 {
         return;
     }
+
     // The block, widened by what its squares hold reaches out of them
     let lo = grid.min + (DVec2::new(f64::from(x0), f64::from(y0)) - reach) * grid.size;
     let hi = grid.min + (DVec2::new(f64::from(x1), f64::from(y1)) + reach) * grid.size;
     let mut corners = [DVec3::ZERO; 18];
+
     for (k, corner) in corners.iter_mut().enumerate() {
         let (i, j, h) = (k % 3, (k / 3) % 3, if k < 9 { heights.0 } else { heights.1 });
         let m = lo + (hi - lo) * DVec2::new(i as f64, j as f64) / 2.0;
+
         *corner = view.position(m, shift) + DVec3::Z * h;
     }
     if !in_planes(view, &corners, planes) {
@@ -376,9 +414,12 @@ fn visit(grid: &Grid, view: &View, bounds: Bounds, block: (u32, u32, u32, u32), 
     }
     if x1 - x0 == 1 && y1 - y0 == 1 {
         out.push(y0 * grid.cols + x0);
+
         return;
     }
+
     let (mx, my) = (x0 + (x1 - x0).div_ceil(2), y0 + (y1 - y0).div_ceil(2));
+
     for b in [(x0, y0, mx, my), (mx, y0, x1, my), (x0, my, mx, y1), (mx, my, x1, y1)] {
         visit(grid, view, bounds, b, out);
     }
@@ -401,14 +442,17 @@ mod tests {
             .map(|k| o + DVec2::new(f64::from(k % n), f64::from(k / n)) * step)
             .collect();
         let mut edges = Vec::new();
+
         for k in 0..n * n {
             if k % n + 1 < n {
                 edges.extend([k, k + 1]);
             }
+
             if k / n + 1 < n {
                 edges.extend([k, k + n]);
             }
         }
+
         (nodes, edges)
     }
 
@@ -416,7 +460,9 @@ mod tests {
     fn every_piece_lies_in_its_square() {
         let (nodes, edges) = town(200);
         let p = build(&nodes, &edges, None, DVec2::ZERO);
+
         assert_eq!(p.pieces.len(), edges.len() / 2);
+
         for s in 0..(p.grid.cols * p.grid.rows) as usize {
             for piece in &p.pieces[p.start[s] as usize..p.start[s + 1] as usize] {
                 assert_eq!(p.grid.square(middle(piece)) as usize, s);
@@ -435,8 +481,11 @@ mod tests {
             points: &points,
         };
         let p = build(&nodes, &[0, 1], Some(&lines), DVec2::new(0.5, 0.3));
+
         assert_eq!(p.pieces.len(), 2);
+
         let mut fractions: Vec<_> = p.pieces.iter().map(|q| q.fractions).collect();
+
         fractions.sort_by(|a, b| a[0].total_cmp(&b[0]));
         assert!(fractions[0][0].abs() < 1e-6 && (fractions[0][1] - 0.5).abs() < 1e-6);
         assert!((fractions[1][1] - 1.0).abs() < 1e-6);
@@ -448,21 +497,27 @@ mod tests {
         // A 50 km straight edge: split to the square size, fractions continuous
         let nodes = [mercator(2.0, 48.0), mercator(2.7, 48.0)];
         let p = build(&nodes, &[0, 1], None, nodes[0]);
+
         assert!(p.pieces.len() > 50, "{}", p.pieces.len());
+
         let length = |q: &Piece| f64::from((q.to[0] - q.from[0]).hypot(q.to[1] - q.from[1]));
+
         assert!(p.pieces.iter().all(|q| length(q) <= p.grid.size * 1.001));
     }
 
     #[test]
     fn items_sorted_by_square_keep_their_order() {
         let (order, start) = sort_by_square(&[2, 0, 2, 1, 0], 3);
+
         assert_eq!(order, [1, 4, 3, 0, 2]);
         assert_eq!(start, [0, 2, 3, 5]);
         // Consecutive squares merge, empty ones are skipped
         assert_eq!(ranges(&[0, 1, 2], &start), [(0, 5)]);
         assert_eq!(ranges(&[0, 2], &start), [(0, 2), (3, 5)]);
         assert_eq!(ranges(&[0, 7], &[0, 0, 4]), Vec::new());
+
         let grid = Grid::over(DVec2::ZERO, DVec2::new(1.0, 0.5), 0.25);
+
         assert_eq!((grid.cols, grid.rows, grid.len()), (5, 3, 15));
         assert_eq!(grid.square(DVec2::new(0.3, 0.3)), 6);
         assert_eq!(grid.square(DVec2::new(-1.0, 9.0)), 10);
@@ -475,15 +530,20 @@ mod tests {
         let size = 100.0 / 40_075_016.686;
         let grid = Grid::over(o, o + DVec2::splat(size * 4.0), size);
         let mut c = Camera::new(2.35, 48.85, 18.0);
+
         c.width = 400.0;
         c.height = 400.0;
         c.center = o + DVec2::new(size * 6.5, size * 2.0);
+
         let view = c.view();
+
         assert_eq!(
             squares_in_view(&grid, &view, (0.0, 0.0), 0.0, 0.0, true),
             Vec::<u32>::new()
         );
+
         let wide = squares_in_view(&grid, &view, (0.0, 0.0), 0.0, size * 2.0, true);
+
         assert!(!wide.is_empty() && wide.is_sorted());
     }
 
@@ -493,16 +553,20 @@ mod tests {
         let (nodes, edges) = town(200);
         let p = build(&nodes, &edges, None, DVec2::ZERO);
         let mut c = Camera::new(2.45, 48.78, 16.0);
+
         c.width = 1200.0;
         c.height = 800.0;
+
         let view = c.view();
         let ranges = p.visible(&view, (0.0, 0.0), 0.0);
         let drawn: u32 = ranges.iter().map(|(a, b)| b - a).sum();
+
         assert!(
             drawn > 0 && (drawn as usize) < p.pieces.len() / 50,
             "{drawn} of {}",
             p.pieces.len()
         );
+
         // Every piece on screen is drawn
         let center = c.center;
         let on_screen = p
@@ -511,14 +575,19 @@ mod tests {
             .enumerate()
             .filter(|(_, q)| middle(q).distance(center) * view.world_size < 300.0)
             .map(|(k, _)| k as u32);
+
         for k in on_screen {
             assert!(ranges.iter().any(|(a, b)| (*a..*b).contains(&k)));
         }
         // Tilted, more squares; far away, none
         c.pitch = 70.0;
+
         let tilted: u32 = p.visible(&c.view(), (0.0, 0.0), 0.0).iter().map(|(a, b)| b - a).sum();
+
         assert!(tilted > drawn);
+
         let mut far = Camera::new(-70.0, 40.0, 14.0);
+
         far.width = 1200.0;
         far.height = 800.0;
         assert_eq!(p.visible(&far.view(), (0.0, 0.0), 0.0), Vec::new());
@@ -533,11 +602,14 @@ mod tests {
             (DVec2::NEG_INFINITY, DVec2::INFINITY),
         ] {
             let grid = Grid::over(min, max, 1e-6);
+
             assert_eq!(grid.len(), 1, "{min} {max}");
             assert_eq!(grid.square(DVec2::new(f64::NAN, 0.5)), 0);
         }
+
         // Tiny squares over a wide extent: larger squares, at most MAX_SIDE a side, still covering the extent
         let grid = Grid::over(DVec2::ZERO, DVec2::new(1e6, 1.0), 1e-9);
+
         assert!(grid.cols <= MAX_SIDE && grid.rows <= MAX_SIDE);
         assert!(f64::from(grid.cols) * grid.size >= 1e6);
         assert_eq!(grid.square(DVec2::new(1e6, 1.0)) % grid.cols, grid.cols - 1);
@@ -557,13 +629,16 @@ mod tests {
         };
         // Edge 0 along a line with a point not a number, edge 1 to a node at infinity: no piece reaches them
         let p = build(&nodes, &[0, 1, 0, 2], Some(&lines), nodes[0]);
+
         assert!(p.grid.len() < 100_000, "{}", p.grid.len());
         assert!(
             p.pieces
                 .iter()
                 .all(|q| q.from.iter().chain(&q.to).all(|v| v.is_finite()))
         );
+
         let only_infinite = build(&nodes, &[2, 2], None, DVec2::ZERO);
+
         assert!(only_infinite.pieces.is_empty() && only_infinite.grid.len() == 1);
     }
 
@@ -572,13 +647,18 @@ mod tests {
         let (nodes, edges) = town(50);
         let p = build(&nodes, &edges, None, DVec2::ZERO);
         let mut c = Camera::new(2.36, 48.84, 16.0);
+
         c.width = 800.0;
         c.height = 600.0;
+
         let view = c.view();
         let look = ((0.0, 0.0), 0.0, 0.0, true);
         let mut visible = Visible::default();
+
         assert!(visible.cached(&view, look).is_none());
+
         let ranges = visible.update(&p.grid, &p.start, &view, look).to_vec();
+
         assert_eq!(ranges, p.visible(&view, (0.0, 0.0), 0.0));
         assert_eq!(visible.cached(&view, look), Some(ranges.as_slice()));
         assert!(visible.squares().is_sorted() && !visible.squares().is_empty());

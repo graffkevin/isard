@@ -22,6 +22,7 @@ const FADE: f64 = 3.0;
 
 fn node(column: usize, row: usize) -> f64 {
     let i = (row * COLUMNS + column) * 2;
+
     f64::from(u16::from_le_bytes([GRID[i], GRID[i + 1]])) / 100.0
 }
 
@@ -33,6 +34,7 @@ pub fn height(lon: f64, lat: f64) -> f64 {
     if !lon.is_finite() || !lat.is_finite() {
         return 0.0;
     }
+
     let x = (lon - WEST) / STEP_LON;
     let y = (NORTH - lat) / STEP_LAT;
     let (last_x, last_y) = ((COLUMNS - 1) as f64, (ROWS - 1) as f64);
@@ -41,9 +43,11 @@ pub fn height(lon: f64, lat: f64) -> f64 {
         (-x).max(x - last_x).max(0.0) * STEP_LON,
         (-y).max(y - last_y).max(0.0) * STEP_LAT,
     );
+
     if outside >= MARGIN + FADE {
         return 0.0;
     }
+
     let t = ((outside - MARGIN) / FADE).clamp(0.0, 1.0);
     let weight = 1.0 - t * t * (3.0 - 2.0 * t);
     let (x, y) = (x.clamp(0.0, last_x), y.clamp(0.0, last_y));
@@ -52,6 +56,7 @@ pub fn height(lon: f64, lat: f64) -> f64 {
     let (tx, ty) = (x - c as f64, y - r as f64);
     let top = node(c, r) * (1.0 - tx) + node(c + 1, r) * tx;
     let bottom = node(c, r + 1) * (1.0 - tx) + node(c + 1, r + 1) * tx;
+
     (top * (1.0 - ty) + bottom * ty) * weight
 }
 
@@ -85,16 +90,21 @@ mod tests {
         // Small steps along lines crossing the grid, its margin and the fade: no jump larger than the slope allows
         for lat in [30.0, 38.5, 41.0, 45.0, 51.5, 52.0, 56.0] {
             let mut previous = height(-15.0, lat);
+
             for i in 1..=3000 {
                 let h = height(-15.0 + f64::from(i) * 0.01, lat);
+
                 assert!((h - previous).abs() < 0.5, "{lat}: step {}", h - previous);
                 previous = h;
             }
         }
+
         for lon in [-12.0, -6.0, 0.0, 8.5, 10.0, 13.0] {
             let mut previous = height(lon, 34.0);
+
             for i in 1..=2400 {
                 let h = height(lon, 34.0 + f64::from(i) * 0.01);
+
                 assert!((h - previous).abs() < 0.5, "{lon}: step {}", h - previous);
                 previous = h;
             }

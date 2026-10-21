@@ -37,11 +37,13 @@ interface Formats {
 let formats: Promise<Formats> | undefined;
 const loadFormats = (): Promise<Formats> => {
   const src = join(root, 'packages/isard/src');
+
   formats ??= Promise.all(
     ['data/kml.ts', 'data/gpx.ts', 'data/topojson.ts', 'data/crs.ts'].map(
       (m) => import(join(src, m)) as Promise<Partial<Formats>>,
     ),
   ).then((modules) => Object.assign({}, ...modules) as Formats);
+
   return formats;
 };
 const KEEPALIVE_MS = 15_000;
@@ -86,6 +88,7 @@ export class BridgeState {
         break;
       case 'remove': {
         const i = this.layers.findIndex((l) => l.id === message.id);
+
         if (i >= 0) this.layers.splice(i, 1);
         break;
       }
@@ -96,8 +99,10 @@ export class BridgeState {
         break;
       default: {
         if (!message.type.startsWith('add')) break;
+
         const add = message as AddMessage;
         const i = this.layers.findIndex((l) => l.id === add.id);
+
         // The same id replaces the layer at its place
         if (i >= 0) this.layers[i] = add;
         else this.layers.push(add);
@@ -142,7 +147,9 @@ class Channel {
       },
       cancel: close,
     });
+
     signal.addEventListener('abort', close);
+
     return new Response(stream, {
       headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
     });
@@ -154,6 +161,7 @@ class Channel {
 
   publish(message: unknown): void {
     const bytes = this.event(message);
+
     this.clients.forEach((c) => {
       try {
         c.enqueue(bytes);
@@ -180,20 +188,25 @@ export const rangeResponse = (path: string, request: Request): Response => {
   const headers: Record<string, string> = { 'Accept-Ranges': 'bytes', 'Content-Type': file.type };
   const range = request.headers.get('Range');
   const head = request.method === 'HEAD';
+
   if (!range) {
     return new Response(head ? null : file, { headers: { ...headers, 'Content-Length': String(size) } });
   }
+
   const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
   const requested = (): [number, number] => {
     if (!match || !(match[1] || match[2])) return [Number.NaN, size - 1];
     // The last n bytes
     if (match[1] === '') return [Math.max(0, size - Number(match[2])), size - 1];
+
     return [Number(match[1]), match[2] ? Math.min(Number(match[2]), size - 1) : size - 1];
   };
   const [start, end] = requested();
+
   if (!(start <= end) || start >= size) {
     return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${size}` } });
   }
+
   return new Response(head ? null : file.slice(start, end + 1), {
     status: 206,
     headers: {
@@ -224,8 +237,10 @@ export class MbTiles {
     this.query = this.db.query<{ tile_data: Uint8Array }, [number, number, number]>(
       'SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?',
     );
+
     const rows = this.db.query<{ name: string; value: string }, []>('SELECT name, value FROM metadata').all();
     const metadata: Record<string, unknown> = Object.fromEntries(rows.map(({ name, value }) => [name, value]));
+
     // The vector layers in the `json` row
     if (typeof metadata.json === 'string') {
       try {
@@ -251,10 +266,14 @@ export class MbTiles {
 
   response(z: number, x: number, y: number): Response {
     const data = this.tile(z, x, y);
+
     if (!data) return new Response(null, { status: this.vector ? 204 : 404 });
+
     const headers: Record<string, string> = { 'Content-Type': TILE_TYPES[this.format] ?? 'application/octet-stream' };
+
     // Gzipped as stored (vector tiles): the browser inflates them
     if (data[0] === 0x1f && data[1] === 0x8b) headers['Content-Encoding'] = 'gzip';
+
     return new Response(data, { headers });
   }
 
@@ -263,6 +282,7 @@ export class MbTiles {
     const b = String(this.metadata.bounds ?? '')
       .split(',')
       .map(Number);
+
     return b.length === 4 && b.every(Number.isFinite) ? (b as Bounds) : undefined;
   }
 
@@ -278,6 +298,7 @@ export const featureCollection = async (json: unknown): Promise<GeoJsonCollectio
     value?.type !== 'FeatureCollection' && value?.type !== 'Feature'
       ? { type: 'Feature', geometry: value, properties: {} }
       : value;
+
   return (await loadFormats()).reproject(data);
 };
 
@@ -292,6 +313,7 @@ interface Served {
 const union = (a: Bounds | undefined, b: Bounds | undefined): Bounds | undefined => {
   if (!a) return b;
   if (!b) return a;
+
   return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
 };
 
@@ -304,17 +326,22 @@ export const fileMessages = async (
   const url = `files/${file.token}/${encodeURIComponent(file.name)}`;
   const ext = extname(lower);
   const named = { id, name: file.name };
+
   if (ext === '.geojson' || ext === '.json' || ext === '.kml' || ext === '.gpx' || ext === '.topojson') {
     const text = await Bun.file(file.path).text();
     const { parseKml, parseGpx, parseTopoJson } = await loadFormats();
     const parse = async (): Promise<GeoJsonCollection> => {
       if (ext === '.kml') return parseKml(text);
       if (ext === '.gpx') return parseGpx(text);
+
       const json = JSON.parse(text) as { type?: string; objects?: Record<string, unknown> };
+
       if (json.type === 'Topology') return parseTopoJson(json, Object.keys(json.objects ?? {})[0]);
+
       return featureCollection(json);
     };
     const data = await parse();
+
     return { messages: [{ type: 'addGeoJSON', ...named, data }], bounds: collectionBounds(data) };
   }
   if (ext === '.laz' || ext === '.las') {
@@ -323,6 +350,7 @@ export const fileMessages = async (
   if (ext === '.pmtiles') {
     const header = parseHeader(new Uint8Array(await Bun.file(file.path).slice(0, 127).arrayBuffer()));
     const kind = header.tileType === 'mvt' ? 'vector' : 'raster';
+
     return { messages: [{ type: 'addPmtiles', ...named, url, kind }], bounds: header.bounds };
   }
   if (ext === '.mbtiles' && file.mbtiles) {
@@ -333,15 +361,18 @@ export const fileMessages = async (
       ...(m.metadata.maxzoom === undefined ? {} : { maxZoom: Number(m.metadata.maxzoom) }),
       ...(typeof m.metadata.attribution === 'string' ? { attribution: m.metadata.attribution } : {}),
     };
+
     if (m.vector) {
       const layers = Array.isArray(m.metadata.vector_layers)
         ? (m.metadata.vector_layers as { id?: unknown }[]).map((l) => l?.id).filter((l) => typeof l === 'string')
         : [];
+
       return {
         messages: [{ type: 'addVectorTiles', ...named, url: tiles, ...zooms, ...(layers.length ? { layers } : {}) }],
         bounds: m.bounds,
       };
     }
+
     return { messages: [{ type: 'addRaster', ...named, url: tiles, ...zooms }], bounds: m.bounds };
   }
   if (ext === '.glb' || ext === '.gltf') {
@@ -354,9 +385,11 @@ export const fileMessages = async (
 /** Starts the server: the viewer, its bridge, the files */
 export const createViewerServer = async (options: ViewerServerOptions = {}): Promise<ViewerServer> => {
   const folder = resolve(options.root ?? join(root, 'apps/viewer/dist'));
+
   if (!existsSync(join(folder, 'index.html'))) {
     console.warn(`isard viewer: ${folder}/index.html is missing (bun run build); the bridge is served anyway`);
   }
+
   const print = options.print ?? true;
   const state = new BridgeState();
   const toViewer = new Channel();
@@ -382,71 +415,102 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
       if (!allowedHosts().includes(request.headers.get('Host') ?? '')) {
         return new Response('Forbidden host', { status: 403 });
       }
+
       const origin = request.headers.get('Origin');
+
       if (request.method === 'POST' && origin && !allowedOrigins().includes(origin)) {
         return new Response('Forbidden origin', { status: 403 });
       }
+
       const { pathname } = new URL(request.url);
+
       if (pathname === '/bridge/events') return toViewer.open(state.replay(), request.signal);
       if (pathname === '/bridge/host-events') return toHosts.open([], request.signal);
       if (pathname === '/bridge/message' && request.method === 'POST') {
         const message = (await request.json().catch(() => undefined)) as ViewerMessage | undefined;
+
         if (message === undefined) return new Response('Bad JSON', { status: 400 });
         if (typeof message?.type !== 'string') return new Response('No type', { status: 400 });
         if (print) console.log(JSON.stringify(message));
         toHosts.publish(message);
+
         return new Response(null, { status: 204 });
       }
       if (pathname === '/bridge/send' && request.method === 'POST') {
         const body: unknown = await request.json().catch(() => undefined);
+
         if (body === undefined) return new Response('Bad JSON', { status: 400 });
+
         const messages = (Array.isArray(body) ? body : [body]) as HostMessage[];
+
         if (!messages.every((m) => typeof m?.type === 'string')) return new Response('No type', { status: 400 });
         send(messages);
+
         return new Response(null, { status: 204 });
       }
+
       const served = /^\/files\/([^/]+)\/([^/]+)$/.exec(pathname);
+
       if (served) {
         const file = files.get(served[1] ?? '');
+
         if (!file || decodeURIComponent(served[2] ?? '') !== file.name)
           return new Response('Not found', { status: 404 });
+
         return rangeResponse(file.path, request);
       }
+
       const mb = /^\/mbtiles\/([^/]+)\/(?:metadata\.json|(\d+)\/(\d+)\/(\d+)(?:\.\w+)?)$/.exec(pathname);
+
       if (mb) {
         const tiles = files.get(mb[1] ?? '')?.mbtiles;
+
         if (!tiles) return new Response('Not found', { status: 404 });
         if (mb[2] === undefined) return Response.json(tiles.metadata);
+
         return tiles.response(Number(mb[2]), Number(mb[3]), Number(mb[4]));
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Not found', { status: 404 });
+
       const path = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, '');
       const target = join(folder, path.endsWith('/') ? `${path}index.html` : path);
+
       if (!target.startsWith(folder)) return new Response('Not found', { status: 404 });
+
       const file = Bun.file(target);
+
       if (!(await file.exists())) return new Response('Not found', { status: 404 });
+
       const type = target.endsWith('.wasm') ? 'application/wasm' : file.type;
+
       return new Response(file, { headers: { 'Content-Type': type } });
     },
   });
+
   port = server.port ?? port;
 
   // The files given: served, then added as layers in order, the view fitted to them
   const ids = new Set<string>();
   let bounds: Bounds | undefined;
+
   for (const given of options.files ?? []) {
     const path = resolve(given);
+
     if (!existsSync(path) || !statSync(path).isFile()) {
       console.error(`isard viewer: ${given}: no such file`);
       continue;
     }
+
     const name = basename(path);
     const file: Served = { token: randomBytes(12).toString('hex'), name, path };
     let id = name;
+
     for (let n = 2; ids.has(id); n += 1) id = `${name}-${n}`;
     try {
       if (name.toLowerCase().endsWith('.mbtiles')) file.mbtiles = new MbTiles(path);
+
       const added = await fileMessages(file, id);
+
       files.set(file.token, file);
       ids.add(id);
       send(added.messages);
@@ -459,6 +523,7 @@ export const createViewerServer = async (options: ViewerServerOptions = {}): Pro
   if (bounds) send({ type: 'fitBounds', bounds, padding: 40 });
 
   const url = `http://127.0.0.1:${port}/`;
+
   return {
     server,
     url,
@@ -479,8 +544,10 @@ if (import.meta.main) {
   const files: string[] = [];
   let port = 5190;
   let open = false;
+
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] as string;
+
     if (arg === '--port') port = Number(args[++i]);
     else if (arg.startsWith('--port=')) port = Number(arg.slice('--port='.length));
     else if (arg === '--open') open = true;
@@ -490,10 +557,13 @@ if (import.meta.main) {
     console.error('isard viewer: --port takes a port number');
     process.exit(1);
   }
+
   const viewer = await createViewerServer({ port, files });
+
   console.error(`isard viewer: ${viewer.url}?bridge=1`);
   if (open) {
     const command = { darwin: ['open'], win32: ['cmd', '/c', 'start', ''] }[process.platform as string] ?? ['xdg-open'];
+
     Bun.spawn([...command, `${viewer.url}?bridge=1`], { stdout: 'ignore', stderr: 'ignore' });
   }
 }

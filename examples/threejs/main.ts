@@ -48,6 +48,7 @@ const colors = [0x2f7de1, 0x2bb673, 0xf2b134, 0x8e5bd6, 0x1fb5c4, 0xe0457b];
 colors.forEach((color, i) => {
   const cube = new THREE.Mesh(new THREE.BoxGeometry(14, 14, 14), new THREE.MeshLambertMaterial({ color }));
   const angle = (i / colors.length) * Math.PI * 2;
+
   cube.position.set(Math.cos(angle) * 140, Math.sin(angle) * 140, 12);
   ring.add(cube);
 });
@@ -74,7 +75,9 @@ map.addCustomLayer({
   },
   render(gl, frame) {
     if (!renderer) return;
+
     const t = still ? 2 : performance.now() / 1000;
+
     knot.rotation.set(t * 0.6, 0, t * 0.9);
     ring.rotation.z = t * 0.25;
     ring.children.forEach((cube) => {

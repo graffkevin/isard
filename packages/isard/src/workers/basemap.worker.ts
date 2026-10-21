@@ -99,6 +99,7 @@ export interface Sprite {
 const spriteIcon = (r: Renderer, name: string) => {
   const sprite = r.sprites.find((sp) => Boolean(sp.icons[name]));
   const icon = sprite?.icons[name];
+
   return sprite && icon ? { icon, image: sprite.image } : undefined;
 };
 
@@ -137,22 +138,31 @@ const images = new Lru<string, Promise<ImageBitmap | undefined>>(64, (evicted) =
 /** An image of a raster source (shared by every renderer); undefined where the source has none */
 const image = (url: string, priority: Priority = 'auto'): Promise<ImageBitmap | undefined> => {
   const hit = images.get(url);
+
   if (hit) return hit;
+
   const pending = (async () => {
     // A tile of a PMTiles archive (`pmtiles://…/{z}/{x}/{y}`)
     const archived = pmtilesTile(url);
+
     if (archived) {
       const bytes = await archived;
+
       return bytes && createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]));
     }
+
     const init: PriorityInit = { priority };
     const response = await fetch(url, withHeaders(url, init));
+
     if (response.status === 404 || response.status === 204) return undefined;
     if (!response.ok) throw new Error(`${url}: ${response.status}`);
+
     return createImageBitmap(await response.blob());
   })();
+
   pending.catch(() => images.delete(url));
   images.set(url, pending);
+
   return pending;
 };
 
@@ -162,17 +172,22 @@ type PriorityInit = RequestInit & { priority?: Priority };
 /** A vector tile, decoded (shared by every renderer of its URL); the first request's priority fetches it */
 const tile = (url: string, priority: Priority = 'auto'): Promise<Map<string, TileLayer> | undefined> => {
   const hit = cache.get(url);
+
   if (hit) return hit;
+
   const pending = (async () => {
     // A tile of a PMTiles archive, ungzipped by the reader
     const archived = pmtilesTile(url);
+
     if (archived) {
       const bytes = await archived;
+
       return bytes && decode(bytes);
     }
     for (let attempt = 0; ; attempt += 1) {
       const init: PriorityInit = { priority };
       const response = await fetch(url, withHeaders(url, init));
+
       if (response.status === 404 || response.status === 204) return undefined;
       if (response.ok) {
         // Every layer: renderers of other subsets share the tile
@@ -182,8 +197,10 @@ const tile = (url: string, priority: Priority = 'auto'): Promise<Map<string, Til
       await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
     }
   })();
+
   pending.catch(() => cache.delete(url));
   cache.set(url, pending);
+
   return pending;
 };
 
@@ -196,43 +213,56 @@ const source = (r: Renderer, z: number, x: number, y: number) => {
   const url = r.tiles.replace('{z}', String(vz)).replace('{x}', String(vx)).replace('{y}', String(vy));
   // Fraction of the vector tile covered, and the offset in it
   const part = 1 / n;
+
   return { url, vz, vx, vy, part, ox: (x % n) * part, oy: (y % n) * part };
 };
 
 const value = (layer: StyleLayer, group: 'paint' | 'layout', key: string, ctx: Context, fallback: unknown) => {
   const v = layer[group]?.[key];
+
   if (v === undefined) return fallback;
+
   // An array that is not an expression is a literal value (`text-font`, `text-offset`, `line-dasharray`)
   const out = Array.isArray(v) && !isExpression(v) ? v : evaluate(v, ctx);
+
   return out === undefined || out === null ? fallback : out;
 };
 
 /** A color with an opacity, for the canvas */
 const paint = (c: unknown, opacity: number): string => {
   const rgba = color(c) ?? [0, 0, 0, 1];
+
   return css([rgba[0], rgba[1], rgba[2], rgba[3] * opacity]);
 };
 
 const shown = (layer: StyleLayer, zoom: number): boolean => {
   if (layer.layout?.visibility === 'none') return false;
+
   return zoom >= (layer.minzoom ?? 0) && zoom < (layer.maxzoom ?? 24);
 };
 
 /** The image of a fill pattern, cut from the sprite on first use */
 const patternImage = (r: Renderer, name: string): OffscreenCanvas | undefined => {
   if (r.patterns.has(name)) return r.patterns.get(name);
+
   const cut = (): OffscreenCanvas | undefined => {
     const found = spriteIcon(r, name);
+
     if (!found || !(found.icon.width > 0) || !(found.icon.height > 0)) return undefined;
+
     const { icon } = found;
     const canvas = new OffscreenCanvas(icon.width, icon.height);
+
     canvas
       .getContext('2d')
       ?.drawImage(found.image, icon.x, icon.y, icon.width, icon.height, 0, 0, icon.width, icon.height);
+
     return canvas;
   };
   const image = cut();
+
   r.patterns.set(name, image);
+
   return image;
 };
 
@@ -244,17 +274,20 @@ const takeCanvas = (size: number): { canvas: OffscreenCanvas; g: OffscreenCanvas
   const canvas = canvases.get(size)?.pop() ?? new OffscreenCanvas(size, size);
   // A canvas on the CPU: its pixels are read back here, in the worker, not on the main thread at the upload
   const g = canvas.getContext('2d', { willReadFrequently: true });
+
   if (!g) throw new Error('no 2D context');
   // The state a former tile left
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.globalAlpha = 1;
   g.setLineDash([]);
   g.clearRect(0, 0, size, size);
+
   return { canvas, g };
 };
 
 const giveCanvas = (canvas: OffscreenCanvas): void => {
   const free = canvases.get(canvas.width) ?? [];
+
   canvases.set(canvas.width, free);
   if (free.length < 4) free.push(canvas);
 };
@@ -270,14 +303,18 @@ export const tileImage = (
   opaque: boolean,
 ): Promise<ImageBitmap> => {
   if (opaque) return Promise.resolve(canvas.transferToImageBitmap());
+
   return createImageBitmap(g.getImageData(0, 0, canvas.width, canvas.height), { premultiplyAlpha: 'none' });
 };
 
 const render = async (r: Renderer, z: number, x: number, y: number, size: number, id: number, priority?: Priority) => {
   const s = source(r, z, x, y);
   const layers = await tile(s.url, priority);
+
   if (aborted.has(id)) return undefined;
+
   const { canvas, g } = takeCanvas(size);
+
   try {
     return await draw(r, s, layers, canvas, g, z, x, y, size, id, priority);
   } finally {
@@ -304,12 +341,16 @@ const draw = async (
   let drawn = false;
   /** A background of full opacity covers the tile: every pixel stays opaque */
   let opaque = false;
+
   for (const layer of r.layers) {
     if (!shown(layer, zoom)) continue;
+
     const zctx: Context = { zoom, properties: {}, type: 'Unknown' };
+
     if (layer.type === 'background') {
       const fill = value(layer, 'paint', 'background-color', zctx, '#000');
       const opacity = Number(value(layer, 'paint', 'background-opacity', zctx, 1));
+
       g.fillStyle = paint(fill, opacity);
       g.fillRect(0, 0, size, size);
       if ((color(fill) ?? [0, 0, 0, 1])[3] * opacity >= 1) opaque = true;
@@ -318,7 +359,9 @@ const draw = async (
     }
     if (layer.type === 'raster') {
       const source = layer.source === undefined ? undefined : r.rasters[layer.source];
+
       if (!source) continue;
+
       // The canvas covers the Web Mercator tile (z, x, y): a source tile of 512 px covers it from a level coarser
       const rz = Math.max(0, Math.min(z - (source.tileSize >= 512 ? 1 : 0), source.maxzoom));
       const n = 2 ** (z - rz);
@@ -327,17 +370,23 @@ const draw = async (
         .replace('{x}', String(Math.floor(x / n)))
         .replace('{y}', String(Math.floor(y / n)));
       const picture = await image(url, priority).catch(() => undefined);
+
       if (aborted.has(id)) return undefined;
       if (!picture) continue;
+
       const [w, h] = [picture.width / n, picture.height / n];
+
       g.globalAlpha = Number(value(layer, 'paint', 'raster-opacity', zctx, 1));
       g.drawImage(picture, (x % n) * w, (y % n) * h, w, h, 0, 0, size, size);
       g.globalAlpha = 1;
       drawn = true;
       continue;
     }
+
     const data = layers?.get(layer['source-layer'] ?? '');
+
     if (!data) continue;
+
     // Tile units to canvas pixels
     const k = size / (data.extent * s.part);
     const [ox, oy] = [s.ox * data.extent, s.oy * data.extent];
@@ -346,6 +395,7 @@ const draw = async (
       for (const line of f.geometry) {
         for (let i = 0; i + 1 < line.length; i += 2) {
           const [lx, ly] = [((line[i] ?? 0) - ox) * k, ((line[i + 1] ?? 0) - oy) * k];
+
           if (i === 0) g.moveTo(lx, ly);
           else g.lineTo(lx, ly);
         }
@@ -357,11 +407,15 @@ const draw = async (
     const get = (group: 'paint' | 'layout', key: string, ctx: Context, fallback: unknown) => {
       const known = dependent.get(key);
       const d = known ?? isFeatureDependent(layer[group]?.[key]);
+
       if (known === undefined) dependent.set(key, d);
+
       return value(layer, group, key, d ? ctx : zctx, fallback);
     };
+
     for (const f of data.features) {
       const ctx = context(f, zoom);
+
       if (!filter(layer.filter, ctx)) continue;
       if (layer.type === 'fill-extrusion' && f.type === 3) {
         // Flat, seen from above: its color
@@ -375,11 +429,15 @@ const draw = async (
       } else if (layer.type === 'fill' && f.type === 3) {
         const opacity = Number(get('paint', 'fill-opacity', ctx, 1));
         const pattern = get('paint', 'fill-pattern', ctx, undefined);
+
         path(f, true);
+
         const icon = typeof pattern === 'string' ? spriteIcon(r, pattern)?.icon : undefined;
         const image = icon && patternImage(r, pattern as string);
+
         if (icon && image) {
           const p = g.createPattern(image, 'repeat');
+
           if (p) {
             p.setTransform(new DOMMatrix().scale(px / (icon.pixelRatio ?? 1)));
             g.globalAlpha = opacity;
@@ -390,7 +448,9 @@ const draw = async (
         } else {
           g.fillStyle = paint(get('paint', 'fill-color', ctx, '#000'), opacity);
           g.fill('evenodd');
+
           const outline = get('paint', 'fill-outline-color', ctx, undefined);
+
           if (outline !== undefined) {
             g.strokeStyle = paint(outline, opacity);
             g.lineWidth = px;
@@ -401,22 +461,30 @@ const draw = async (
         drawn = true;
       } else if (layer.type === 'line' && f.type !== 1) {
         const width = Number(get('paint', 'line-width', ctx, 1));
+
         if (width <= 0) continue;
+
         // A gap: two lines on either side of it, drawn as one wide line (the casing of a road, its inside drawn over)
         const gap = Number(get('paint', 'line-gap-width', ctx, 0));
+
         g.strokeStyle = paint(get('paint', 'line-color', ctx, '#000'), Number(get('paint', 'line-opacity', ctx, 1)));
         g.lineWidth = (gap > 0 ? gap + 2 * width : width) * px;
         g.lineCap = String(get('layout', 'line-cap', ctx, 'butt')) as CanvasLineCap;
         g.lineJoin = String(get('layout', 'line-join', ctx, 'miter')) as CanvasLineJoin;
+
         const dash = get('paint', 'line-dasharray', ctx, undefined);
+
         g.setLineDash(Array.isArray(dash) ? dash.map((d) => Number(d) * width * px) : []);
         path(f, f.type === 3);
         g.stroke();
         drawn = true;
       } else if (layer.type === 'circle' && f.type === 1) {
         const radius = Number(get('paint', 'circle-radius', ctx, 5)) * px;
+
         g.fillStyle = paint(get('paint', 'circle-color', ctx, '#000'), Number(get('paint', 'circle-opacity', ctx, 1)));
+
         const stroke = Number(get('paint', 'circle-stroke-width', ctx, 0)) * px;
+
         g.strokeStyle = paint(
           get('paint', 'circle-stroke-color', ctx, '#000'),
           Number(get('paint', 'circle-stroke-opacity', ctx, 1)),
@@ -435,6 +503,7 @@ const draw = async (
     }
   }
   if (!drawn && !layers) return null;
+
   return tileImage(canvas, g, opaque);
 };
 
@@ -442,8 +511,10 @@ const draw = async (
 const overlapOf = (layer: StyleLayer, prefix: 'text' | 'icon', ctx: Context): CandidateOverlap => {
   const allow = Boolean(value(layer, 'layout', `${prefix}-allow-overlap`, ctx, false));
   const ignore = Boolean(value(layer, 'layout', `${prefix}-ignore-placement`, ctx, false));
+
   if (allow && ignore) return true;
   if (allow) return 'allow';
+
   return ignore ? 'ignore' : false;
 };
 
@@ -456,6 +527,7 @@ const pair = (v: unknown, fallback: [number, number]): [number, number] => {
 const sides = (v: unknown): [number, number, number, number] => {
   const n = (Array.isArray(v) ? v : [v]).map((x) => Number(x) || 0);
   const [top = 0, right = top, bottom = top, left = right] = n;
+
   return [top, right, bottom, left];
 };
 
@@ -463,6 +535,7 @@ const sides = (v: unknown): [number, number, number, number] => {
 const cased = (t: string, transform: unknown): string => {
   if (transform === 'uppercase') return t.toUpperCase();
   if (transform === 'lowercase') return t.toLowerCase();
+
   return t;
 };
 
@@ -470,29 +543,38 @@ const cased = (t: string, transform: unknown): string => {
  * shorter line): each point and the segment it lies on (x, y, x0, y0, x1, y1) */
 export const lineAnchors = (line: readonly number[], spacing: number): number[][] => {
   let length = 0;
+
   for (let i = 2; i + 1 < line.length; i += 2) {
     length += Math.hypot((line[i] ?? 0) - (line[i - 2] ?? 0), (line[i + 1] ?? 0) - (line[i - 1] ?? 0));
   }
+
   const out: number[][] = [];
+
   if (!(length > 0) || !(spacing > 0)) return out;
+
   let next = Math.min(spacing / 2, length / 2);
   let walked = 0;
+
   for (let i = 2; i + 1 < line.length; i += 2) {
     const [ax, ay, bx, by] = [line[i - 2] ?? 0, line[i - 1] ?? 0, line[i] ?? 0, line[i + 1] ?? 0];
     const d = Math.hypot(bx - ax, by - ay);
+
     while (d > 0 && next <= walked + d) {
       const t = (next - walked) / d;
+
       out.push([ax + (bx - ax) * t, ay + (by - ay) * t, ax, ay, bx, by]);
       next += spacing;
     }
     walked += d;
   }
+
   return out;
 };
 
 /** Longitude and latitude of a point of tile (z, x, y) in tile units */
 const lonLat = (z: number, x: number, y: number, extent: number, px: number, py: number): [number, number] => {
   const n = 2 ** z;
+
   return [longitude((x + px / extent) / n), latitude((y + py / extent) / n)];
 };
 
@@ -507,6 +589,7 @@ const iconOf = (
   const alignment = value(layer, 'layout', 'icon-rotation-alignment', ctx, 'auto');
   const fit = String(value(layer, 'layout', 'icon-text-fit', ctx, 'none'));
   const padding = value(layer, 'layout', 'icon-text-fit-padding', ctx, [0, 0, 0, 0]);
+
   return {
     image,
     size: isFeatureDependent(layer.layout?.['icon-size'])
@@ -536,44 +619,64 @@ const labels = async (
 ): Promise<LabelCandidate[]> => {
   const url = r.tiles.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
   const layers = await tile(url, priority);
+
   if (!layers || aborted.has(id)) return [];
+
   const out: LabelCandidate[] = [];
   // The text size of a layer when it depends on the zoom only: legacy stops as they are, an expression as stops
   const sizes = new Map<StyleLayer, Json>();
   const sizeOf = (layer: StyleLayer): Json => {
     const known = sizes.get(layer);
+
     if (known !== undefined) return known;
+
     const v = layer.layout?.['text-size'] ?? 16;
     const s = isExpression(v) ? zoomStops(v) : v;
+
     sizes.set(layer, s);
+
     return s;
   };
   // The icon size of a layer when it depends on the zoom only, as the text size
   const iconSizes = new Map<StyleLayer, Json>();
   const iconSizeOf = (layer: StyleLayer): Json => {
     const known = iconSizes.get(layer);
+
     if (known !== undefined) return known;
+
     const v = layer.layout?.['icon-size'] ?? 1;
     const s = isExpression(v) ? zoomStops(v) : v;
+
     iconSizes.set(layer, s);
+
     return s;
   };
+
   r.layers.forEach((layer, index) => {
     const layout = layer.layout ?? {};
+
     if (layer.type !== 'symbol' || !shown(layer, zoom)) return;
     if (layout['text-field'] === undefined && layout['icon-image'] === undefined) return;
+
     const data = layers.get(layer['source-layer'] ?? '');
+
     if (!data) return;
+
     const zctx: Context = { zoom, properties: {}, type: 'Unknown' };
     const placement = value(layer, 'layout', 'symbol-placement', zctx, 'point') === 'line' ? 'line' : 'point';
     const textAlong =
       placement === 'line' && value(layer, 'layout', 'text-rotation-alignment', zctx, 'auto') !== 'viewport';
+
     for (const f of data.features) {
       const ctx = context(f, zoom);
+
       if (!filter(layer.filter, ctx)) continue;
+
       const field = text(layout['text-field'], ctx).trim();
       const image = text(layout['icon-image'], ctx).trim();
+
       if (!field && !image) continue;
+
       const t = cased(field, value(layer, 'layout', 'text-transform', ctx, 'none'));
       const fonts = value(layer, 'layout', 'text-font', ctx, ['Noto Sans Regular']);
       const font = labelFont(Array.isArray(fonts) && typeof fonts[0] === 'string' ? fonts[0] : 'Noto Sans Regular');
@@ -598,13 +701,17 @@ const labels = async (
         ...(value(layer, 'layout', 'text-optional', ctx, false) ? { textOptional: true } : {}),
         ...(image ? { icon: iconOf(layer, image, ctx, placement, iconSizeOf) } : {}),
       };
+
       if (f.type === 1) {
         for (const point of f.geometry) {
           for (let i = 0; i + 1 < point.length; i += 2) {
             const [px, py] = [point[i] ?? 0, point[i + 1] ?? 0];
+
             // Points in the buffer belong to the neighbouring tile
             if (px < 0 || py < 0 || px >= data.extent || py >= data.extent) continue;
+
             const [lon, lat] = lonLat(z, x, y, data.extent, px, py);
+
             out.push({ ...base, lon, lat });
           }
         }
@@ -613,12 +720,15 @@ const labels = async (
         // level, twice as many at each zoom past it)
         const spacing =
           (Number(value(layer, 'layout', 'symbol-spacing', ctx, 250)) * data.extent) / (512 * 2 ** (zoom - z));
+
         for (const line of f.geometry) {
           for (const [px = 0, py = 0, ax = 0, ay = 0, bx = 0, by = 0] of lineAnchors(line, Math.max(spacing, 1))) {
             if (px < 0 || py < 0 || px >= data.extent || py >= data.extent) continue;
+
             const [lon, lat] = lonLat(z, x, y, data.extent, px, py);
             const [lon1, lat1] = lonLat(z, x, y, data.extent, bx, by);
             const [lon0, lat0] = lonLat(z, x, y, data.extent, ax, ay);
+
             out.push({ ...base, lon, lat, along: [lon1 - lon0, lat1 - lat0] });
           }
         }
@@ -626,8 +736,10 @@ const labels = async (
         // The middle of the longest line inside the tile, along it
         let best: number[] | undefined;
         let bestLength = 0;
+
         for (const line of f.geometry) {
           let length = 0;
+
           for (let i = 2; i + 1 < line.length; i += 2) {
             length += Math.hypot((line[i] ?? 0) - (line[i - 2] ?? 0), (line[i + 1] ?? 0) - (line[i - 1] ?? 0));
           }
@@ -637,16 +749,22 @@ const labels = async (
           }
         }
         if (!best || bestLength < data.extent / 32) continue;
+
         let rest = bestLength / 2;
+
         for (let i = 2; i + 1 < best.length; i += 2) {
           const [ax, ay, bx, by] = [best[i - 2] ?? 0, best[i - 1] ?? 0, best[i] ?? 0, best[i + 1] ?? 0];
           const d = Math.hypot(bx - ax, by - ay);
+
           if (d >= rest && d > 0) {
             const [px, py] = [ax + ((bx - ax) * rest) / d, ay + ((by - ay) * rest) / d];
+
             if (px < 0 || py < 0 || px >= data.extent || py >= data.extent) break;
+
             const [lon, lat] = lonLat(z, x, y, data.extent, px, py);
             const [lon1, lat1] = lonLat(z, x, y, data.extent, bx, by);
             const [lon0, lat0] = lonLat(z, x, y, data.extent, ax, ay);
+
             out.push({ ...base, lon, lat, ...(placement === 'line' ? { along: [lon1 - lon0, lat1 - lat0] } : {}) });
             break;
           }
@@ -655,6 +773,7 @@ const labels = async (
       }
     }
   });
+
   return out;
 };
 
@@ -664,6 +783,7 @@ const post = (message: BasemapResponse, transfer: Transferable[] = []) =>
 self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
   if (data.type === 'headers') {
     setHeaderRules(data.rules);
+
     return;
   }
   if (data.type === 'init') {
@@ -676,6 +796,7 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       sprites: data.sprites ?? [],
       patterns: new Map(),
     });
+
     return;
   }
   if (data.type === 'drop') {
@@ -684,24 +805,30 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
       sprite.image.close();
     });
     renderers.delete(data.key);
+
     return;
   }
   if (data.type === 'abort') {
     // An abort that arrives after the answer is ignored
     if (active.has(data.id)) aborted.add(data.id);
     controllers.get(data.id)?.abort();
+
     return;
   }
   if (data.type === 'heights' || data.type === 'reproject') {
     await decodeTile(data);
+
     return;
   }
   active.add(data.id);
+
   const r = renderers.get(data.key);
+
   try {
     if (!r) throw new Error(`no renderer ${data.key}`);
     if (data.type === 'render') {
       const image = await render(r, data.z, data.x, data.y, data.size, data.id, data.priority);
+
       if (image) post({ id: data.id, image }, [image]);
       else post({ id: data.id, missing: true });
     } else {
@@ -718,15 +845,19 @@ self.onmessage = async ({ data }: MessageEvent<BasemapRequest>) => {
 /** A tile of another layer: the altitudes of a relief tile, or a reprojected raster tile */
 const decodeTile = async (data: Extract<BasemapWork, { type: 'heights' | 'reproject' }> & { id: number }) => {
   const controller = new AbortController();
+
   controllers.set(data.id, controller);
   try {
     if (data.type === 'heights') {
       const heights = await fetchHeights(data.url, data.encoding, data.floor, controller.signal, heightsSurface);
+
       if (heights) post({ id: data.id, heights }, [heights.buffer]);
       else post({ id: data.id, missing: true });
     } else {
       reprojection.cache.capacity = data.cached;
+
       const image = await reprojection.draw(data.job, controller.signal);
+
       if (image) post({ id: data.id, image }, [image]);
       else post({ id: data.id, missing: true });
     }

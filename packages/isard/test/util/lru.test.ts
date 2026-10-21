@@ -11,7 +11,9 @@ describe('Web Mercator', () => {
     // Past the edges: clamped
     expect(mercatorY(90)).toBeCloseTo(0, 12);
     expect(mercatorY(-90)).toBeCloseTo(1, 12);
+
     const [lon, lat] = fromMercator(toMercator([2.35, 48.85]));
+
     expect(lon).toBeCloseTo(2.35, 12);
     expect(lat).toBeCloseTo(48.85, 12);
     expect(latitude(0.5)).toBe(0);
@@ -22,6 +24,7 @@ describe('Lru', () => {
   test('the least recently used dropped past the capacity, told to `evict`; a read or a write uses an entry', () => {
     const evicted: [string, number][] = [];
     const lru = new Lru<string, number>(2, (value, key) => evicted.push([key, value]));
+
     lru.set('a', 1);
     lru.set('b', 2);
     expect(lru.get('a')).toBe(1);
@@ -43,6 +46,7 @@ describe('Lru', () => {
 
   test('a capacity lowered applies at the next write', () => {
     const lru = new Lru<number, number>(4);
+
     [0, 1, 2, 3].forEach((i) => {
       lru.set(i, i);
     });

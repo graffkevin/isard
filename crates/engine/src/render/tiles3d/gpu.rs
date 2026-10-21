@@ -74,6 +74,7 @@ fn primitive_arrays(
         Some(_) => Some(objects.buffer()?),
         None => None,
     };
+
     // SAFETY: state setup of objects just created on the live context
     unsafe {
         gl.bind_vertex_array(Some(vao));
@@ -94,6 +95,7 @@ fn primitive_arrays(
         gl.bind_vertex_array(None);
     }
     objects.keep();
+
     Ok((vao, [vbo, ibo], features))
 }
 
@@ -102,8 +104,10 @@ pub fn feature_properties(properties: &tiles3d::decode::Properties) -> JsValue {
     use js_sys::{Array, Object, Reflect};
     use tiles3d::decode::Property;
     let out = Array::new();
+
     for feature in &properties.features {
         let object = Object::new();
+
         for (name, value) in properties.names.iter().zip(feature) {
             let value = match value {
                 Property::Null => JsValue::NULL,
@@ -116,6 +120,7 @@ pub fn feature_properties(properties: &tiles3d::decode::Properties) -> JsValue {
         }
         out.push(&object);
     }
+
     out.into()
 }
 
@@ -149,11 +154,13 @@ pub fn upload(
     };
     let mut textures = Vec::with_capacity(images.len());
     let mut images = images.into_iter();
+
     while let Some(image) = images.next() {
         let Some(bitmap) = image else {
             textures.push(None);
             continue;
         };
+
         match texture(gl, &bitmap) {
             Ok((texture, size)) => {
                 gpu.textures.push(texture);
@@ -163,14 +170,17 @@ pub fn upload(
             Err(e) => {
                 images.flatten().for_each(|i| i.close());
                 delete_mesh(gl, &gpu);
+
                 return Err(e);
             }
         }
     }
     for p in &mesh.primitives {
         let texture = p.image.and_then(|i| textures.get(i).copied().flatten());
+
         if let Err(e) = upload_primitive(gl, p, texture, &mut gpu) {
             delete_mesh(gl, &gpu);
+
             return Err(e);
         }
     }
@@ -186,10 +196,12 @@ pub fn upload(
             }
             Err(e) => {
                 delete_mesh(gl, &gpu);
+
                 return Err(format!("{e:?}"));
             }
         }
     }
+
     Ok(gpu)
 }
 
@@ -212,22 +224,26 @@ fn upload_primitive(
         |target| {
             // SAFETY: upload into the buffer bound by `primitive_arrays`
             unsafe { gl.buffer_data_u8_slice(target, bytes(&vertices), glow::STATIC_DRAW) };
+
             Ok(())
         },
         |target| {
             // SAFETY: upload into the buffer bound by `primitive_arrays`
             unsafe { gl.buffer_data_u8_slice(target, bytes(&p.indices), glow::STATIC_DRAW) };
+
             Ok(())
         },
         p.features.as_ref().map(|features| {
             |target| {
                 // SAFETY: upload into the buffer bound by `primitive_arrays`
                 unsafe { gl.buffer_data_u8_slice(target, bytes(features), glow::STATIC_DRAW) };
+
                 Ok(())
             }
         }),
     )
     .map_err(|e| format!("{e:?}"))?;
+
     if let Some(features) = &p.features {
         gpu.feature_count = gpu.feature_count.max(feature_bound(features.iter().copied()));
         gpu.bytes += features.len() * 4;
@@ -241,6 +257,7 @@ fn upload_primitive(
         color: p.color,
     });
     gpu.bytes += vertices.len() * 4 + p.indices.len() * 4;
+
     Ok(())
 }
 
@@ -253,9 +270,11 @@ pub fn upload_decoded(
     frame: u64,
 ) -> Result<GpuMesh, JsValue> {
     let anchor: js_sys::Float64Array = js_get(tile, "anchor").dyn_into()?;
+
     if anchor.length() < 3 {
         return Err("decoded tile: an anchor of 3 numbers expected".into());
     }
+
     let anchor = glam::DVec3::new(anchor.get_index(0), anchor.get_index(1), anchor.get_index(2));
     let mut gpu = GpuMesh {
         anchor,
@@ -268,15 +287,19 @@ pub fn upload_decoded(
         used: frame,
     };
     let properties = js_get(tile, "properties");
+
     if let Ok(list) = properties.clone().dyn_into::<js_sys::Array>() {
         gpu.feature_count = list.length();
         gpu.properties = Some(properties);
     }
+
     // The bitmaps and transcoded textures met so far and their GPU textures: the same object, the same texture
     let mut shared: Vec<(JsValue, Option<glow::Texture>)> = Vec::new();
+
     for p in get_array(tile, "primitives").iter() {
         if let Err(e) = upload_decoded_primitive(gl, raw, &p, &mut gpu, &mut shared) {
             delete_mesh(gl, &gpu);
+
             return Err(e);
         }
     }
@@ -285,6 +308,7 @@ pub fn upload_decoded(
             .dyn_into::<js_sys::Uint8Array>()
             .map_err(|_| JsValue::from_str("decoded tile: points of no Uint8Array"))
             .and_then(|v| GpuPoints::upload_js(gl, raw, &v));
+
         match uploaded {
             Ok(points) => {
                 gpu.bytes += points.bytes;
@@ -292,10 +316,12 @@ pub fn upload_decoded(
             }
             Err(e) => {
                 delete_mesh(gl, &gpu);
+
                 return Err(e);
             }
         }
     }
+
     Ok(gpu)
 }
 
@@ -314,23 +340,28 @@ fn upload_decoded_primitive(
         gl,
         |target| {
             raw.buffer_data_with_array_buffer_view(target, &vertices, glow::STATIC_DRAW);
+
             Ok(())
         },
         |target| {
             raw.buffer_data_with_array_buffer_view(target, &indices, glow::STATIC_DRAW);
+
             Ok(())
         },
         features.as_ref().map(|features| {
             |target| {
                 raw.buffer_data_with_array_buffer_view(target, features, glow::STATIC_DRAW);
+
                 Ok(())
             }
         }),
     )?;
+
     if let Some(features) = &features {
         gpu.feature_count = gpu.feature_count.max(feature_bound(features.to_vec()));
         gpu.bytes += features.byte_length() as usize;
     }
+
     let primitive = GpuPrimitive {
         vao,
         buffers,
@@ -339,11 +370,15 @@ fn upload_decoded_primitive(
         texture: None,
         color: color_of(p),
     };
+
     gpu.bytes += (vertices.byte_length() + indices.byte_length()) as usize;
+
     let (bitmap, compressed) = (js_get(p, "bitmap"), js_get(p, "texture"));
     let source = if bitmap.is_object() { bitmap } else { compressed };
+
     if !source.is_object() {
         gpu.primitives.push(primitive);
+
         return Ok(());
     }
     if let Some((_, texture)) = shared.iter().find(|(s, _)| js_sys::Object::is(s, &source)) {
@@ -351,25 +386,32 @@ fn upload_decoded_primitive(
             texture: *texture,
             ..primitive
         });
+
         return Ok(());
     }
+
     let made = match source.clone().dyn_into::<web_sys::ImageBitmap>() {
         Ok(bitmap) => texture(gl, &bitmap).map(Some).map_err(JsValue::from),
         Err(_) => compressed_texture(gl, raw, &source),
     };
+
     match made {
         Ok(made) => {
             let texture = made.map(|(texture, size)| {
                 gpu.textures.push(texture);
                 gpu.bytes += size;
+
                 texture
             });
+
             shared.push((source, texture));
             gpu.primitives.push(GpuPrimitive { texture, ..primitive });
+
             Ok(())
         }
         Err(e) => {
             delete_primitive(gl, &primitive);
+
             Err(e)
         }
     }
@@ -378,11 +420,13 @@ fn upload_decoded_primitive(
 /// The base color of a primitive a worker decoded: white when it has none
 fn color_of(p: &JsValue) -> [f32; 4] {
     let mut color = [1.0; 4];
+
     if let Ok(given) = js_get(p, "color").dyn_into::<js_sys::Float32Array>()
         && given.length() == 4
     {
         given.copy_to(&mut color);
     }
+
     color
 }
 
@@ -390,9 +434,11 @@ fn color_of(p: &JsValue) -> [f32; 4] {
 /// for another format or a side that is not positive
 fn level_bytes(format: u32, width: i32, height: i32) -> Option<usize> {
     let (w, h) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
+
     if w == 0 || h == 0 {
         return None;
     }
+
     let block = match format {
         glow::RGBA8 => return w.checked_mul(h)?.checked_mul(4),
         // BC1 (S3TC RGB / RGBA), ETC2 RGB, ETC1
@@ -401,6 +447,7 @@ fn level_bytes(format: u32, width: i32, height: i32) -> Option<usize> {
         0x83f2 | 0x83f3 | 0x8e8c | 0x9278 | 0x93b0 => 16,
         _ => return None,
     };
+
     w.div_ceil(4).checked_mul(h.div_ceil(4))?.checked_mul(block)
 }
 
@@ -411,6 +458,7 @@ fn levels_fit(format: u32, levels: &[(i32, i32, usize)]) -> bool {
     let Some(&(w0, h0, _)) = levels.first() else {
         return false;
     };
+
     levels.len() <= 32
         && levels.iter().enumerate().all(|(k, &(w, h, length))| {
             w == (w0 >> k).max(1) && h == (h0 >> k).max(1) && level_bytes(format, w, h) == Some(length)
@@ -429,19 +477,23 @@ fn compressed_texture(
         .ok_or("compressed texture without format")? as u32;
     let mut levels = Vec::new();
     let mut sizes = Vec::new();
+
     for info in get_array(texture, "levels").iter() {
         let width = js_get(&info, "width").as_f64().unwrap_or(0.0) as i32;
         let height = js_get(&info, "height").as_f64().unwrap_or(0.0) as i32;
         let data: js_sys::Uint8Array = js_get(&info, "data").dyn_into()?;
+
         sizes.push((width, height, data.byte_length() as usize));
         levels.push(data);
     }
     if !levels_fit(format, &sizes) {
         return Ok(None);
     }
+
     let mut objects = Objects::new(gl);
     let handle = objects.texture()?;
     let bytes = sizes.iter().map(|&(_, _, length)| length).sum();
+
     // SAFETY: setup of a texture just created on the live context; glow binds, the raw context uploads into the bound
     // texture
     unsafe {
@@ -471,19 +523,24 @@ fn compressed_texture(
                 );
             }
         }
+
         let count = levels.len() as i32;
+
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, (count - 1).max(0));
+
         let min = if count > 1 {
             glow::LINEAR_MIPMAP_LINEAR
         } else {
             glow::LINEAR
         };
+
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, min as i32);
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
     }
     objects.keep();
+
     Ok(Some((handle, bytes)))
 }
 
@@ -494,9 +551,11 @@ fn texture(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) -> Result<(glow::T
         Ok(texture) => texture,
         Err(e) => {
             bitmap.close();
+
             return Err(e);
         }
     };
+
     // SAFETY: setup of a texture just created on the live context
     unsafe {
         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -512,8 +571,11 @@ fn texture(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) -> Result<(glow::T
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
         gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
     }
+
     let bytes = (bitmap.width() * bitmap.height()) as usize * 4 * 4 / 3;
+
     bitmap.close();
+
     Ok((texture, bytes))
 }
 
@@ -522,6 +584,7 @@ fn delete_primitive(gl: &glow::Context, p: &GpuPrimitive) {
     // SAFETY: objects owned by the primitive, not used afterwards
     unsafe {
         gl.delete_vertex_array(p.vao);
+
         for b in p.buffers.into_iter().chain(p.features) {
             gl.delete_buffer(b);
         }
@@ -535,6 +598,7 @@ pub fn delete_mesh(gl: &glow::Context, mesh: &GpuMesh) {
     for p in &mesh.points {
         p.delete(gl);
     }
+
     for &t in &mesh.textures {
         // SAFETY: textures owned by the mesh, not used afterwards
         unsafe { gl.delete_texture(t) };
@@ -549,6 +613,7 @@ mod tests {
     fn mip_levels_must_have_the_size_of_their_format() {
         // BC7 (16 bytes per 4 × 4 block): 8 × 8, 4 × 4, 2 × 2, 1 × 1
         let good = [(8, 8, 64), (4, 4, 16), (2, 2, 16), (1, 1, 16)];
+
         assert!(levels_fit(0x8e8c, &good));
         // BC1 (8 bytes a block) does not fit the same bytes; RGBA8 has its own
         assert!(!levels_fit(0x83f0, &good));

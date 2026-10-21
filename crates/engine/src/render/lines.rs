@@ -116,6 +116,7 @@ fn build(geometry: &Polylines) -> (pieces::Pieces, Vec<f32>, DVec2) {
     let mut nodes = Vec::with_capacity(count * 2);
     let mut edges = Vec::with_capacity(count * 2);
     let mut table = Vec::with_capacity(count * 2);
+
     for l in 0..count {
         let (s, e) = (
             geometry.start[l] as usize,
@@ -127,17 +128,22 @@ fn build(geometry: &Polylines) -> (pieces::Pieces, Vec<f32>, DVec2) {
             [a] => (*a, *a),
             [] => (DVec2::ZERO, DVec2::ZERO),
         };
+
         edges.extend([nodes.len() as u32, nodes.len() as u32 + 1]);
         nodes.extend([a, b]);
+
         let length: f64 = line.windows(2).map(|w| w[0].distance(w[1])).sum();
+
         table.extend([geometry.feature[l] as f32, length as f32]);
     }
+
     let origin = overlay::bounds(&points).map_or(DVec2::ZERO, |(min, max)| (min + max) / 2.0);
     let lines = Lines {
         // No line: no entry either (`start` may be empty)
         start: geometry.start.get(..=count).unwrap_or_default(),
         points: &points,
     };
+
     (pieces::build(&nodes, &edges, Some(&lines), origin), table, origin)
 }
 
@@ -163,6 +169,7 @@ pub struct LineLayer {
 impl LineLayer {
     pub fn new(gl: &glow::Context, geometry: &Polylines, feature_count: usize) -> Result<Self, String> {
         overlay::pick_ids_fit(feature_count, "line layer");
+
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let overlay = Overlay::new(&mut objects, gl, &[LINE, &Layout::LINE.glsl(), VERTEX], &[FRAGMENT])?;
@@ -170,6 +177,7 @@ impl LineLayer {
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
         let lines = objects.texture()?;
+
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -180,10 +188,15 @@ impl LineLayer {
             }
             gl.bind_vertex_array(None);
         }
+
         let features = Features::new(gl, feature_count, Layout::LINE)?;
+
         objects.keep();
+
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
+
         gl::sampler_units(gl, program, &[(uniforms[1].as_ref(), LINES_UNIT)]);
+
         let mut layer = Self {
             features,
             dash: [0.0, 0.0],
@@ -205,10 +218,13 @@ impl LineLayer {
             drape: Drape::new(),
             pieces: 0,
         };
+
         if let Err(e) = layer.set_geometry(gl, geometry) {
             layer.delete(gl);
+
             return Err(e);
         }
+
         Ok(layer)
     }
 
@@ -217,6 +233,7 @@ impl LineLayer {
         let (built, table, origin) = build(geometry);
         // The new table first: if it cannot be made, the layer keeps its lines
         let lines = features::index_texture(gl, &table)?;
+
         // SAFETY: uploads into objects owned by this layer; the old table, replaced, is not used afterwards
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
@@ -232,6 +249,7 @@ impl LineLayer {
         // The extent changed: a new page table
         self.drape.delete(gl);
         self.drape = Drape::new();
+
         Ok(())
     }
 
@@ -246,7 +264,9 @@ impl LineLayer {
         } = frame;
         let [segments, _, dash, layer, pick_u, slop] = &self.uniforms;
         let parts = if relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+
         self.overlay.begin(frame, self.origin, LINE_DEPTH_BIAS, &self.drape);
+
         // SAFETY: draw with objects owned by this layer
         unsafe {
             gl.uniform_1_i32(segments.as_ref(), parts);
@@ -270,6 +290,7 @@ impl LineLayer {
             && self.pieces > 0
         {
             let size = DVec2::new(f64::from(self.grid.cols), f64::from(self.grid.rows)) * self.grid.size;
+
             self.drape.update(frame.gl, self.grid.min, self.grid.min + size, source);
         }
     }
@@ -286,6 +307,7 @@ impl Layer for LineLayer {
             return false;
         }
         self.update_drape(frame);
+
         let look = overlay::look(self.origin, frame.view, frame.relief, 0.0);
         let mut visible = std::mem::take(&mut self.visible);
         let ranges = visible.update(&self.grid, &self.start, frame.view, look);
@@ -294,6 +316,7 @@ impl Layer for LineLayer {
         // A translucent color too (a feature's, or the ramp's): the joins would show as darker dots
         let translucent = self.features.translucent();
         let depth = DepthState::over_ground(gl, frame.relief.is_some());
+
         // SAFETY: state changes on the live context, set back below
         unsafe {
             if translucent {
@@ -309,6 +332,7 @@ impl Layer for LineLayer {
         // SAFETY: state change on the live context
         unsafe { gl.disable(glow::STENCIL_TEST) };
         drop(depth);
+
         false
     }
 
@@ -320,10 +344,12 @@ impl Layer for LineLayer {
         if !self.shows(frame) {
             return;
         }
+
         let look = overlay::look(self.origin, frame.view, frame.relief, 0.0);
         let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, frame.view, look);
         // Hidden by the hills as on screen (the picking pass drew the ground's depth)
         let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
+
         self.render(frame, &ranges, Some(layer));
     }
 
@@ -354,6 +380,7 @@ impl Engine {
     ) -> Result<u32, JsValue> {
         let geometry = Polylines { points, start, feature };
         let layer = LineLayer::new(&self.gl, &geometry, feature_count)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -363,6 +390,7 @@ impl Engine {
         if let Some((layer, gl)) = self.layer_mut::<LineLayer>(id) {
             layer.set_geometry(gl, &Polylines { points, start, feature })?;
         }
+
         Ok(())
     }
 
@@ -382,6 +410,7 @@ mod tests {
     #[test]
     fn malformed_lines_do_not_panic() {
         let points = [0.5, 0.5, 0.5001, 0.5, 0.5001, 0.5001, f64::INFINITY, 0.5];
+
         for (start, feature) in [
             (&[][..], &[][..]),
             (&[], &[1, 2]),
@@ -397,6 +426,7 @@ mod tests {
                 feature,
             });
             let lines = start.len().saturating_sub(1).min(feature.len());
+
             assert_eq!(table.len(), lines * 2, "{start:?}");
             assert!(origin.is_finite());
             assert!(
@@ -407,12 +437,14 @@ mod tests {
             );
             assert_eq!(built.start.len(), built.grid.len() + 1);
         }
+
         // A good line: its pieces, its feature and length
         let (built, table, _) = build(&Polylines {
             points: &points,
             start: &[0, 3],
             feature: &[7],
         });
+
         assert_ne!(built.pieces.len(), 0);
         assert_eq!(table[0], 7.0);
         assert!((f64::from(table[1]) - 0.0002).abs() < 1e-9);

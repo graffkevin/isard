@@ -43,6 +43,7 @@ impl Sample {
     pub fn write(&self, data: &mut Vec<f32>) {
         let uv = |s: Option<(u16, [f32; 4])>| s.map_or([0.0; 4], |(_, uv)| uv);
         let slot = |s: Option<(u16, [f32; 4])>| s.map_or(-1.0, |(slot, _)| f32::from(slot));
+
         data.extend_from_slice(&uv(self.front));
         data.extend_from_slice(&uv(self.back));
         data.extend_from_slice(&[slot(self.front), slot(self.back), self.fade]);
@@ -56,6 +57,7 @@ pub fn crop(tile: TileId, source: TileId) -> [f32; 4] {
     let u0 = (f64::from(tile.x) / scale - f64::from(source.x)) as f32;
     let v0 = (f64::from(tile.y) / scale - f64::from(source.y)) as f32;
     let step = (1.0 / scale) as f32;
+
     [u0, v0, u0 + step, v0 + step]
 }
 
@@ -123,6 +125,7 @@ pub struct Cache {
 impl Cache {
     pub fn new(min_z: u8, max_z: u8, slots: usize) -> Self {
         let slots = slots.min(usize::from(u16::MAX)) as u16;
+
         Self {
             min_z,
             max_z,
@@ -154,11 +157,13 @@ impl Cache {
     /// Marks a tile of the pool drawn in `frame`; its slot
     fn touch(&mut self, tile: TileId, frame: u64) -> Option<&Loaded> {
         let loaded = self.slots.get_mut(&tile)?;
+
         if loaded.used != frame {
             self.lru.remove(&(loaded.used, tile));
             loaded.used = frame;
             self.lru.insert((frame, tile));
         }
+
         Some(loaded)
     }
 
@@ -168,9 +173,11 @@ impl Cache {
         if self.slots.contains_key(&tile) {
             return Install::Duplicate;
         }
+
         let Some(slot) = self.free.pop().or_else(|| self.evict(frame)) else {
             return Install::Full;
         };
+
         self.slots.insert(
             tile,
             Loaded {
@@ -181,16 +188,19 @@ impl Cache {
             },
         );
         self.lru.insert((frame, tile));
+
         Install::Slot(slot)
     }
 
     /// Frees the least recently used slot not drawn in the current frame
     fn evict(&mut self, frame: u64) -> Option<u16> {
         let &(used, tile) = self.lru.first()?;
+
         if used >= frame {
             return None;
         }
         self.lru.remove(&(used, tile));
+
         self.slots.remove(&tile).map(|l| l.slot)
     }
 
@@ -206,10 +216,12 @@ impl Cache {
         self.missing_count += 1;
         self.missing.insert(tile, self.missing_count);
         self.missing_order.push_back((self.missing_count, tile));
+
         while self.missing.len() > MAX_MISSING || self.missing_order.len() > 2 * MAX_MISSING {
             let Some((order, old)) = self.missing_order.pop_front() else {
                 break;
             };
+
             // An entry of a tile marked missing again later (or that arrived since) is stale
             if self.missing.get(&old) == Some(&order) {
                 self.missing.remove(&old);
@@ -223,8 +235,10 @@ impl Cache {
             // The tiles whose cooldown is over go first: they may be asked again anyway
             self.failed.retain(|_, (until, _)| *until > now);
         }
+
         let strikes = self.failed.get(&tile).map_or(0, |f| f.1) + 1;
         let delay = (COOLDOWN_MS * f64::from(1u32 << (strikes - 1).min(8))).min(COOLDOWN_MAX_MS);
+
         self.failed.insert(tile, (now + delay, strikes));
     }
 
@@ -241,17 +255,20 @@ impl Cache {
     /// in cooldown walked
     pub fn failure_counts(&self, now: f64) -> (usize, usize) {
         let cooling = self.failed.values().filter(|(until, _)| *until > now).count();
+
         (cooling, self.missing.len())
     }
 
     fn loaded_ancestor(&self, tile: TileId) -> Option<TileId> {
         let mut ancestor = tile.parent();
+
         while let Some(a) = ancestor {
             if self.slots.contains_key(&a) {
                 return Some(a);
             }
             ancestor = a.parent();
         }
+
         None
     }
 
@@ -260,6 +277,7 @@ impl Cache {
         if levels == 0 {
             return;
         }
+
         for child in tile.children() {
             if self.slots.contains_key(&child) {
                 out.push(child);
@@ -273,7 +291,9 @@ impl Cache {
     /// uploads. Whether the tile is in the pool and was not held yet
     fn hold(&mut self, tile: TileId, frame: u64) -> bool {
         let held = self.slots.get(&tile).is_some_and(|l| l.used != frame);
+
         self.touch(tile, frame);
+
         held
     }
 
@@ -296,24 +316,30 @@ impl Cache {
         plan.urgent.clear();
         plan.cover.clear();
         plan.deferred = false;
+
         // Slots held by this frame
         let mut held = 0;
+
         for selected in wanted {
             let tile = selected.tile;
+
             if self.hold(tile, frame) {
                 held += 1;
                 plan.tiles.push(tile);
                 continue;
             }
+
             // Stand-in: nearest loaded ancestor (cropped to this tile by `sample`), or its loaded descendants
             // (zooming out)
             let ancestor = self.loaded_ancestor(tile);
             let covered = ancestor.is_some();
+
             if let Some(ancestor) = ancestor {
                 held += usize::from(self.hold(ancestor, frame));
                 plan.tiles.push(tile);
             } else {
                 let before = plan.tiles.len();
+
                 self.push_descendants(tile, DESCENDANT_LEVELS, &mut plan.tiles);
                 for k in before..plan.tiles.len() {
                     held += usize::from(self.hold(plan.tiles[k], frame));
@@ -322,12 +348,15 @@ impl Cache {
                     // Nothing yet: drawn anyway, the other layers of the pass may cover it
                     plan.tiles.push(tile);
                 }
+
                 // Nothing loaded above: a coarse tile first, to cover the area quickly
                 let level = tile.z.saturating_sub(COVER_LEVELS).max(self.min_z);
                 let mut coarse = tile;
+
                 while coarse.z > level {
                     coarse = coarse.parent().unwrap_or(coarse);
                 }
+
                 if coarse != tile && !self.is_failed(coarse, now) && !plan.cover.contains(&coarse) {
                     plan.cover.push(coarse);
                 }
@@ -349,9 +378,11 @@ impl Cache {
                 plan.deferred = true;
                 continue;
             }
+
             if self.is_failed(tile, now) {
                 // No tile here (or it kept failing): its nearest ancestor that can load stands in
                 let mut ancestor = tile.parent();
+
                 while let Some(a) = ancestor {
                     if a.z < self.min_z || self.slots.contains_key(&a) {
                         break;
@@ -378,7 +409,9 @@ impl Cache {
         // left in the pool, the last ones wait (the farthest tiles, then the destination)
         plan.urgent.splice(0..0, plan.cover.iter().map(|_| true));
         plan.missing.splice(0..0, plan.cover.drain(..));
+
         let room = self.capacity.saturating_sub(held);
+
         plan.missing.truncate(room);
         plan.urgent.truncate(room);
     }
@@ -387,20 +420,24 @@ impl Cache {
     /// stand-in to mix while it fades in; or its nearest loaded ancestor alone. Also whether it is fading in
     pub fn sample(&mut self, tile: TileId, frame: u64, now: f64, fade_ms: f64) -> (Sample, bool) {
         let mut target = tile;
+
         while target.z > self.max_z {
             target = target.parent().unwrap_or(target);
         }
         if target.z < self.min_z {
             return (Sample::NONE, false);
         }
+
         let front = self.touch(target, frame).map(|loaded| {
             let fade = if fade_ms > 0.0 {
                 ((now - loaded.at) / fade_ms).clamp(0.0, 1.0)
             } else {
                 1.0
             };
+
             (loaded.slot, fade as f32)
         });
+
         if let Some((slot, fade)) = front
             && fade >= 1.0
         {
@@ -409,18 +446,23 @@ impl Cache {
                 back: None,
                 fade,
             };
+
             return (sample, false);
         }
+
         let back = self.loaded_ancestor(target).and_then(|ancestor| {
             let slot = self.touch(ancestor, frame)?.slot;
+
             Some((slot, crop(tile, ancestor)))
         });
+
         if let Some((slot, fade)) = front {
             let sample = Sample {
                 front: Some((slot, crop(tile, target))),
                 back,
                 fade,
             };
+
             (sample, true)
         } else {
             let sample = Sample {
@@ -428,6 +470,7 @@ impl Cache {
                 back: None,
                 fade: 1.0,
             };
+
             (sample, false)
         }
     }
@@ -436,9 +479,11 @@ impl Cache {
     /// elevation tile covering it, and its slot (-1: none yet, flat)
     pub fn heights(&mut self, tile: TileId, frame: u64) -> [f32; 4] {
         let mut target = tile;
+
         while target.z > self.max_z {
             target = target.parent().unwrap_or(target);
         }
+
         let source = if self.slots.contains_key(&target) {
             Some(target)
         } else {
@@ -448,6 +493,7 @@ impl Cache {
             return [0.0, 0.0, 1.0, -1.0];
         };
         let [u0, v0, u1, _] = crop(tile, source.unwrap_or(tile));
+
         [u0, v0, u1 - u0, f32::from(slot)]
     }
 
@@ -456,9 +502,11 @@ impl Cache {
         if !m.is_finite() {
             return None;
         }
+
         // Across the antimeridian x wraps around the world (a point of another copy of the world), y stops at the
         // poles
         let m = glam::DVec2::new(m.x.rem_euclid(1.0), m.y).clamp(glam::DVec2::ZERO, glam::DVec2::splat(1.0 - 1e-9));
+
         for z in (self.min_z..=self.max_z).rev() {
             let n = f64::from(1u32 << z);
             let tile = TileId::new(z, (m.x * n) as u32, (m.y * n) as u32);
@@ -472,12 +520,15 @@ impl Cache {
             let (i, f) = (p.floor(), p - p.floor());
             let at = |x: f64, y: f64| {
                 let (x, y) = ((x as usize).min(CPU_HEIGHTS - 1), (y as usize).min(CPU_HEIGHTS - 1));
+
                 f64::from(heights[y * CPU_HEIGHTS + x])
             };
             let top = at(i.x, i.y) * (1.0 - f.x) + at(i.x + 1.0, i.y) * f.x;
             let bottom = at(i.x, i.y + 1.0) * (1.0 - f.x) + at(i.x + 1.0, i.y + 1.0) * f.x;
+
             return Some(top * (1.0 - f.y) + bottom * f.y);
         }
+
         None
     }
 }
@@ -490,8 +541,10 @@ pub fn simulate_plans(wanted: &[Selected], preload: &[TileId], frames: u64) -> u
     let mut cache = Cache::new(0, 19, 256);
     let mut plan = Plan::default();
     let mut drawn = 0;
+
     for frame in 1..=frames {
         let now = frame as f64 * 16.0;
+
         cache.plan(&mut plan, wanted, preload, frame, now, Motion::default());
         for &tile in plan.missing.iter().take(8) {
             cache.install(tile, None, frame, now);
@@ -501,6 +554,7 @@ pub fn simulate_plans(wanted: &[Selected], preload: &[TileId], frames: u64) -> u
         }
         drawn += plan.tiles.len();
     }
+
     drawn
 }
 
@@ -527,14 +581,17 @@ mod tests {
     #[test]
     fn samples_write_eleven_floats() {
         let mut data = Vec::new();
+
         Sample::NONE.write(&mut data);
         assert_eq!(data, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, 1.0]);
         data.clear();
+
         let s = Sample {
             front: Some((3, [0.0, 0.0, 1.0, 1.0])),
             back: Some((9, [0.5, 0.5, 1.0, 1.0])),
             fade: 0.25,
         };
+
         s.write(&mut data);
         assert_eq!(data, [0.0, 0.0, 1.0, 1.0, 0.5, 0.5, 1.0, 1.0, 3.0, 9.0, 0.25]);
     }
@@ -543,6 +600,7 @@ mod tests {
     fn the_least_recently_used_slot_is_recycled_never_one_on_screen() {
         let mut cache = Cache::new(0, 20, 2);
         let (a, b, c) = (TileId::new(3, 0, 0), TileId::new(3, 1, 0), TileId::new(3, 2, 0));
+
         assert_eq!(cache.install(a, None, 1, 0.0), Install::Slot(0));
         assert_eq!(cache.install(b, None, 2, 0.0), Install::Slot(1));
         assert_eq!(cache.install(b, None, 2, 0.0), Install::Duplicate);
@@ -561,6 +619,7 @@ mod tests {
     fn failures_cool_down_and_missing_tiles_stay_missing() {
         let mut cache = Cache::new(0, 20, 4);
         let (a, b) = (TileId::new(4, 1, 1), TileId::new(4, 2, 1));
+
         cache.failed(a, 1000.0);
         assert!(cache.is_failed(a, 2000.0) && !cache.is_failed(a, 3001.0));
         // Twice the delay after a second failure
@@ -578,10 +637,13 @@ mod tests {
         let mut cache = Cache::new(0, 20, 16);
         let mut plan = Plan::default();
         let tile = TileId::new(10, 500, 300);
+
         cache.plan(&mut plan, &[selected(tile)], &[], 1, 0.0, Motion::default());
         // Nothing loaded: drawn anyway, its grand-parent asked first, then itself
         assert_eq!(plan.tiles, [tile]);
+
         let coarse = tile.parent().unwrap().parent().unwrap();
+
         assert_eq!(plan.missing, [coarse, tile]);
         assert_eq!(plan.urgent, [true, true]);
         // The grand-parent arrived: it stands in, only the tile is asked
@@ -589,9 +651,12 @@ mod tests {
         cache.plan(&mut plan, &[selected(tile)], &[], 2, 0.0, Motion::default());
         assert_eq!(plan.tiles, [tile]);
         assert_eq!(plan.missing, [tile]);
+
         let (sample, fading) = cache.sample(tile, 2, 0.0, 0.0);
+
         assert!(!fading);
         assert_eq!(sample.front, Some((0, crop(tile, coarse))));
+
         // Off the screen center while the camera moves: it waits
         let off = Selected {
             central: false,
@@ -601,10 +666,13 @@ mod tests {
             defer_off_center: true,
             ..Motion::default()
         };
+
         cache.plan(&mut plan, &[off], &[], 3, 0.0, motion);
         assert!(plan.missing.is_empty() && plan.deferred);
+
         // Off the center at rest: loaded, not urgent; the flight destination neither
         let far = TileId::new(10, 900, 900);
+
         cache.plan(&mut plan, &[off], &[far], 4, 0.0, Motion::default());
         assert_eq!(plan.missing, [tile, far]);
         assert_eq!(plan.urgent, [false, false]);
@@ -616,24 +684,31 @@ mod tests {
         let mut plan = Plan::default();
         let root = TileId::new(0, 0, 0);
         let [p, q, r, s, t] = [0, 1, 2, 3, 4].map(|x| TileId::new(3, x, 0));
+
         for tile in [root, p, q, r] {
             cache.install(tile, None, 1, 0.0);
         }
+
         // Five tiles wanted, by priority: three loaded, two standing in with the root; the pool is full of them, so
         // nothing more is asked for, and an arrival finds no slot
         let wanted: Vec<Selected> = [p, q, r, s, t].into_iter().map(selected).collect();
+
         cache.plan(&mut plan, &wanted, &[], 2, 0.0, Motion::default());
         assert_eq!(plan.tiles, [p, q, r, s, t]);
         assert_eq!(plan.missing, []);
         assert_eq!(cache.install(s, None, 2, 0.0), Install::Full);
+
         // Fewer wanted: two slots are held (p and the root), the others are free for the two tiles asked for
         let wanted: Vec<Selected> = [p, s, t].into_iter().map(selected).collect();
+
         cache.plan(&mut plan, &wanted, &[], 3, 0.0, Motion::default());
         assert_eq!(plan.missing, [s, t]);
         assert_eq!(cache.install(s, None, 3, 0.0), Install::Slot(2));
         assert!(cache.contains(p) && cache.contains(root) && !cache.contains(q));
+
         // Now three are held: room for one, the nearest of the rest
         let wanted: Vec<Selected> = [p, s, t, TileId::new(3, 5, 0)].into_iter().map(selected).collect();
+
         cache.plan(&mut plan, &wanted, &[], 4, 0.0, Motion::default());
         assert_eq!(plan.missing, [t]);
     }
@@ -643,6 +718,7 @@ mod tests {
         let mut cache = Cache::new(0, 20, 16);
         let mut plan = Plan::default();
         let tile = TileId::new(8, 100, 100);
+
         cache.install(TileId::new(4, 6, 6), None, 1, 0.0);
         cache.missing(tile);
         cache.plan(&mut plan, &[selected(tile)], &[], 2, 0.0, Motion::default());
@@ -656,6 +732,7 @@ mod tests {
         let mut plan = Plan::default();
         let tile = TileId::new(6, 10, 10);
         let children = tile.children();
+
         cache.install(children[0], None, 1, 0.0);
         cache.install(children[3].children()[1], None, 1, 0.0);
         cache.plan(&mut plan, &[selected(tile)], &[], 2, 0.0, Motion::default());
@@ -666,14 +743,19 @@ mod tests {
     fn fading_tiles_mix_with_their_stand_in() {
         let mut cache = Cache::new(0, 20, 16);
         let (parent, tile) = (TileId::new(3, 1, 1), TileId::new(4, 2, 2));
+
         cache.install(parent, None, 1, 0.0);
         cache.install(tile, None, 1, 1000.0);
+
         let (s, fading) = cache.sample(tile, 2, 1100.0, 200.0);
+
         assert!(fading);
         assert!((s.fade - 0.5).abs() < 1e-6);
         assert_eq!(s.back.map(|b| b.1), Some([0.0, 0.0, 0.5, 0.5]));
+
         // Done fading: alone
         let (s, fading) = cache.sample(tile, 3, 1300.0, 200.0);
+
         assert!(!fading && s.back.is_none());
     }
 
@@ -686,11 +768,14 @@ mod tests {
         let slope: Box<[f32]> = (0..CPU_HEIGHTS * CPU_HEIGHTS)
             .map(|k| (k % CPU_HEIGHTS) as f32)
             .collect();
+
         cache.install(coarse, Some(flat), 1, 0.0);
         assert_eq!(cache.altitude(glam::DVec2::new(0.3, 0.3)), Some(10.0));
         cache.install(fine, Some(slope), 1, 0.0);
+
         // The middle of the fine tile, between samples 15 and 16
         let h = cache.altitude(glam::DVec2::new(0.3125, 0.3125)).unwrap();
+
         assert!((h - 15.5).abs() < 1e-9, "{h}");
         // Elsewhere in the coarse tile
         assert_eq!(cache.altitude(glam::DVec2::new(0.4, 0.4)), Some(10.0));
@@ -703,6 +788,7 @@ mod tests {
         let mut cache = Cache::new(0, 20, 16);
         // Two tiles at the ends of the world, west at 100 m, east at 900 m
         let (west, east) = (TileId::new(3, 0, 3), TileId::new(3, 7, 3));
+
         cache.install(
             west,
             Some(vec![100.0; CPU_HEIGHTS * CPU_HEIGHTS].into_boxed_slice()),
@@ -715,7 +801,9 @@ mod tests {
             1,
             0.0,
         );
+
         let y = 3.5 / 8.0;
+
         // Just east of the antimeridian, on the next copy of the world: the western tile, not the eastern one
         assert_eq!(cache.altitude(glam::DVec2::new(1.01, y)), Some(100.0));
         // Just west of it, on the copy before
@@ -729,6 +817,7 @@ mod tests {
     fn missing_tiles_are_remembered_within_a_bound() {
         let mut cache = Cache::new(0, 20, 4);
         let first = TileId::new(20, 0, 0);
+
         for k in 0..=MAX_MISSING as u32 {
             cache.missing(TileId::new(20, k, 0));
         }
@@ -736,8 +825,10 @@ mod tests {
         assert!(!cache.is_failed(first, 0.0));
         assert!(cache.is_failed(TileId::new(20, MAX_MISSING as u32, 0), 0.0));
         assert_eq!(cache.failure_counts(0.0), (0, MAX_MISSING));
+
         // A tile marked missing again keeps its place; one that arrived is forgotten
         let again = TileId::new(20, 5, 0);
+
         cache.missing(again);
         cache.succeeded(TileId::new(20, 6, 0));
         for k in 0..MAX_MISSING as u32 - 2 {

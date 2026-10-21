@@ -129,16 +129,21 @@ export const rampTexels = (ramp: Ramp): { rgba: Uint8Array; min: number; max: nu
   const min = stops[0]?.[0] ?? 0;
   const max = stops.at(-1)?.[0] ?? 1;
   const rgba = new Uint8Array(256 * 4);
+
   for (let i = 0; i < 256; i += 1) {
     const v = min + ((max - min) * i) / 255;
     let k = 0;
+
     while (k + 1 < stops.length && (stops[k + 1]?.[0] ?? 0) < v) k += 1;
+
     const [v0, c0] = stops[k] ?? [min, [0, 0, 0, 1]];
     const [v1, c1] = stops[k + 1] ?? [v0, c0];
     const t = v1 > v0 ? Math.max(0, Math.min(1, (v - v0) / (v1 - v0))) : 0;
+
     for (let j = 0; j < 4; j += 1)
       rgba[i * 4 + j] = Math.round(((c0[j] ?? 0) + ((c1[j] ?? 0) - (c0[j] ?? 0)) * t) * 255);
   }
+
   return { rgba, min, max };
 };
 
@@ -147,32 +152,43 @@ export const stops = (size: Size): [number, number, number, number, number, numb
   if (!Array.isArray(size)) {
     // A style function may return nothing for a feature without the property: 0
     const v = Number.isFinite(size) ? size : 0;
+
     return [0, 0, 0, 0, v, v, v, v];
   }
+
   // More than four: resampled at four zooms over their range
   const resampled = (): [number, number][] => {
     const z0 = size[0]?.[0] ?? 0;
     const z1 = size.at(-1)?.[0] ?? 0;
+
     return [0, 1, 2, 3].map((k): [number, number] => {
       const z = z0 + ((z1 - z0) * k) / 3;
+
       return [z, interpolate(size, z)];
     });
   };
   const s = size.length > 4 ? resampled() : size;
   const at = (k: number) => s[Math.min(k, s.length - 1)] ?? [0, 0];
+
   return [at(0)[0], at(1)[0], at(2)[0], at(3)[0], at(0)[1], at(1)[1], at(2)[1], at(3)[1]];
 };
 
 /** Value of zoom stops at a zoom */
 export const interpolate = (size: Size, zoom: number): number => {
   if (typeof size === 'number') return size;
+
   const first = size[0];
+
   if (!first) return 0;
   if (zoom <= first[0]) return first[1];
+
   const k = size.findIndex(([z], i) => i > 0 && zoom <= z);
+
   if (k < 0) return size.at(-1)?.[1] ?? 0;
+
   const [z0, v0] = size[k - 1] ?? first;
   const [z1, v1] = size[k] ?? first;
+
   return v0 + ((v1 - v0) * (zoom - z0)) / Math.max(z1 - z0, 1e-9);
 };
 
@@ -189,10 +205,15 @@ export const featuresOf = <P>(data: FeatureData<P>): Feature<P>[] => {
   if (Array.isArray(data)) return data;
   if (data.type !== 'FeatureCollection') return [data];
   if (crsOf(data) === undefined) return data.features;
+
   const cached = reprojected.get(data) as Feature<P>[] | undefined;
+
   if (cached) return cached;
+
   const features = reproject(data).features;
+
   reprojected.set(data, features);
+
   return features;
 };
 
@@ -212,6 +233,7 @@ class Grow<T extends Float64Array | Uint32Array> {
       const next = new (this.data.constructor as new (n: number) => T)(
         Math.max(16, this.data.length * 2, this.length + values.length),
       );
+
       next.set(this.data);
       this.data = next;
     }
@@ -232,6 +254,7 @@ const lineGeometry = (features: Feature<unknown>[]) => {
     feature.push(f);
     for (const [lon, lat] of coords) points.push(mercatorX(lon), mercatorY(lat));
   };
+
   features.forEach((f, i) => {
     for (const g of geometries(f.geometry)) {
       if (g.type === 'LineString') line(g.coordinates, i);
@@ -241,6 +264,7 @@ const lineGeometry = (features: Feature<unknown>[]) => {
     }
   });
   start.push(points.length / 2);
+
   return { points: points.done(), start: start.done(), feature: feature.done() };
 };
 
@@ -251,12 +275,14 @@ const pointGeometry = (features: Feature<unknown>[]) => {
     points.push(mercatorX(lon), mercatorY(lat));
     feature.push(f);
   };
+
   features.forEach((f, i) => {
     for (const g of geometries(f.geometry)) {
       if (g.type === 'Point') point(g.coordinates, i);
       else if (g.type === 'MultiPoint') for (const p of g.coordinates) point(p, i);
     }
   });
+
   return { points: points.done(), feature: feature.done() };
 };
 
@@ -273,6 +299,7 @@ export const polygonGeometry = (features: Feature<unknown>[]) => {
       for (const [lon, lat] of ring) points.push(mercatorX(lon), mercatorY(lat));
     }
   };
+
   features.forEach((f, i) => {
     for (const g of geometries(f.geometry)) {
       if (g.type === 'Polygon') polygon(g.coordinates, i);
@@ -281,6 +308,7 @@ export const polygonGeometry = (features: Feature<unknown>[]) => {
   });
   ringStart.push(points.length / 2);
   polygonStart.push(ringStart.length - 1);
+
   return {
     points: points.done(),
     ringStart: ringStart.done(),
@@ -322,6 +350,7 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   /** Replaces the features; the style is evaluated again for them */
   setData(data: FeatureData<P>): void {
     const before = this.list.length;
+
     this.list = featuresOf(data);
     if (this.list.length !== before) this.values = undefined;
     // A new feature count needs new textures: the layer is created again at its place
@@ -360,10 +389,12 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   private mask(): Uint8Array {
     const { filter } = this.style;
     const mask = new Uint8Array(this.list.length).fill(255);
+
     if (filter)
       this.list.forEach((f, i) => {
         if (!filter(f.properties, i)) mask[i] = 0;
       });
+
     return mask;
   }
 
@@ -371,6 +402,7 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   private recreate(): void {
     const engine = this.map.engine;
     const old = this.id;
+
     this.attach(engine);
     this.map.replaceLayer(this, old);
   }
@@ -378,8 +410,10 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   /** @internal */
   protected create(engine: Engine): number {
     const id = this.add(engine);
+
     this.applyStyle(engine, id);
     if (this.values) engine.setFeatureValues(id, this.values);
+
     return id;
   }
 
@@ -398,9 +432,11 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
   /** @internal */
   protected applyStyle(engine: Engine, id: number): void {
     const out = new Float32Array(this.list.length * FLOATS);
+
     this.list.forEach((f, i) => {
       const [color, second, size, size2] = this.featureStyle(f.properties, i);
       const o = i * FLOATS;
+
       out.set(parseColor(color), o);
       out.set(parseColor(second), o + 4);
       out.set(stops(size), o + 8);
@@ -408,8 +444,10 @@ export abstract class FeatureLayer<P, S extends FeatureLayerStyle<P>> extends La
     });
     engine.setFeatureStyle(id, out);
     engine.setFeatureMask(id, this.mask());
+
     const { ramp, opacity, minZoom, maxZoom, visible } = this.style;
     const r = ramp && rampTexels(ramp);
+
     engine.setFeatureRamp(id, r?.rgba, r?.min ?? 0, r?.max ?? 1);
     engine.setFeatureLayer(id, Float32Array.from(stops(opacity)), minZoom, maxZoom, visible);
     this.applyExtra(engine, id);
@@ -420,23 +458,27 @@ export class LineLayer<P = Properties> extends FeatureLayer<P, LineStyle<P>> {
   /** @internal */
   protected add(engine: Engine): number {
     const g = lineGeometry(this.list);
+
     return engine.addLines(g.points, g.start, g.feature, this.list.length);
   }
 
   /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = lineGeometry(this.list);
+
     engine.setLines(id, g.points, g.start, g.feature);
   }
 
   protected featureStyle(properties: P, index: number): [string, string, Size, Size] {
     const { color, width } = this.style;
+
     return [evaluate(color, properties, index), '#000', evaluate(width, properties, index), 0];
   }
 
   /** @internal */
   protected applyExtra(engine: Engine, id: number): void {
     const [dash, gap] = this.style.dash ?? [0, 0];
+
     engine.setLineDash(id, dash, gap);
   }
 }
@@ -445,17 +487,20 @@ export class CircleLayer<P = Properties> extends FeatureLayer<P, CircleStyle<P>>
   /** @internal */
   protected add(engine: Engine): number {
     const g = pointGeometry(this.list);
+
     return engine.addCircles(g.points, g.feature, this.list.length);
   }
 
   /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = pointGeometry(this.list);
+
     engine.setCircles(id, g.points, g.feature);
   }
 
   protected featureStyle(properties: P, index: number): [string, string, Size, Size] {
     const { color, strokeColor, radius, strokeWidth } = this.style;
+
     return [
       evaluate(color, properties, index),
       evaluate(strokeColor, properties, index),
@@ -474,12 +519,14 @@ export class FillLayer<P = Properties> extends FeatureLayer<P, FillStyle<P>> {
   /** @internal */
   protected add(engine: Engine): number {
     const g = polygonGeometry(this.list);
+
     return engine.addFills(g.points, g.ringStart, g.polygonStart, g.feature, this.list.length);
   }
 
   /** @internal */
   protected upload(engine: Engine, id: number): void {
     const g = polygonGeometry(this.list);
+
     engine.setFills(id, g.points, g.ringStart, g.polygonStart, g.feature);
   }
 
@@ -492,11 +539,13 @@ export class FillLayer<P = Properties> extends FeatureLayer<P, FillStyle<P>> {
 
 export const lineStyle = <P>(options: LineOptions<P>): LineStyle<P> => {
   const { data: _, before: __, ...rest } = options;
+
   return { ...(BASE as FeatureLayerStyle<P>), color: '#000', width: 1, dash: undefined, ...rest };
 };
 
 export const circleStyle = <P>(options: CircleOptions<P>): CircleStyle<P> => {
   const { data: _, before: __, ...rest } = options;
+
   return {
     ...(BASE as FeatureLayerStyle<P>),
     color: '#000',
@@ -510,5 +559,6 @@ export const circleStyle = <P>(options: CircleOptions<P>): CircleStyle<P> => {
 
 export const fillStyle = <P>(options: FillOptions<P>): FillStyle<P> => {
   const { data: _, before: __, ...rest } = options;
+
   return { ...(BASE as FeatureLayerStyle<P>), color: '#000', ...rest };
 };

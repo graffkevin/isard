@@ -19,10 +19,13 @@ const meshError = (g: ReturnType<typeof resolveGrid>, z: number, x: number, y: n
   const job = planTile(g, '{z}/{x}/{y}', z, x, y, 256) as Job;
   const [level, col0, row0] = tilesOf(job)[0] as number[];
   const m = g.matrices.find((matrix) => Number(matrix.id) === level);
+
   if (!m) throw new Error('no matrix');
+
   const { n, mesh } = job;
   const at = (i: number, j: number, k: number) => mesh[2 * (j * (n + 1) + i) + k] as number;
   const steps = Array.from({ length: Math.ceil(256 / 3) }, (_, k) => k * 3);
+
   return steps
     .flatMap((row) =>
       steps.map((col) => {
@@ -41,6 +44,7 @@ const meshError = (g: ReturnType<typeof resolveGrid>, z: number, x: number, y: n
         ]);
         const u = (X - m.origin[0]) / m.resolution - (col0 as number) * m.tileWidth;
         const v = (m.origin[1] - Y) / m.resolution - (row0 as number) * m.tileHeight;
+
         return Math.hypot(u - lerp(0), v - lerp(1));
       }),
     )
@@ -51,6 +55,7 @@ describe('planTile in Lambert-93', () => {
   test('the level of the same pixel size, the source tiles under the Mercator tile', () => {
     // Paris at zoom 12: Mercator pixels of 25 m there, level 13 (25.6 m)
     const job = planTile(L93, '{z}/{x}/{y}', 12, 2074, 1409, 256);
+
     expect(tilesOf(job)).toEqual([
       [13, 98, 783],
       [13, 99, 783],
@@ -59,8 +64,10 @@ describe('planTile in Lambert-93', () => {
     ]);
     expect([job?.width, job?.height, job?.n]).toEqual([512, 512, 16]);
     expect(job?.sources[3]).toMatchObject({ x: 256, y: 256, w: 256, h: 256 });
+
     // The corners of the tile, in the mosaic: the Mercator tile's own corner, projected
     const [X = 0, Y = 0] = getCrs('EPSG:2154').forward([longitude(2074 / 4096), latitude(1409 / 4096)]);
+
     expect(job?.mesh[0]).toBeCloseTo(X / 25.6 - 98 * 256, 3);
     expect(job?.mesh[1]).toBeCloseTo((12000000 - Y) / 25.6 - 783 * 256, 3);
     // One level finer per zoom
@@ -79,8 +86,10 @@ describe('planTile in Lambert-93', () => {
     expect(planTile(L93, '{z}/{x}/{y}', 10, 301, 385, 256)).toBeNull();
     // Zoom 22 over Paris: level 20, the last
     expect(tilesOf(planTile(L93, '{z}/{x}/{y}', 22, 2074 << 10, 1409 << 10, 256))[0]?.[0]).toBe(20);
+
     // France on one tile of zoom 3: the coarsest level, its tiles within the mosaic's limit
     const coarse = planTile(L93, '{z}/{x}/{y}', 3, 4, 2, 256);
+
     expect(tilesOf(coarse)[0]?.[0]).toBe(6);
     expect((coarse?.width ?? 0) * (coarse?.height ?? 0)).toBeLessThanOrEqual(2048 * 2048);
   });
@@ -90,6 +99,7 @@ describe('planTile in Lambert-93', () => {
       crs: 'EPSG:2154',
       matrices: [{ id: 'a', resolution: 25.6, origin: [0, 12000000], limits: [99, 0, 200, 783] }],
     });
+
     expect(tilesOf(planTile(grid, '{z}/{x}/{y}', 12, 2074, 1409, 256)).map((t) => t.slice(1))).toEqual([[99, 783]]);
   });
 
@@ -105,6 +115,7 @@ describe('planTile of a WMS (no matrices)', () => {
     const job = planTile(grid, 'wms?BBOX={bbox}&WIDTH={width}&HEIGHT={height}', 14, 8297, 5636, 512);
     const url = new URL(job?.sources[0]?.url ?? '', 'https://x/');
     const [x0, y0, x1, y1] = (url.searchParams.get('BBOX') ?? '').split(',').map(Number) as number[];
+
     expect([url.searchParams.get('WIDTH'), url.searchParams.get('HEIGHT')]).toEqual(['512', '512']);
     // Some 1.6 km across at 48.85° N, around the Panthéon
     expect((x1 as number) - (x0 as number)).toBeGreaterThan(1600);
@@ -130,6 +141,7 @@ describe('the equirectangular preset', () => {
   test('the same pixel size along the parallels: level z - 1, one source column per Mercator tile', () => {
     // On the equator, east of the meridian; its source rows: the northern half of row 3 (2 boundaries: 2 rows)
     const job = planTile(EQ, '{z}/{x}/{y}', 4, 9, 7, 256);
+
     expect(new Set(tilesOf(job).map(([level, col]) => `${level}/${col}`))).toEqual(new Set(['3/9']));
     expect(meshError(EQ, 4, 9, 7)).toBeLessThan(0.02);
   });
@@ -137,6 +149,7 @@ describe('the equirectangular preset', () => {
   test('finer towards the poles (three levels at most), never past the last level nor before the first', () => {
     // Around 80° north: level 3 + 3, the eight source columns of the tile
     const polar = planTile(EQ, '{z}/{x}/{y}', 4, 3, 1, 256);
+
     expect(tilesOf(polar)[0]?.[0]).toBe(6);
     expect(new Set(tilesOf(polar).map(([, col]) => col))).toEqual(new Set([24, 25, 26, 27, 28, 29, 30, 31]));
     expect(tilesOf(planTile(resolveGrid(equirectangularGrid(0, 5)), '{z}/{x}/{y}', 4, 3, 1, 256))[0]?.[0]).toBe(5);
@@ -152,29 +165,35 @@ describe('resample', () => {
   /** A mosaic of w × h pixels, each `[r, g, b, a]` of `color(x, y)` */
   const mosaic = (w: number, h: number, color: (x: number, y: number) => number[]) => {
     const data = new Uint8ClampedArray(w * h * 4);
+
     for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) data.set(color(x, y), 4 * (y * w + x));
+
     return data;
   };
   /** The mesh of an affine map: tile pixel (x, y) to mosaic (a x + b, c y + d) */
   const affine = (n: number, size: number, [a, b, c, d]: number[]) => {
     const mesh = new Float32Array(2 * (n + 1) ** 2);
+
     for (let j = 0; j <= n; j += 1) {
       for (let i = 0; i <= n; i += 1) {
         mesh[2 * (j * (n + 1) + i)] = ((a as number) * i * size) / n + (b as number);
         mesh[2 * (j * (n + 1) + i) + 1] = ((c as number) * j * size) / n + (d as number);
       }
     }
+
     return mesh;
   };
 
   test('one to one: the pixels as they are', () => {
     const source = mosaic(8, 8, (x, y) => [x * 30, y * 30, 7, 255]);
+
     expect(resample(source, 8, 8, affine(4, 8, [1, 0, 1, 0]), 4, 8)).toEqual(source);
   });
 
   test('an offset of half a pixel: the mean of two, a quarter of four', () => {
     const source = mosaic(4, 4, (x) => [x * 100, 0, 0, 255]);
     const out = resample(source, 4, 4, affine(2, 2, [1, 0.5, 1, 0]), 2, 2);
+
     expect([...out.slice(0, 4)]).toEqual([50, 0, 0, 255]);
     expect([...out.slice(4, 8)]).toEqual([150, 0, 0, 255]);
   });
@@ -183,6 +202,7 @@ describe('resample', () => {
     const source = mosaic(2, 1, (x) => (x === 0 ? [255, 0, 0, 255] : [0, 0, 255, 0]));
     // The middle of the two pixels: red at half opacity, not purple
     const out = resample(source, 2, 1, affine(1, 1, [0, 1, 0, 0.5]), 1, 1);
+
     expect([...out]).toEqual([255, 0, 0, 128]);
     expect([...resample(source, 2, 1, affine(1, 1, [0, 10, 0, 0.5]), 1, 1)]).toEqual([0, 0, 0, 0]);
     expect([...resample(source, 2, 1, Float32Array.of(Number.NaN, 0, 1, 0, 0, 1, 1, 1), 1, 1)]).toEqual([0, 0, 0, 0]);
@@ -192,6 +212,7 @@ describe('resample', () => {
 describe('resampler and gridLoader', () => {
   const fetched: string[] = [];
   const drawn: unknown[][] = [];
+
   class FakeCanvas {
     constructor(
       readonly width: number,
@@ -205,17 +226,21 @@ describe('resampler and gridLoader', () => {
       };
     }
   }
+
   /** Downloads held until their promise resolves */
   const gates = new Map<string, Promise<void>>();
   const restore = setGlobals({
     fetch: mock(async (url: string) => {
       fetched.push(url);
       await gates.get(url);
+
       const missing = url.includes('missing') || url.endsWith('/1/0');
+
       return new Response(missing ? null : 'png', { status: missing ? 404 : 200 });
     }),
     createImageBitmap: async (source: Blob | { width: number }, options?: unknown) => {
       if (!(source instanceof Blob)) return { tile: source.width, options };
+
       const image = {
         source: await source.text(),
         closed: false,
@@ -223,6 +248,7 @@ describe('resampler and gridLoader', () => {
           image.closed = true;
         },
       };
+
       return image;
     },
     OffscreenCanvas: FakeCanvas,
@@ -233,11 +259,14 @@ describe('resampler and gridLoader', () => {
       ) {}
     },
   });
+
   afterAll(restore);
+
   const signal = new AbortController().signal;
 
   test('the source tiles fetched once, missing ones left empty; nothing outside the source', async () => {
     const loader = gridLoader('https://eq.example/{z}/{x}/{y}', EQ, 256);
+
     expect(await loader(0, 0, 0, signal)).toEqual({ tile: 256, options: { premultiplyAlpha: 'none' } } as never);
     expect(fetched.sort()).toEqual(['https://eq.example/0/0/0', 'https://eq.example/0/1/0']);
     // Only the western tile drawn, at its place
@@ -255,8 +284,10 @@ describe('resampler and gridLoader', () => {
     const jobs: Job[] = [];
     const remote = (job: Job) => {
       jobs.push(job);
+
       return Promise.resolve(null);
     };
+
     await gridLoader('https://l93.example/{z}/{x}/{y}', L93, 512, remote)(12, 2074, 1409, signal);
     // Tiles of 512 pixels: one level finer
     expect(jobs[0]?.size).toBe(512);
@@ -274,6 +305,7 @@ describe('resampler and gridLoader', () => {
       sources: [{ url: `https://evict.example/${k}`, x: 0, y: 0, w: 256, h: 256 }],
     });
     let open = () => {};
+
     gates.set(
       'https://evict.example/0',
       new Promise((resolve) => {
@@ -281,10 +313,14 @@ describe('resampler and gridLoader', () => {
       }),
     );
     drawn.length = 0;
+
     const held = draw(job(0), signal);
+
     for (let k = 1; k <= 20; k += 1) await draw(job(k), signal);
     await new Promise((resolve) => setTimeout(resolve, 0));
+
     const imageOf = (entry: unknown[] | undefined) => entry?.[0] as { closed: boolean };
+
     // The first drawn, from an open image, closed since it left the cache; the latest ones kept
     expect(drawn[0]?.at(-1)).toBe(false);
     expect(imageOf(drawn[0]).closed).toBe(true);
@@ -299,6 +335,7 @@ describe('resampler and gridLoader', () => {
 
   test('an aborted request rejects', async () => {
     const controller = new AbortController();
+
     controller.abort();
     expect(gridLoader('https://eq.example/{z}/{x}/{y}', EQ, 256)(0, 0, 0, controller.signal)).rejects.toThrow();
   });
@@ -310,9 +347,12 @@ describe("the Géoplateforme's Lambert-93 layers", () => {
       matrixSet: '2154_10cm_6_20',
       format: 'image/jpeg',
     });
+
     expect(options.url).toContain('TILEMATRIXSET=2154_10cm_6_20&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}');
     expect(options.maxZoom).toBeUndefined();
+
     const grid = options.grid as { matrices: { id: number; resolution: number }[]; crs: string };
+
     expect(grid.crs).toBe('EPSG:2154');
     expect(grid.matrices[0]).toMatchObject({ id: 6, resolution: 3276.8 });
     expect(grid.matrices.at(-1)).toMatchObject({ id: 20, resolution: 0.2 });
@@ -323,6 +363,7 @@ describe("the Géoplateforme's Lambert-93 layers", () => {
 
   test('a WMS asked for in Lambert-93, or in CRS:84 for EPSG:4326', () => {
     const options = geoplateformeWms('CADASTRALPARCELS.PARCELLAIRE_EXPRESS', { crs: 'EPSG:2154' });
+
     expect(options.url).toContain('CRS=EPSG:2154&BBOX={bbox}&WIDTH={width}&HEIGHT={height}');
     expect(options.grid).toMatchObject({ crs: 'EPSG:2154', bounds: [-5.5, 41, 10, 51.5] });
     expect(geoplateformeWms('X', { crs: 'EPSG:4326' }).url).toContain('CRS=CRS:84');

@@ -19,6 +19,7 @@ const mesh = map.addTiles3d({
 });
 map.on('render', () => {
   const s = mesh.stats();
+
   if (s)
     element('tiles').textContent = `${s.drawn} tiles drawn, ${s.inFlight} loading, ${s.gpuMb.toFixed(0)} MB on the GPU`;
 });

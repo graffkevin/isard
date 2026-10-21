@@ -40,17 +40,23 @@ export class Bridge {
       send: (message) => this.receive(message),
       on: (type, listener) => {
         const set = this.listeners.get(type) ?? new Set<Listener>();
+
         this.listeners.set(type, set);
         set.add(listener);
+
         return () => set.delete(listener);
       },
     };
     // An iframe's parent or the window that opened this one; other windows are not listened to
     window.addEventListener('message', (event: MessageEvent<unknown>) => {
       if (event.source !== window.parent && event.source !== window.opener) return;
+
       const data = event.data as Partial<PostedMessage> | null;
+
       if (!data || typeof data !== 'object' || data.isard !== 1 || typeof data.type !== 'string') return;
+
       const { isard: _, ...message } = data;
+
       this.receive(message as HostMessage);
     });
     if (this.http) this.connect();
@@ -62,6 +68,7 @@ export class Bridge {
     this.events.onmessage = (event: MessageEvent<string>) => {
       try {
         const message = JSON.parse(event.data) as HostMessage | HostMessage[];
+
         (Array.isArray(message) ? message : [message]).forEach((m) => {
           this.receive(m);
         });

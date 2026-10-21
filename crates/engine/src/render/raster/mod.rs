@@ -80,15 +80,18 @@ const ELEVATION_SCALE: f64 = 8.0;
 /// Whether a tile is a descendant of a wanted tile close enough to stand in for it (`DESCENDANT_LEVELS`)
 fn stands_in_for(tile: TileId, wanted: &HashSet<TileId>) -> bool {
     let mut t = tile.parent();
+
     for _ in 0..DESCENDANT_LEVELS {
         let Some(a) = t else {
             return false;
         };
+
         if wanted.contains(&a) {
             return true;
         }
         t = a.parent();
     }
+
     false
 }
 
@@ -120,6 +123,7 @@ impl RasterOptions {
         if self.size <= TILE {
             return SLOTS;
         }
+
         (POOL_BYTES / (self.size as usize * self.size as usize * 4)).clamp(96, SLOTS)
     }
 }
@@ -200,11 +204,14 @@ impl RasterSource {
     pub fn new(gl: &glow::Context, mut options: RasterOptions) -> Result<Self, String> {
         options.max_z = options.max_z.min(MAX_Z);
         options.min_z = options.min_z.min(options.max_z);
+
         let slots = options.slots();
         // SAFETY: object creation and state setup on a live WebGL2 context
         let pool = unsafe {
             let pool = gl.create_texture()?;
+
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(pool));
+
             // Altitudes are read with texelFetch (R32F cannot be filtered in WebGL2)
             let (format, filter) = if options.elevation {
                 (glow::R32F, glow::NEAREST)
@@ -212,6 +219,7 @@ impl RasterSource {
                 (glow::RGBA8, glow::LINEAR)
             };
             let size = if options.elevation { TILE } else { options.size.max(1) };
+
             gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, format, size, size, slots as i32);
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, filter),
@@ -221,8 +229,10 @@ impl RasterSource {
             ] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D_ARRAY, key, value as i32);
             }
+
             pool
         };
+
         Ok(Self {
             clip: UNCLIPPED,
             cache: Cache::new(options.min_z, options.max_z, slots),
@@ -248,9 +258,11 @@ impl RasterSource {
     fn receive(&mut self, gl: &glow::Context, frame: u64, now: f64, budget_ms: f64) {
         for (tile, pixels) in self.inbox.borrow_mut().drain(..) {
             self.in_flight.remove(&tile);
+
             match pixels {
                 Ok(pixels) => {
                     self.cache.succeeded(tile);
+
                     if self.queued.insert(tile) {
                         self.queue.push_back((tile, pixels));
                     } else {
@@ -261,29 +273,37 @@ impl RasterSource {
                 Err(Fetch::Transient) => self.cache.failed(tile, now),
             }
         }
+
         // Tiles no longer needed (neither wanted nor kept by `abort_stale`, nor a descendant standing in for a wanted
         // tile while zooming out) are dropped: a decoded image may hold 4 MB outside the heap
         let (wanted, keep, queued) = (&self.wanted_set, &self.keep, &mut self.queued);
+
         self.queue.retain(|(tile, pixels)| {
             let needed = keep.contains(tile) || stands_in_for(*tile, wanted);
+
             if !needed {
                 queued.remove(tile);
                 pixels.close();
             }
+
             needed
         });
         // Tiles of the current view first, the others (stand-ins, tiles that left the view) after
         self.queue
             .make_contiguous()
             .sort_by_key(|(tile, _)| !wanted.contains(tile));
+
         // Uploads within the frame's time budget (at least one), the rest waits for the next frames
         let start = crate::js::now();
         let mut uploaded = 0;
+
         while uploaded == 0 || crate::js::now() - start < budget_ms {
             let Some((tile, pixels)) = self.queue.pop_front() else {
                 break;
             };
+
             uploaded += 1;
+
             let heights = match &pixels {
                 Pixels::Heights(heights) => Some(data::subsample(heights)),
                 Pixels::Image(_) => None,
@@ -303,11 +323,15 @@ impl RasterSource {
                     continue;
                 }
             };
+
             self.queued.remove(&tile);
+
             let size = self.options.size;
+
             // SAFETY: upload into an allocated slot of the pool
             unsafe {
                 gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(self.pool));
+
                 match &pixels {
                     Pixels::Image(bitmap) => gl::upload_bitmap_layer(gl, i32::from(slot), size, bitmap),
                     Pixels::Heights(heights) => gl.tex_sub_image_3d(
@@ -355,6 +379,7 @@ impl RasterSource {
         match ctx.preload {
             Some((generation, view)) if generation != self.preload.0 => {
                 let tiles = tiles::select(view, self.options.min_z, self.options.max_z, self.tile_px());
+
                 self.preload = (
                     generation,
                     tiles.into_iter().take(PRELOAD_TILES).map(|s| s.tile).collect(),
@@ -390,12 +415,16 @@ impl RasterSource {
         // A tile that failed before is fetched past the HTTP cache (it may hold the error)
         let retried = self.cache.failed_before(tile);
         let priority = if urgent { "high" } else { "low" };
+
         self.in_flight.insert(tile, (controller, now));
+
         let inbox = self.inbox.clone();
         let redraw = redraw.clone();
+
         wasm_bindgen_futures::spawn_local(async move {
             // Transient errors (network, rate limit, server) are retried; "no tile here" is final
             let mut pixels = Err(Fetch::Transient);
+
             for (attempt, pause) in RETRY_PAUSES_MS.iter().enumerate() {
                 let reload = retried || attempt > 0;
                 let fetched = if let (Some(loader), true) = (&loader, elevation) {
@@ -413,6 +442,7 @@ impl RasterSource {
                         .await
                         .map(Pixels::Image)
                 };
+
                 match fetched {
                     Ok(p) => {
                         pixels = Ok(p);
@@ -427,10 +457,12 @@ impl RasterSource {
                     }
                     Err(Fetch::Transient) => {}
                 }
+
                 if signal.aborted() {
                     break;
                 }
             }
+
             // An aborted tile was already forgotten (or its source dropped); it is not a failure
             if !signal.aborted() {
                 inbox.borrow_mut().push((tile, pixels));
@@ -449,6 +481,7 @@ impl RasterSource {
         self.keep.clear();
         for &tile in &self.wanted_set {
             let mut t = Some(tile);
+
             while let Some(a) = t {
                 if !self.keep.insert(a) {
                     break;
@@ -456,12 +489,16 @@ impl RasterSource {
                 t = a.parent();
             }
         }
+
         let keep = &self.keep;
+
         self.in_flight.retain(|tile, (controller, started)| {
             let kept = keep.contains(tile) || now - *started < STALE_GRACE_MS;
+
             if !kept {
                 controller.abort();
             }
+
             kept
         });
     }
@@ -470,6 +507,7 @@ impl RasterSource {
     /// or waiting for their upload
     pub fn prepare(&mut self, gl: &glow::Context, ctx: &DrawContext) -> bool {
         let (view, frame, redraw, now) = (ctx.view, ctx.frame, ctx.redraw, ctx.now);
+
         self.wanted = tiles::select(view, self.options.min_z, self.options.max_z, self.tile_px());
         self.update_preload(ctx);
         self.wanted_set.clear();
@@ -478,10 +516,12 @@ impl RasterSource {
         // The tiles kept first (`keep`), which the arrivals not needed any more are checked against
         self.abort_stale(now);
         self.fading = false;
+
         let motion = Motion {
             flying: ctx.loading.skip_levels_in_flight && ctx.moving && ctx.preload.is_some(),
             defer_off_center: ctx.loading.defer_off_center && ctx.moving,
         };
+
         // The plan before the uploads: the tiles it relies on are held, the uploads take the other slots
         self.cache
             .plan(&mut self.plan, &self.wanted, &self.preload.1, frame, now, motion);
@@ -489,21 +529,27 @@ impl RasterSource {
         // The deferred tiles load once the camera rests
         if self.plan.deferred && !self.wake.get() {
             self.wake.set(true);
+
             let (wake, redraw) = (self.wake.clone(), redraw.clone());
+
             wasm_bindgen_futures::spawn_local(async move {
                 crate::js::sleep(REST_MS).await;
                 wake.set(false);
                 redraw();
             });
         }
+
         // Coverage first, then the tiles by priority, then the flight destination
         let (missing, urgent) = (
             std::mem::take(&mut self.plan.missing),
             std::mem::take(&mut self.plan.urgent),
         );
+
         self.request_all(&missing, &urgent, redraw, ctx.loading.raster_requests, now);
         (self.plan.missing, self.plan.urgent) = (missing, urgent);
+
         let (cooling, missing) = self.cache.failure_counts(now);
+
         self.stats = RasterStats {
             drawn: self.plan.tiles.len(),
             loaded: self.cache.len(),
@@ -513,6 +559,7 @@ impl RasterSource {
             cooling,
             missing,
         };
+
         !self.in_flight.is_empty() || !self.queue.is_empty()
     }
 
@@ -526,7 +573,9 @@ impl RasterSource {
     /// What this source draws on the area of `tile` (see `Cache::sample`)
     fn sample(&mut self, tile: TileId, frame: u64, now: f64, fade_ms: f64) -> Sample {
         let (sample, fading) = self.cache.sample(tile, frame, now, fade_ms);
+
         self.fading |= fading;
+
         sample
     }
 
@@ -546,6 +595,7 @@ impl RasterSource {
             if self.in_flight.len() >= max_requests {
                 break;
             }
+
             // Neither loading, nor arrived and waiting for its upload, nor uploaded since the plan
             if !self.in_flight.contains_key(&tile) && !self.queued.contains(&tile) && !self.cache.contains(tile) {
                 self.request(tile, urgent.get(k).copied().unwrap_or(false), redraw, now);
@@ -569,6 +619,7 @@ impl Drop for RasterSource {
         for (_, pixels) in self.queue.drain(..) {
             pixels.close();
         }
+
         for (_, pixels) in self.inbox.borrow_mut().drain(..) {
             if let Ok(pixels) = pixels {
                 pixels.close();
@@ -585,6 +636,7 @@ mod tests {
     fn close_descendants_stand_in_for_wanted_tiles() {
         let wanted: HashSet<TileId> = [TileId::new(5, 10, 10)].into_iter().collect();
         let child = TileId::new(6, 21, 20);
+
         assert!(stands_in_for(child, &wanted));
         assert!(stands_in_for(TileId::new(8, 84, 80), &wanted));
         // Too deep, elsewhere, the tile itself or its parent: no

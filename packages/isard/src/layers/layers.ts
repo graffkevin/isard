@@ -44,6 +44,7 @@ export abstract class Layer {
       do await this.map.whenIdle();
       while (this.#id < 0 && this.needsFullEngine);
     })();
+
     return this.#ready;
   }
 
@@ -110,6 +111,7 @@ export class RasterLayer extends Layer {
   /** @internal */
   protected create(engine: Engine): number {
     const { url, minZoom, maxZoom, opacity, saturation, size, loader } = this.options;
+
     return engine.addRaster(url, minZoom, maxZoom, opacity, saturation, size, loader);
   }
 }
@@ -150,6 +152,7 @@ export class NetworkLayer extends Layer {
 
   setStyle(style: Partial<NetworkStyle>): void {
     const ramp = this.style.ramp;
+
     this.style = { ...this.style, ...style };
     this.map.engine.setNetworkStyle(this.id, networkStyle(this.style));
     if (this.style.ramp !== ramp)
@@ -175,11 +178,14 @@ export class NetworkLayer extends Layer {
     const mercator = ((): { nodes: Float64Array; lines: Float64Array | undefined } => {
       if (this.kept) {
         const { origin, nodes: n, lines: l } = this.kept;
+
         return { nodes: unpack(n, origin), lines: l && unpack(l, origin) };
       }
+
       // Mercator here: Math.tan and Math.log run natively, several times faster than in WebAssembly
       const projected = { nodes: mercatorPoints(nodes), lines: lines && mercatorPoints(lines.points) };
       const origin: [number, number] = [projected.nodes[0] ?? 0, projected.nodes[1] ?? 0];
+
       this.kept = {
         origin,
         nodes: pack(projected.nodes, origin),
@@ -187,6 +193,7 @@ export class NetworkLayer extends Layer {
       };
       // The degrees are not needed again: millions of points for a region
       this.geometry = { nodes: EMPTY, edges, lines: lines && { start: lines.start, points: EMPTY } };
+
       return projected;
     })();
     const id = engine.addNetwork(
@@ -197,9 +204,11 @@ export class NetworkLayer extends Layer {
       this.costs,
       networkStyle(this.style),
     );
+
     if (this.style.ramp) engine.setNetworkRamp(id, rampTexels(this.style.ramp).rgba);
     if (this.edgeWidths) engine.setNetworkScales(id, this.edgeWidths);
     if (this.values) engine.setNetworkValues(id, this.values);
+
     return id;
   }
 }
@@ -207,6 +216,7 @@ export class NetworkLayer extends Layer {
 /** The 25 numbers of a network style for the engine */
 const networkStyle = (style: NetworkStyle): Float32Array => {
   const { width, halo, max, contour, opacity, haloOpacity, unreachedColor, fade } = style;
+
   return Float32Array.from([
     ...stops(width),
     ...stops(halo),
@@ -224,29 +234,35 @@ const EMPTY = new Float64Array(0);
 /** Interleaved points as f32 offsets from an origin, and back */
 const pack = (points: Float64Array, [ox, oy]: [number, number]): Float32Array => {
   const out = new Float32Array(points.length);
+
   for (let i = 0; i < points.length; i += 2) {
     out[i] = (points[i] ?? 0) - ox;
     out[i + 1] = (points[i + 1] ?? 0) - oy;
   }
+
   return out;
 };
 
 const unpack = (points: Float32Array, [ox, oy]: [number, number]): Float64Array => {
   const out = new Float64Array(points.length);
+
   for (let i = 0; i < points.length; i += 2) {
     out[i] = (points[i] ?? 0) + ox;
     out[i + 1] = (points[i + 1] ?? 0) + oy;
   }
+
   return out;
 };
 
 /** Longitudes and latitudes (degrees, interleaved) to Mercator [0, 1], y towards the south */
 const mercatorPoints = (lonLat: Float64Array): Float64Array => {
   const out = new Float64Array(lonLat.length);
+
   for (let i = 0; i < lonLat.length; i += 2) {
     out[i] = mercatorX(lonLat[i] ?? 0);
     out[i + 1] = mercatorY(lonLat[i + 1] ?? 0);
   }
+
   return out;
 };
 
@@ -279,9 +295,13 @@ export class Tiles3dLayer extends Layer {
    * (`EXT_structural_metadata`, a b3dm batch table), none for a mesh without features; its index in the tile as id */
   featureAt(index: number): Feature<Record<string, unknown>> | undefined {
     if (this.id < 0) return undefined;
+
     const hit = this.map.engine.tiles3dFeature(this.id, index);
+
     if (!hit) return undefined;
+
     const [properties, feature] = hit;
+
     return { type: 'Feature', id: feature, properties: properties ?? {}, geometry: null };
   }
 
@@ -294,12 +314,15 @@ export class Tiles3dLayer extends Layer {
   /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addTiles3d(this.url, this.style.maxScreenSpaceError, this.geoid);
+
     this.applyStyle(engine, id);
+
     return id;
   }
 
   private applyStyle(engine: Engine, id: number): void {
     const { maxScreenSpaceError, opacity, pointSize, color } = this.style;
+
     engine.setTiles3dStyle(id, maxScreenSpaceError, opacity, pointSize, new Float32Array(color ? rgb(color) : []));
   }
 }
@@ -374,6 +397,7 @@ export class GroundLayer extends Layer {
     region: { x?: number; y?: number; layer?: number; width: number; height: number },
   ): void {
     const { x = 0, y = 0, layer = 0, width, height } = region;
+
     this.map.engine.updateGroundTexture(this.id, name, x, y, layer, width, height, bytesOf(data));
     this.map.requestRender();
   }
@@ -381,6 +405,7 @@ export class GroundLayer extends Layer {
   /** A uniform of the code: a number, or numbers for vectors, arrays and matrices (column major) */
   setUniform(name: string, value: number | readonly number[]): void {
     const values = [value].flat();
+
     this.uniforms.set(name, values);
     this.map.engine.setGroundUniform(this.id, name, Float64Array.from(values));
     this.map.requestRender();
@@ -400,6 +425,7 @@ export class GroundLayer extends Layer {
 
   private sendTexture(engine: Engine, id: number, name: string, t: GroundTexture): void {
     const data = t.data && bytesOf(t.data);
+
     engine.setGroundTexture(id, name, t.format, t.width, t.height, t.depth ?? 0, t.linear ?? false, data);
   }
 
@@ -412,6 +438,7 @@ export class GroundLayer extends Layer {
       ay,
       ...mercatorBox(this.options.bounds ?? [-180, -85.06, 180, 85.06]),
     );
+
     this.textures.forEach((texture, name) => {
       this.sendTexture(engine, id, name, texture);
     });
@@ -419,6 +446,7 @@ export class GroundLayer extends Layer {
       engine.setGroundUniform(id, name, Float64Array.from(values));
     });
     engine.setGroundVisible(id, this.visible);
+
     return id;
   }
 }
@@ -432,6 +460,7 @@ const mercatorBox = ([west, south, east, north]: [number, number, number, number
 ] => {
   const [x0, y1] = toMercator([west, south]);
   const [x1, y0] = toMercator([east, north]);
+
   return [x0, y0, x1, y1];
 };
 
@@ -514,7 +543,9 @@ export class CustomLayer extends Layer {
     this.frame = {
       matrixAt: ([lon, lat], altitude = 0) => {
         const m = matrix(lon, lat, altitude);
+
         if (!m) throw new Error('isard: frame.matrixAt is only available during render');
+
         return m;
       },
       get camera() {
@@ -532,6 +563,7 @@ export class CustomLayer extends Layer {
       this.stale = false;
       this.implementation.onAdd?.(this.gl, this.owner);
     }
+
     return engine.addCustomLayer(this.draw, this.implementation.renderingMode === '3d');
   }
 
@@ -590,9 +622,11 @@ export interface ModelOptions {
 /** The numbers of instances for the engine: longitude, latitude, altitude, heading, pitch, roll, scale */
 export const instanceNumbers = (instances: readonly ModelInstance[]): Float64Array => {
   const out = new Float64Array(instances.length * 7);
+
   instances.forEach(({ lonLat, altitude = 0, heading = 0, pitch = 0, roll = 0, scale = 1 }, i) => {
     out.set([lonLat[0], lonLat[1], altitude, heading, pitch, roll, scale], i * 7);
   });
+
   return out;
 };
 
@@ -607,13 +641,16 @@ export class ModelLayer extends Layer {
   /** @internal */
   constructor(map: LayerHost, options: ModelOptions) {
     super(map);
+
     const { url, data } = options;
+
     if (data) {
       this.blob = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
       this.url = this.blob;
     } else if (url) {
       // Against the page: the decoding workers fetch it, and a relative URL would be theirs
       const base = typeof document === 'undefined' ? undefined : document.baseURI;
+
       this.url = base ? new URL(url, base).href : url;
     } else {
       throw new Error('isard: a model needs a url or data');

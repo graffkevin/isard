@@ -16,16 +16,20 @@ type Target = () => Pick<Engine, 'setCamera' | 'clearPreload'>;
 /** MapLibre's default easing: cubic Bézier (0.25, 0.1, 0.25, 1) */
 export const defaultEasing = (t: number): number => {
   if (t <= 0 || t >= 1) return Math.max(0, Math.min(1, t));
+
   // Solve x(u) = t for the curve parameter, Newton then bisection
   const [x1, y1, x2, y2] = [0.25, 0.1, 0.25, 1];
   const bezier = (u: number, a: number, b: number) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
   let u = t;
+
   for (let i = 0; i < 8; i += 1) {
     const x = bezier(u, x1, x2) - t;
     const dx = 3 * x1 * (1 - u) ** 2 + 6 * (x2 - x1) * u * (1 - u) + 3 * (1 - x2) * u * u;
+
     if (Math.abs(x) < 1e-6 || dx === 0) break;
     u = Math.max(0, Math.min(1, u - x / dx));
   }
+
   return bezier(u, y1, y2);
 };
 
@@ -37,11 +41,14 @@ export const easeTo = (engine: Target, from: Camera, to: Camera, options: number
   // Shortest way round
   const turn = ((to.bearing - from.bearing + 540) % 360) - 180;
   const start = performance.now();
+
   return (now) => {
     if (now - start >= duration) engine().clearPreload();
+
     const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
     const k = easing(t);
     const mix = (a: number, b: number) => a + (b - a) * k;
+
     engine().setCamera(
       mix(from.center[0], to.center[0]),
       mix(from.center[1], to.center[1]),
@@ -49,6 +56,7 @@ export const easeTo = (engine: Target, from: Camera, to: Camera, options: number
       mix(from.pitch, to.pitch),
       from.bearing + turn * k,
     );
+
     return t < 1;
   };
 };
@@ -73,6 +81,7 @@ export const flyTo = (engine: Target, from: Camera, to: Camera, viewport: number
   const rho2 = rho * rho;
   const r = (i: 0 | 1) => {
     const b = (w1 * w1 - w0 * w0 + (i ? -1 : 1) * rho2 * rho2 * u1 * u1) / (2 * (i ? w1 : w0) * rho2 * u1);
+
     return Math.log(Math.sqrt(b * b + 1) - b);
   };
   // No move on the ground (or nearly): a plain zoom
@@ -86,15 +95,19 @@ export const flyTo = (engine: Target, from: Camera, to: Camera, viewport: number
   const duration = options.duration ?? (1000 * length) / speed;
   const turn = ((to.bearing - from.bearing + 540) % 360) - 180;
   const start = performance.now();
+
   return (now) => {
     if (now - start >= duration) engine().clearPreload();
+
     const t = duration > 0 ? Math.min(1, (now - start) / duration) : 1;
     const k = easing(t);
     const s = k * length;
     const u = t >= 1 ? 1 : along(s);
     const zoom = t >= 1 ? to.zoom : from.zoom + Math.log2(1 / width(s));
     const [lon, lat] = fromMercator([x0 + dx * u, y0 + dy * u]);
+
     engine().setCamera(lon, lat, zoom, from.pitch + (to.pitch - from.pitch) * k, from.bearing + turn * k);
+
     return t < 1;
   };
 };

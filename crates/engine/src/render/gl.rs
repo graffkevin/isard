@@ -10,6 +10,7 @@ pub fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<glow:
         let program = gl.create_program()?;
         let mut shaders = Vec::new();
         let mut error = None;
+
         for (kind, source) in [(glow::VERTEX_SHADER, vertex), (glow::FRAGMENT_SHADER, fragment)] {
             let shader = match gl.create_shader(kind) {
                 Ok(shader) => shader,
@@ -18,6 +19,7 @@ pub fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<glow:
                     break;
                 }
             };
+
             shaders.push(shader);
             gl.shader_source(shader, source);
             gl.compile_shader(shader);
@@ -29,6 +31,7 @@ pub fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<glow:
         }
         if error.is_none() {
             gl.link_program(program);
+
             if !gl.get_program_link_status(program) {
                 error = Some(gl.get_program_info_log(program));
             }
@@ -40,9 +43,11 @@ pub fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<glow:
             }
             gl.delete_shader(shader);
         }
+
         match error {
             Some(e) => {
                 gl.delete_program(program);
+
                 Err(e)
             }
             None => Ok(program),
@@ -77,48 +82,61 @@ impl<'a> Objects<'a> {
 
     pub fn program(&mut self, vertex: &str, fragment: &str) -> Result<glow::Program, String> {
         let program = program(self.gl, vertex, fragment)?;
+
         self.programs.push(program);
+
         Ok(program)
     }
 
     pub fn vertex_array(&mut self) -> Result<glow::VertexArray, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let vao = unsafe { self.gl.create_vertex_array()? };
+
         self.vertex_arrays.push(vao);
+
         Ok(vao)
     }
 
     pub fn buffer(&mut self) -> Result<glow::Buffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let buffer = unsafe { self.gl.create_buffer()? };
+
         self.buffers.push(buffer);
+
         Ok(buffer)
     }
 
     pub fn texture(&mut self) -> Result<glow::Texture, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let texture = unsafe { self.gl.create_texture()? };
+
         self.textures.push(texture);
+
         Ok(texture)
     }
 
     /// A texture already made (`table_texture`…), deleted with the others on a failure
     pub fn adopt_texture(&mut self, texture: glow::Texture) -> glow::Texture {
         self.textures.push(texture);
+
         texture
     }
 
     pub fn framebuffer(&mut self) -> Result<glow::Framebuffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let framebuffer = unsafe { self.gl.create_framebuffer()? };
+
         self.framebuffers.push(framebuffer);
+
         Ok(framebuffer)
     }
 
     pub fn renderbuffer(&mut self) -> Result<glow::Renderbuffer, String> {
         // SAFETY: creation on a live context, tracked for deletion
         let renderbuffer = unsafe { self.gl.create_renderbuffer()? };
+
         self.renderbuffers.push(renderbuffer);
+
         Ok(renderbuffer)
     }
 
@@ -157,9 +175,11 @@ impl DepthTarget {
             return Ok((framebuffer, texture));
         }
         self.delete(gl);
+
         let mut objects = Objects::new(gl);
         let texture = objects.texture()?;
         let framebuffer = objects.framebuffer()?;
+
         objects.keep();
         // SAFETY: storage and attachment of objects just created on the live context
         unsafe {
@@ -179,6 +199,7 @@ impl DepthTarget {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
         self.0 = Some((texture, framebuffer, size));
+
         Ok((framebuffer, texture))
     }
 
@@ -196,6 +217,7 @@ impl DepthTarget {
 impl Drop for Objects<'_> {
     fn drop(&mut self) {
         let gl = self.gl;
+
         // SAFETY: objects created by this guard and never handed over (`keep` empties the lists)
         unsafe {
             for &p in &self.programs {
@@ -213,6 +235,7 @@ impl Drop for Objects<'_> {
             for &f in &self.framebuffers {
                 gl.delete_framebuffer(f);
             }
+
             for &r in &self.renderbuffers {
                 gl.delete_renderbuffer(r);
             }
@@ -236,6 +259,7 @@ pub fn sampler_units(gl: &glow::Context, program: glow::Program, units: &[(Optio
     // SAFETY: uniforms of a linked program, put in use
     unsafe {
         gl.use_program(Some(program));
+
         for &(location, unit) in units {
             gl.uniform_1_i32(location, unit as i32);
         }
@@ -292,12 +316,14 @@ impl Projection {
     pub fn set(&self, gl: &glow::Context, view: &geo::camera::View) {
         let [factor, radius, east, north, up, world, body] = &self.0;
         let g = &view.globe;
+
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_1_f32(factor.as_ref(), g.factor as f32);
             gl.uniform_1_f32(radius.as_ref(), g.radius as f32);
             gl.uniform_1_f32(world.as_ref(), view.world_size as f32);
             gl.uniform_2_f32(body.as_ref(), view.body.circumference() as f32, view.body.radius as f32);
+
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
@@ -327,46 +353,62 @@ impl Grid {
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         let n = GRID + 1;
         let mut vertices: Vec<f32> = Vec::new();
+
         for j in 0..n {
             for i in 0..n {
                 vertices.extend([f32::from(i) / f32::from(GRID), f32::from(j) / f32::from(GRID)]);
             }
         }
+
         let mut indices: Vec<u16> = Vec::new();
+
         for j in 0..GRID {
             for i in 0..GRID {
                 let a = j * n + i;
+
                 indices.extend_from_slice(&[a, a + 1, a + n, a + 1, a + n + 1, a + n]);
             }
         }
+
         // The border, once around: top, right, bottom, left
         let mut border: Vec<u16> = Vec::new();
+
         border.extend(0..GRID);
         border.extend((0..GRID).map(|j| j * n + GRID));
         border.extend((0..GRID).map(|i| GRID * n + GRID - i));
         border.extend((0..GRID).map(|j| (GRID - j) * n));
+
         let skirt = |k: usize| n * n + k as u16;
+
         for &b in &border {
             let (x, y) = (vertices[usize::from(b) * 2], vertices[usize::from(b) * 2 + 1]);
+
             vertices.extend_from_slice(&[x + 2.0, y + 2.0]);
         }
         for k in 0..border.len() {
             let next = (k + 1) % border.len();
             let (a, b, sa, sb) = (border[k], border[next], skirt(k), skirt(next));
+
             indices.extend_from_slice(&[a, b, sa, b, sb, sa, a, sa, b, b, sa, sb]);
         }
+
         let (last, row) = (n * n - 1, GRID);
+
         indices.extend_from_slice(&[0, row, n * GRID, row, last, n * GRID]);
+
         let mut objects = Objects::new(gl);
         let vertex_buffer = objects.buffer()?;
         let index_buffer = objects.buffer()?;
+
         objects.keep();
+
         // SAFETY: uploads into buffers just created on a live context
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&vertices), glow::STATIC_DRAW);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buffer));
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&indices), glow::STATIC_DRAW);
+
             Ok(Self {
                 vertices: vertex_buffer,
                 indices: index_buffer,
@@ -403,6 +445,7 @@ impl Grid {
         } else {
             Self::CORNERS
         };
+
         // SAFETY: draw with the vertex array bound by the caller
         unsafe {
             gl.draw_elements_instanced(glow::TRIANGLES, count, glow::UNSIGNED_SHORT, offset, instances);
@@ -420,9 +463,11 @@ pub fn bytes<T: bytemuck::NoUninit>(data: &[T]) -> &[u8] {
 pub fn context(webgl: web_sys::WebGl2RenderingContext) -> Result<glow::Context, String> {
     #[cfg(target_arch = "wasm32")]
     return Ok(glow::Context::from_webgl2_context(webgl));
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         drop(webgl);
+
         Err("WebGL2 is only available in the browser".to_owned())
     }
 }
@@ -446,6 +491,7 @@ pub fn upload_bitmap_layer(gl: &glow::Context, layer: i32, size: i32, bitmap: &w
             bitmap,
         );
     }
+
     #[cfg(not(target_arch = "wasm32"))]
     let _ = (gl, layer, size, bitmap);
 }
@@ -465,6 +511,7 @@ pub fn image_bitmap_2d(gl: &glow::Context, bitmap: &web_sys::ImageBitmap) {
             bitmap,
         );
     }
+
     #[cfg(not(target_arch = "wasm32"))]
     let _ = (gl, bitmap);
 }
@@ -499,6 +546,7 @@ pub mod unit {
 #[must_use]
 pub fn common() -> String {
     let last = RAMP_TEXELS - 1;
+
     format!(
         "ivec2 table_texel(highp uint i) {{ return ivec2(int(i & {mask}u), int(i >> {shift}u)); }}
 vec2 ramp_uv(float t) {{ return vec2((clamp(t, 0.0, 1.0) * {last}.0 + 0.5) / {RAMP_TEXELS}.0, 0.5); }}
@@ -525,9 +573,11 @@ pub fn fragment_shader(parts: &[&str]) -> String {
 
 fn shader(head: &str, parts: &[&str]) -> String {
     let mut source = head.to_owned() + &common();
+
     for part in parts {
         source.push_str(part);
     }
+
     source
 }
 
@@ -584,6 +634,7 @@ pub fn reset_after_page(gl: &glow::Context, width: i32, height: i32) {
             gl.disable(capability);
         }
         gl.depth_range(0.0, 1.0);
+
         for (parameter, value) in [
             (glow::UNPACK_ALIGNMENT, 4),
             (glow::PACK_ALIGNMENT, 4),
@@ -613,12 +664,14 @@ impl<'a> DepthState<'a> {
         // SAFETY: state changes on a live context, set back by `drop`
         unsafe {
             gl.disable(glow::CULL_FACE);
+
             if relief {
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LEQUAL);
                 gl.depth_mask(false);
             }
         }
+
         Self(gl)
     }
 
@@ -628,6 +681,7 @@ impl<'a> DepthState<'a> {
         if relief {
             return Self::over_ground(gl, true);
         }
+
         Self(gl)
     }
 
@@ -640,6 +694,7 @@ impl<'a> DepthState<'a> {
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
         }
+
         Self(gl)
     }
 }
@@ -647,6 +702,7 @@ impl<'a> DepthState<'a> {
 impl Drop for DepthState<'_> {
     fn drop(&mut self) {
         let gl = self.0;
+
         // SAFETY: state changes on a live context
         unsafe {
             gl.enable(glow::CULL_FACE);
@@ -669,6 +725,7 @@ pub fn draw_instances(gl: &glow::Context, attributes: &[Attribute], stride: i32,
     unsafe {
         for &(first, end) in ranges {
             let base = first as i32 * stride;
+
             for &(location, size, float, offset) in attributes {
                 if float {
                     gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, base + offset);
@@ -704,15 +761,19 @@ impl Table {
     /// as needed, or just enough if the GPU takes no more. Without one, this table's texture is left bound
     pub fn prepare(&self, gl: &glow::Context, texels: usize) -> Result<Option<(glow::Texture, usize)>, String> {
         let rows = table_rows(texels);
+
         if keeps(self.capacity / TABLE_WIDTH, rows) {
             // SAFETY: binding a texture owned by this table
             unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.texture)) };
+
             return Ok(None);
         }
+
         let roomy = rows.saturating_add(rows / 2).saturating_mul(TABLE_WIDTH);
         let made = table_texture(gl, self.format, roomy)
             .map(|t| (t, roomy))
             .or_else(|_| table_texture(gl, self.format, texels).map(|t| (t, rows * TABLE_WIDTH)))?;
+
         Ok(Some(made))
     }
 
@@ -746,6 +807,7 @@ pub fn table_rows(texels: usize) -> usize {
 /// many entries fit: past it the texture would be missing and the layer drawn black, without a word
 pub fn table_rows_within(texels: usize, max: i32) -> Result<i32, String> {
     let rows = table_rows(texels);
+
     match i32::try_from(rows) {
         Ok(rows) if rows <= max => Ok(rows),
         _ => Err(format!(
@@ -762,6 +824,7 @@ pub fn table_texture(gl: &glow::Context, format: u32, texels: usize) -> Result<g
     unsafe {
         let rows = table_rows_within(texels, gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE))?;
         let texture = gl.create_texture()?;
+
         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
         gl.tex_storage_2d(glow::TEXTURE_2D, 1, format, TABLE_WIDTH as i32, rows);
         for (key, value) in [
@@ -772,6 +835,7 @@ pub fn table_texture(gl: &glow::Context, format: u32, texels: usize) -> Result<g
         ] {
             gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
         }
+
         Ok(texture)
     }
 }
@@ -782,6 +846,7 @@ pub fn table_texture(gl: &glow::Context, format: u32, texels: usize) -> Result<g
 pub fn upload_table(gl: &glow::Context, data: &[u8], texels: usize, format: u32, kind: u32, size: usize) {
     let texels = texels.min(data.len() / size.max(1));
     let (full, rest) = (texels / TABLE_WIDTH, texels % TABLE_WIDTH);
+
     // SAFETY: the caller bound a table texture with room for `texels` texels; the slices are within `data`
     unsafe {
         if full > 0 {
@@ -797,6 +862,7 @@ pub fn upload_table(gl: &glow::Context, data: &[u8], texels: usize, format: u32,
                 glow::PixelUnpackData::Slice(Some(&data[..full * TABLE_WIDTH * size])),
             );
         }
+
         if rest > 0 {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             gl.tex_sub_image_2d(
@@ -826,6 +892,7 @@ pub fn area(width: i32, height: i32) -> Option<usize> {
 pub fn region_fits(x: i32, y: i32, width: i32, height: i32, size: (i32, i32)) -> bool {
     let fits =
         |at: i32, len: i32, total: i32| at >= 0 && len >= 0 && i64::from(at) + i64::from(len) <= i64::from(total);
+
     fits(x, width, size.0) && fits(y, height, size.1)
 }
 
@@ -856,7 +923,9 @@ mod tests {
         assert!(keeps(1, 1) && keeps(6, 4) && keeps(4, 1));
         // Too small, or four times too large: replaced
         assert!(!keeps(4, 5) && !keeps(5, 1));
+
         let shader = common();
+
         assert!(shader.contains("i & 4095u") && shader.contains("i >> 12u"), "{shader}");
         assert!(shader.contains("* 255.0 + 0.5) / 256.0"), "{shader}");
     }

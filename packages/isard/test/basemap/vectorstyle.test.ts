@@ -85,6 +85,7 @@ describe('evaluate', () => {
 
   test('an unsupported operator gives null, with one warning', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+
     expect(evaluate(['distance', ['literal', {}]], ctx)).toBeNull();
     expect(evaluate(['distance', ['literal', {}]], ctx)).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
@@ -121,6 +122,7 @@ describe('filter', () => {
 
   test('legacy and expression parts mixed', () => {
     const mixed: Json = ['all', ['==', 'class', 'river'], ['>=', ['zoom'], 10]];
+
     expect(filter(mixed, ctx)).toBe(true);
     expect(filter(mixed, { ...ctx, zoom: 8 })).toBe(false);
     expect(filter(['any', ['==', 'class', 'road'], ['==', ['get', 'rank'], 2]], ctx)).toBe(true);
@@ -128,6 +130,7 @@ describe('filter', () => {
 
   test('an unsupported operator drops the feature', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+
     expect(filter(['within', ['literal', {}]], ctx)).toBe(false);
     warn.mockRestore();
   });
@@ -158,8 +161,10 @@ describe('zoomStops', () => {
       [11, 9.75],
       [12, 10],
     ]);
+
     // Exponential: followed at the whole zooms
     const curve = zoomStops(['interpolate', ['exponential', 2], ['zoom'], 0, 0, 2, 3]);
+
     expect(curve.map(([z]) => z)).toEqual([0, 1, 2]);
     expect(curve[1]?.[1]).toBeCloseTo(1, 6);
   });

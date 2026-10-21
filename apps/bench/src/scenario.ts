@@ -77,6 +77,7 @@ export const START = FRANCE;
 /** Interpolated pose: distances geometrically (constant zoom speed), angles linearly */
 const between = (a: Pose, b: Pose, t: number): Pose => {
   const k = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;
+
   return {
     lon: a.lon + (b.lon - a.lon) * k,
     lat: a.lat + (b.lat - a.lat) * k,
@@ -104,6 +105,7 @@ const summary = (phase: string, times: number[], start: number, end: number): Ph
   const sorted = [...gaps].sort((a, b) => a - b);
   const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
   const duration = end - start;
+
   return {
     phase,
     durationMs: Math.round(duration),
@@ -124,13 +126,16 @@ const summary = (phase: string, times: number[], start: number, end: number): Ph
 /** Moves the camera from `from` to `to` over `ms`, one pose per frame */
 const animate = async (engine: BenchEngine, phase: string, from: Pose, to: Pose, ms: number): Promise<PhaseResult> => {
   Object.assign(window, { benchPhase: phase });
+
   const times: number[] = [];
   const start = await frame();
+
   for (let now = start; now - start < ms; now = await frame()) {
     times.push(now);
     engine.setPose(between(from, to, (now - start) / ms));
   }
   engine.setPose(to);
+
   return summary(phase, times, start, performance.now());
 };
 
@@ -139,16 +144,20 @@ const animate = async (engine: BenchEngine, phase: string, from: Pose, to: Pose,
 const settle = async (engine: BenchEngine, phase: string, maxMs: number): Promise<PhaseResult> => {
   // The current phase, for inspection from outside (screenshots at given times of a phase)
   Object.assign(window, { benchPhase: phase });
+
   const times: number[] = [];
   const start = await frame();
   let groundBusy = start;
   let meshBusy = start;
   let done = false;
   const counts: [number, number][] = [];
+
   for (let now = start; now - start < maxMs; now = await frame()) {
     times.push(now);
     counts.push([now, engine.meshTiles()]);
+
     const idle = engine.idle();
+
     if (!idle.ground) groundBusy = now;
     if (!idle.mesh) meshBusy = now;
     // Both idle for 500 ms: done (a pause between two tile batches does not count)
@@ -157,21 +166,29 @@ const settle = async (engine: BenchEngine, phase: string, maxMs: number): Promis
       break;
     }
   }
+
   const end = performance.now();
   const result = summary(phase, times, start, end);
   const after = (busy: number) => Math.round(busy === start ? 0 : busy - start);
+
   if (done || end - groundBusy > 500) result.groundAfterMs = after(groundBusy);
   if (done || end - meshBusy > 500) result.meshAfterMs = after(meshBusy);
   if (done) result.idleAfterMs = after(Math.max(groundBusy, meshBusy));
+
   const final = counts.at(-1)?.[1] ?? 0;
+
   result.meshTilesEnd = final;
+
   const half = counts.find(([, n]) => n >= final / 2 && n > 0);
+
   if (half && final > 0) result.meshHalfMs = Math.round(half[0] - start);
+
   return result;
 };
 
 export const run = async (engine: BenchEngine): Promise<BenchResult> => {
   const phases: PhaseResult[] = [];
+
   engine.setPose(FRANCE);
   phases.push(await settle(engine, '1 load France', 30_000));
   phases.push(await animate(engine, '2 flight to Lille', FRANCE, LILLE, 6000));
@@ -182,9 +199,12 @@ export const run = async (engine: BenchEngine): Promise<BenchResult> => {
   // The mesh alone: a jump (no flight) to a spot never seen, nothing of it loaded
   engine.setPose(VIEUX_LILLE);
   phases.push(await settle(engine, '7 jump to Vieux-Lille', 40_000));
+
   const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
   const result: BenchResult = { engine: engine.name, phases, info: engine.info() };
+
   if (memory) result.heapMb = Math.round(memory.usedJSHeapSize / 1048576);
+
   return result;
 };
 
@@ -192,11 +212,15 @@ export const run = async (engine: BenchEngine): Promise<BenchResult> => {
  * (to check what an engine shows) */
 export const benchmark = async (engine: BenchEngine): Promise<void> => {
   const still = new URLSearchParams(location.search).get('still');
+
   if (still) {
     engine.setPose(still === 'lille' ? LILLE : FRANCE);
+
     return;
   }
+
   const result = await run(engine);
+
   parent.postMessage({ type: 'bench-result', result }, '*');
   (window as Window & { benchResult?: BenchResult }).benchResult = result;
 };

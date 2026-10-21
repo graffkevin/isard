@@ -42,6 +42,7 @@ pub async fn fetch_bitmap(
     priority: &str,
 ) -> Result<web_sys::ImageBitmap, Fetch> {
     let response = fetched(url, signal, reload, priority).await?;
+
     decode(&response, size).await.map_err(|_| Fetch::Transient)
 }
 
@@ -55,11 +56,15 @@ pub async fn draw_tile(
 ) -> Result<web_sys::ImageBitmap, Fetch> {
     let value = call_loader(loader, tile, signal).await?;
     let bitmap: web_sys::ImageBitmap = value.dyn_into().map_err(|_| Fetch::Transient)?;
+
     if bitmap.width() == size as u32 && bitmap.height() == size as u32 {
         return Ok(bitmap);
     }
+
     let resized = resize(&bitmap, size).await;
+
     bitmap.close();
+
     resized.map_err(|_| Fetch::Transient)
 }
 
@@ -68,16 +73,19 @@ async fn resize(bitmap: &web_sys::ImageBitmap, size: i32) -> Result<web_sys::Ima
     let window = web_sys::window().ok_or("no window")?;
     let options = bitmap_options(size);
     let promise = window.create_image_bitmap_with_image_bitmap_and_image_bitmap_options(bitmap, &options)?;
+
     JsFuture::from(promise).await?.dyn_into()
 }
 
 /// Straight alpha (the shader blends it), colors as they are, `size` × `size`
 fn bitmap_options(size: i32) -> web_sys::ImageBitmapOptions {
     let options = web_sys::ImageBitmapOptions::new();
+
     options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
     options.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
     options.set_resize_width(size as u32);
     options.set_resize_height(size as u32);
+
     options
 }
 
@@ -93,14 +101,18 @@ pub async fn draw_heights(
 ) -> Result<Vec<f32>, Fetch> {
     let value = call_loader(loader, tile, signal).await?;
     let grid: js_sys::Float32Array = value.dyn_into().map_err(|_| Fetch::Transient)?;
+
     if grid.length() != (TILE * TILE) as u32 {
         return Err(Fetch::Transient);
     }
+
     let mut heights = grid.to_vec();
+
     fill_no_data(&mut heights, no_data);
     if geoid {
         to_ellipsoid(tile, &mut heights);
     }
+
     Ok(heights)
 }
 
@@ -124,12 +136,15 @@ pub async fn fetch_heights(
     let buffer: js_sys::ArrayBuffer = buffer.dyn_into().map_err(|_| Fetch::Transient)?;
     let (grid, mask) = ((TILE * TILE * 4) as u32, (TILE * TILE / 8) as u32);
     let length = buffer.byte_length();
+
     if length != grid && length != grid + mask {
         return Err(Fetch::Transient);
     }
+
     // One copy, straight into the floats: a Float32Array reads the platform's byte order, little-endian in
     // WebAssembly, that of the grid
     let mut heights = vec![0f32; (TILE * TILE) as usize];
+
     js_sys::Float32Array::new_with_byte_offset_and_length(&buffer, 0, grid / 4).copy_to(&mut heights);
     if length > grid {
         apply_mask(
@@ -141,6 +156,7 @@ pub async fn fetch_heights(
     if geoid {
         to_ellipsoid(tile, &mut heights);
     }
+
     Ok(heights)
 }
 
@@ -155,6 +171,7 @@ async fn fetched(
     let response = fetch_response(url, signal, reload, priority)
         .await
         .map_err(|_| Fetch::Transient)?;
+
     match response.status() {
         204 | 404 | 410 => Err(Fetch::Missing),
         200..=299 => Ok(response),
@@ -177,9 +194,11 @@ async fn call_loader(loader: &js_sys::Function, tile: TileId, signal: &web_sys::
     let value = JsFuture::from(js_sys::Promise::resolve(&promise))
         .await
         .map_err(|_| Fetch::Transient)?;
+
     if value.is_null() || value.is_undefined() {
         return Err(Fetch::Missing);
     }
+
     Ok(value)
 }
 
@@ -191,6 +210,7 @@ async fn fetch_response(
 ) -> Result<web_sys::Response, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
+
     init.set_signal(Some(signal));
     // The tiles at the screen center first; always explicit (see `fetch_priority`)
     crate::js::fetch_priority(&init, priority);
@@ -198,6 +218,7 @@ async fn fetch_response(
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }
+
     JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await?
         .dyn_into()
@@ -210,5 +231,6 @@ async fn decode(response: &web_sys::Response, size: i32) -> Result<web_sys::Imag
     let options = bitmap_options(size);
     let bitmap =
         JsFuture::from(window.create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &options)?).await?;
+
     bitmap.dyn_into()
 }

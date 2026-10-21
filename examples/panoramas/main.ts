@@ -33,6 +33,7 @@ let walking = true;
 walk.textContent = 'Leave';
 const where = () => {
   const pano = panoramas.current;
+
   element('where').textContent = pano ? `panorama ${pano.index + 1} of ${panoramas.list.length}` : '';
 };
 walk.addEventListener('click', async () => {

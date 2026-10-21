@@ -41,6 +41,7 @@ const files = (dir: string): string[] => {
     .filter((name) => name !== '__pycache__' && name !== '.DS_Store' && !name.endsWith('.pyc'))
     .flatMap((name) => {
       const path = join(dir, name);
+
       return statSync(path).isDirectory() ? files(path) : [path];
     })
     .sort();
@@ -61,6 +62,7 @@ const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
     const crc = Bun.hash.crc32(data);
     const local = new Uint8Array(30 + nameBytes.length);
     const lv = new DataView(local.buffer);
+
     lv.setUint32(0, 0x04034b50, true);
     lv.setUint16(4, 20, true);
     lv.setUint16(6, 0x0800, true);
@@ -72,8 +74,10 @@ const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
     lv.setUint32(22, data.length, true);
     lv.setUint16(26, nameBytes.length, true);
     local.set(nameBytes, 30);
+
     const central = new Uint8Array(46 + nameBytes.length);
     const cv = new DataView(central.buffer);
+
     cv.setUint32(0, 0x02014b50, true);
     cv.setUint16(4, (3 << 8) | 20, true);
     cv.setUint16(6, 20, true);
@@ -91,22 +95,28 @@ const zip = (entries: { name: string; data: Uint8Array }[]): Uint8Array => {
     central.set(nameBytes, 46);
     locals.push(local, body);
     centrals.push(central);
+
     return offset + local.length + body.length;
   }, 0);
   const centralSize = centrals.reduce((n, c) => n + c.length, 0);
   const end = new Uint8Array(22);
   const ev = new DataView(end.buffer);
+
   ev.setUint32(0, 0x06054b50, true);
   ev.setUint16(8, entries.length, true);
   ev.setUint16(10, entries.length, true);
   ev.setUint32(12, centralSize, true);
   ev.setUint32(16, offset, true);
+
   const parts = [...locals, ...centrals, end];
   const result = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+
   parts.reduce((at, part) => {
     result.set(part, at);
+
     return at + part.length;
   }, 0);
+
   return result;
 };
 

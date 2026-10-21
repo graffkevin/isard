@@ -16,23 +16,32 @@ pub fn decompress(chunk: &[u8], vlr: &[u8], record_length: usize, count: usize) 
     if count > MAX_POINTS {
         return Err(format!("chunk of {count} points: more than {MAX_POINTS}"));
     }
+
     let vlr = LazVlr::read_from(vlr).map_err(|e| format!("LAZ VLR: {e}"))?;
+
     if vlr.items().first().map(laz::LazItem::item_type) != Some(LazItemType::Point14) {
         return Err("LAZ chunks of COPC are layered (point formats 6 to 8)".into());
     }
+
     let size = usize::try_from(vlr.items_size()).unwrap_or(usize::MAX);
+
     if size != record_length {
         return Err(format!("LAZ records of {size} bytes, the header says {record_length}"));
     }
+
     let mut decompressor = LayeredPointRecordDecompressor::new(Cursor::new(chunk));
+
     decompressor
         .set_fields_from(vlr.items())
         .map_err(|e| format!("LAZ items: {e}"))?;
+
     // A chunk ends where its points do: a chunk shorter than its count is an error (end of data)
     let mut out = vec![0; count * record_length];
+
     decompressor
         .decompress_many(&mut out)
         .map_err(|e| format!("LAZ chunk: {e}"))?;
+
     Ok(out)
 }
 
@@ -54,6 +63,7 @@ mod tests {
     /// The coordinates of a record (CRS units)
     fn xyz(record: &[u8], copc: &Copc) -> [f64; 3] {
         let h = &copc.header;
+
         [0, 1, 2].map(|i| f64::from(i32_at(record, i * 4).unwrap()) * h.scale[i] + h.offset[i])
     }
 
@@ -62,11 +72,15 @@ mod tests {
         let copc = head(header);
         let length = usize::from(copc.header.record_length);
         let records = decompress(chunk, &copc.laz, length, count).unwrap();
+
         assert_eq!(records.len(), count * length);
+
         let [depth, x, y, z] = key;
         let (min, side) = crate::copc::Key { depth, x, y, z }.cube(&copc.info);
+
         for r in records.chunks(length) {
             let p = xyz(r, &copc);
+
             for i in 0..3 {
                 assert!(
                     p[i] >= min[i] - 0.01 && p[i] <= min[i] + side + 0.01,
@@ -74,6 +88,7 @@ mod tests {
                 );
             }
         }
+
         (copc, records)
     }
 
@@ -88,6 +103,7 @@ mod tests {
             1543,
         );
         let classes: std::collections::BTreeSet<u8> = records.chunks(30).map(|r| r[16]).collect();
+
         // A roof of the cathedral: buildings (the classes of LiDAR HD: ground, vegetation, buildings, water, bridges,
         // 64 and up)
         assert_eq!(classes.into_iter().collect::<Vec<_>>(), [6]);
@@ -120,6 +136,7 @@ mod tests {
             .map(|r| u16::from_le_bytes([r[30], r[31]]))
             .max()
             .unwrap();
+
         assert!(red_max > 255, "16-bit colors: {red_max}");
     }
 
@@ -128,9 +145,12 @@ mod tests {
         let items = LazItemRecordBuilder::default_for_point_format_id(8, 0).unwrap();
         let vlr = LazVlr::from_laz_items(items);
         let mut vlr_bytes = Vec::new();
+
         vlr.write_to(&mut vlr_bytes).unwrap();
+
         let length = vlr.items_size() as usize;
         let mut records = vec![0u8; count * length];
+
         for (i, r) in records.chunks_mut(length).enumerate() {
             r[0..4].copy_from_slice(&(i as i32 * 100).to_le_bytes());
             r[4..8].copy_from_slice(&(-(i as i32)).to_le_bytes());
@@ -141,16 +161,20 @@ mod tests {
             r[30..32].copy_from_slice(&65535u16.to_le_bytes());
             r[36..38].copy_from_slice(&1234u16.to_le_bytes());
         }
+
         let mut compressor = LayeredPointRecordCompressor::new(Cursor::new(Vec::new()));
+
         compressor.set_fields_from(vlr.items()).unwrap();
         compressor.compress_many(&records).unwrap();
         compressor.done().unwrap();
+
         (compressor.into_inner().into_inner(), vlr_bytes, records)
     }
 
     #[test]
     fn decodes_format_8_as_compressed() {
         let (chunk, vlr, records) = compressed(500);
+
         assert_eq!(decompress(&chunk, &vlr, 38, 500).unwrap(), records);
         // The wrong record length, a count past the limit: errors before anything is decoded
         assert!(decompress(&chunk, &vlr, 30, 500).is_err());
@@ -160,6 +184,7 @@ mod tests {
     #[test]
     fn broken_chunks_are_errors() {
         let (chunk, vlr, _) = compressed(200);
+
         // Cut short, or more points asked for than it holds
         assert!(decompress(&chunk[..chunk.len() / 3], &vlr, 38, 200).is_err());
         assert!(decompress(&chunk[..3], &vlr, 38, 200).is_err());

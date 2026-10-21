@@ -47,6 +47,7 @@ const engine = {
   },
   idle() {
     const loop = view.mainLoop;
+
     return {
       // RENDERING_PAUSED (0), not exported by iTowns
       ground: loop.scheduler.commandsWaitingExecutionCount() === 0 && loop.renderingState === 0,
@@ -56,6 +57,7 @@ const engine = {
   meshTiles: () => mesh.tilesRenderer.visibleTiles.size,
   info(): string {
     const s = mesh.tilesRenderer.stats;
+
     return `3D tiles: ${s.visible} visible, ${s.downloading} downloading, ${s.parsing} parsing`;
   },
 };

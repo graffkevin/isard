@@ -74,10 +74,13 @@ pub fn polygon_rings(polygons: &Polygons) -> impl Iterator<Item = std::ops::Rang
     let rings = polygons.ring_start.len().saturating_sub(1);
     let starts = polygons.polygon_start;
     let mut end = 0;
+
     (0..starts.len().saturating_sub(1)).map(move |p| {
         let first = (starts[p] as usize).min(rings).max(end);
         let last = (starts[p + 1] as usize).min(rings).max(first);
+
         end = last;
+
         first..last
     })
 }
@@ -97,6 +100,7 @@ impl Vertex {
     fn new(m: DVec2, feature: u32, level: f32) -> Self {
         let hi = [m.x as f32, m.y as f32];
         let lo = [(m.x - f64::from(hi[0])) as f32, (m.y - f64::from(hi[1])) as f32];
+
         Self { hi, lo, feature, level }
     }
 
@@ -132,9 +136,11 @@ fn ring<'a>(polygons: &Polygons<'a>, r: usize) -> &'a [DVec2] {
     };
     let e = (e as usize).min(polygons.points.len());
     let points = &polygons.points[(s as usize).min(e)..e];
+
     if !points.iter().all(|p| p.is_finite()) {
         return &[];
     }
+
     match points {
         [first, .., last] if first == last => &points[..points.len() - 1],
         _ => points,
@@ -144,6 +150,7 @@ fn ring<'a>(polygons: &Polygons<'a>, r: usize) -> &'a [DVec2] {
 /// Twice the signed area (positive: counterclockwise with x and y as drawn on paper, y up)
 fn area(points: &[DVec2]) -> f64 {
     let n = points.len();
+
     (0..n).map(|i| points[i].perp_dot(points[(i + 1) % n])).sum()
 }
 
@@ -154,32 +161,43 @@ const CLIPPED: usize = 8;
 /// left, and their count. On the stack: millions of triangles may be cut
 fn clip(triangle: &[DVec2; 3], lo: DVec2, hi: DVec2) -> ([DVec2; CLIPPED], usize) {
     let mut out = [DVec2::ZERO; CLIPPED];
+
     out[..3].copy_from_slice(triangle);
+
     let mut n = 3;
+
     // Each side: the coordinate (0: x, 1: y), the bound and whether points below it are kept
     for (axis, bound, below) in [(0, lo.x, false), (0, hi.x, true), (1, lo.y, false), (1, hi.y, true)] {
         let (input, count) = (out, n);
+
         n = 0;
+
         let inside = |p: DVec2| if below { p[axis] <= bound } else { p[axis] >= bound };
+
         for i in 0..count {
             let (p, q) = (input[i], input[(i + 1) % count]);
+
             if inside(p) {
                 out[n] = p;
                 n += 1;
             }
+
             if inside(p) != inside(q) {
                 let t = (bound - p[axis]) / (q[axis] - p[axis]);
                 let mut x = p.lerp(q, t);
+
                 // Exactly on the grid line: the neighbour computes the same point
                 x[axis] = bound;
                 out[n] = x;
                 n += 1;
             }
         }
+
         if n == 0 {
             break;
         }
     }
+
     (out, n)
 }
 
@@ -199,9 +217,11 @@ fn squares(min: DVec2, max: DVec2, square: f64) -> impl Iterator<Item = (DVec2, 
     } else {
         (j0, i0)
     };
+
     (j0..j1).flat_map(move |j| {
         (i0..i1).map(move |i| {
             let lo = DVec2::new(i as f64, j as f64) * square;
+
             (lo, lo + square)
         })
     })
@@ -210,16 +230,22 @@ fn squares(min: DVec2, max: DVec2, square: f64) -> impl Iterator<Item = (DVec2, 
 /// Fractions along `a` → `b` where it crosses the grid lines, with 0 and 1, in order
 fn crossings(a: DVec2, b: DVec2, square: f64) -> Vec<f64> {
     let mut t = vec![0.0, 1.0];
+
     for axis in 0..2 {
         let (p, q) = (a[axis], b[axis]);
+
         if (p - q).abs() < f64::EPSILON {
             continue;
         }
+
         let (lo, hi) = (p.min(q), p.max(q));
+
         if !(lo.is_finite() && hi.is_finite()) || (hi - lo) / square > MAX_CROSSINGS {
             continue;
         }
+
         let mut k = (lo / square).floor() + 1.0;
+
         while k * square < hi {
             t.push((k * square - p) / (q - p));
             k += 1.0;
@@ -227,6 +253,7 @@ fn crossings(a: DVec2, b: DVec2, square: f64) -> Vec<f64> {
     }
     t.sort_by(f64::total_cmp);
     t.dedup();
+
     t
 }
 
@@ -247,13 +274,16 @@ const MAX_HALVINGS: i32 = 12;
 #[must_use]
 pub fn square_for(min: DVec2, max: DVec2) -> f64 {
     let extent = (max - min).max_element();
+
     if !extent.is_finite() || extent <= 0.0 {
         return SQUARE;
     }
+
     let halvings = (SQUARE * CHUNKS_ACROSS / extent)
         .log2()
         .ceil()
         .clamp(0.0, f64::from(MAX_HALVINGS));
+
     SQUARE / f64::from(1u32 << halvings as u32)
 }
 
@@ -297,30 +327,41 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
     let mut earcut = earcut::Earcut::new();
     let (mut flat, mut holes, mut triangles, mut all): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>, Vec<DVec2>) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
     for (p, rings) in polygon_rings(polygons).enumerate() {
         let first = rings.start;
+
         flat.clear();
         holes.clear();
         all.clear();
+
         let base = mesh.vertices.len() as u32;
+
         for r in rings {
             let points = ring(polygons, r);
+
             if points.len() < 3 {
                 continue;
             }
             if r > first {
                 holes.push(all.len() as u32);
             }
+
             let start = base + all.len() as u32;
+
             all.extend_from_slice(points);
+
             let n = points.len();
+
             if prism {
                 // Walls turned outwards: away from the polygon's inside (outside of a hole)
                 let outer = r == first;
                 let counterclockwise = area(points) > 0.0;
+
                 for i in 0..n {
                     let (a, b) = (points[i], points[(i + 1) % n]);
                     let ends = (start + i as u32, start + ((i + 1) % n) as u32);
+
                     // With the inside on the left of a → b (counterclockwise outer ring, clockwise hole), the outward
                     // normal is (dy, -dx): the order the wall triangles below assume
                     walls.push(if outer == counterclockwise {
@@ -340,6 +381,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
                     });
                 }
             }
+
             for &a in points {
                 mesh.min = mesh.min.min(a);
                 mesh.max = mesh.max.max(a);
@@ -350,14 +392,18 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
         }
         mesh.vertices.extend(all.iter().map(|&q| Vertex::new(q, p as u32, 1.0)));
         exact.extend_from_slice(&all);
+
         // Relative to the first point: earcut works in f64 but its predicates like small numbers
         let origin = all[0];
+
         flat.extend(all.iter().map(|&q| (q - origin).to_array()));
         earcut.earcut(flat.iter().copied(), &holes, &mut triangles);
+
         for t in triangles.as_chunks::<3>().0 {
             let [a, b, c] = [t[0], t[1], t[2]].map(|i| all[i as usize]);
             // Counterclockwise: the top cap faces up
             let [i, j, k] = t.map(|i| base + i);
+
             caps.push(if (b - a).perp_dot(c - a) >= 0.0 {
                 [i, j, k]
             } else {
@@ -365,37 +411,46 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
             });
         }
     }
+
     // The caps, cut along the grid
     // The vertices added by the pieces of the current polygon start at `added`; the points of a piece are looked for
     // among the last `RECENT` of them only (a polygon cut into thousands of pieces stays linear)
     let mut added = exact.len();
     let mut polygon = u32::MAX;
+
     for t in caps {
         let tri = t.map(|i| exact[i as usize]);
         let p = mesh.vertices[t[0] as usize].feature;
+
         if p != polygon {
             (polygon, added) = (p, exact.len());
         }
+
         let recent = exact.len().saturating_sub(RECENT);
         let min = tri[0].min(tri[1]).min(tri[2]);
         let max = tri[0].max(tri[1]).max(tri[2]);
         // Inside one square (most triangles of small polygons): as it is, without clipping
         let mut cells = squares(min, max, square);
+
         if cells.next().is_some() && cells.next().is_none() {
             if area(&tri).abs() >= 1e-30 {
                 mesh.indices.extend(t);
             }
             continue;
         }
+
         for (lo, hi) in squares(min, max, square) {
             let (points, n) = clip(&tri, lo, hi);
             let piece = &points[..n];
+
             if piece.len() < 3 || area(piece).abs() < 1e-30 {
                 continue;
             }
+
             // A convex piece: a fan of its points, still counterclockwise. A corner of the triangle is its vertex, a
             // point on a grid line the one of the piece next to it if it was just added
             let mut fan = [0u32; CLIPPED];
+
             for (k, &q) in piece.iter().enumerate() {
                 fan[k] = if let Some(c) = tri.iter().position(|&corner| corner == q) {
                     t[c]
@@ -404,9 +459,11 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
                 } else {
                     mesh.vertices.push(Vertex::new(q, p, 1.0));
                     exact.push(q);
+
                     exact.len() as u32 - 1
                 };
             }
+
             for k in 1..piece.len() - 1 {
                 mesh.indices.extend([fan[0], fan[k], fan[k + 1]]);
             }
@@ -418,6 +475,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
     if prism {
         // The bottom cap faces down: the same triangles the other way round, on the same vertices at level 0
         let lift = mesh.top_vertices as u32;
+
         mesh.vertices.extend_from_within(..mesh.top_vertices);
         for v in &mut mesh.vertices[mesh.top_vertices..] {
             v.level = 0.0;
@@ -427,23 +485,28 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
             *t = [t[0] + lift, t[2] + lift, t[1] + lift];
         }
         mesh.walls = mesh.indices.len();
+
         for Wall { a, b, ends, polygon } in walls {
             // Split where they cross the grid lines, as the caps are: the walls meet the caps vertex to vertex. Each
             // point of the wall: its top vertex (the bottom one follows it)
             let cuts = crossings(a, b, square);
             let mut previous = ends.0;
+
             for (k, w) in cuts.windows(2).enumerate() {
                 let next = if k + 2 == cuts.len() {
                     ends.1
                 } else {
                     let v = mesh.vertices.len() as u32;
                     let m = a.lerp(b, w[1]);
+
                     mesh.vertices
                         .extend([Vertex::new(m, polygon, 1.0), Vertex::new(m, polygon, 0.0)]);
+
                     v
                 };
                 let bottom = |top: u32| if top < lift { top + lift } else { top + 1 };
                 let (u0, v0, v1, u1) = (bottom(previous), bottom(next), next, previous);
+
                 mesh.indices.extend([u0, v0, v1, u0, v1, u1]);
                 previous = next;
             }
@@ -453,6 +516,7 @@ pub fn triangulate_with(polygons: &Polygons, square: f64, prism: bool) -> Mesh {
         mesh.min = DVec2::ZERO;
         mesh.max = DVec2::ZERO;
     }
+
     mesh
 }
 
@@ -486,20 +550,25 @@ pub fn chunk(mesh: &mut Mesh, square: f64) -> Chunks {
             .iter()
             .map(|t| {
                 let c = t.iter().map(|&i| mesh.vertices[i as usize].position()).sum::<DVec2>() / 3.0;
+
                 grid.square(c)
             })
             .collect();
         let (order, start) = sort_by_square(&square_of, squares);
         let mut sorted = Vec::with_capacity(triangles.len());
+
         for &t in &order {
             let t = t as usize * 3;
+
             sorted.extend_from_slice(&triangles[t..t + 3]);
         }
         mesh.indices[range.clone()].copy_from_slice(&sorted);
+
         start.into_iter().map(|s| s * 3 + range.start as u32).collect()
     };
     let top_start = sort(0..top);
     let rest = sort(top..end);
+
     Chunks {
         grid,
         top: top_start,
@@ -521,6 +590,7 @@ mod tests {
             .map(|t| {
                 [t[0], t[1], t[2]].map(|i| {
                     let v = mesh.vertices[i as usize];
+
                     v.position().extend(f64::from(v.level) * 1e-3)
                 })
             })
@@ -542,11 +612,13 @@ mod tests {
             o + DVec2::new(s * 0.75, s * 0.75),
             o + DVec2::new(s * 0.25, s * 0.75),
         ];
+
         (points, vec![0, 5, 9], vec![0, 2])
     }
 
     fn mesh(size: f64) -> Mesh {
         let (points, ring_start, polygon_start) = square_with_hole(size);
+
         triangulate(&Polygons {
             points: &points,
             ring_start: &ring_start,
@@ -565,6 +637,7 @@ mod tests {
     fn the_top_cap_covers_the_polygon_without_its_hole() {
         let s = 1e-3;
         let m = mesh(s);
+
         assert!(
             (total_area(&m) - s * s * 0.75).abs() < s * s * 1e-9,
             "{}",
@@ -583,9 +656,12 @@ mod tests {
         // 10 squares across: no piece wider than a square, the area kept
         let s = SQUARE * 10.0;
         let m = mesh(s);
+
         assert!((total_area(&m) - s * s * 0.75).abs() < s * s * 1e-9);
+
         for [a, b, c] in faces(&m, 0..m.top) {
             let (lo, hi) = (a.min(b).min(c), a.max(b).max(c));
+
             assert!(hi.x - lo.x <= SQUARE * (1.0 + 1e-9) && hi.y - lo.y <= SQUARE * (1.0 + 1e-9));
         }
     }
@@ -597,15 +673,19 @@ mod tests {
         // Closed: the area vectors of its faces add up to nothing
         let sum: DVec3 = all.iter().map(|[a, b, c]| (*b - *a).cross(*c - *a)).sum();
         let scale: f64 = all.iter().map(|[a, b, c]| (*b - *a).cross(*c - *a).length()).sum();
+
         assert!(sum.length() < scale * 1e-9, "{sum:?}");
+
         // Outwards: each wall faces away from the middle of the ring it borders (the outer ring's walls away from the
         // center, the hole's towards it)
         let center = DVec2::new(0.5 + 5e-4, 0.33 + 5e-4);
+
         for [a, b, c] in faces(&m, m.walls..m.indices.len()) {
             let n = (b - a).cross(c - a).truncate();
             let middle = ((a + b + c) / 3.0).truncate();
             let outer = (middle - center).abs().max_element() > 3e-4;
             let away = n.dot(middle - center) > 0.0;
+
             assert_eq!(away, outer, "wall at {middle:?}");
         }
     }
@@ -619,19 +699,26 @@ mod tests {
             polygon_start: &polygon_start,
         };
         let b = extrude(&polygons, DVec2::new(0.5, 0.33));
+
         // 8 roof triangles (a square ring around a hole), 8 walls of 2 triangles
         assert_eq!(b.indices.len(), 8 * 3 + 8 * 6);
+
         let walls: Vec<_> = b.vertices.iter().filter(|v| v.level == 0.0).collect();
+
         assert_eq!(walls.len(), 16);
+
         // The walls facing north and west are lit, the others not (outside and in the hole: 4 walls, 2 feet each)
         let lit = b.vertices.iter().filter(|v| v.level == 0.0 && v.shade > 0.75).count();
+
         assert_eq!(lit, 8);
     }
 
     #[test]
     fn small_layers_are_cut_finer_on_the_same_grid() {
         assert_eq!(square_for(DVec2::ZERO, DVec2::ONE), SQUARE);
+
         let s = square_for(DVec2::new(0.5, 0.3), DVec2::new(0.505, 0.302));
+
         assert!(
             s < SQUARE && 0.005 / s >= CHUNKS_ACROSS && 0.005 / s < 2.0 * CHUNKS_ACROSS,
             "{s}"
@@ -663,22 +750,28 @@ mod tests {
             .collect();
         let area = total_area(&m);
         let c = chunk(&mut m, square);
+
         assert_eq!(c.top.len(), c.grid.len() + 1);
         assert_eq!(*c.top.last().unwrap() as usize, m.top);
         assert_eq!(*c.rest.last().unwrap() as usize, m.indices.len());
         assert!(c.grid.len() > 100, "{}", c.grid.len());
+
         // The same triangles, each in its square
         let mut sorted = before.as_chunks::<3>().0.to_vec();
         let mut after = m.indices.as_chunks::<3>().0.to_vec();
+
         sorted.sort_unstable();
         after.sort_unstable();
         assert_eq!(sorted, after);
         assert!((total_area(&m) - area).abs() < area * 1e-12);
+
         for s in 0..c.grid.len() {
             for t in m.indices[c.top[s] as usize..c.top[s + 1] as usize].as_chunks::<3>().0 {
                 let p = t.iter().map(|&i| m.vertices[i as usize].position()).sum::<DVec2>() / 3.0;
+
                 assert_eq!(c.grid.square(p) as usize, s);
             }
+
             // Order kept within a square
             let order: Vec<usize> = m.indices[c.top[s] as usize..c.top[s + 1] as usize]
                 .as_chunks::<3>()
@@ -686,6 +779,7 @@ mod tests {
                 .iter()
                 .map(|t| place[t])
                 .collect();
+
             assert!(order.is_sorted());
         }
     }
@@ -693,15 +787,18 @@ mod tests {
     #[test]
     fn caps_and_walls_share_their_vertices() {
         let m = mesh(1e-3);
+
         // 8 points: the top cap indexes them, the bottom cap their copies at level 0, the walls stand on both
         assert_eq!((m.top_vertices, m.vertices.len()), (8, 16));
         assert_eq!((m.top, m.walls, m.indices.len()), (8 * 3, 16 * 3, 16 * 3 + 8 * 6));
         assert!(m.vertices[..8].iter().all(|v| v.level > 0.5));
         assert!(m.vertices[8..].iter().all(|v| v.level < 0.5));
         assert!(m.indices[..m.top].iter().all(|&i| i < 8));
+
         // Cut by the grid: the walls add their crossings, two vertices each, the pieces their points
         let big = mesh(SQUARE * 3.0);
         let n = big.vertices.len() as u32;
+
         assert!(big.indices.iter().all(|&i| i < n));
         assert!(big.indices[..big.top].iter().all(|&i| (i as usize) < big.top_vertices));
         assert!(
@@ -722,6 +819,7 @@ mod tests {
         };
         let prism = triangulate_with(&polygons, SQUARE, true);
         let flat = triangulate_with(&polygons, SQUARE, false);
+
         assert_eq!(
             (flat.top, flat.walls, flat.indices.len()),
             (prism.top, prism.top, prism.top)
@@ -736,23 +834,28 @@ mod tests {
     fn polygons_starting_inside_the_previous_one_share_no_ring() {
         let (mut points, mut ring_start, mut polygon_start) = square_with_hole(SQUARE * 1.5);
         let o = DVec2::new(0.6, 0.4);
+
         points.extend([o, o + DVec2::X * 1e-3, o + DVec2::ONE * 1e-3, o]);
         ring_start.push(points.len() as u32);
         // Polygon 1 starts at ring 1 (inside polygon 0), polygon 2 at ring 3, past the rings
         polygon_start.extend([1, 3, 4]);
+
         let polygons = Polygons {
             points: &points,
             ring_start: &ring_start,
             polygon_start: &polygon_start,
         };
         let rings: Vec<_> = polygon_rings(&polygons).collect();
+
         assert_eq!(rings, [0..2, 2..2, 2..3, 3..3]);
         assert_eq!(
             polygons.rings(rings[2].clone()).map(<[DVec2]>::len).collect::<Vec<_>>(),
             [3]
         );
+
         let kept = OwnedPolygons::new(&polygons);
         let (a, b) = (triangulate(&polygons), triangulate(&kept.as_polygons()));
+
         assert_eq!((a.vertices, a.indices), (b.vertices, b.indices));
     }
 
@@ -768,6 +871,7 @@ mod tests {
             polygon_start: &polygon_start,
         };
         let total: usize = polygon_rings(&polygons).map(|r| r.len()).sum();
+
         assert_eq!(total, ring_start.len() - 1);
         assert_eq!(extrude(&polygons, DVec2::ZERO).parts.len(), 1);
     }
@@ -777,13 +881,16 @@ mod tests {
         // A row of 40 small squares 50 m apart, from east to west
         let step = 50.0 / 40_075_016.686;
         let (mut points, mut ring_start, mut polygon_start) = (Vec::new(), vec![0u32], vec![0u32]);
+
         for k in (0..40).rev() {
             let p = DVec2::new(0.5 + f64::from(k) * step, 0.33);
             let s = step * 0.4;
+
             points.extend([p, p + DVec2::new(s, 0.0), p + DVec2::new(s, s), p + DVec2::new(0.0, s)]);
             ring_start.push(points.len() as u32);
             polygon_start.push(ring_start.len() as u32 - 1);
         }
+
         let polygons = Polygons {
             points: &points,
             ring_start: &ring_start,
@@ -792,21 +899,29 @@ mod tests {
         let mut blocks = extrude(&polygons, DVec2::new(0.5, 0.33));
         let before = blocks.indices.clone();
         let chunks = chunk_blocks(&mut blocks);
+
         assert_eq!(chunks.start.len(), chunks.grid.len() + 1);
         assert_eq!(*chunks.start.last().unwrap() as usize, before.len());
         assert!(chunks.reach > 0.0 && chunks.reach < step);
+
         let mut a = before.as_chunks::<3>().0.to_vec();
         let mut b = blocks.indices.as_chunks::<3>().0.to_vec();
+
         a.sort_unstable();
         b.sort_unstable();
         assert_eq!(a, b);
+
         // West first now (the last polygons), each polygon in its square, its triangles together, in their order
         let feature_of = |i: u32| blocks.vertices[i as usize].feature;
+
         assert!(feature_of(blocks.indices[0]) >= 38);
+
         let mut seen = Vec::new();
+
         for s in 0..chunks.grid.len() {
             let range = chunks.start[s] as usize..chunks.start[s + 1] as usize;
             let mut features: Vec<u32> = blocks.indices[range].iter().map(|&i| feature_of(i)).collect();
+
             features.dedup();
             assert!(features.is_sorted(), "{features:?}");
             seen.extend(features);
@@ -826,6 +941,7 @@ mod tests {
             DVec2::new(f64::INFINITY, 1.0),
             DVec2::new(0.1, 0.1),
         ];
+
         // A huge triangle, a ring with NaN and infinity, rings whose starts point past the points
         for (ring_start, polygon_start) in [
             (vec![0, 3], vec![0, 1]),
@@ -855,6 +971,7 @@ mod tests {
     fn positions_keep_the_f64_precision() {
         let p = DVec2::new(0.512_345_678_901_234, 0.354_321_098_765_432);
         let v = Vertex::new(p, 0, 1.0);
+
         assert!(v.position().distance(p) < 1e-14);
     }
 }
@@ -895,6 +1012,7 @@ pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
     let (mut flat, mut holes, mut triangles): (Vec<[f64; 2]>, Vec<u32>, Vec<u32>) =
         (Vec::new(), Vec::new(), Vec::new());
     let f32s = |p: DVec2| [p.x as f32, p.y as f32];
+
     for (p, rings) in polygon_rings(polygons).enumerate() {
         let rings: Vec<&[DVec2]> = rings.map(|r| ring(polygons, r)).filter(|r| r.len() >= 3).collect();
         let Some(outer) = rings.first() else {
@@ -912,35 +1030,46 @@ pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
             shade,
             pad: 0.0,
         };
+
         // Roof
         flat.clear();
         holes.clear();
+
         let mut all: Vec<DVec2> = Vec::new();
+
         for (k, r) in rings.iter().enumerate() {
             if k > 0 {
                 holes.push(all.len() as u32);
             }
             all.extend_from_slice(r);
         }
+
         let base = all[0];
+
         flat.extend(all.iter().map(|&q| (q - base).to_array()));
         earcut.earcut(flat.iter().copied(), &holes, &mut triangles);
+
         let start = out.vertices.len() as u32;
+
         out.vertices.extend(all.iter().map(|&m| vertex(m, 1.0, 1.0)));
         out.indices.extend(triangles.iter().map(|&i| start + i));
         // Walls, each with its own vertices (flat shading)
         for (k, r) in rings.iter().enumerate() {
             // Outward normal: the inside is on the left of a counterclockwise outer ring and of a clockwise hole
             let sign = if (area(r) > 0.0) == (k == 0) { 1.0 } else { -1.0 };
+
             for i in 0..r.len() {
                 let (a, b) = (r[i], r[(i + 1) % r.len()]);
                 let d = b - a;
+
                 if d.length_squared() == 0.0 {
                     continue;
                 }
+
                 let normal = DVec2::new(d.y, -d.x).normalize() * sign;
                 let shade = (0.72 + 0.2 * normal.dot(LIGHT).max(0.0)) as f32;
                 let s = out.vertices.len() as u32;
+
                 out.vertices.extend([
                     vertex(a, 0.0, shade),
                     vertex(b, 0.0, shade),
@@ -950,11 +1079,14 @@ pub fn extrude(polygons: &Polygons, origin: DVec2) -> Blocks {
                 out.indices.extend([s, s + 1, s + 2, s, s + 2, s + 3]);
             }
         }
+
         // Its holes reach no further than its outer ring
         let radius = if radius.is_finite() { radius } else { 0.0 };
+
         out.parts
             .push((first_index, out.indices.len() as u32, centroid, radius));
     }
+
     out
 }
 
@@ -990,16 +1122,24 @@ pub fn chunk_blocks(blocks: &mut Blocks) -> BlockChunks {
     // The parts in their new order, and where each one starts
     let mut indices = Vec::with_capacity(blocks.indices.len());
     let mut at = Vec::with_capacity(order.len() + 1);
+
     for &k in &order {
         at.push(indices.len() as u32);
+
         let (first, end, _, _) = blocks.parts[k as usize];
+
         indices.extend_from_slice(&blocks.indices[first as usize..end as usize]);
     }
     at.push(indices.len() as u32);
+
     let start = part_start.iter().map(|&p| at[p as usize]).collect();
+
     blocks.indices = indices;
+
     let reach = blocks.parts.iter().map(|p| p.3).fold(0.0, f64::max);
+
     // Their ranges were those of the indices before
     blocks.parts.clear();
+
     BlockChunks { grid, start, reach }
 }

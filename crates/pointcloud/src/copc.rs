@@ -56,16 +56,20 @@ impl Copc {
     /// `point_data_offset` (`Head::More` when the bytes stop before)
     pub fn parse(bytes: &[u8]) -> Result<Head, String> {
         let header = Header::parse(bytes)?;
+
         if !(6..=8).contains(&header.point_format) {
             return Err(format!(
                 "point format {}: COPC holds formats 6 to 8",
                 header.point_format
             ));
         }
+
         let end = header.point_data_offset as usize;
+
         if bytes.len() < end {
             return Ok(Head::More(end));
         }
+
         let vlrs = header.vlrs(bytes)?;
         let find = |user: &str, record: u16| vlrs.iter().find(|v| v.user == user && v.record == record);
         let info = find("copc", 1).ok_or("no COPC info VLR: not a COPC file")?;
@@ -76,11 +80,14 @@ impl Copc {
             offset: u64_at(d, 40).ok_or_else(truncated)?,
             size: u64_at(d, 48).ok_or_else(truncated)?,
         };
+
         if ![cx, cy, cz, halfsize, spacing].iter().all(|v| v.is_finite()) || halfsize <= 0.0 || spacing <= 0.0 {
             return Err("bad COPC info".into());
         }
+
         let laz = find("laszip encoded", 22204).ok_or("no LAZ VLR")?;
         let wkt = find("LASF_Projection", 2112).map(|v| crate::las::text(v.data));
+
         Ok(Head::Ready(Box::new(Self {
             header,
             info: Info {
@@ -128,6 +135,7 @@ impl Key {
         let Some(shift) = self.depth.checked_sub(other.depth) else {
             return false;
         };
+
         (self.x >> shift, self.y >> shift, self.z >> shift) == (other.x, other.y, other.z)
     }
 
@@ -137,6 +145,7 @@ impl Key {
         let side = 2.0 * info.halfsize / f64::from(1u32 << self.depth.min(31));
         let index = [self.x, self.y, self.z];
         let min = [0, 1, 2].map(|i| info.center[i] - info.halfsize + f64::from(index[i]) * side);
+
         (min, side)
     }
 }
@@ -160,6 +169,7 @@ pub fn parse_page(bytes: &[u8]) -> Result<Vec<Entry>, String> {
     if !bytes.len().is_multiple_of(ENTRY) {
         return Err("hierarchy page of a wrong size".into());
     }
+
     bytes
         .as_chunks::<ENTRY>()
         .0
@@ -175,14 +185,18 @@ pub fn parse_page(bytes: &[u8]) -> Result<Vec<Entry>, String> {
             ) else {
                 return Err("negative key in a hierarchy page".to_owned());
             };
+
             if depth > MAX_DEPTH || [x, y, z].iter().any(|&v| v >> depth != 0) {
                 return Err("key out of its level in a hierarchy page".into());
             }
+
             let size = i32_at(e, 24).unwrap_or(-1);
             let count = i32_at(e, 28).unwrap_or(-2);
+
             if size < 0 || count < -1 {
                 return Err("bad entry in a hierarchy page".into());
             }
+
             Ok(Entry {
                 key: Key { depth, x, y, z },
                 offset: u64_at(e, 16).unwrap_or(0),
@@ -236,6 +250,7 @@ impl Hierarchy {
             radius: 0.0,
             spacing: 0.0,
         };
+
         Self {
             info,
             nodes: vec![root],
@@ -260,14 +275,17 @@ impl Hierarchy {
         let Some(top) = self.nodes.get(node).map(|n| n.key) else {
             return Err("no such node".into());
         };
+
         // The page is consumed whatever happens: the node holds what the page says of it, or nothing
         self.nodes[node].content = Content::Empty;
         entries.retain(|e| e.key.within(&top));
         if self.nodes.len().saturating_add(entries.len()) > self.max_nodes {
             return Err(format!("point cloud: more than {} nodes", self.max_nodes));
         }
+
         // In any order: a child before its parent adds it empty, its entry then fills it
         let mut added = Vec::new();
+
         for e in entries {
             let content = match e.count {
                 -1 if e.size > 0 && u64::from(e.size) <= MAX_PAGE => Content::Page(Page {
@@ -281,6 +299,7 @@ impl Hierarchy {
                 },
                 _ => Content::Empty,
             };
+
             // The page's own node (or one it lists twice) takes the content
             if let Some(&i) = self.index.get(&e.key) {
                 if i == node || self.nodes[i].content == Content::Empty {
@@ -288,9 +307,12 @@ impl Hierarchy {
                 }
                 continue;
             }
+
             let i = self.insert(e.key, &mut added);
+
             self.nodes[i].content = content;
         }
+
         Ok(added)
     }
 
@@ -299,9 +321,11 @@ impl Hierarchy {
         if let Some(&i) = self.index.get(&key) {
             return i;
         }
+
         // Under the root, always there: the recursion ends
         let parent = key.parent().map_or(0, |p| self.insert(p, added));
         let i = self.nodes.len();
+
         self.nodes.push(Node {
             key,
             content: Content::Empty,
@@ -313,6 +337,7 @@ impl Hierarchy {
         self.nodes[parent].children.push(i);
         self.index.insert(key, i);
         added.push(i);
+
         i
     }
 
@@ -320,6 +345,7 @@ impl Hierarchy {
     #[must_use]
     pub fn center(&self, node: usize) -> [f64; 3] {
         let (min, side) = self.nodes[node].key.cube(&self.info);
+
         min.map(|m| m + side / 2.0)
     }
 
@@ -329,6 +355,7 @@ impl Hierarchy {
         let n = &mut self.nodes[node];
         let (_, side) = n.key.cube(&self.info);
         let half = side / 2.0;
+
         n.geodetic = geodetic;
         n.radius = (2.0 * (half * metres).powi(2) + (half * vertical).powi(2)).sqrt();
         n.spacing = self.info.spacing * metres / f64::from(1u32 << n.key.depth.min(31));
@@ -353,6 +380,7 @@ mod tests {
     #[test]
     fn reads_the_head_of_a_lidar_hd_tile() {
         let copc = paris();
+
         assert_eq!(copc.info.center, [652_500.0, 6_861_500.0, 522.21]);
         assert_eq!(copc.info.halfsize, 500.0);
         assert!((copc.info.spacing - 6.802_721).abs() < 1e-6);
@@ -374,6 +402,7 @@ mod tests {
         let Head::Ready(copc) = Copc::parse(AUTZEN).unwrap() else {
             panic!("the whole head is there");
         };
+
         assert_eq!((copc.header.point_format, copc.header.record_length), (7, 36));
         assert!(copc.wkt.as_deref().unwrap().contains("Oregon GIC Lambert (ft)"));
     }
@@ -381,12 +410,17 @@ mod tests {
     #[test]
     fn reads_the_root_page() {
         let entries = parse_page(PARIS_PAGE).unwrap();
+
         assert_eq!(entries.len(), 401);
+
         let root = entries.iter().find(|e| e.key == Key::ROOT).unwrap();
+
         assert_eq!((root.offset, root.size, root.count), (101_315_967, 697_096, 62_403));
         assert!(entries.iter().all(|e| e.count > 0 && e.key.depth <= 5));
+
         let mut h = Hierarchy::new(paris().info);
         let added = h.add_page(0, entries).unwrap();
+
         assert_eq!(added.len(), 400);
         assert_eq!(h.nodes.len(), 401);
         assert_eq!(
@@ -403,6 +437,7 @@ mod tests {
                 assert_eq!(h.nodes[c].key.parent(), Some(n.key), "{i}");
             }
         }
+
         let total: u64 = h
             .nodes
             .iter()
@@ -411,6 +446,7 @@ mod tests {
                 _ => 0,
             })
             .sum();
+
         assert_eq!(total, paris().header.point_count);
     }
 
@@ -420,13 +456,16 @@ mod tests {
         let close = |(a, s): ([f64; 3], f64), (b, t): ([f64; 3], f64)| {
             (s - t).abs() < 1e-9 && a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9)
         };
+
         assert!(close(Key::ROOT.cube(&info), ([652_000.0, 6_861_000.0, 22.21], 1000.0)));
+
         let k = Key {
             depth: 2,
             x: 3,
             y: 1,
             z: 0,
         };
+
         assert!(close(k.cube(&info), ([652_750.0, 6_861_250.0, 22.21], 250.0)));
         assert!(k.within(&Key::ROOT) && k.within(&k) && !Key::ROOT.within(&k));
         assert_eq!(k.parent().unwrap().parent(), Some(Key::ROOT));
@@ -457,22 +496,28 @@ mod tests {
                 ],
             )
             .unwrap();
+
         assert_eq!(added.len(), 4);
+
         let child = h.index[&Key {
             depth: 1,
             x: 1,
             y: 0,
             z: 0,
         }];
+
         assert_eq!(h.page(child), Some(Page { offset: 1000, size: 10 }));
+
         let missing = h.index[&Key {
             depth: 1,
             x: 1,
             y: 1,
             z: 1,
         }];
+
         assert_eq!(h.nodes[missing].content, Content::Empty);
         assert_eq!(h.nodes[missing].children.len(), 1);
+
         // Its page: the node itself, a child; an entry of another subtree is left out
         let added = h
             .add_page(
@@ -480,6 +525,7 @@ mod tests {
                 vec![entry(1, 1, 0, 0, 3), entry(2, 2, 0, 1, 4), entry(2, 0, 0, 0, 4)],
             )
             .unwrap();
+
         assert_eq!(added.len(), 1);
         assert!(matches!(h.nodes[child].content, Content::Points { count: 3, .. }));
         assert_eq!(h.nodes[child].children.len(), 1);
@@ -488,15 +534,21 @@ mod tests {
     #[test]
     fn malformed_pages_are_errors() {
         assert!(parse_page(&PARIS_PAGE[..33]).is_err());
+
         let mut bad = PARIS_PAGE[..64].to_vec();
+
         // x past its level
         bad[4..8].copy_from_slice(&5i32.to_le_bytes());
         bad[0..4].copy_from_slice(&1i32.to_le_bytes());
         assert!(parse_page(&bad).is_err());
+
         let mut bad = PARIS_PAGE[..64].to_vec();
+
         bad[0..4].copy_from_slice(&(-1i32).to_le_bytes());
         assert!(parse_page(&bad).is_err());
+
         let mut bad = PARIS_PAGE[..64].to_vec();
+
         bad[28..32].copy_from_slice(&(-7i32).to_le_bytes());
         assert!(parse_page(&bad).is_err());
     }
@@ -504,8 +556,11 @@ mod tests {
     #[test]
     fn hierarchies_stay_within_their_bounds() {
         let mut h = Hierarchy::new(paris().info);
+
         h.max_nodes = 10;
+
         let many: Vec<Entry> = (0..64).map(|i| entry(3, i % 8, i / 8, 0, 1)).collect();
+
         assert!(h.add_page(0, many).is_err());
         assert_eq!(h.nodes.len(), 1);
         assert_eq!(h.nodes[0].content, Content::Empty);
@@ -517,13 +572,16 @@ mod tests {
     #[test]
     fn nodes_are_placed_in_metres() {
         let mut h = Hierarchy::new(paris().info);
+
         h.add_page(0, parse_page(PARIS_PAGE).unwrap()).unwrap();
         assert_eq!(h.center(0), [652_500.0, 6_861_500.0, 522.21]);
         h.place(0, DVec3::new(2.35, 48.85, 80.0), 1.0, 1.0);
         assert!((h.nodes[0].radius - 500.0 * 3f64.sqrt()).abs() < 1e-9);
         assert!((h.nodes[0].spacing - 6.802_721).abs() < 1e-6);
+
         // In feet, a node's sphere and spacing in metres
         let deep = h.nodes.iter().position(|n| n.key.depth == 3).unwrap();
+
         h.place(deep, DVec3::ZERO, 0.3048, 0.3048);
         assert!((h.nodes[deep].spacing - 6.802_721 * 0.3048 / 8.0).abs() < 1e-6);
     }

@@ -37,19 +37,25 @@ pub(super) fn property_table(gltf: &Gltf, table: usize) -> Result<Option<Propert
     let Some(count) = index(&table["count"]).filter(|&c| c > 0 && c <= MAX_FEATURES) else {
         return Ok(None);
     };
+
     gltf.spend(count)?;
+
     let mut out = Properties {
         names: Vec::new(),
         features: vec![Vec::new(); count],
     };
+
     for (name, property) in table["properties"].as_object().into_iter().flatten() {
         let definition = &class["properties"][name];
         let values = column(gltf, schema, definition, property, count)?;
+
         out.names.push(name.clone());
+
         for (feature, value) in out.features.iter_mut().zip(values) {
             feature.push(value);
         }
     }
+
     Ok(Some(out))
 }
 
@@ -62,9 +68,11 @@ fn column(
     count: usize,
 ) -> Result<Vec<Property>, String> {
     let nulls = || vec![Property::Null; count];
+
     if definition["array"].as_bool() == Some(true) {
         return Ok(nulls());
     }
+
     let Some(view) = index(&property["values"]) else {
         return Ok(nulls());
     };
@@ -73,6 +81,7 @@ fn column(
     let values = match definition["type"].as_str() {
         Some("SCALAR") => {
             let component = definition["componentType"].as_str().unwrap_or("FLOAT32");
+
             numbers(&bytes, component, count)
                 .into_iter()
                 .map(|v| v.filter(|&v| !same(v, no_data)))
@@ -96,10 +105,12 @@ fn column(
             let kind = property["stringOffsetType"].as_str().unwrap_or("UINT32");
             let offsets = numbers(&offsets, kind, count + 1);
             let at = |k: usize| offsets.get(k).copied().flatten().map(|n| n as usize);
+
             (0..count)
                 .map(|i| match (at(i), at(i + 1)) {
                     (Some(a), Some(b)) if a <= b => bytes.get(a..b).map_or(Property::Null, |s| {
                         let text = String::from_utf8_lossy(s);
+
                         if no_data.as_str() == Some(&*text) {
                             Property::Null
                         } else {
@@ -118,6 +129,7 @@ fn column(
             let names = schema["enums"][name]["values"]
                 .as_array()
                 .map_or(&[][..], Vec::as_slice);
+
             numbers(&bytes, kind, count)
                 .into_iter()
                 .map(|v| {
@@ -131,6 +143,7 @@ fn column(
         }
         _ => nulls(),
     };
+
     Ok(values)
 }
 
@@ -145,10 +158,13 @@ fn same(v: f64, no_data: &Value) -> bool {
 /// An f32 to 7 significant digits (394.8, not 394.79998779296875)
 fn round_f32(value: f32) -> f64 {
     let v = f64::from(value);
+
     if v == 0.0 || !v.is_finite() {
         return v;
     }
+
     let scale = 10f64.powi(6 - v.abs().log10().floor() as i32);
+
     (v * scale).round() / scale
 }
 
@@ -161,11 +177,14 @@ fn numbers(bytes: &[u8], component: &str, count: usize) -> Vec<Option<f64>> {
         "INT64" | "UINT64" | "FLOAT64" => 8,
         _ => return vec![None; count],
     };
+
     (0..count)
         .map(|i| {
             let b = bytes.get(i * size..(i + 1) * size)?;
             let mut a = [0u8; 8];
+
             a[..size].copy_from_slice(b);
+
             let v = match component {
                 "INT8" => f64::from(i8::from_le_bytes([a[0]])),
                 "UINT8" => f64::from(a[0]),
@@ -178,6 +197,7 @@ fn numbers(bytes: &[u8], component: &str, count: usize) -> Vec<Option<f64>> {
                 "FLOAT32" => f64::from(f32::from_le_bytes([a[0], a[1], a[2], a[3]])),
                 _ => f64::from_le_bytes(a),
             };
+
             v.is_finite().then_some(v)
         })
         .collect()
@@ -187,19 +207,24 @@ fn numbers(bytes: &[u8], component: &str, count: usize) -> Vec<Option<f64>> {
 /// without any
 pub(super) fn batch_table(table: &Value, count: usize) -> Option<Properties> {
     let properties = table.as_object()?;
+
     if count == 0 || count > MAX_FEATURES {
         return None;
     }
+
     let mut out = Properties {
         names: Vec::new(),
         features: vec![Vec::new(); count],
     };
+
     for (name, values) in properties {
         // Binary properties (a byteOffset) and the hierarchy extension are left out
         let Some(values) = values.as_array() else {
             continue;
         };
+
         out.names.push(name.clone());
+
         for (k, feature) in out.features.iter_mut().enumerate() {
             feature.push(match values.get(k) {
                 Some(Value::Bool(b)) => Property::Bool(*b),
@@ -209,6 +234,7 @@ pub(super) fn batch_table(table: &Value, count: usize) -> Option<Properties> {
             });
         }
     }
+
     (!out.names.is_empty()).then_some(out)
 }
 
@@ -224,11 +250,13 @@ mod tests {
     fn a_property_table_gives_each_feature_its_properties() {
         // A triangle of 3 vertices, features 0, 1, 1; two buildings: heights (the second has none), names, a flag
         let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]); // positions, 36 bytes
+
         bin.extend(f32s(&[0.0, 1.0, 1.0])); // feature IDs at 36, 12 bytes
         bin.extend(f32s(&[12.5, f32::MAX])); // heights at 48, 8 bytes
         bin.extend(b"abcdefg\0"); // names at 56: "abc", "defg"
         bin.extend([0u32, 3, 7].iter().flat_map(|v| v.to_le_bytes())); // their offsets at 64, 12 bytes
         bin.extend([0b10u8, 0, 0, 0]); // flags at 76: false, true
+
         let json = json!({
             "asset": {"version": "2.0"},
             "extensionsUsed": ["EXT_mesh_features", "EXT_structural_metadata"],
@@ -264,8 +292,11 @@ mod tests {
             }}
         });
         let mesh = decode(&glb(&json, &bin), &DMat4::IDENTITY, false, &[]).unwrap();
+
         assert_eq!(mesh.primitives[0].features.as_deref(), Some(&[0.0, 1.0, 1.0][..]));
+
         let properties = mesh.properties.unwrap();
+
         assert_eq!(properties.names, ["hauteur", "leger", "nom"]);
         assert_eq!(
             properties.features,
@@ -280,6 +311,7 @@ mod tests {
     fn a_batch_table_gives_its_arrays() {
         let table = json!({"id": ["a", "b"], "h": [3, 4], "binary": {"byteOffset": 0, "componentType": "FLOAT"}});
         let properties = super::batch_table(&table, 2).unwrap();
+
         assert_eq!(properties.names, ["h", "id"]);
         assert_eq!(
             properties.features,

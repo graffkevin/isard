@@ -142,8 +142,10 @@ export interface TileLoaderLike {
 #[wasm_bindgen(js_name = dracoRequests, unchecked_return_type = "DracoRequest[]")]
 pub fn draco_requests(bytes: &[u8]) -> Result<Array, JsValue> {
     let out = Array::new();
+
     for r in decode::draco_requests(bytes)? {
         let request = Object::new();
+
         Reflect::set(&request, &"mesh".into(), &(r.mesh as u32).into())?;
         Reflect::set(&request, &"primitive".into(), &(r.primitive as u32).into())?;
         Reflect::set(&request, &"data".into(), &Uint8Array::from(&r.data[..]))?;
@@ -158,6 +160,7 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Array, JsValue> {
         }
         out.push(&request);
     }
+
     Ok(out)
 }
 
@@ -166,12 +169,14 @@ fn draco_geometries(value: &JsValue) -> Result<Vec<decode::DracoGeometry>, JsVal
     if value.is_undefined() || value.is_null() {
         return Ok(Vec::new());
     }
+
     let number = |g: &JsValue, key: &str| {
         Reflect::get(g, &key.into())
             .ok()
             .and_then(|v| v.as_f64())
             .map(|v| v as usize)
     };
+
     Array::from(value)
         .iter()
         .map(|g| {
@@ -189,6 +194,7 @@ fn draco_geometries(value: &JsValue) -> Result<Vec<decode::DracoGeometry>, JsVal
             } else {
                 indices.dyn_into::<Uint32Array>()?.to_vec()
             };
+
             Ok(decode::DracoGeometry {
                 mesh: number(&g, "mesh").ok_or("Draco geometry without mesh")?,
                 primitive: number(&g, "primitive").ok_or("Draco geometry without primitive")?,
@@ -218,7 +224,9 @@ pub fn decode_tile(
     let mesh = decode::decode(bytes, &transform, y_up, &draco_geometries(draco)?)?;
     let out = Object::new();
     let set = |target: &Object, key: &str, value: &JsValue| Reflect::set(target, &JsValue::from_str(key), value);
+
     set(&out, "anchor", &Float64Array::from(&mesh.anchor.to_array()[..]))?;
+
     // One array per image, shared by the primitives that use it
     let images: Vec<Uint8Array> = mesh
         .images
@@ -226,6 +234,7 @@ pub fn decode_tile(
         .map(|(bytes, _)| Uint8Array::from(&bytes[..]))
         .collect();
     let primitives = Array::new();
+
     for p in &mesh.primitives {
         let vertices: Vec<f32> = p
             .positions
@@ -236,6 +245,7 @@ pub fn decode_tile(
             .flat_map(|(&[x, y, z], &[u, v])| [x, y, z, u, v])
             .collect();
         let primitive = Object::new();
+
         set(&primitive, "vertices", &Float32Array::from(&vertices[..]))?;
         set(&primitive, "indices", &Uint32Array::from(&p.indices[..]))?;
         if let (Some(image), Some((_, mime))) = (p.image.and_then(|i| images.get(i)), mesh.image(p)) {
@@ -251,7 +261,9 @@ pub fn decode_tile(
         primitives.push(&primitive);
     }
     set(&out, "primitives", &primitives)?;
+
     let points = Array::new();
+
     for p in &mesh.points {
         points.push(&Uint8Array::from(&crate::render::points::tile_vertices(p)[..]));
     }
@@ -263,5 +275,6 @@ pub fn decode_tile(
             &crate::render::tiles3d::gpu::feature_properties(properties),
         )?;
     }
+
     Ok(out)
 }

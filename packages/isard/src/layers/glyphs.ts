@@ -53,8 +53,10 @@ class Reader {
   varint(): number {
     let value = 0;
     let shift = 0;
+
     for (;;) {
       const b = this.buf[this.pos++] ?? 0;
+
       value += (b & 0x7f) * 2 ** shift;
       if (b < 0x80) return value;
       shift += 7;
@@ -62,12 +64,15 @@ class Reader {
   }
   sint(): number {
     const v = this.varint();
+
     return v % 2 === 1 ? -(v + 1) / 2 : v / 2;
   }
   bytes(): Uint8Array {
     const n = this.varint();
     const out = this.buf.subarray(this.pos, this.pos + n);
+
     this.pos += n;
+
     return out;
   }
   skip(wire: number): void {
@@ -82,26 +87,34 @@ class Reader {
 const parse = (buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Array }> => {
   const out = new Map<number, { glyph: Glyph; bitmap: Uint8Array }>();
   const root = new Reader(new Uint8Array(buffer));
+
   while (!root.done) {
     const tag = root.varint();
+
     if (tag >> 3 !== 1) {
       root.skip(tag & 7);
       continue;
     }
+
     // A fontstack
     const stack = new Reader(root.bytes());
+
     while (!stack.done) {
       const t = stack.varint();
+
       if (t >> 3 !== 3) {
         stack.skip(t & 7);
         continue;
       }
+
       const g = new Reader(stack.bytes());
       let id = 0;
       let bitmap: Uint8Array = new Uint8Array(0);
       const glyph: Glyph = { width: 0, height: 0, left: 0, top: 0, advance: 0 };
+
       while (!g.done) {
         const f = g.varint();
+
         switch (f >> 3) {
           case 1:
             id = g.varint();
@@ -131,6 +144,7 @@ const parse = (buffer: ArrayBuffer): Map<number, { glyph: Glyph; bitmap: Uint8Ar
       out.set(id, { glyph, bitmap });
     }
   }
+
   return out;
 };
 
@@ -200,16 +214,22 @@ export class Glyphs {
   /** Loads the glyphs of these code points in a font */
   async load(font: string, codes: Iterable<number>): Promise<Map<number, Glyph>> {
     const glyphs = this.fonts.get(font) ?? new Map<number, Glyph>();
+
     this.fonts.set(font, glyphs);
+
     const starts = new Set([...codes].filter((code) => !glyphs.has(code)).map((code) => Math.floor(code / 256) * 256));
+
     await Promise.all([...starts].map((start) => this.range(font, start, glyphs)));
+
     return glyphs;
   }
 
   private range(font: string, start: number, glyphs: Map<number, Glyph>): Promise<void> {
     const key = `${font}/${start}`;
     const cached = this.ranges.get(key);
+
     if (cached) return cached;
+
     const url = (this.sources.get(font) ?? this.url)
       .replace('{fontstack}', encodeURIComponent(font))
       .replace('{range}', `${start}-${start + 255}`);
@@ -230,7 +250,9 @@ export class Glyphs {
         // A missing range is not retried this session; its characters stay blank
         console.warn('isard: glyphs', error);
       });
+
     this.ranges.set(key, pending);
+
     return pending;
   }
 
@@ -240,10 +262,12 @@ export class Glyphs {
    */
   private upload(): void {
     const engine = this.engine;
+
     if (!engine) return;
     engine.setGlyphPages(this.size, this.size, this.capacity);
     this.pages.forEach((page, i) => {
       const rows = this.used[i] ?? 0;
+
       if (rows > 0) engine.updateGlyphPage(i, 0, 0, this.size, rows, page.subarray(0, rows * this.size));
     });
   }
@@ -252,6 +276,7 @@ export class Glyphs {
   private flush(): void {
     this.dirty.forEach(([y0, y1], page) => {
       const data = this.pages[page];
+
       if (data)
         this.engine?.updateGlyphPage(page, 0, y0, this.size, y1 - y0, data.subarray(y0 * this.size, y1 * this.size));
     });
@@ -267,11 +292,13 @@ export class Glyphs {
     const h = glyph.height + 2 * BUFFER;
     // One texel of padding between bitmaps: linear filtering never reads a neighbour
     let shelf = this.shelves.find((s) => s.height >= h && s.height <= h + 4 && s.x + w + 1 <= this.size);
+
     if (!shelf) {
       const page = this.pages.length - 1;
       // New shelves go on the last page only: the last shelf is on it, unless the page is new
       const last = this.shelves.at(-1);
       const y = last && last.page === page ? last.y + last.height + 1 : 0;
+
       if (y + h > this.size) {
         if (this.pages.length === 1 && this.size * 2 <= this.maxSize) this.grow();
         else if (this.pages.length < MAX_PAGES) this.addPage();
@@ -279,15 +306,19 @@ export class Glyphs {
           // Full: the glyph takes its room in the text but is not drawn
           if (!this.full) console.warn(`isard: the glyph atlas is full (${MAX_PAGES} pages)`);
           this.full = true;
+
           return;
         }
         this.pack(glyph, bitmap);
+
         return;
       }
       shelf = { page, y, height: h, x: 0 };
       this.shelves.push(shelf);
     }
+
     const data = this.pages[shelf.page];
+
     if (!data) return;
     glyph.x = shelf.x;
     glyph.y = shelf.page * this.size + shelf.y;
@@ -297,7 +328,9 @@ export class Glyphs {
       data.set(bitmap.subarray(row * w, row * w + w), (shelf.y + row) * this.size + glyph.x);
     }
     this.used[shelf.page] = Math.max(this.used[shelf.page] ?? 0, shelf.y + h);
+
     const dirty = this.dirty.get(shelf.page);
+
     this.dirty.set(shelf.page, [Math.min(dirty?.[0] ?? shelf.y, shelf.y), Math.max(dirty?.[1] ?? 0, shelf.y + h)]);
   }
 
@@ -306,6 +339,7 @@ export class Glyphs {
     const size = this.size * 2;
     const old = this.pages[0] ?? new Uint8Array(this.size * this.size);
     const page = new Uint8Array(size * size);
+
     for (let row = 0; row < this.size; row += 1) {
       page.set(old.subarray(row * this.size, (row + 1) * this.size), row * size);
     }
@@ -371,28 +405,37 @@ export const shape = (
 ): Shaping => {
   const { size, maxWidth, lineHeight, anchor, offset } = options;
   const k = size / EM;
+
   // Characters with their glyph and scale, split into lines
   type Char = { glyph: Glyph | undefined; scale: number; space: boolean };
+
   const lines: Char[][] = [[]];
+
   for (const part of parts) {
     const glyphs = glyphsOf(part.font ?? options.font);
+
     for (const ch of part.text) {
       if (ch === '\n') {
         lines.push([]);
         continue;
       }
+
       const code = ch.codePointAt(0) ?? 32;
+
       lines.at(-1)?.push({ glyph: glyphs?.get(code), scale: part.scale ?? 1, space: /\s/.test(ch) });
     }
   }
+
   const advance = (c: Char) => (c.glyph?.advance ?? (c.space ? EM / 4 : 0)) * c.scale;
   // Wrapping at spaces, greedy
   const limit = maxWidth * EM;
   const wrapped: Char[][] = [];
+
   for (const line of lines) {
     let current: Char[] = [];
     let width = 0;
     let lastSpace = -1;
+
     for (const c of line) {
       current.push(c);
       width += advance(c);
@@ -406,6 +449,7 @@ export const shape = (
     }
     wrapped.push(current);
   }
+
   // Glyphs on their lines, each line centered on x = 0, in units of the 24 px font
   const quads: number[][] = [];
   let [x0, y0, x1, y1] = [
@@ -417,20 +461,28 @@ export const shape = (
   let baseline = 0;
   let widest = 0;
   let height = 0;
+
   wrapped.forEach((line, i) => {
     const scale = Math.max(1, ...line.map((c) => c.scale));
+
     if (i > 0) baseline += lineHeight * EM * scale;
     height += lineHeight * EM * scale;
+
     const width = line.reduce((s, c) => s + advance(c), 0);
+
     widest = Math.max(widest, width);
+
     let pen = -width / 2;
+
     for (const c of line) {
       const g = c.glyph;
+
       if (g && g.x !== undefined && g.y !== undefined && g.width > 0) {
         const qx = pen + (g.left - BUFFER) * c.scale;
         const qy = baseline - (g.top + BUFFER) * c.scale;
         const qw = (g.width + 2 * BUFFER) * c.scale;
         const qh = (g.height + 2 * BUFFER) * c.scale;
+
         quads.push([qx, qy, qw, qh, g.x, g.y, g.x + g.width + 2 * BUFFER, g.y + g.height + 2 * BUFFER, c.scale]);
         x0 = Math.min(x0, qx + BUFFER * c.scale);
         y0 = Math.min(y0, qy + BUFFER * c.scale);
@@ -441,17 +493,20 @@ export const shape = (
     }
   });
   if (!quads.length) return { quads, box: [0, 0, 0, 0], layout: [0, 0, 0, 0] };
+
   // The block placed around the anchor by its ink box
   // The side of the box at the anchor: its start, its end, or its middle
   const side = (start: boolean, end: boolean, lo: number, hi: number) => {
     if (start) return -lo;
     if (end) return -hi;
+
     return -(lo + hi) / 2;
   };
   const horizontal = side(anchor.includes('left'), anchor.includes('right'), x0, x1);
   const vertical = side(anchor.startsWith('top'), anchor.startsWith('bottom'), y0, y1);
   const dx = horizontal + offset[0] * EM;
   const dy = vertical + offset[1] * EM;
+
   for (const q of quads) {
     q[0] = ((q[0] ?? 0) + dx) * k;
     q[1] = ((q[1] ?? 0) + dy) * k;
@@ -459,8 +514,11 @@ export const shape = (
     q[3] = (q[3] ?? 0) * k;
     q[8] = (q[8] ?? 1) * k;
   }
+
   const middle = (y0 + y1) / 2 + dy;
+
   height = Math.max(height, y1 - y0);
+
   return {
     quads,
     box: [(x0 + dx) * k, (y0 + dy) * k, (x1 + dx) * k, (y1 + dy) * k],

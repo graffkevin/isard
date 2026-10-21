@@ -112,10 +112,13 @@ impl Overlay {
     /// The program of `vertex` (with `gl::common` before the parts above) and `fragment` (`gl::fragment_shader`)
     pub fn new(objects: &mut Objects, gl: &glow::Context, vertex: &[&str], fragment: &[&str]) -> Result<Self, String> {
         let mut source = gl::vertex_shader(&[gl::PROJECT, drape::ALTITUDE, ANCHOR]);
+
         for part in vertex {
             source.push_str(part);
         }
+
         let program = objects.program(&source, &gl::fragment_shader(fragment))?;
+
         Ok(Self {
             program,
             anchor: Anchor::new(gl, program),
@@ -135,9 +138,12 @@ impl Overlay {
             relief,
             ..
         } = frame;
+
         // SAFETY: a program of this layer, on the live context
         unsafe { gl.use_program(Some(self.program)) };
+
         let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+
         self.anchor.set_view(gl, view, viewport, relief.is_some(), depth_bias);
         self.anchor.set_origin(gl, view, origin);
         self.projection.set(gl, view);
@@ -165,6 +171,7 @@ pub fn bounds(points: &[DVec2]) -> Option<(DVec2, DVec2)> {
         .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &p| {
             (a.min(p), b.max(p))
         });
+
     min.is_finite().then_some((min, max))
 }
 
@@ -181,6 +188,7 @@ pub fn heights(view: &View, relief: Option<(&RasterSource, f32)>) -> (f64, f64) 
     relief.map_or((0.0, 0.0), |(_, e)| {
         let k = view.vertical * f64::from(e);
         let (low, high) = view.body.relief;
+
         (low * k, high * k)
     })
 }
@@ -205,6 +213,7 @@ pub fn pick_ranges<'a>(
     visible.cached(view, look).map_or_else(
         || {
             let mut fresh = Visible::default();
+
             std::borrow::Cow::Owned(fresh.update(grid, start, view, look).to_vec())
         },
         std::borrow::Cow::Borrowed,
@@ -215,6 +224,7 @@ pub fn pick_ranges<'a>(
 #[must_use]
 pub fn split(x: f64) -> (f32, f32) {
     let hi = x as f32;
+
     (hi, (x - f64::from(hi)) as f32)
 }
 
@@ -244,6 +254,7 @@ impl Anchor {
         let [matrix, _, _, _, viewport_u, bias_u, horizon_u] = &self.0;
         let bias = if relief { 2.0 * view.near * depth_bias } else { 0.0 };
         let horizon = horizon(view);
+
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_matrix_4_f32_slice(matrix.as_ref(), false, &gl::mat4(&view.view_proj));
@@ -262,6 +273,7 @@ impl Anchor {
         let [_, origin_u, hi_u, lo_u, _, _, _] = &self.0;
         let camera = camera_offset(view, origin);
         let ((xh, xl), (yh, yl)) = (split(camera.x), split(camera.y));
+
         // SAFETY: uniform uploads on the program in use
         unsafe {
             gl.uniform_2_f32(origin_u.as_ref(), origin.x as f32, origin.y as f32);
@@ -278,8 +290,10 @@ pub fn horizon(view: &View) -> [f32; 4] {
     if view.globe.factor <= 0.0 {
         return [0.0, 0.0, 0.0, -1.0];
     }
+
     let eye = view.eye - view.sphere_center();
     let r = view.globe.radius;
+
     [eye.x as f32, eye.y as f32, eye.z as f32, (0.98 * r * r) as f32]
 }
 
@@ -300,8 +314,10 @@ pub fn pick_ids_fit(count: usize, what: &str) -> bool {
     web_sys::console::warn_1(&wasm_bindgen::JsValue::from_str(&format!(
         "{what}: {count} features, picking tells apart only the first {MAX}"
     )));
+
     #[cfg(not(target_arch = "wasm32"))]
     let _ = what;
+
     false
 }
 
@@ -312,9 +328,11 @@ mod tests {
 
     fn view(lon: f64, lat: f64, zoom: f64, pitch: f64) -> View {
         let mut camera = Camera::new(lon, lat, zoom);
+
         camera.width = 800.0;
         camera.height = 600.0;
         camera.pitch = pitch;
+
         camera.view()
     }
 
@@ -324,29 +342,39 @@ mod tests {
         let behind = |v: &View, p: glam::DVec3| {
             let [x, y, z, w] = horizon(v);
             let q = (p - v.sphere_center()).as_vec3();
+
             q.dot(glam::Vec3::new(x, y, z)) <= w
         };
         let mut camera = Camera::new(-80.0, 0.0, 1.2);
+
         camera.globe = true;
         camera.width = 640.0;
         camera.height = 400.0;
+
         let v = camera.view();
+
         for lon in (-180..180).step_by(5) {
             for lat in (-80..=80).step_by(10) {
                 let m = mercator(f64::from(lon), f64::from(lat));
                 let p = v.position(m, -(m.x - v.center.x).round());
+
                 assert_eq!(behind(&v, p), !v.faces_camera(p), "{lon} {lat}");
             }
         }
+
         // Gale crater, on the far side of Tharsis; Valles Marineris in front
         let at = |lon: f64, lat: f64| {
             let m = mercator(lon, lat);
+
             v.position(m, -(m.x - v.center.x).round())
         };
+
         assert!(behind(&v, at(137.44, -4.59)));
         assert!(!behind(&v, at(-59.2, -13.9)));
+
         // On the plane, nothing hidden
         let flat = view(-80.0, 0.0, 12.0, 60.0);
+
         assert!(!behind(&flat, flat.position(mercator(-79.0, 0.5), 0.0)));
     }
 
@@ -354,6 +382,7 @@ mod tests {
     fn split_keeps_the_low_bits() {
         let x = 0.507_123_456_789_012_3;
         let (hi, lo) = split(x);
+
         assert!((f64::from(hi) + f64::from(lo) - x).abs() < 1e-15);
         assert!((f64::from(hi) - x).abs() > 1e-10);
     }
@@ -374,20 +403,26 @@ mod tests {
             f64::from(plane(offset.0.y, yh, yl)),
         );
         let exact = (point - v.center) * v.world_size;
+
         // Within a pixel; the old `origin_px + offset * world` was off by several
         assert!((gpu - exact).length() < 1.0, "{gpu} {exact}");
+
         let old = (origin - v.center).as_vec2() * v.world_size as f32 + offset.0 * v.world_size as f32;
+
         assert!((old.as_dvec2() - exact).length() > 1.0);
     }
 
     #[test]
     fn points_and_bounds() {
         let p = points(&[0.1, 0.2, 0.3, 0.05, 0.9]);
+
         assert_eq!(p, [DVec2::new(0.1, 0.2), DVec2::new(0.3, 0.05)]);
         assert_eq!(bounds(&p), Some((DVec2::new(0.1, 0.05), DVec2::new(0.3, 0.2))));
         assert_eq!(bounds(&[]), None);
+
         // Points not numbers are left out
         let q = [DVec2::new(f64::INFINITY, 0.0), DVec2::new(0.2, 0.4), DVec2::NAN];
+
         assert_eq!(bounds(&q), Some((DVec2::new(0.2, 0.4), DVec2::new(0.2, 0.4))));
         assert_eq!(bounds(&q[2..]), None);
     }

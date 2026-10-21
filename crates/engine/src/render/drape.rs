@@ -66,9 +66,12 @@ impl Drape {
             return;
         }
         self.generation = source.generation();
+
         let t = table(min, max, source.options.max_z, source.loaded());
+
         self.first = t.first;
         self.level = t.level;
+
         // SAFETY: (re)allocation and upload of the table on the live context
         unsafe {
             let texture = match self.texture {
@@ -76,11 +79,13 @@ impl Drape {
                 None => match gl.create_texture() {
                     Ok(texture) => {
                         self.texture = Some(texture);
+
                         texture
                     }
                     Err(_) => return,
                 },
             };
+
             gl.active_texture(glow::TEXTURE0 + unit::PAGE);
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
@@ -108,13 +113,16 @@ impl Drape {
     pub fn bind(&self, gl: &glow::Context, uniforms: &DrapeUniforms, relief: Option<(&RasterSource, f32)>) {
         let [_, _, rect, exaggeration] = &uniforms.0;
         let relief = relief.filter(|_| self.texture.is_some());
+
         // SAFETY: uniforms and bindings on the program in use (its sampler units set once, by `DrapeUniforms::new`)
         unsafe {
             gl.uniform_1_f32(exaggeration.as_ref(), relief.map_or(0.0, |(_, e)| e));
+
             let Some((source, _)) = relief else {
                 return;
             };
             let n = f64::from(1u32 << self.level);
+
             gl.uniform_3_f32(rect.as_ref(), self.first.0 as f32, self.first.1 as f32, n as f32);
             gl.active_texture(glow::TEXTURE0 + unit::PAGE);
             gl.bind_texture(glow::TEXTURE_2D, self.texture);
@@ -138,6 +146,7 @@ pub struct DrapeUniforms([Option<glow::UniformLocation>; 4]);
 impl DrapeUniforms {
     pub fn new(gl: &glow::Context, program: glow::Program) -> Self {
         let uniforms = crate::render::gl::uniforms(gl, program, ["u_page", "u_heights", "u_page_rect", "u_relief"]);
+
         crate::render::gl::sampler_units(
             gl,
             program,
@@ -146,6 +155,7 @@ impl DrapeUniforms {
                 (uniforms[1].as_ref(), unit::HEIGHTS),
             ],
         );
+
         Self(uniforms)
     }
 }

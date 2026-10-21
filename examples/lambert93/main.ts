@@ -25,6 +25,7 @@ const GRIDS = {
 /** PLAN IGN in a grid: Lambert-93 (reprojected) or Web Mercator (as the engine draws it) */
 const plan = (matrixSet: keyof typeof GRIDS) => {
   const [layer, format] = GRIDS[matrixSet];
+
   return map.addRaster(geoplateformeWmts(layer, { matrixSet, format, opacity: 0.6 }));
 };
 let raster: RasterLayer = plan('2154_10cm_6_20');
@@ -61,6 +62,7 @@ map.addSymbols({
 (Object.keys(GRIDS) as (keyof typeof GRIDS)[]).forEach((id) => {
   element(id).onclick = () => {
     const opacity = Number(element<HTMLInputElement>('opacity').value);
+
     raster.remove();
     raster = plan(id);
     raster.setStyle({ opacity });

@@ -17,13 +17,17 @@ function fakeGlyphs(missing = new Set<number>()) {
         map.set(c, { width: 10, height: 14, left: 1, top: 12, advance: 12, x: c * 4, y: 0, page: 0 });
       });
   };
+
   fill();
+
   const loads: number[][] = [];
+
   return {
     version: 1,
     loads,
     load: async (_font: string, codes: Iterable<number>) => {
       loads.push([...codes]);
+
       return map;
     },
     /** The missing glyphs arrive (a range loaded) */
@@ -46,6 +50,7 @@ const layer = (glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, ico
       get: (_, name) => {
         if (name === 'addSymbols') return () => 1;
         if (name === 'setSymbols') return (...args: unknown[]) => resolve(args);
+
         return () => undefined;
       },
     },
@@ -56,13 +61,16 @@ const layer = (glyphs = fakeGlyphs(), style: Partial<SymbolOptions<P>> = {}, ico
     new Promise<[number, Float64Array, Float32Array, Float32Array, Float32Array]>((r) => {
       resolve = r as never;
     });
+
   symbols.attach(engine as never);
+
   return { symbols, glyphs, icons, next };
 };
 
 /** What `act` sends, `sent` asked for before it */
 const after = <T>(sent: Promise<T>, act: () => unknown): Promise<T> => {
   act();
+
   return sent;
 };
 
@@ -87,16 +95,21 @@ describe('symbol groups', () => {
     const expected = await after(plain.next(), () => plain.symbols.setData([...a, ...b, ...c]));
     const grouped = layer();
     const got = await after(grouped.next(), () => grouped.symbols.setGroups([a, b, c]));
+
     [1, 2, 3, 4].forEach((i) => {
       expect([...(got[i] as Float32Array)]).toEqual([...(expected[i] as Float32Array)]);
     });
     expect(grouped.symbols.features).toEqual([...a, ...b, ...c]);
     // Another order, a new group: only the new group's glyphs are asked for
     grouped.glyphs.loads.length = 0;
+
     const d = [point('i', 5)];
     const moved = await after(grouped.next(), () => grouped.symbols.setGroups([c, d, a]));
+
     expect(grouped.glyphs.loads).toEqual([['i'.charCodeAt(0)]]);
+
     const again = await after(plain.next(), () => plain.symbols.setData([...c, ...d, ...a]));
+
     // The quads' label indices follow the new order
     [1, 2, 3, 4].forEach((i) => {
       expect([...(moved[i] as Float32Array)]).toEqual([...(again[i] as Float32Array)]);
@@ -106,6 +119,7 @@ describe('symbol groups', () => {
   test('a new style shapes the groups again', async () => {
     const { symbols, glyphs, next } = layer();
     const a = [point('ab', 1)];
+
     await after(next(), () => symbols.setGroups([a]));
     glyphs.loads.length = 0;
     await after(next(), () => symbols.setStyle({ size: 20 }));
@@ -117,22 +131,28 @@ describe('symbol groups', () => {
     const { symbols, next } = layer(glyphs);
     const a = [point('ab', 1)];
     const first = await after(next(), () => symbols.setGroups([a]));
+
     // One glyph: one quad
     expect(first[4].length).toBe(QUAD);
     glyphs.loads.length = 0;
     await after(next(), () => symbols.setGroups([a]));
     expect(glyphs.loads.length).toBe(0);
     glyphs.arrive();
+
     const second = await after(next(), () => symbols.setGroups([a]));
+
     expect(glyphs.loads.length).toBe(1);
     expect(second[4].length).toBe(2 * QUAD);
   });
 
   test('a style reading the index of the features shapes groups that moved again', async () => {
     const { symbols, glyphs, next } = layer();
+
     await after(next(), () => symbols.setStyle({ text: (p, i) => `${p.text}${i}` }));
+
     const a = [point('a', 1)];
     const b = [point('b', 2)];
+
     await after(next(), () => symbols.setGroups([a, b]));
     glyphs.loads.length = 0;
     await after(next(), () => symbols.setGroups([b, a]));
@@ -143,7 +163,9 @@ describe('symbol groups', () => {
 describe('icons', () => {
   test('a label with its icon: both flagged, the icon box and scale sent, the icon quads under the glyphs', async () => {
     const icons = new Icons();
+
     icons.add('poi', image(20, 10), { pixelRatio: 2 });
+
     const { symbols, next } = layer(
       fakeGlyphs(),
       {
@@ -156,12 +178,17 @@ describe('icons', () => {
       icons,
     );
     const sent = next();
+
     symbols.setData([point('ab', 1, 'poi'), point('', 2, 'poi'), point('c', 3, 'missing')]);
+
     const [, anchors, boxes, styles, quads] = await sent;
+
     // Three labels: with its icon, the icon alone, the text alone (its image is missing)
     expect(anchors.length).toBe(6);
     expect(styles.length).toBe(3 * LABEL);
+
     const flags = [0, 1, 2].map((i) => styles[i * LABEL + 9]);
+
     // text 64, icon 128
     expect(flags).toEqual([192, 128, 64]);
     // The icon's box: 10 × 5 CSS pixels at its largest size (2), with 2 px of room
@@ -172,8 +199,10 @@ describe('icons', () => {
     expect([...styles.slice(24, 28)]).toEqual([0, 0, 0, 1]);
     // The text box of the icon alone is empty
     expect([...boxes.slice(4, 8)]).toEqual([0, 0, 0, 0]);
+
     // Two icon quads first (scale -1), then the glyphs (three)
     const kinds = Array.from({ length: Math.ceil(quads.length / QUAD) }, (_, k) => quads[k * QUAD + 9]);
+
     expect(kinds.map((k) => (k ?? 0) < 0)).toEqual([true, true, false, false, false]);
     expect([quads[0], quads[QUAD]]).toEqual([0, 1]);
   });
@@ -182,6 +211,7 @@ describe('icons', () => {
     const icons = new Icons();
     const { symbols, next } = layer(fakeGlyphs(), { icon: (p) => p.icon ?? '' }, icons);
     const a = [point('a', 1, 'pin')];
+
     expect((await after(next(), () => symbols.setGroups([a])))[3][9]).toBe(64);
     icons.add('pin', image(8, 8));
     expect((await after(next(), () => symbols.setGroups([a])))[3][9]).toBe(192);
@@ -189,7 +219,9 @@ describe('icons', () => {
 
   test('a shield stretched around its text, turning with it along its line; overlaps and optional parts', async () => {
     const icons = new Icons();
+
     icons.add('shield', image(10, 10));
+
     const line: Feature<P> = {
       type: 'Feature',
       properties: { text: 'A6', icon: 'shield' },
@@ -216,8 +248,11 @@ describe('icons', () => {
       icons,
     );
     const sent = next();
+
     symbols.setData([line]);
+
     const [, , boxes, styles, quads] = await sent;
+
     // text, icon, text allowed to overlap 1, icon ignored 8, icon optional 32, along its line 256 and 512, upright 1024
     expect(styles[9]).toBe(64 | 128 | 1 | 8 | 32 | 256 | 512 | 1024);
     // A direction
@@ -232,15 +267,20 @@ describe('icons', () => {
 
   test('an icon turning with the map at a point takes the east as its direction', async () => {
     const icons = new Icons();
+
     icons.add('arrow', image(4, 4));
+
     const { symbols, next } = layer(
       fakeGlyphs(),
       { icon: 'arrow', iconRotationAlignment: 'map', iconRotate: 90 },
       icons,
     );
     const sent = next();
+
     symbols.setData([point('', 1)]);
+
     const [, , , styles, quads] = await sent;
+
     expect(styles[9]).toBe(128 | 512);
     expect([styles[10], styles[11]]).toEqual([1, 0]);
     expect(quads[10]).toBeCloseTo(Math.PI / 2, 6);
@@ -268,6 +308,7 @@ describe('tileLabels', () => {
 
   test('features by style layer, the higher first, each in the order of the tile', () => {
     const groups = tileLabels([candidate(1, 'a'), candidate(3, 'b', [0.2, 0.1]), candidate(1, 'c')]);
+
     expect(groups.map(([layer, features]) => [layer, features.map((f) => f.properties.text)])).toEqual([
       [3, ['b']],
       [1, ['a', 'c']],

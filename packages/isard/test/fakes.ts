@@ -45,17 +45,20 @@ export class FakeEngine {
       this.failing.add(name);
     });
     FakeEngine.failNext.clear();
+
     const own: Record<string, (...args: never[]) => unknown> = {
       camera: () => ({ ...this.cam, center: [...this.cam.center] }),
       setCamera: (lon: number, lat: number, zoom: number, pitch: number, bearing: number) => {
         // As the engine's camera clamp: longitude and bearing wrapped to [-180, 180)
         const wrap = (degrees: number) =>
           degrees >= -180 && degrees < 180 ? degrees : ((((degrees + 540) % 360) + 360) % 360) - 180;
+
         this.cam = { center: [wrap(lon), lat], zoom, pitch, bearing: wrap(bearing) };
       },
       bounds: () => this.boundsValue,
       render: () => {
         this.onRender?.();
+
         return this.loading;
       },
       requestPick: () => this.canPick,
@@ -66,16 +69,21 @@ export class FakeEngine {
         this.freed = true;
       },
     };
+
     // biome-ignore lint/correctness/noConstructorReturn: a recording proxy stands for the engine
     return new Proxy(this, {
       get: (target, name, receiver) => {
         if (typeof name === 'symbol' || name in target) return Reflect.get(target, name, receiver);
         if (target.hidden.has(name)) return undefined;
+
         return (...args: unknown[]) => {
           target.calls.push([name, args]);
           if (target.failing.has(name)) throw new Error(`engine: ${name} failed`);
+
           const f = own[name];
+
           if (f) return (f as (...a: unknown[]) => unknown)(...args);
+
           return name.startsWith('add') ? target.nextId++ : undefined;
         };
       },
@@ -173,8 +181,10 @@ export class FakeElement {
     contains: (name: string) => this.classes().includes(name),
     toggle: (name: string, force?: boolean) => {
       const on = force ?? !this.classList.contains(name);
+
       if (on) this.classList.add(name);
       else this.classList.remove(name);
+
       return on;
     },
   };
@@ -221,6 +231,7 @@ export class FakeElement {
 
   addEventListener(type: string, handler: Handler): void {
     const set = this.listeners.get(type) ?? new Set();
+
     this.listeners.set(type, set);
     set.add(handler);
   }
@@ -250,6 +261,7 @@ export class FakeElement {
 
   getBoundingClientRect(): { left: number; top: number; width: number; height: number } {
     this.rectReads += 1;
+
     return { left: this.left, top: this.top, width: this.clientWidth, height: this.clientHeight };
   }
 
@@ -277,7 +289,9 @@ export class Frames {
   private next = 1;
   readonly request = (callback: (now: number) => void): number => {
     const id = this.next++;
+
     this.queue.set(id, callback);
+
     return id;
   };
   readonly cancel = (id: number): void => {
@@ -289,6 +303,7 @@ export class Frames {
   /** Runs the callbacks queued before this call (those they queue wait for the next run) */
   run(now = performance.now()): void {
     const callbacks = [...this.queue.values()];
+
     this.queue.clear();
     callbacks.forEach((callback) => {
       callback(now);
@@ -304,9 +319,11 @@ export class Frames {
 export const setGlobals = (values: Record<string, unknown>): (() => void) => {
   const g = globalThis as Record<string, unknown>;
   const saved = Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(g, key)] as const);
+
   Object.entries(values).forEach(([key, value]) => {
     Object.defineProperty(g, key, { value, configurable: true, writable: true });
   });
+
   return () => {
     saved.forEach(([key, descriptor]) => {
       if (descriptor) Object.defineProperty(g, key, descriptor);

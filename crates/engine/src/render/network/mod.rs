@@ -69,6 +69,7 @@ impl Pass {
         let overlay = Overlay::new(objects, gl, &[defines, LINE, VERTEX], &[defines, VALUE, fragment])?;
         let program = overlay.program;
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
+
         gl::sampler_units(
             gl,
             program,
@@ -80,6 +81,7 @@ impl Pass {
                 (uniforms[12].as_ref(), RAMP_UNIT),
             ],
         );
+
         Ok(Self { overlay, uniforms })
     }
 }
@@ -106,6 +108,7 @@ impl NetworkStyle {
     /// From the floats of `setNetworkStyle`
     fn from_floats(s: &[f32]) -> Option<Self> {
         let s: &[f32; FLOATS] = s.get(..FLOATS)?.try_into().ok()?;
+
         Some(Self {
             width: stops_of(&s[0..8])?,
             halo: stops_of(&s[8..16])?,
@@ -180,9 +183,13 @@ impl NetworkLayer {
         style: NetworkStyle,
     ) -> Result<Self, String> {
         let nodes = mercator.len() / 2;
+
         check_edges(edges, nodes)?;
+
         let edge_count = edges.len() / 2;
+
         overlay::pick_ids_fit(edge_count, "network layer");
+
         // The points as they came, no copy (millions for a region): pairs of f64 are a DVec2
         let merc: &[DVec2] = bytemuck::cast_slice(&mercator[..nodes * 2]);
         let lines = lines.map(|(start, line)| Lines {
@@ -197,12 +204,15 @@ impl NetworkLayer {
         let pick = Pass::new(&mut objects, gl, "#define PICK\n", PICK_FRAGMENT)?;
         let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, nodes)?);
         let edge_texture = objects.adopt_texture(gl::table_texture(gl, glow::RG32UI, edge_count)?);
+
         gl::upload_table(gl, as_bytes(edges), edge_count, glow::RG_INTEGER, glow::UNSIGNED_INT, 8);
+
         let cost_texture = objects.adopt_texture(gl::table_texture(gl, glow::RG32F, edge_count)?);
         let scales = objects.adopt_texture(gl::table_texture(gl, glow::R32F, edge_count)?);
         let ramp = objects.texture()?;
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
+
         // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
@@ -225,6 +235,7 @@ impl NetworkLayer {
             gl.bind_vertex_array(None);
         }
         objects.keep();
+
         let mut layer = Self {
             style,
             shaded,
@@ -247,17 +258,20 @@ impl NetworkLayer {
             piece_count: built.pieces.len(),
             drawn: Cell::new(0),
         };
+
         // Unreached until the first values
         layer.set_values(gl, &vec![-1.0; nodes]);
         layer.set_costs(gl, costs);
         layer.set_scales(gl, None);
         layer.set_ramp(gl, None);
+
         Ok(layer)
     }
 
     /// One value per node, in node order; negative (or 1e30 and above) = unreached
     pub fn set_values(&mut self, gl: &glow::Context, values: &[f32]) {
         let n = values.len().min(self.nodes);
+
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.values)) };
         gl::upload_table(gl, as_bytes(&values[..n]), n, glow::RED, glow::FLOAT, 4);
@@ -267,6 +281,7 @@ impl NetworkLayer {
     /// interpolated along the edges
     pub fn set_costs(&mut self, gl: &glow::Context, costs: Option<&[f32]>) {
         self.with_costs = costs.is_some();
+
         let Some(costs) = costs else {
             return;
         };
@@ -275,6 +290,7 @@ impl NetworkLayer {
             .take(self.edge_count * 2)
             .map(|&c| if c.is_nan() { CLOSED } else { c.min(CLOSED) })
             .collect();
+
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.costs)) };
         gl::upload_table(gl, as_bytes(&clamped), clamped.len() / 2, glow::RG, glow::FLOAT, 8);
@@ -283,8 +299,10 @@ impl NetworkLayer {
     /// Width factor of each edge (1 for all without)
     pub fn set_scales(&mut self, gl: &glow::Context, scales: Option<&[f32]>) {
         let mut all = vec![1.0f32; self.edge_count.max(1)];
+
         if let Some(s) = scales {
             let n = s.len().min(all.len());
+
             all[..n].copy_from_slice(&s[..n]);
         }
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
@@ -296,6 +314,7 @@ impl NetworkLayer {
     pub fn set_ramp(&mut self, gl: &glow::Context, rgba: Option<&[u8]>) {
         let default = default_ramp();
         let data = rgba.filter(|r| r.len() >= RAMP_TEXELS * 4).unwrap_or(&default);
+
         // SAFETY: upload of the whole ramp texture
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.ramp));
@@ -344,10 +363,13 @@ impl NetworkLayer {
             fade,
         ] = &pass.uniforms;
         let style = &self.style;
+
         pass.overlay.begin(frame, self.origin, LINE_DEPTH_BIAS, &self.drape);
+
         // SAFETY: state setup with objects owned by this layer (the sampler units set once, by `Pass::new`)
         unsafe {
             let parts = if frame.relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+
             gl.uniform_1_i32(segments.as_ref(), parts);
             gl.uniform_1_f32(max.as_ref(), style.max);
             gl.uniform_1_f32(contour.as_ref(), style.contour);
@@ -377,10 +399,13 @@ impl NetworkLayer {
         let (gl, pixel_ratio) = (frame.gl, frame.pixel_ratio);
         let style = &self.style;
         let parts = if frame.relief.is_some() { RELIEF_SEGMENTS } else { 1 };
+
         // SAFETY: draws with the objects bound by `bind`
         unsafe {
             gl.uniform_1_f32(width_u.as_ref(), (width.pixels * pixel_ratio) as f32);
+
             let alpha = if width.halo { style.halo_opacity } else { style.opacity };
+
             gl.uniform_1_f32(opacity.as_ref(), alpha);
             gl.uniform_1_f32(halo.as_ref(), if width.halo { 1.0 } else { 0.0 });
         }
@@ -399,6 +424,7 @@ impl Layer for NetworkLayer {
             relief,
             ..
         } = frame;
+
         if let Some((source, _)) = relief
             && self.nodes > 0
         {
@@ -406,35 +432,46 @@ impl Layer for NetworkLayer {
                 self.grid.min,
                 self.grid.min + DVec2::new(f64::from(self.grid.cols), f64::from(self.grid.rows)) * self.grid.size,
             );
+
             self.drape.update(gl, lo, hi, source);
         }
+
         let look = overlay::look(self.origin, view, relief, 0.0);
         let mut visible = std::mem::take(&mut self.visible);
         let ranges = visible.update(&self.grid, &self.start, view, look);
+
         self.drawn.set(ranges.iter().map(|(a, b)| b - a).sum());
+
         // Line quads are built on screen, either way round
         let depth = DepthState::over_ground(gl, relief.is_some());
         let style = self.style;
+
         if !ranges.is_empty() {
             self.bind(frame, &self.shaded);
+
             let halo_width = stops(&style.halo, camera.zoom);
+
             if halo_width > 0.0 && style.halo_opacity > 0.0 {
                 let halo = Width {
                     pixels: halo_width,
                     halo: true,
                 };
+
                 self.draw_ranges(frame, &self.shaded, halo, ranges);
             }
+
             let lines = Width {
                 pixels: stops(&style.width, camera.zoom),
                 halo: false,
             };
+
             self.draw_ranges(frame, &self.shaded, lines, ranges);
             // SAFETY: unbinding on the live context
             unsafe { gl.bind_vertex_array(None) };
         }
         self.visible = visible;
         drop(depth);
+
         false
     }
 
@@ -451,22 +488,27 @@ impl Layer for NetworkLayer {
             relief,
             ..
         } = frame;
+
         // SAFETY: uniform on the picking program
         unsafe {
             gl.use_program(Some(self.pick.overlay.program));
             gl.uniform_1_f32(self.pick.uniforms[LAYER_UNIFORM].as_ref(), f32::from(layer));
         }
+
         let look = overlay::look(self.origin, view, relief, 0.0);
         let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, view, look);
+
         if ranges.is_empty() {
             return;
         }
+
         let width = Width {
             pixels: stops(&self.style.width, camera.zoom) + PICK_SLOP,
             halo: false,
         };
         // Hidden by the hills as on screen (the picking pass drew the ground's depth)
         let _depth = DepthState::over_ground(gl, relief.is_some());
+
         self.bind(frame, &self.pick);
         self.draw_ranges(frame, &self.pick, width, &ranges);
         // SAFETY: unbinding on the live context
@@ -505,22 +547,26 @@ fn check_edges(edges: &[u32], nodes: usize) -> Result<(), String> {
     if let Some(bad) = edges.iter().find(|&&i| i as usize >= nodes) {
         return Err(format!("edge to node {bad}, only {nodes} nodes"));
     }
+
     Ok(())
 }
 
 /// The ramp used without one given: `DEFAULT_RAMP` over `RAMP_TEXELS` RGBA texels
 fn default_ramp() -> Vec<u8> {
     let mut rgba = Vec::with_capacity(RAMP_TEXELS * 4);
+
     for i in 0..RAMP_TEXELS {
         let t = i as f32 / (RAMP_TEXELS - 1) as f32 * 4.0;
         let k = (t.floor() as usize).min(3);
         let f = t - k as f32;
         let (a, b) = (DEFAULT_RAMP[k], DEFAULT_RAMP[k + 1]);
+
         for c in 0..3 {
             rgba.push(((a[c] + (b[c] - a[c]) * f) * 255.0).round() as u8);
         }
         rgba.push(255);
     }
+
     rgba
 }
 
@@ -556,6 +602,7 @@ impl Engine {
         let style = NetworkStyle::from_floats(style).ok_or("a network style is 25 numbers")?;
         let lines = line_start.as_deref().zip(line_points.as_deref());
         let layer = NetworkLayer::new(&self.gl, mercator, edges, lines, costs.as_deref(), style)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -611,6 +658,7 @@ impl Engine {
     pub fn network_stats(&self, id: u32) -> JsValue {
         self.layer::<NetworkLayer>(id).map_or(JsValue::UNDEFINED, |layer| {
             let (pieces, drawn) = layer.counts();
+
             js::object(&[("pieces", (pieces as f64).into()), ("drawn", drawn.into())])
         })
     }
@@ -624,6 +672,7 @@ mod tests {
     fn styles_read_25_floats() {
         let mut f: Vec<f32> = (0..25).map(|i| i as f32).collect();
         let s = NetworkStyle::from_floats(&f).unwrap();
+
         assert_eq!(s.width, [[0.0, 1.0, 2.0, 3.0], [4.0, 5.0, 6.0, 7.0]]);
         assert_eq!(s.halo[1], [12.0, 13.0, 14.0, 15.0]);
         assert_eq!((s.max, s.contour, s.opacity, s.halo_opacity), (16.0, 17.0, 18.0, 19.0));
@@ -645,6 +694,7 @@ mod tests {
     #[test]
     fn the_default_ramp_runs_green_to_red() {
         let r = default_ramp();
+
         assert_eq!(r.len(), 1024);
         assert_eq!(&r[..4], &[0, 168, 107, 255]);
         assert_eq!(&r[1020..], &[232, 56, 79, 255]);

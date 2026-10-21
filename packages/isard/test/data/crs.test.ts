@@ -42,9 +42,12 @@ describe('built-in CRSs', () => {
   test.each(REFERENCES)('EPSG:%i at %d, %d: within 0.1 mm of PROJ, both ways', (code, lon, lat, x, y) => {
     const crs = getCrs(`EPSG:${code}`);
     const [fx = 0, fy = 0] = crs.forward([lon, lat]);
+
     expect(Math.abs(fx - x)).toBeLessThan(1e-4);
     expect(Math.abs(fy - y)).toBeLessThan(1e-4);
+
     const [ilon = 0, ilat = 0] = crs.inverse([x, y]);
+
     // 1e-9 degree: 0.1 mm
     expect(Math.abs(ilon - lon)).toBeLessThan(1e-9);
     expect(Math.abs(ilat - lat)).toBeLessThan(1e-9);
@@ -55,13 +58,17 @@ describe('built-in CRSs', () => {
     const utm = getCrs('EPSG:32632');
     const lons = Array.from({ length: 11 }, (_, k) => -5 + 1.5 * k);
     const lats = Array.from({ length: 11 }, (_, k) => 41 + k);
+
     lons.forEach((lon) => {
       lats.forEach((lat) => {
         const [x = 0, y = 0] = l93.forward([lon, lat]);
         const [a = 0, b = 0] = l93.inverse([x, y]);
+
         expect(Math.hypot(a - lon, b - lat)).toBeLessThan(1e-11);
+
         const [u = 0, v = 0] = utm.forward([lon + 4, lat]);
         const [c = 0, d = 0] = utm.inverse([u, v]);
+
         expect(Math.hypot(c - lon - 4, d - lat)).toBeLessThan(1e-11);
       });
     });
@@ -69,9 +76,12 @@ describe('built-in CRSs', () => {
 
   test('Web Mercator in metres, longitudes and latitudes as they are', () => {
     const [x = 0, y = 0] = getCrs('EPSG:3857').forward([180, 0]);
+
     expect(x).toBeCloseTo(20037508.342789244, 6);
     expect(y).toBeCloseTo(0, 6);
+
     const [lon = 0, lat = 0] = getCrs('EPSG:3857').inverse([0, 20037508.342789244]);
+
     expect(lon).toBe(0);
     expect(lat).toBeCloseTo(85.0511287798, 9);
     expect(getCrs('EPSG:4326').forward([2.5, 48])).toEqual([2.5, 48]);
@@ -158,14 +168,19 @@ describe('reproject', () => {
   test('from the CRS its crs member names, altitudes and properties kept', () => {
     const data = collection('urn:ogc:def:crs:EPSG::2154');
     const out = reproject(data);
+
     expect(out.crs).toBeUndefined();
+
     const point = out.features[0]?.geometry as { coordinates: number[] };
+
     expect(point.coordinates[0]).toBeCloseTo(2.3461, 9);
     expect(point.coordinates[1]).toBeCloseTo(48.8462, 9);
     expect(point.coordinates[2]).toBe(35);
     expect(out.features[1]?.properties).toBe(data.features[1]?.properties as Record<string, unknown>);
+
     const both = out.features[1]?.geometry as { geometries: { coordinates: number[][] }[] } | undefined;
     const line = both?.geometries[0];
+
     expect(line?.coordinates[0]?.[0]).toBeCloseTo(3, 12);
     expect(line?.coordinates[0]?.[1]).toBeCloseTo(46.5, 12);
     // The input untouched
@@ -174,11 +189,14 @@ describe('reproject', () => {
 
   test('from a CRS given; nothing to do in longitudes and latitudes or without a CRS', () => {
     const out = reproject(collection().features, 'EPSG:2154');
+
     expect((out.features[0]?.geometry as { coordinates: number[] } | undefined)?.coordinates[1]).toBeCloseTo(
       48.8462,
       9,
     );
+
     const wgs84 = collection('urn:ogc:def:crs:OGC:1.3:CRS84');
+
     expect(reproject(wgs84).features).toBe(wgs84.features);
     expect(reproject(collection()).features[0]?.geometry).toEqual(collection().features[0]?.geometry ?? null);
   });
@@ -186,9 +204,12 @@ describe('reproject', () => {
   test('the feature layers reproject a collection naming its CRS, once', () => {
     const data = collection('EPSG:2154');
     const features = featuresOf(data);
+
     expect((features[0]?.geometry as { coordinates: number[] } | undefined)?.coordinates[0]).toBeCloseTo(2.3461, 9);
     expect(featuresOf(data)).toBe(features);
+
     const plain = collection();
+
     expect(featuresOf(plain)).toBe(plain.features);
   });
 });

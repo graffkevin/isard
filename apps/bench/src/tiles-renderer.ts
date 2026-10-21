@@ -44,6 +44,7 @@ mesh.addEventListener('load-model', ({ scene }) => {
   scene.traverse((object) => {
     if (object instanceof Mesh && object.material instanceof MeshStandardMaterial) {
       const lit = object.material;
+
       object.material = new MeshBasicMaterial({ map: lit.map, color: lit.color, side: lit.side });
       lit.dispose();
     }
@@ -63,8 +64,10 @@ const target = new Vector3();
 const setPose = (pose: Pose): void => {
   const lat = MathUtils.degToRad(pose.lat);
   const lon = MathUtils.degToRad(pose.lon);
+
   WGS84_ELLIPSOID.getCartographicToPosition(lat, lon, 0, target);
   WGS84_ELLIPSOID.getEastNorthUpAxes(lat, lon, east, north, up);
+
   const tilt = MathUtils.degToRad(pose.tilt);
   const heading = MathUtils.degToRad(pose.heading);
   // Horizontal direction the camera looks to, then the camera behind the target, raised by the tilt
@@ -76,6 +79,7 @@ const setPose = (pose: Pose): void => {
     .clone()
     .multiplyScalar(Math.cos(tilt))
     .add(forward.clone().multiplyScalar(-Math.sin(tilt)));
+
   camera.position.copy(target).addScaledVector(offset, pose.range);
   // Screen up: perpendicular to the view, towards the heading
   camera.up.copy(forward.multiplyScalar(Math.cos(tilt)).add(up.clone().multiplyScalar(Math.sin(tilt)))).normalize();

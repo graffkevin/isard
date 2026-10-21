@@ -212,11 +212,13 @@ impl PointProgram {
         let pick = objects.program(&vertex, &gl::fragment_shader(&[PICK_FRAGMENT]))?;
         let palette = objects.texture()?;
         let ramp = objects.texture()?;
+
         for (texture, width, filter) in [(palette, 256, glow::NEAREST), (ramp, RAMP_TEXELS, glow::LINEAR)] {
             // SAFETY: storage and parameters of a texture just created on a live context
             unsafe {
                 gl.bind_texture(glow::TEXTURE_2D, Some(texture));
                 gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, width as i32, 1);
+
                 for (key, value) in [
                     (glow::TEXTURE_MIN_FILTER, filter),
                     (glow::TEXTURE_MAG_FILTER, filter),
@@ -228,11 +230,15 @@ impl PointProgram {
             }
         }
         objects.keep();
+
         let uniforms = [gl::uniforms(gl, program, UNIFORMS), gl::uniforms(gl, pick, UNIFORMS)];
+
         for p in [program, pick] {
             let [palette, ramp] = gl::uniforms(gl, p, ["u_palette", "u_ramp"]);
+
             gl::sampler_units(gl, p, &[(palette.as_ref(), PALETTE), (ramp.as_ref(), unit::RAMP)]);
         }
+
         let made = Self {
             program,
             pick,
@@ -240,12 +246,16 @@ impl PointProgram {
             palette,
             ramp,
         };
+
         // Every class shown in grey, a grey ramp, until the layer's style is set
         made.set_palette(gl, &[[200, 200, 200, 255]; 256].concat());
+
         let ramp: Vec<u8> = (0..RAMP_TEXELS)
             .flat_map(|i| [i as u8, i as u8, i as u8, 255])
             .collect();
+
         made.set_ramp(gl, &ramp);
+
         Ok(made)
     }
 
@@ -280,6 +290,7 @@ impl PointProgram {
         ] = &self.uniforms[usize::from(pick.is_some())];
         let ratio = pixel_ratio as f32;
         let _depth = gl::DepthState::solid(gl);
+
         // SAFETY: draws with objects owned by this program and the points given
         unsafe {
             gl.use_program(Some(if pick.is_some() { self.pick } else { self.program }));
@@ -293,8 +304,10 @@ impl PointProgram {
             gl.uniform_1_i32(mode.as_ref(), look.color_by as i32);
             gl.uniform_1_i32(classes.as_ref(), i32::from(look.classes));
             gl.uniform_1_i32(lit.as_ref(), i32::from(look.lit));
+
             let [lo, hi] = look.range;
             let hi = if hi > lo { hi } else { lo + 1.0 };
+
             gl.uniform_2_f32(range.as_ref(), lo as f32, hi as f32);
             gl.uniform_1_i32(round.as_ref(), i32::from(look.round));
             if let Some((ordinal, _)) = pick {
@@ -302,10 +315,14 @@ impl PointProgram {
             }
             for (k, d) in draws.iter().enumerate() {
                 gl.uniform_matrix_4_f32_slice(m.as_ref(), false, &gl::mat4(&d.matrix));
+
                 let u = d.up.as_vec3();
+
                 gl.uniform_3_f32(up.as_ref(), u.x, u.y, u.z);
                 gl.uniform_1_f32(base.as_ref(), d.base as f32);
+
                 let s = if look.adaptive { d.spacing * pixel_ratio } else { 0.0 };
+
                 gl.uniform_1_f32(spacing.as_ref(), s as f32);
                 if let Some((_, firsts)) = pick {
                     gl.uniform_1_u32(first.as_ref(), firsts.get(k).copied().unwrap_or(0));
@@ -332,6 +349,7 @@ fn upload_row(gl: &glow::Context, texture: glow::Texture, rgba: &[u8], width: us
     let Some(rgba) = rgba.get(..width * 4) else {
         return;
     };
+
     // SAFETY: upload into a texture of this width, owned by the program
     unsafe {
         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
@@ -365,6 +383,7 @@ impl GpuPoints {
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
         let stride = STRIDE as i32;
+
         // SAFETY: state setup of objects just created on the live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -381,6 +400,7 @@ impl GpuPoints {
             gl.bind_vertex_array(None);
         }
         objects.keep();
+
         Ok(Self {
             vao,
             buffer,
@@ -394,6 +414,7 @@ impl GpuPoints {
         Self::new(gl, vertices.len(), |target| {
             // SAFETY: upload into the buffer bound by `new`
             unsafe { gl.buffer_data_u8_slice(target, vertices, glow::STATIC_DRAW) };
+
             Ok(())
         })
     }
@@ -406,6 +427,7 @@ impl GpuPoints {
     ) -> Result<Self, JsValue> {
         Self::new(gl, vertices.byte_length() as usize, |target| {
             raw.buffer_data_with_array_buffer_view(target, vertices, glow::STATIC_DRAW);
+
             Ok(())
         })
     }
@@ -415,13 +437,16 @@ impl GpuPoints {
         if index >= self.count as u32 {
             return None;
         }
+
         let mut out = [0u8; STRIDE];
+
         // SAFETY: a read within the buffer (index checked against its count)
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
             gl.get_buffer_sub_data(glow::ARRAY_BUFFER, (index as usize * STRIDE) as i32, &mut out);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
         }
+
         Some(out)
     }
 
@@ -438,14 +463,19 @@ impl GpuPoints {
 #[must_use]
 pub fn oct_encode(n: [f32; 3]) -> [u8; 2] {
     let l1 = n[0].abs() + n[1].abs() + n[2].abs();
+
     if l1 <= 0.0 {
         return [128, 128];
     }
+
     let (mut x, mut y) = (n[0] / l1, n[1] / l1);
+
     if n[2] < 0.0 {
         (x, y) = ((1.0 - y.abs()) * x.signum(), (1.0 - x.abs()) * y.signum());
     }
+
     let byte = |v: f32| ((v * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+
     [byte(x), byte(y)]
 }
 
@@ -453,6 +483,7 @@ pub fn oct_encode(n: [f32; 3]) -> [u8; 2] {
 #[must_use]
 pub fn tile_vertices(points: &tiles3d::decode::Points) -> Vec<u8> {
     let mut out = Vec::with_capacity(points.colors.len() * STRIDE);
+
     for (i, (p, c)) in points
         .positions
         .as_chunks::<3>()
@@ -468,8 +499,10 @@ pub fn tile_vertices(points: &tiles3d::decode::Points) -> Vec<u8> {
             intensity: normal.map_or(0, u16::from_le_bytes),
             returns: [u8::from(normal.is_some()), 0],
         };
+
         push(&mut out, *p, &attributes);
     }
+
     out
 }
 
@@ -491,13 +524,17 @@ impl Edl {
         let framebuffer = objects.framebuffer()?;
         let color = objects.texture()?;
         let depth = objects.texture()?;
+
         objects.keep();
+
         let [color_unit, depth_unit] = gl::uniforms(gl, program, ["u_color", "u_depth"]);
+
         gl::sampler_units(
             gl,
             program,
             &[(color_unit.as_ref(), unit::OWN[0]), (depth_unit.as_ref(), unit::OWN[1])],
         );
+
         Ok(Self {
             uniforms: gl::uniforms(gl, program, ["u_near_far", "u_strength", "u_radius"]),
             program,
@@ -534,6 +571,7 @@ impl Edl {
                         kind,
                         glow::PixelUnpackData::Slice(None),
                     );
+
                     for key in [glow::TEXTURE_MIN_FILTER, glow::TEXTURE_MAG_FILTER] {
                         gl.tex_parameter_i32(glow::TEXTURE_2D, key, glow::NEAREST as i32);
                     }
@@ -567,6 +605,7 @@ impl Edl {
     pub fn finish(&self, gl: &glow::Context, view: &geo::camera::View, strength: f64, radius: f64) {
         let [near_far, strength_u, radius_u] = &self.uniforms;
         let _depth = gl::DepthState::solid(gl);
+
         // SAFETY: draws with objects owned by this pass on the live context
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
@@ -614,6 +653,7 @@ mod tests {
             let [x, y] = oct_encode(n);
             let back = oct_decode(x, y);
             let dot: f32 = n.iter().zip(back).map(|(a, b)| a * b).sum();
+
             assert!(dot > 0.999, "{n:?} → {back:?}");
         }
     }
@@ -626,6 +666,7 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]],
         };
         let v = tile_vertices(&points);
+
         assert_eq!(v.len(), 2 * STRIDE);
         assert_eq!(&v[COLOR..COLOR + 4], &[10, 20, 30, 0]);
         assert_eq!(v[RETURNS], 1);
@@ -633,10 +674,12 @@ mod tests {
             oct_decode(v[INTENSITY], v[INTENSITY + 1]).map(f32::round),
             [0.0, 0.0, 1.0]
         );
+
         let plain = tile_vertices(&tiles3d::decode::Points {
             normals: Vec::new(),
             ..points
         });
+
         assert_eq!(plain[RETURNS], 0);
     }
 }

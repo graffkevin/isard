@@ -30,6 +30,7 @@ type Ring = LonLat[];
 const polygonsOf = (g: (typeof buildings.features)[number]['geometry']): Ring[][] => {
   if (g?.type === 'Polygon') return [g.coordinates as Ring[]];
   if (g?.type === 'MultiPolygon') return g.coordinates as Ring[][];
+
   return [];
 };
 const footprints = buildings.features.flatMap((f) => {
@@ -38,16 +39,20 @@ const footprints = buildings.features.flatMap((f) => {
     const lons = outer.map((c) => c[0]);
     const lats = outer.map((c) => c[1]);
     const box = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
+
     return { rings, box, height: roofHeight(f.properties) };
   });
 });
 const inside = ([x, y]: LonLat, ring: Ring) => {
   let within = false;
+
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [xi, yi] = ring[i] as LonLat;
     const [xj, yj] = ring[j] as LonLat;
+
     if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) within = !within;
   }
+
   return within;
 };
 /** Metres of the roof under a point, 0 off the buildings */
@@ -62,12 +67,14 @@ const roofAt = (at: LonLat) => {
       inside(at, rings[0] ?? []) &&
       !rings.slice(1).some((hole) => inside(at, hole)),
   );
+
   return under?.height ?? 0;
 };
 
 observers(map, {
   standOn: (at) => {
     const metres = roofAt(at);
+
     return metres > 0 ? { metres, what: 'a roof' } : undefined;
   },
 })([2.34305, 48.88615]);

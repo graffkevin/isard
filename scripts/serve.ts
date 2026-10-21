@@ -20,6 +20,7 @@ const server = Bun.serve({
     const [prefix, folder] = MOUNTS.find(([p]) => path === p || path.startsWith(`${p}/`)) ?? ['', root];
     const rest = path.slice(prefix.length) || '/';
     const file = Bun.file(join(folder, rest.endsWith('/') ? `${rest}index.html` : rest));
+
     return (await file.exists()) ? new Response(file) : new Response('Not found', { status: 404 });
   },
 });

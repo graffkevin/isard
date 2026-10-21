@@ -82,6 +82,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     if (data) {
       const features = featuresOf(data);
       const properties = features.map((f) => f.properties);
+
       this.tiles.set(DATA, {
         batch: 0,
         properties,
@@ -96,6 +97,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   /** Replaces the set given as `data` */
   setData(data: FeatureData<P>): void {
     const features = featuresOf(data);
+
     this.put(
       DATA,
       features.map((f) => f.properties),
@@ -109,6 +111,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     if ('arrays' in data) this.put(key, data.properties, undefined, data.arrays);
     else {
       const features = featuresOf(data);
+
       this.put(
         key,
         features.map((f) => f.properties),
@@ -120,6 +123,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
   removeTile(key: TileKey): void {
     const tile = this.tiles.get(key);
+
     if (!tile) return;
     this.tiles.delete(key);
     this.map.engine.removeExtrusionBatch(this.id, tile.batch);
@@ -140,30 +144,38 @@ export class ExtrusionLayer<P = Properties> extends Layer {
    * order they were added */
   featureAt(index: number): Feature<P> | undefined {
     let rest = index;
+
     for (const tile of [...this.tiles.values()].sort((a, b) => a.batch - b.batch)) {
       const n = tile.properties.length;
+
       if (rest < n) {
         const properties = tile.properties[rest] as P;
+
         return tile.features?.[rest] ?? { type: 'Feature', properties, geometry: null };
       }
       rest -= n;
     }
+
     return undefined;
   }
 
   /** The tile and the index in it of a picked index */
   tileAt(index: number): { key: TileKey | undefined; index: number } | undefined {
     let rest = index;
+
     for (const [key, tile] of [...this.tiles].sort((a, b) => a[1].batch - b[1].batch)) {
       if (rest < tile.properties.length) return { key: key === DATA ? undefined : key, index: rest };
       rest -= tile.properties.length;
     }
+
     return undefined;
   }
 
   setStyle(style: Partial<ExtrusionStyle<P>>): void {
     this.style = { ...this.style, ...style };
+
     const engine = this.map.engine;
+
     this.tiles.forEach((tile) => {
       this.sendStyle(engine, this.id, tile);
     });
@@ -186,6 +198,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   /** One value per building of a tile (or of the data), colored through the ramp; NaN keeps a building's color */
   setValues(values: Float32Array | undefined, key?: TileKey): void {
     const tile = this.tiles.get(key ?? DATA);
+
     if (!tile) return;
     tile.values = values;
     this.map.engine.setFeatureValues(
@@ -210,6 +223,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   /** Per building of a tile (or of the data): node A, node B, cost from A, cost from B (4 floats each) */
   setAnchors(anchors: Float32Array, key?: TileKey): void {
     const tile = this.tiles.get(key ?? DATA);
+
     if (!tile) return;
     tile.anchors = anchors;
     this.map.engine.setExtrusionAnchors(this.id, tile.batch, anchors);
@@ -231,6 +245,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
       values: undefined,
       anchors: undefined,
     };
+
     this.tiles.set(key, tile);
     this.sendTile(this.map.engine, this.id, tile);
     this.map.requestRender();
@@ -239,16 +254,19 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   private mask(tile: Tile<P>): Uint8Array {
     const { filter } = this.style;
     const mask = new Uint8Array(tile.properties.length).fill(255);
+
     if (filter)
       tile.properties.forEach((p, i) => {
         if (!filter(p, i)) mask[i] = 0;
       });
+
     return mask;
   }
 
   private sendTile(engine: Engine, id: number, tile: Tile<P>): void {
     const g = tile.arrays ?? polygonGeometry(tile.features ?? []);
     const n = tile.properties.length;
+
     engine.setExtrusionBatch(id, tile.batch, g.points, g.ringStart, g.polygonStart, g.feature, n);
     this.sendStyle(engine, id, tile);
     if (tile.values) engine.setFeatureValues(id, tile.values, tile.batch);
@@ -260,8 +278,10 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     const out = new Float32Array(tile.properties.length * FLOATS);
     // Constant colors parsed once: a tile has thousands of buildings
     const fixed = typeof color === 'string' ? parseColor(color) : undefined;
+
     tile.properties.forEach((p, i) => {
       const o = i * FLOATS;
+
       out.set(fixed ?? parseColor(evaluate(color, p, i)), o);
       out.set(stops(evaluate(height, p, i)), o + 8);
       out.set(stops(evaluate(base, p, i)), o + 16);
@@ -273,6 +293,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
   private sendLayer(engine: Engine, id: number): void {
     const { ramp, opacity, minZoom, maxZoom, visible } = this.style;
     const r = ramp && rampTexels(ramp);
+
     engine.setFeatureRamp(id, r?.rgba, r?.min ?? 0, r?.max ?? 1);
     engine.setFeatureLayer(id, Float32Array.from(stops(opacity)), minZoom, maxZoom, visible);
   }
@@ -281,18 +302,21 @@ export class ExtrusionLayer<P = Properties> extends Layer {
     const n = this.network;
     // A network removed (or not created) links to nothing
     const network = n && n.layer.id >= 0 ? n.layer.id : undefined;
+
     engine.linkExtrusionNetwork(id, network, n ? Math.min(n.max, 1e29) : 0);
   }
 
   /** @internal */
   protected create(engine: Engine): number {
     const id = engine.addExtrusions();
+
     this.sendLayer(engine, id);
     this.tiles.forEach((tile) => {
       this.sendTile(engine, id, tile);
     });
     // A network created before (on a new engine, the map relinks once every layer is there)
     if (!this.network || this.network.layer.id >= 0) this.sendLink(engine, id);
+
     return id;
   }
 
@@ -304,6 +328,7 @@ export class ExtrusionLayer<P = Properties> extends Layer {
 
 export const extrusionStyle = <P>(options: ExtrusionOptions<P>): ExtrusionStyle<P> => {
   const { data: _, before: __, ...rest } = options;
+
   return {
     opacity: 1,
     minZoom: 0,

@@ -39,7 +39,9 @@ fuzz_target!(|data: &[u8]| {
 
 fn fuzz_view() -> geo::camera::View {
     let mut camera = geo::camera::Camera::new(3.06, 50.63, 16.0);
+
     camera.width = 640.0;
     camera.height = 400.0;
+
     camera.view()
 }

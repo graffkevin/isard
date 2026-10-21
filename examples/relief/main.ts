@@ -49,6 +49,8 @@ const merc = ([lon, lat]: [number, number]) => [
 const [ax, ay] = merc(MONT_BLANC);
 map.on('hover', ({ lonLat }) => {
   if (!lonLat) return;
+
   const [x, y] = merc(lonLat);
+
   rings.setUniform('u_cursor', [(x ?? 0) - (ax ?? 0), (y ?? 0) - (ay ?? 0)]);
 });

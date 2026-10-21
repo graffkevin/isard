@@ -12,6 +12,6 @@ cpSync(join(root, 'examples'), target, {
   recursive: true,
   // The pages, their built scripts and the shared style; not the sources nor the packages
   filter: (source) =>
-    !/node_modules|\.ts$|package\.json|tsconfig|README/.test(source.slice(root.length)) || source.endsWith('.d.ts'),
+    !/node_modules|\.tsx?$|package\.json|tsconfig|README/.test(source.slice(root.length)) || source.endsWith('.d.ts'),
 });
 console.log(`examples copied to ${target}`);

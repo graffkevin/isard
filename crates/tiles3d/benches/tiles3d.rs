@@ -23,6 +23,7 @@ fn decoding(c: &mut Criterion) {
         4_900_910.163_547_64,
     ));
     let mut group = c.benchmark_group("decode");
+
     group.bench_function("b3dm", |b| {
         b.iter(|| decode::decode(black_box(B3DM), &DMat4::IDENTITY, true, &[]));
     });
@@ -43,15 +44,19 @@ fn meshopt_views(glb: &[u8]) -> Vec<(&[u8], usize, usize, Mode, Filter)> {
     let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_length]).expect("glb JSON");
     let bin = &glb[20 + json_length + 8..];
     let mut out = Vec::new();
+
     for view in json["bufferViews"].as_array().into_iter().flatten() {
         let ext = &view["extensions"]["EXT_meshopt_compression"];
+
         if ext.is_null() {
             continue;
         }
+
         let at = |key: &str| ext[key].as_u64().unwrap_or(0) as usize;
         let (offset, length) = (at("byteOffset"), at("byteLength"));
         let mode = Mode::parse(ext["mode"].as_str().unwrap_or("")).expect("meshopt mode");
         let filter = Filter::parse(ext["filter"].as_str()).expect("meshopt filter");
+
         out.push((
             &bin[offset..offset + length],
             at("count"),
@@ -60,13 +65,16 @@ fn meshopt_views(glb: &[u8]) -> Vec<(&[u8], usize, usize, Mode, Filter)> {
             filter,
         ));
     }
+
     out
 }
 
 fn meshopt_streams(c: &mut Criterion) {
     let mut group = c.benchmark_group("meshopt");
+
     for (name, glb) in [("plain", NOQ), ("quantized", Q), ("filtered", VPF)] {
         let views = meshopt_views(glb);
+
         assert!(!views.is_empty(), "{name}: no meshopt view");
         group.bench_function(name, |b| {
             b.iter(|| {
@@ -78,6 +86,7 @@ fn meshopt_streams(c: &mut Criterion) {
                         mode,
                         filter,
                     };
+
                     black_box(meshopt::decode(&view).expect("meshopt stream"));
                 }
             });
@@ -93,9 +102,12 @@ fn region_tile(region: [f64; 4], error: f64, depth: u32, out: &mut String) {
         out,
         r#"{{"boundingVolume":{{"region":[{w},{s},{e},{n},0,120]}},"geometricError":{error},"content":{{"uri":"t.glb"}}"#
     );
+
     if depth > 0 {
         out.push_str(r#","children":["#);
+
         let (mx, my) = (f64::midpoint(w, e), f64::midpoint(s, n));
+
         for (k, child) in [[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]]
             .into_iter()
             .enumerate()
@@ -115,19 +127,25 @@ fn tree_selection(c: &mut Criterion) {
     let (lon, lat) = (3.06f64.to_radians(), 50.63f64.to_radians());
     let half = 0.003;
     let mut root = String::new();
+
     region_tile([lon - half, lat - half, lon + half, lat + half], 256.0, 6, &mut root);
+
     let json = format!(r#"{{"asset":{{"version":"1.1"}},"geometricError":512,"root":{root}}}"#);
     let mut tree = Tree::default();
     let root = tree
         .add(json.as_bytes(), "https://example.org/tileset.json", None)
         .expect("tileset");
     let mut group = c.benchmark_group("tileset::select");
+
     for (name, zoom, pitch) in [("z13", 13.0, 0.0), ("z16 tilted", 16.0, 60.0)] {
         let mut camera = Camera::new(3.06, 50.63, zoom);
+
         camera.width = 1920.0;
         camera.height = 1080.0;
         camera.pitch = pitch;
+
         let view = camera.view();
+
         group.bench_function(name, |b| {
             b.iter(|| tileset::select(&tree, root, black_box(&view), 16.0, &|_| Readiness::Ready));
         });

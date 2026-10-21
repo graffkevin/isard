@@ -18,18 +18,22 @@ export const decodeHeights = (
 ): Float32Array => {
   const n = rgba.length >> 2;
   const out = new Float32Array(n);
+
   // A loop per encoding, without allocations: 65 536 pixels a tile
   if (encoding === 'terrarium') {
     for (let i = 0, j = 0; i < n; i += 1, j += 4) {
       const h = (rgba[j] as number) * 256 + (rgba[j + 1] as number) + (rgba[j + 2] as number) / 256 - 32768;
+
       out[i] = h > floor ? h : floor;
     }
   } else {
     for (let i = 0, j = 0; i < n; i += 1, j += 4) {
       const h = -10000 + ((rgba[j] as number) * 65536 + (rgba[j + 1] as number) * 256 + (rgba[j + 2] as number)) * 0.1;
+
       out[i] = h > floor ? h : floor;
     }
   }
+
   return out;
 };
 
@@ -50,21 +54,27 @@ export const fetchHeights = async (
   surface: Surface,
 ): Promise<Float32Array | null> => {
   const response = await fetch(url, withHeaders(url, { signal }));
+
   if (response.status === 404 || response.status === 204 || response.status === 410) return null;
   if (!response.ok) throw new Error(`${response.url}: ${response.status}`);
+
   // The colors as stored: no color management, no premultiplied alpha
   const bitmap = await createImageBitmap(await response.blob(), {
     premultiplyAlpha: 'none',
     colorSpaceConversion: 'none',
   });
+
   try {
     surface.canvas ??= new OffscreenCanvas(SIZE, SIZE);
+
     const g = surface.canvas.getContext('2d', { willReadFrequently: true });
+
     if (!g) throw new Error('no 2D context');
     // Another size is resampled to the nearest pixel: an interpolated color is no altitude
     g.imageSmoothingEnabled = false;
     g.clearRect(0, 0, SIZE, SIZE);
     g.drawImage(bitmap, 0, 0, SIZE, SIZE);
+
     return decodeHeights(g.getImageData(0, 0, SIZE, SIZE).data, encoding, floor);
   } finally {
     bitmap.close();
@@ -92,8 +102,10 @@ export const encodedTerrainLoader = (
   remote?: RemoteHeights,
 ): ((z: number, x: number, y: number, signal: AbortSignal) => Promise<Float32Array | null>) => {
   const surface: Surface = {};
+
   return (z, x, y, signal) => {
     const tile = url.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y));
+
     return remote?.(tile, encoding, floor, [z, x, y], signal) ?? fetchHeights(tile, encoding, floor, signal, surface);
   };
 };

@@ -31,7 +31,9 @@ pub fn load_in_worker(
         &JsValue::from_bool(y_up),
         &JsValue::from_bool(reload),
     );
+
     args.push(&JsValue::from_str(priority));
+
     load.apply(loader, &args).ok()?.dyn_into().ok()
 }
 
@@ -44,9 +46,11 @@ pub fn close(images: Vec<Option<web_sys::ImageBitmap>>) {
 /// Decodes the images of a mesh off the main thread (`createImageBitmap`), each once (`Mesh::images`)
 pub async fn decode_images(mesh: &Mesh) -> Vec<Option<web_sys::ImageBitmap>> {
     let mut out = Vec::new();
+
     for (bytes, mime) in &mesh.images {
         out.push(decode_image(bytes, mime).await.ok());
     }
+
     out
 }
 
@@ -54,12 +58,17 @@ async fn decode_image(bytes: &[u8], mime: &str) -> Result<web_sys::ImageBitmap, 
     let window = web_sys::window().ok_or("no window")?;
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let options = web_sys::BlobPropertyBag::new();
+
     options.set_type(mime);
+
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)?;
     let bitmap_options = web_sys::ImageBitmapOptions::new();
+
     bitmap_options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
+
     let bitmap =
         JsFuture::from(window.create_image_bitmap_with_blob_and_image_bitmap_options(&blob, &bitmap_options)?).await?;
+
     bitmap.dyn_into()
 }
 
@@ -74,19 +83,24 @@ pub async fn fetch_bytes(
 ) -> Result<Vec<u8>, JsValue> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
+
     init.set_signal(signal);
     crate::js::fetch_priority(&init, priority);
     crate::js::request_headers(&init, url, &[])?;
     if reload {
         init.set_cache(web_sys::RequestCache::Reload);
     }
+
     let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await?
         .dyn_into()?;
+
     if !response.ok() {
         return Err(JsValue::from(response.status()));
     }
+
     let buffer = JsFuture::from(response.array_buffer()?).await?;
+
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
@@ -97,25 +111,33 @@ pub async fn fetch_range(url: &str, start: u64, length: u64, priority: &str) -> 
     let window = web_sys::window().ok_or("no window")?;
     let controller = web_sys::AbortController::new().map_err(error)?;
     let init = web_sys::RequestInit::new();
+
     init.set_signal(Some(&controller.signal()));
     crate::js::fetch_priority(&init, priority);
+
     let end = start.saturating_add(length.max(1) - 1);
+
     crate::js::request_headers(&init, url, &[("Range", &format!("bytes={start}-{end}"))]).map_err(error)?;
+
     let response: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
         .await
         .map_err(error)?
         .dyn_into()
         .map_err(error)?;
+
     if !response.ok() {
         return Err(format!("HTTP {}", response.status()));
     }
     if response.status() != 206 {
         let size = response.headers().get("content-length").ok().flatten();
+
         if size.and_then(|s| s.parse::<u64>().ok()).is_none_or(|s| s > length) {
             controller.abort();
+
             return Err("the server ignores range requests (HTTP 206 expected)".into());
         }
     }
+
     let buffer = JsFuture::from(response.array_buffer().map_err(error)?)
         .await
         .map_err(error)?;
@@ -127,5 +149,6 @@ pub async fn fetch_range(url: &str, start: u64, length: u64, priority: &str) -> 
         start.min(u64::from(bytes.length())) as u32
     };
     let end = (u64::from(offset) + length).min(u64::from(bytes.length())) as u32;
+
     Ok(bytes.subarray(offset, end).to_vec())
 }

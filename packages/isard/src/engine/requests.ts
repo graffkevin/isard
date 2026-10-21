@@ -18,6 +18,7 @@ const listeners = new Set<(rules: HeaderRules) => void>();
  */
 export const setRequestHeaders = (prefix: string, headers?: Record<string, string>): void => {
   const kept = rules.filter(([p]) => p !== prefix);
+
   if (headers && Object.keys(headers).length > 0) kept.push([prefix, { ...headers }]);
   kept.sort(([p], [q]) => p.length - q.length);
   setHeaderRules(kept);
@@ -39,6 +40,7 @@ export const setHeaderRules = (next: HeaderRules): void => {
 /** @internal Follows the rules (the workers and engines of a map); returns the function that stops */
 export const onHeaderRules = (listener: (rules: HeaderRules) => void): (() => void) => {
   listeners.add(listener);
+
   return () => listeners.delete(listener);
 };
 
@@ -46,12 +48,16 @@ export const onHeaderRules = (listener: (rules: HeaderRules) => void): (() => vo
 export const withHeaders = <T extends RequestInit>(url: string | URL, init?: T): T => {
   const href = String(url);
   const matching = rules.filter(([prefix]) => href.startsWith(prefix));
+
   if (matching.length === 0) return init ?? ({} as T);
+
   const headers = new Headers(init?.headers);
+
   matching.forEach(([, set]) => {
     Object.entries(set).forEach(([name, value]) => {
       headers.set(name, value);
     });
   });
+
   return { ...(init ?? ({} as T)), headers };
 };

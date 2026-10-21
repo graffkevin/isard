@@ -136,6 +136,7 @@ impl Batch {
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.vertices);
             gl.delete_buffer(self.indices);
+
             if let Some(anchors) = self.anchors {
                 gl.delete_texture(anchors);
             }
@@ -168,6 +169,7 @@ impl ExtrusionLayer {
             &gl::fragment_shader(&[FRAGMENT]),
         )?;
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
+
         gl::sampler_units(
             gl,
             program,
@@ -176,6 +178,7 @@ impl ExtrusionLayer {
                 (uniforms[3].as_ref(), NETWORK_UNIT),
             ],
         );
+
         Ok(Self {
             program,
             uniforms,
@@ -205,29 +208,37 @@ impl ExtrusionLayer {
             .filter(|(k, _)| **k != key)
             .map(|(_, b)| b.features.count)
             .sum();
+
         overlay::pick_ids_fit(others + feature_count, "extrusion layer");
+
         let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
         let origin = (min + max) / 2.0;
         let mut blocks = shapes::extrude(polygons, origin);
         let chunks = shapes::chunk_blocks(&mut blocks);
+
         // Polygon numbers to features
         for v in &mut blocks.vertices {
             v.feature = feature.get(v.feature as usize).copied().unwrap_or(u32::MAX);
         }
+
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let vao = objects.vertex_array()?;
         let vertices = objects.buffer()?;
         let indices = objects.buffer()?;
         let mut features = Features::new(gl, feature_count, Layout::EXTRUSION)?;
+
         objects.keep();
         features.set_ramp(gl, self.ramp.as_ref().map(|(rgba, lo, hi)| (rgba.as_slice(), *lo, *hi)));
+
         // SAFETY: state setup and uploads of objects just created on the live context
         let batch = unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&blocks.vertices), glow::STATIC_DRAW);
+
             let stride = size_of::<shapes::Block>() as i32;
+
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
             gl.enable_vertex_attrib_array(1);
@@ -241,6 +252,7 @@ impl ExtrusionLayer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
             gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&blocks.indices), glow::STATIC_DRAW);
             gl.bind_vertex_array(None);
+
             Batch {
                 features,
                 vao,
@@ -258,9 +270,11 @@ impl ExtrusionLayer {
                 visible: Visible::default(),
             }
         };
+
         if let Some(old) = self.batches.insert(key, batch) {
             old.delete(gl);
         }
+
         Ok(())
     }
 
@@ -286,6 +300,7 @@ impl ExtrusionLayer {
     /// Ramp of every batch, present and future
     pub fn set_ramp(&mut self, gl: &glow::Context, ramp: Option<(&[u8], f32, f32)>) {
         self.ramp = ramp.map(|(rgba, lo, hi)| (rgba.to_vec(), lo, hi));
+
         for b in self.batches.values_mut() {
             b.features.set_ramp(gl, ramp);
         }
@@ -298,19 +313,25 @@ impl ExtrusionLayer {
         };
         let n = batch.features.count;
         let mut padded = vec![0f32; n * 4];
+
         for (i, a) in anchors.as_chunks::<4>().0.iter().take(n).enumerate() {
             padded[i * 4..i * 4 + 4].copy_from_slice(a);
         }
+
         let texture = if let Some(texture) = batch.anchors {
             texture
         } else {
             let texture = gl::table_texture(gl, glow::RGBA32F, n)?;
+
             batch.anchors = Some(texture);
+
             texture
         };
+
         // SAFETY: binding the anchors texture owned by this batch, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(texture)) };
         gl::upload_table(gl, bytes(&padded), n, glow::RGBA, glow::FLOAT, 16);
+
         Ok(())
     }
 
@@ -323,6 +344,7 @@ impl ExtrusionLayer {
             low,
             high + MAX_HEIGHT * view.vertical * f64::from(relief.map_or(1.0, |(_, e)| e)),
         );
+
         (heights, overlay::shift(batch.origin, view), batch.reach, true)
     }
 
@@ -337,10 +359,13 @@ impl ExtrusionLayer {
             ..
         } = frame;
         let [pick_base, linked, _, _, linked_max, layer, pick_u] = &self.uniforms;
+
         // SAFETY: draws with objects owned by this layer (and the linked network's values texture)
         unsafe {
             gl.use_program(Some(self.program));
+
             let viewport = (camera.width * pixel_ratio, camera.height * pixel_ratio);
+
             self.anchor.set_view(gl, view, viewport, false, 0.0);
             gl.uniform_1_f32(layer.as_ref(), f32::from(pick.unwrap_or(0)));
             gl.uniform_1_i32(pick_u.as_ref(), i32::from(pick.is_some()));
@@ -348,14 +373,18 @@ impl ExtrusionLayer {
             gl.active_texture(glow::TEXTURE0 + NETWORK_UNIT);
             gl.bind_texture(glow::TEXTURE_2D, self.link.map(|(_, t, _)| t));
             self.projection.set(gl, view);
+
             let mut base = 0u32;
+
             for batch in self.batches.values() {
                 let first = base;
+
                 // Batches out of view are skipped (their features still count for the picking ids)
                 base = base.wrapping_add(batch.features.count as u32);
                 if batch.count == 0 {
                     continue;
                 }
+
                 let ranges = if pick.is_some() {
                     overlay::pick_ranges(
                         &batch.visible,
@@ -367,12 +396,15 @@ impl ExtrusionLayer {
                 } else {
                     std::borrow::Cow::Borrowed(batch.visible.ranges())
                 };
+
                 if ranges.is_empty() {
                     continue;
                 }
                 self.anchor.set_origin(gl, view, batch.origin);
                 gl.uniform_1_u32(pick_base.as_ref(), first);
+
                 let is_linked = self.link.is_some() && batch.anchors.is_some();
+
                 gl.uniform_1_i32(linked.as_ref(), i32::from(is_linked));
                 gl.active_texture(glow::TEXTURE0 + ANCHORS_UNIT);
                 gl.bind_texture(glow::TEXTURE_2D, batch.anchors);
@@ -382,6 +414,7 @@ impl ExtrusionLayer {
                     .features
                     .bind(gl, &self.feature_uniforms, camera.zoom, pixel_ratio);
                 gl.bind_vertex_array(Some(batch.vao));
+
                 for &(first, end) in ranges.iter() {
                     gl.draw_elements(
                         glow::TRIANGLES,
@@ -409,20 +442,26 @@ impl Layer for ExtrusionLayer {
             batch.features.layer = self.layer;
             if let Some((source, _)) = frame.relief {
                 let pad = DVec2::splat(1e-6);
+
                 batch.drape.update(frame.gl, batch.min - pad, batch.max + pad, source);
             }
+
             let look = Self::look(frame, batch);
+
             batch.visible.update(&batch.grid, &batch.start, frame.view, look);
         }
+
         let gl = frame.gl;
         // A translucent color too (a feature's, or the ramp's): the faces behind would show through
         let translucent = self.layer.translucent() || self.batches.values().any(|b| b.features.colors_translucent());
         let depth = DepthState::solid(gl);
+
         if translucent {
             // Depth first: then each pixel is colored by its nearest face only
             // SAFETY: state changes on the live context, set back below and by the guard
             unsafe { gl.color_mask(false, false, false, false) };
             self.render(frame, None);
+
             // SAFETY: as above
             unsafe {
                 gl.color_mask(true, true, true, true);
@@ -432,6 +471,7 @@ impl Layer for ExtrusionLayer {
         }
         self.render(frame, None);
         drop(depth);
+
         false
     }
 
@@ -448,8 +488,10 @@ impl Layer for ExtrusionLayer {
         if !self.shows(frame.camera.zoom) {
             return;
         }
+
         // The blocks hide one another and what is drawn after them, and are hidden by the hills, as on screen
         let _depth = DepthState::solid(frame.gl);
+
         self.render(frame, Some(layer));
     }
 
@@ -474,6 +516,7 @@ impl Engine {
     #[wasm_bindgen(js_name = addExtrusions)]
     pub fn add_extrusions(&mut self) -> Result<u32, JsValue> {
         let layer = ExtrusionLayer::new(&self.gl)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -492,14 +535,17 @@ impl Engine {
         feature_count: usize,
     ) -> Result<(), JsValue> {
         let points = overlay::points(points);
+
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
             let polygons = Polygons {
                 points: &points,
                 ring_start,
                 polygon_start,
             };
+
             layer.set_batch(gl, key, &polygons, feature, feature_count)?;
         }
+
         Ok(())
     }
 
@@ -516,6 +562,7 @@ impl Engine {
     #[wasm_bindgen(js_name = linkExtrusionNetwork)]
     pub fn link_extrusion_network(&mut self, id: u32, network: Option<u32>, max: f32) {
         let values = network.and_then(|n| self.layer::<NetworkLayer>(n).map(|l| (n, l.values_texture())));
+
         if let Some((layer, _)) = self.layer_mut::<ExtrusionLayer>(id) {
             layer.link = values.map(|(n, texture)| (n, texture, max));
         }
@@ -527,6 +574,7 @@ impl Engine {
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
             layer.set_anchors(gl, key, anchors)?;
         }
+
         Ok(())
     }
 }

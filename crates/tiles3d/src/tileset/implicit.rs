@@ -21,6 +21,7 @@ pub(super) struct Coord {
 impl Coord {
     fn children(self, octree: bool) -> impl Iterator<Item = Self> {
         let n = if octree { 8 } else { 4 };
+
         (0..n).map(move |k| Self {
             level: self.level + 1,
             x: self.x * 2 + (k & 1),
@@ -43,18 +44,24 @@ impl Coord {
 fn morton(x: u32, y: u32, z: u32, octree: bool) -> u64 {
     let k = if octree { 3 } else { 2 };
     let mut m = 0u64;
+
     for i in 0..32u32 {
         let bit = |v: u32| u64::from((v >> i) & 1);
         let at = i * k;
+
         if at >= 64 {
             break;
         }
+
         let put = |v: u32, offset: u32| bit(v).checked_shl(at + offset).unwrap_or(0);
+
         m |= put(x, 0) | put(y, 1);
+
         if octree {
             m |= put(z, 2);
         }
     }
+
     m
 }
 
@@ -62,6 +69,7 @@ fn morton(x: u32, y: u32, z: u32, octree: bool) -> u64 {
 fn relative(subtree: &Subtree, tile: Coord, local: u32) -> (u32, u32, u32) {
     let r = subtree.root;
     let shift = |v: u32| v.checked_shl(local).unwrap_or(0);
+
     (
         tile.x.wrapping_sub(shift(r.x)),
         tile.y.wrapping_sub(shift(r.y)),
@@ -138,11 +146,13 @@ fn trim_padding(text: &[u8]) -> &[u8] {
         .iter()
         .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
         .map_or(0, |i| i + 1);
+
     &text[..end]
 }
 
 fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
     let b = bytes.get(at..at + 8)?;
+
     Some(u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
@@ -153,6 +163,7 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
         if bytes.get(4..8) != Some(&1u32.to_le_bytes()[..]) {
             return Err("subtree version 1 expected".into());
         }
+
         let json_length = u64_at(bytes, 8).and_then(|n| usize::try_from(n).ok()).ok_or_else(bad)?;
         let binary_length = u64_at(bytes, 16)
             .and_then(|n| usize::try_from(n).ok())
@@ -163,6 +174,7 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
             .checked_add(binary_length)
             .and_then(|end| bytes.get(json_end..end))
             .ok_or("truncated subtree")?;
+
         (
             serde_json::from_slice(trim_padding(text)).map_err(|e| format!("subtree: {e}"))?,
             binary,
@@ -177,15 +189,18 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
     let view = |i: usize| -> Result<&[u8], String> {
         let view = &json["bufferViews"][i];
         let buffer = &json["buffers"][index(&view["buffer"]).ok_or_else(bad)?];
+
         if !buffer.is_object() || !buffer["uri"].is_null() {
             return Err("subtree buffers outside the subtree file are unsupported".into());
         }
+
         let start = if view["byteOffset"].is_null() {
             0
         } else {
             index(&view["byteOffset"]).ok_or_else(bad)?
         };
         let length = index(&view["byteLength"]).ok_or_else(bad)?;
+
         start
             .checked_add(length)
             .and_then(|end| binary.get(start..end))
@@ -195,13 +210,16 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
         if let Some(c) = v["constant"].as_u64() {
             return Ok(Bits::Constant(c == 1));
         }
+
         let stream = index(&v["bitstream"])
             .or(index(&v["bufferView"]))
             .ok_or("subtree availability")?;
         let stream = view(stream)?;
+
         if (stream.len() as u64) < count.div_ceil(8) {
             return Err("subtree availability too short".into());
         }
+
         Ok(Bits::Stream(stream.to_vec()))
     };
     let n = tiling.branching();
@@ -212,6 +230,7 @@ fn parse_subtree(bytes: &[u8], url: &str, root: Coord, tiling: &Implicit) -> Res
         Value::Null => Vec::new(),
         one => vec![one],
     };
+
     Ok(Subtree {
         root,
         url: url.to_owned(),
@@ -246,6 +265,7 @@ impl Tree {
             .map_or_else(|| tile.fill(&tiling.subtrees), |s| s.url.clone());
         let base = tiling.base(tile, depth);
         let index = self.push(&base, vec![Content::Tileset(url)]);
+
         self.pending.insert(
             index,
             Placeholder {
@@ -254,6 +274,7 @@ impl Tree {
                 subtree,
             },
         );
+
         index
     }
 
@@ -271,16 +292,22 @@ impl Tree {
             Some(s) => s,
             None => Rc::new(parse_subtree(bytes, url, tile, &tiling)?),
         };
+
         // Once expanded the placeholder is a plain empty node
         self.nodes[p].content = Content::None;
+
         let local = tile.level - subtree.root.level;
+
         if !subtree.tiles.get(tiling.bit(&subtree, tile, local)) {
             return Ok(p);
         }
+
         let depth = self.nodes[p].depth + 1;
         let chunk = CHUNK_LEVELS[usize::from(tiling.octree)];
         let node = self.expand_tile(&tiling, &subtree, tile, chunk, depth);
+
         self.nodes[p].children.push(node);
+
         Ok(node)
     }
 
@@ -304,6 +331,7 @@ impl Tree {
             .map(|(template, _)| classify("", &tile.fill(template)))
             .collect();
         let index = self.push(&tiling.base(tile, depth), contents);
+
         if tile.level + 1 >= tiling.available_levels {
             return index;
         }
@@ -311,6 +339,7 @@ impl Tree {
             let node = if local + 1 == tiling.subtree_levels {
                 // The root of a child subtree
                 let (x, y, z) = relative(subtree, child, local + 1);
+
                 subtree
                     .children
                     .get(morton(x, y, z, tiling.octree))
@@ -322,10 +351,12 @@ impl Tree {
             } else {
                 Some(self.placeholder(tiling, child, Some(subtree.clone()), depth + 1))
             };
+
             if let Some(node) = node {
                 self.nodes[index].children.push(node);
             }
         }
+
         index
     }
 }
@@ -343,21 +374,27 @@ impl Implicit {
             "OCTREE" => true,
             other => return Err(format!("implicit tiling {other} unsupported")),
         };
+
         if matches!(volume, Volume::Sphere(_)) {
             return Err("implicit tiling of a bounding sphere".into());
         }
+
         let subtree_levels = json.subtree_levels;
+
         if subtree_levels == 0 || subtree_levels > MAX_SUBTREE_LEVELS[usize::from(octree)] {
             return Err("implicit tiling: bad subtreeLevels".into());
         }
+
         let available_levels = json
             .available_levels
             .or(json.maximum_level.map(|m| m.saturating_add(1)))
             .ok_or("implicit tiling without availableLevels")?
             .min(MAX_LEVELS);
+
         if available_levels == 0 {
             return Err("implicit tiling: bad availableLevels".into());
         }
+
         Ok(Self {
             octree,
             subtree_levels,
@@ -376,6 +413,7 @@ impl Implicit {
     fn bit(&self, subtree: &Subtree, tile: Coord, local: u32) -> u64 {
         let n = self.branching();
         let (x, y, z) = relative(subtree, tile, local);
+
         (n.pow(local) - 1) / (n - 1) + morton(x, y, z, self.octree)
     }
 
@@ -386,6 +424,7 @@ impl Implicit {
             .subdivide(tile, self.octree)
             .sphere(&self.transform)
             .unwrap_or((DVec3::ZERO, 0.0));
+
         Base {
             center,
             radius,
@@ -420,37 +459,49 @@ mod tests {
             r(50.68)
         );
         let mut tree = Tree::default();
+
         tree.add(json.as_bytes(), "https://example.org/implicit/tileset.json?key=1", None)
             .unwrap();
+
         tree
     }
 
     /// A binary subtree file
     fn subtree_file(json: &str, binary: &[u8]) -> Vec<u8> {
         let mut text = json.as_bytes().to_vec();
+
         while !text.len().is_multiple_of(8) {
             text.push(b' ');
         }
+
         let mut out = b"subt".to_vec();
+
         out.extend(1u32.to_le_bytes());
         out.extend((text.len() as u64).to_le_bytes());
         out.extend((binary.len() as u64).to_le_bytes());
         out.extend(text);
         out.extend(binary);
+
         out
     }
 
     #[test]
     fn implicit_tiling_grows_from_its_subtrees() {
         let mut tree = implicit();
+
         assert_eq!(tree.nodes.len(), 1);
+
         let url = |s: &str| format!("https://example.org/implicit/{s}?key=1");
+
         assert_eq!(tree.nodes[0].content, Content::Tileset(url("subtrees/0/0/0.subtree")));
+
         // Subtree 0/0/0: the root (no content), tiles 1/0/0 and 1/1/1 (with content), subtree 2/0/0 below
         let mut binary = vec![0u8; 24];
+
         binary[0] = 0b1_0011;
         binary[8] = 0b1_0010;
         binary[16] = 0b1;
+
         let file = subtree_file(
             r#"{"buffers":[{"byteLength":24}],"bufferViews":[
                 {"buffer":0,"byteOffset":0,"byteLength":1},{"buffer":0,"byteOffset":8,"byteLength":1},
@@ -459,27 +510,37 @@ mod tests {
                 "childSubtreeAvailability":{"bitstream":2}}"#,
             &binary,
         );
+
         assert!(!tree.expandable(0));
+
         let root = tree.add(&file, &url("subtrees/0/0/0.subtree"), Some(0)).unwrap();
+
         assert_eq!(tree.nodes[0].content, Content::None, "the placeholder, once expanded");
         assert_eq!(tree.nodes[0].children, [root]);
         assert_eq!(tree.nodes[root].content, Content::None);
+
         let children: Vec<&Node> = tree.nodes[root].children.iter().map(|&c| &tree.nodes[c]).collect();
+
         assert_eq!(children.len(), 2);
         assert_eq!(children[0].content, Content::Mesh(url("content/1/0/0.glb")));
         assert_eq!(children[1].content, Content::Mesh(url("content/1/1/1.glb")));
         assert!((children[0].error - 250.0).abs() < 1e-9);
+
         // The south-west child is west and south of the north-east one
         let (a, b) = (children[0].geodetic, children[1].geodetic);
+
         assert!(a.x < b.x && a.y < b.y, "{a} {b}");
         // Below 1/0/0, the placeholder of subtree 2/0/0
         assert_eq!(children[0].children.len(), 1);
         assert_eq!(children[1].children, Vec::<usize>::new());
+
         let placeholder = children[0].children[0];
+
         assert_eq!(
             tree.nodes[placeholder].content,
             Content::Tileset(url("subtrees/2/0/0.subtree"))
         );
+
         // Subtree 2/0/0 in JSON, everything available: its root and 4 children, the last level
         let before = tree.nodes.len();
         let constant = br#"{"tileAvailability":{"constant":1},"contentAvailability":[{"constant":1}],
@@ -487,6 +548,7 @@ mod tests {
         let sub = tree
             .add(constant, &url("subtrees/2/0/0.subtree"), Some(placeholder))
             .unwrap();
+
         assert_eq!(tree.nodes.len(), before + 5);
         assert_eq!(tree.nodes[sub].content, Content::Mesh(url("content/2/0/0.glb")));
         assert_eq!(tree.nodes[sub].children.len(), 4);
@@ -496,14 +558,18 @@ mod tests {
                 .iter()
                 .all(|&c| tree.nodes[c].children.is_empty())
         );
+
         // The traversal goes through the placeholders down to the fine tiles
         let mut c = Camera::new(3.015, 50.5925, 17.0);
+
         c.width = 1200.0;
         c.height = 800.0;
+
         let s = select(&tree, 0, &c.view(), 16.0, &|i| match tree.nodes[i].content {
             Content::Mesh(_) => Readiness::Ready,
             _ => Readiness::Empty,
         });
+
         assert!(s.draw.iter().any(|&i| tree.nodes[i].depth >= 4), "{s:?}");
     }
 
@@ -522,10 +588,13 @@ mod tests {
             r(50.68)
         );
         let mut tree = Tree::default();
+
         tree.add(json.as_bytes(), "https://example.org/o/tileset.json", None)
             .unwrap();
+
         let constant = br#"{"tileAvailability":{"constant":1},"contentAvailability":[{"constant":1}],
             "childSubtreeAvailability":{"constant":0}}"#;
+
         tree.add(constant, "https://example.org/o/s/0/0/0/0.json", Some(0))
             .unwrap();
         // 3 levels (1 + 8 + 64 tiles), then 512 placeholders expanding from memory
@@ -535,10 +604,14 @@ mod tests {
             tree.nodes[1].content,
             Content::Mesh("https://example.org/o/c/0/0/0/0".into())
         );
+
         let placeholder = tree.nodes.len() - 1;
+
         assert!(tree.expandable(placeholder));
+
         let before = tree.nodes.len();
         let tile = tree.add(&[], "", Some(placeholder)).unwrap();
+
         assert_eq!(tree.nodes.len(), before + 73);
         assert_eq!(
             tree.nodes[tile].content,
@@ -556,16 +629,22 @@ mod tests {
                 "tileAvailability":{"bitstream":0},"childSubtreeAvailability":{"bitstream":0}}"#,
             &[0xff],
         );
+
         assert!(tree.add(&short, "", Some(0)).is_err());
+
         let mut tree = implicit();
         let external = br#"{"buffers":[{"byteLength":8,"uri":"a.bin"}],"bufferViews":[{"buffer":0,"byteLength":8}],
             "tileAvailability":{"bitstream":0},"childSubtreeAvailability":{"constant":0}}"#;
+
         assert!(tree.add(external, "", Some(0)).is_err());
+
         let mut tree = implicit();
+
         assert!(
             tree.add(b"subt\x01\0\0\0\xff\xff\xff\xff\xff\xff\xff\xff", "", Some(0))
                 .is_err()
         );
+
         // Schemes and levels
         for implicit in [
             r#""subdivisionScheme":"S2","subtreeLevels":2,"availableLevels":2"#,
@@ -577,6 +656,7 @@ mod tests {
                 r#"{{"asset":{{"version":"1.1"}},"geometricError":1,"root":{{"boundingVolume":{{"region":[0,0,0.1,0.1,0,1]}},
                 "geometricError":1,"implicitTiling":{{{implicit},"subtrees":{{"uri":"s"}}}}}}}}"#
             );
+
             assert!(Tree::default().add(json.as_bytes(), "", None).is_err(), "{implicit}");
         }
     }
@@ -584,9 +664,11 @@ mod tests {
     #[test]
     fn mutated_subtrees_never_panic() {
         let mut binary = vec![0u8; 24];
+
         binary[0] = 0b1_0011;
         binary[8] = 0b1_0010;
         binary[16] = 0b1;
+
         let file = subtree_file(
             r#"{"buffers":[{"byteLength":24}],"bufferViews":[
                 {"buffer":0,"byteOffset":0,"byteLength":1},{"buffer":0,"byteOffset":8,"byteLength":1},
@@ -600,16 +682,22 @@ mod tests {
             r ^= r << 13;
             r ^= r >> 7;
             r ^= r << 17;
+
             (r % n as u64) as usize
         };
+
         for _ in 0..3000 {
             let mut bytes = file.clone();
+
             for _ in 0..=next(4) {
                 let i = next(bytes.len());
+
                 bytes[i] = [0, 0xff, b'9', b'"', b'{', next(256) as u8][next(6)];
             }
             bytes.truncate(bytes.len() - next(8));
+
             let mut tree = implicit();
+
             if tree.add(&bytes, "", Some(0)).is_ok() {
                 let _ = select(&tree, 0, &view(16.0), 16.0, &|_| Readiness::Pending);
             }

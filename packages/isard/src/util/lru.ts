@@ -18,10 +18,12 @@ export class Lru<K, V> {
   /** The value of a key, now the most recently used; undefined if absent */
   get(key: K): V | undefined {
     const value = this.entries.get(key);
+
     if (value !== undefined) {
       this.entries.delete(key);
       this.entries.set(key, value);
     }
+
     return value;
   }
 

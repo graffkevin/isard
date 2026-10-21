@@ -40,6 +40,7 @@ impl Volume {
                 let half = DVec3::new(b[3], b[4], b[5]).length_squared()
                     + DVec3::new(b[6], b[7], b[8]).length_squared()
                     + DVec3::new(b[9], b[10], b[11]).length_squared();
+
                 (
                     transform.transform_point3(DVec3::new(b[0], b[1], b[2])),
                     half.sqrt() * scale,
@@ -51,19 +52,25 @@ impl Volume {
                 let (lon, lat) = (f64::midpoint(west, east), f64::midpoint(south, north));
                 let center = geodesy::to_ecef(lon.to_degrees(), lat.to_degrees(), f64::midpoint(low, high));
                 let mut radius = 0f64;
+
                 for i in 0..=4 {
                     let x = west + (east - west) * f64::from(i) / 4.0;
+
                     for j in 0..=4 {
                         let y = south + (north - south) * f64::from(j) / 4.0;
+
                         for h in [low, high] {
                             let p = geodesy::to_ecef(x.to_degrees(), y.to_degrees(), h);
+
                             radius = radius.max(p.distance(center));
                         }
                     }
                 }
+
                 (center, radius)
             }
         };
+
         if center.is_finite() && radius.is_finite() && radius >= 0.0 {
             Ok((center, radius))
         } else {
@@ -77,6 +84,7 @@ impl Volume {
         let d = f64::from(t.level).exp2();
         // Center of index `i` along a halved axis, in -1..1
         let f = |i: u32| (2.0 * f64::from(i) + 1.0) / d - 1.0;
+
         match *self {
             Self::Box(b) => {
                 let axis = |k: usize| DVec3::new(b[k], b[k + 1], b[k + 2]);
@@ -84,17 +92,20 @@ impl Volume {
                 let c = axis(0) + x * f(t.x) + y * f(t.y) + if octree { z * f(t.z) } else { DVec3::ZERO };
                 let z = if octree { z / d } else { z };
                 let (x, y) = (x / d, y / d);
+
                 Self::Box([c.x, c.y, c.z, x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z])
             }
             Self::Region([west, south, east, north, low, high]) => {
                 let east = if east < west { east + TAU } else { east };
                 let part = |lo: f64, hi: f64, i: u32| {
                     let step = (hi - lo) / d;
+
                     (lo + step * f64::from(i), lo + step * (f64::from(i) + 1.0))
                 };
                 let (w, e) = part(west, east, t.x);
                 let (s, n) = part(south, north, t.y);
                 let (l, h) = if octree { part(low, high, t.z) } else { (low, high) };
+
                 Self::Region([w, s, e, n, l, h])
             }
             Self::Sphere(_) => *self,
@@ -116,22 +127,27 @@ mod tests {
         );
         let region = Volume::Region([w, s, e, n, 0.0, 200.0]);
         let (center, radius) = region.sphere(&DMat4::IDENTITY).unwrap();
+
         for lon in [w, e] {
             for lat in [s, n] {
                 for h in [0.0, 200.0] {
                     let p = geodesy::to_ecef(lon.to_degrees(), lat.to_degrees(), h);
+
                     assert!(p.distance(center) <= radius + 1e-6);
                 }
             }
         }
         assert!(radius < 7000.0, "{radius}");
+
         // A box 2 km × 2 km × 100 m, moved by its transform
         let c = geodesy::to_ecef(3.06, 50.63, 0.0);
         let [east, north, up] = geodesy::enu(3.06, 50.63);
         let (x, y, z) = (east * 1000.0, north * 1000.0, up * 50.0);
         let b = Volume::Box([0.0, 0.0, 0.0, x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z]);
         let (center, radius) = b.sphere(&DMat4::from_translation(c)).unwrap();
+
         assert!(center.distance(c) < 1e-6 && (radius - (2e6f64 + 2500.0).sqrt()).abs() < 1e-6);
+
         // Implicit subdivision: the quadtree tile (1, 1, 0) is the east-south quarter
         let Volume::Box(q) = b.subdivide(
             Coord {
@@ -145,12 +161,14 @@ mod tests {
             panic!()
         };
         let qc = DVec3::new(q[0], q[1], q[2]);
+
         assert!((qc - (x * 0.5 - y * 0.5)).length() < 1e-9);
         assert!((DVec3::new(q[3], q[4], q[5]) - x * 0.5).length() < 1e-9);
         assert!(
             (DVec3::new(q[9], q[10], q[11]) - z).length() < 1e-9,
             "z kept by a quadtree"
         );
+
         let Volume::Region(r) = region.subdivide(
             Coord {
                 level: 2,
@@ -162,6 +180,7 @@ mod tests {
         ) else {
             panic!()
         };
+
         assert!(
             (r[0] - (w + (e - w) * 0.75)).abs() < 1e-12 && (r[4] - 50.0).abs() < 1e-9 && (r[5] - 100.0).abs() < 1e-9
         );

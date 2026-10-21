@@ -34,11 +34,14 @@ const isometric = (phi: number, e: number) => Math.atanh(Math.sin(phi)) - e * Ma
 /** Latitude (radians) of an isometric latitude, by fixed-point iteration (converges by e² at each step) */
 const fromIsometric = (psi: number, e: number): number => {
   let phi = Math.asin(Math.tanh(psi));
+
   for (let i = 0; i < 20; i += 1) {
     const next = Math.asin(Math.tanh(psi + e * Math.atanh(e * Math.sin(phi))));
+
     if (Math.abs(next - phi) < 1e-15) return next;
     phi = next;
   }
+
   return phi;
 };
 
@@ -70,10 +73,12 @@ export const lambertConformalConic = (p: {
   const aF = (a * m(phi1) * Math.exp(n * isometric(phi1, e))) / n;
   const r0 = aF * Math.exp(-n * isometric(p.lat0 * RAD, e));
   const lon0 = p.lon0 * RAD;
+
   return {
     forward: ([lon, lat]) => {
       const r = aF * Math.exp(-n * isometric(lat * RAD, e));
       const theta = n * wrap(lon * RAD - lon0);
+
       return [p.x0 + r * Math.sin(theta), p.y0 + r0 - r * Math.cos(theta)];
     },
     inverse: ([x, y]) => {
@@ -81,6 +86,7 @@ export const lambertConformalConic = (p: {
       const [dx, dy] = [x - p.x0, r0 - (y - p.y0)];
       const r = s * Math.hypot(dx, dy);
       const theta = Math.atan2(s * dx, s * dy);
+
       return [(theta / n + lon0) / RAD, fromIsometric(-Math.log(r / aF) / n, e) / RAD];
     },
   };
@@ -123,14 +129,18 @@ export const transverseMercator = (p: {
   /** ξ, η moved by the series of coefficients `c`, added (forward) or subtracted (inverse) */
   const series = (xi: number, eta: number, c: number[], sign: number): [number, number] => {
     let [x, y] = [xi, eta];
+
     c.forEach((k, j) => {
       const w = 2 * (j + 1);
+
       x += sign * k * Math.sin(w * xi) * Math.cosh(w * eta);
       y += sign * k * Math.cos(w * xi) * Math.sinh(w * eta);
     });
+
     return [x, y];
   };
   const lon0 = p.lon0 * RAD;
+
   return {
     forward: ([lon, lat]) => {
       const lambda = wrap(lon * RAD - lon0);
@@ -142,11 +152,13 @@ export const transverseMercator = (p: {
         alpha,
         1,
       );
+
       return [p.x0 + kA * eta, p.y0 + kA * xi];
     },
     inverse: ([x, y]) => {
       const [xi, eta] = series((y - p.y0) / kA, (x - p.x0) / kA, beta, -1);
       const t = Math.sin(xi) / Math.hypot(Math.sinh(eta), Math.cos(xi));
+
       return [(lon0 + Math.atan2(Math.sinh(eta), Math.cos(xi))) / RAD, fromIsometric(Math.asinh(t), e) / RAD];
     },
   };
@@ -177,11 +189,16 @@ const made = new Map<number, Crs>();
  */
 export const epsgCode = (name: string): number | undefined => {
   const n = name.trim().toUpperCase();
+
   if (/CRS:?84$/.test(n) || n === 'IGNF:WGS84G') return 4326;
   if (n === 'IGNF:LAMB93') return 2154;
+
   const code = /EPSG(?::+|\/)(?:[\d.]+[:/]+)?(\d+)$/.exec(n)?.[1];
+
   if (code === undefined) return undefined;
+
   const c = Number(code);
+
   return c === 900913 || c === 3785 || c === 102100 || c === 102113 ? 3857 : c;
 };
 
@@ -195,24 +212,30 @@ const builtin = (code: number): Crs | undefined => {
   if (code >= 3942 && code <= 3950) {
     const lat0 = code - 3900;
     const y0 = (lat0 - 41) * 1000000 + 200000;
+
     return lambertConformalConic({ lat0, lon0: 3, lat1: lat0 - 0.75, lat2: lat0 + 0.75, x0: 1700000, y0 });
   }
+
   const utm = (zone: number, south: boolean, ellipsoid: Ellipsoid) =>
     transverseMercator({ ellipsoid, lon0: zone * 6 - 183, k0: 0.9996, x0: 500000, y0: south ? 10000000 : 0 });
+
   if (code >= 32601 && code <= 32660) return utm(code - 32600, false, WGS84);
   if (code >= 32701 && code <= 32760) return utm(code - 32700, true, WGS84);
   if (code >= 25828 && code <= 25838) return utm(code - 25800, false, GRS80);
+
   return undefined;
 };
 
 /** Whether a CRS name is longitudes and latitudes (needs no reprojection) */
 export const isGeographic = (name: string): boolean => {
   const code = epsgCode(name);
+
   return !registered.has(normalize(name)) && code !== undefined && builtin(code) === GEOGRAPHIC;
 };
 
 const normalize = (name: string) => {
   const code = epsgCode(name);
+
   return code === undefined ? name.trim().toUpperCase() : `EPSG:${code}`;
 };
 
@@ -227,13 +250,19 @@ export const registerCrs = (name: string, crs: Crs): void => {
 /** The CRS of a name (registered or built in), or the CRS given; throws for an unknown name */
 export const getCrs = (crs: CrsLike): Crs => {
   if (typeof crs !== 'string') return crs;
+
   const found = registered.get(normalize(crs));
+
   if (found) return found;
+
   const code = epsgCode(crs);
+
   if (code !== undefined) {
     const c = made.get(code) ?? builtin(code);
+
     if (c) {
       made.set(code, c);
+
       return c;
     }
   }
@@ -244,6 +273,7 @@ export const getCrs = (crs: CrsLike): Crs => {
 export const crsOf = (data: unknown): string | undefined => {
   const member = (data as { crs?: { properties?: { name?: unknown } } } | null)?.crs;
   const name = member?.properties?.name;
+
   return typeof name === 'string' ? name : undefined;
 };
 
@@ -276,18 +306,23 @@ export const reproject = <P>(data: FeatureData<P>, from?: CrsLike): FeatureColle
   const featuresOf = (): Feature<P>[] => {
     if (Array.isArray(data)) return data;
     if (data.type === 'FeatureCollection') return data.features;
+
     return [data];
   };
   const features = featuresOf();
   const source = from ?? crsOf(data);
+
   if (source === undefined || (typeof source === 'string' && isGeographic(source))) {
     return { type: 'FeatureCollection', features };
   }
+
   const crs = getCrs(source);
   const f = (p: Position): Position => {
     const [lon, lat] = crs.inverse([p[0], p[1]]);
+
     return [lon ?? Number.NaN, lat ?? Number.NaN, ...p.slice(2)];
   };
+
   return {
     type: 'FeatureCollection',
     features: features.map(

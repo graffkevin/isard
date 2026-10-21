@@ -13,17 +13,22 @@ const ATTRIBUTES: [(u32, i32, i32); 3 + 3 * STACK] = attributes();
 
 const fn attributes() -> [(u32, i32, i32); 3 + 3 * STACK] {
     let mut out = [(0, 0, 0); 3 + 3 * STACK];
+
     out[0] = (1, 4, 0);
     out[1] = (2, 4, 16);
+
     let mut k = 0;
+
     while k < STACK {
         let base = 32 + k as i32 * 44;
+
         out[2 + 3 * k] = (3 + 3 * k as u32, 4, base);
         out[3 + 3 * k] = (4 + 3 * k as u32, 4, base + 16);
         out[4 + 3 * k] = (5 + 3 * k as u32, 3, base + 32);
         k += 1;
     }
     out[2 + 3 * STACK] = (15, 4, 32 + STACK as i32 * 44);
+
     out
 }
 
@@ -42,6 +47,7 @@ impl Stack {
         let stride = (INSTANCE * 4) as i32;
         let vao = objects.vertex_array()?;
         let instances = objects.buffer()?;
+
         // SAFETY: state setup of objects just created on a live WebGL2 context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -53,6 +59,7 @@ impl Stack {
                 gl.vertex_attrib_divisor(location, 1);
             }
             gl.bind_vertex_array(None);
+
             Ok(Self {
                 vao,
                 instances,
@@ -85,11 +92,13 @@ fn source_uniforms(sources: &[&mut RasterSource], n: usize) -> ([f32; STACK], [f
     let mut opacity = [0f32; STACK];
     let mut saturation = [1f32; STACK];
     let mut clip = [0f32; 2 * STACK];
+
     for (k, source) in sources.iter().take(n).enumerate() {
         opacity[k] = source.options.opacity;
         saturation[k] = source.options.saturation;
         clip[2 * k..2 * k + 2].copy_from_slice(&source.clip);
     }
+
     (opacity, saturation, clip)
 }
 
@@ -101,7 +110,9 @@ impl RasterPass {
         let program = objects.program(&vertex, FRAGMENT)?;
         let depth = objects.program(&vertex, DEPTH_FRAGMENT)?;
         let stacks = [Stack::new(gl, grid, &mut objects)?, Stack::new(gl, grid, &mut objects)?];
+
         objects.keep();
+
         Ok(Self {
             program,
             uniforms: gl::uniforms(
@@ -152,15 +163,19 @@ impl RasterPass {
     ) -> Option<f32> {
         let ground = &self.stacks[0];
         let (count, relief) = ground.last?;
+
         // SAFETY: draws with the vertex array and instances owned by this pass; the pointers are set back after
         unsafe {
             gl.bind_vertex_array(Some(ground.vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(ground.instances));
+
             // Runs of consecutive accepted tiles, each one draw
             let mut run: Option<usize> = None;
             let n = (count as usize).min(ground.tiles.len());
+
             for i in 0..=n {
                 let accepted = i < n && keep(ground.tiles[i].0, ground.tiles[i].1);
+
                 match (run, accepted) {
                     (None, true) => run = Some(i),
                     (Some(first), false) => {
@@ -174,6 +189,7 @@ impl RasterPass {
             Self::point_at(gl, 0);
             gl.bind_vertex_array(None);
         }
+
         Some(relief)
     }
 
@@ -181,6 +197,7 @@ impl RasterPass {
     unsafe fn point_at(gl: &glow::Context, first: usize) {
         let stride = (INSTANCE * 4) as i32;
         let base = first as i32 * stride;
+
         // SAFETY: the caller bound the vertex array and the instance buffer
         unsafe {
             for (location, size, offset) in ATTRIBUTES {
@@ -197,6 +214,7 @@ impl RasterPass {
             return;
         };
         let [matrix, heights, relief_u] = &self.depth_uniforms;
+
         // SAFETY: draw with objects owned by this pass and the terrain's pool
         unsafe {
             gl.use_program(Some(self.depth));
@@ -229,13 +247,18 @@ impl RasterPass {
         fog: Option<([f32; 3], [f32; 2])>,
     ) {
         let n = sources.len().min(STACK);
+
         if n == 0 {
             return;
         }
+
         let stack = &mut self.stacks[self.drawn.min(1)];
+
         self.drawn += 1;
         self.data.clear();
+
         let tiles = std::mem::take(&mut sources[0].plan.tiles);
+
         stack.tiles.clear();
         stack.tiles.extend(tiles.iter().map(|t| t.bounds()));
         for &tile in &tiles {
@@ -244,6 +267,7 @@ impl RasterPass {
             // Plane positions here; the sphere ones are computed on the GPU from the Mercator rect
             let plane = |m: glam::DVec2| (glam::DVec2::new(m.x + shift, m.y) - view.center) * view.world_size;
             let (a, b) = (plane(min), plane(max));
+
             self.data
                 .extend_from_slice(&[a.x as f32, a.y as f32, b.x as f32, b.y as f32]);
             self.data
@@ -254,19 +278,25 @@ impl RasterPass {
             for _ in n..STACK {
                 Sample::NONE.write(&mut self.data);
             }
+
             let heights = terrain
                 .as_mut()
                 .map_or([0.0, 0.0, 1.0, -1.0], |(source, _)| source.heights(tile, frame));
+
             self.data.extend_from_slice(&heights);
         }
         sources[0].plan.tiles = tiles;
+
         let (opacity, saturation, clip) = source_uniforms(sources, n);
         let count = (self.data.len() / INSTANCE) as i32;
         let relief = terrain.as_ref().map_or(0.0, |(_, exaggeration)| *exaggeration);
+
         stack.last = Some((count, relief));
+
         // SAFETY: draw with objects owned by this pass and the sources' pools
         unsafe {
             gl.use_program(Some(self.program));
+
             let [
                 matrix,
                 count_u,
@@ -284,6 +314,7 @@ impl RasterPass {
                 clip_u,
             ] = &self.uniforms;
             let ([r, g, b], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
+
             gl.uniform_3_f32(eye.as_ref(), view.eye.x as f32, view.eye.y as f32, view.eye.z as f32);
             gl.uniform_3_f32(fog_u.as_ref(), r, g, b);
             gl.uniform_2_f32(fog_range.as_ref(), start, end);
@@ -307,7 +338,9 @@ impl RasterPass {
             gl.active_texture(glow::TEXTURE0);
             // The shader composites the stack and outputs premultiplied alpha
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+
             let lifted = relief > 0.0;
+
             if lifted {
                 // In relief the ground hides itself (hills) and the 3D layers drawn after; the skirts hang either side
                 gl.enable(glow::DEPTH_TEST);
@@ -339,6 +372,7 @@ impl RasterPass {
         unsafe {
             gl.delete_program(self.program);
             gl.delete_program(self.depth);
+
             for stack in &self.stacks {
                 gl.delete_vertex_array(stack.vao);
                 gl.delete_buffer(stack.instances);
@@ -355,10 +389,13 @@ mod tests {
     fn instance_attributes_cover_the_instance() {
         // The heights come last, at the end of the instance
         let (location, size, offset) = ATTRIBUTES[ATTRIBUTES.len() - 1];
+
         assert_eq!((location, size), (15, 4));
         assert_eq!(offset as usize + 16, INSTANCE * 4);
+
         // Locations 1 to 15, each once
         let mut locations: Vec<u32> = ATTRIBUTES.iter().map(|a| a.0).collect();
+
         locations.sort_unstable();
         assert_eq!(locations, (1..=15).collect::<Vec<_>>());
     }

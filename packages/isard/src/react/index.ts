@@ -60,6 +60,7 @@ export const useMap = (): GeoMap | undefined => {
 export const useMapEvent = <K extends keyof MapEvents>(type: K, listener: (event: MapEvents[K]) => void): void => {
   const map = useMap();
   const latest = useRef(listener);
+
   latest.current = listener;
   useEffect(() => map?.on(type, (event) => latest.current(event)), [map, type]);
 };
@@ -148,15 +149,19 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
   const element = useRef<HTMLDivElement>(null);
   const [binding, setBinding] = useState<Binding>();
   const latest = useRef(props);
+
   latest.current = props;
   useImperativeHandle(ref, () => binding?.map, [binding]);
 
   useEffect(() => {
     const container = element.current;
+
     if (!container) return;
+
     let cancelled = false;
     let created: GeoMap | undefined;
     const { camera, center, zoom, pitch, bearing, children: _, ...options } = latest.current;
+
     GeoMap.create(container, {
       ...stripProps(options),
       ...defined({ center, zoom, pitch, bearing }),
@@ -166,10 +171,13 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
         // Unmounted while the engine was loading (or StrictMode's second mount): that map is not wanted
         if (cancelled) {
           map.destroy();
+
           return;
         }
         created = map;
+
         const viewsheds = new Map<object, ViewshedOptions>();
+
         setBinding({
           map,
           order: new LayerOrder(),
@@ -184,6 +192,7 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
         else console.error(error);
       },
     );
+
     return () => {
       cancelled = true;
       created?.destroy();
@@ -193,13 +202,16 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
 
   // The events, each listened to once: the props may give another function at each render
   const map = binding?.map;
+
   useEffect(() => {
     if (!map) return;
+
     const offs = Object.entries(EVENT_PROPS).map(([prop, type]) =>
       map.on(type, (event) =>
         (latest.current[prop as keyof MapEventProps] as ((e: unknown) => void) | undefined)?.(event),
       ),
     );
+
     return () => {
       offs.forEach((off) => {
         off();
@@ -209,11 +221,16 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
 
   // The options taken again, compared with what the map was given last
   const applied = useRef<IsardMapProps>(props);
+
   useEffect(() => {
     if (!map) return;
+
     const last = applied.current;
+
     applied.current = props;
+
     const done = new Set<(map: GeoMap, props: IsardMapProps) => void>();
+
     Object.entries(LIVE_OPTIONS).forEach(([key, apply]) => {
       if (!apply || done.has(apply) || Object.is(last[key as keyof IsardMapProps], props[key as keyof IsardMapProps])) {
         return;
@@ -224,6 +241,7 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
   });
 
   const { camera } = props;
+
   useEffect(() => {
     if (map && camera && !sameCamera(map.getCamera(), camera)) map.setCamera(camera);
   }, [map, camera]);
@@ -238,9 +256,11 @@ export const IsardMap = forwardRef<GeoMap | undefined, IsardMapProps>(function I
 /** The props that are not options of the map */
 const stripProps = (props: Partial<IsardMapProps>): GeoMapOptions => {
   const options: Record<string, unknown> = { ...props };
+
   [...Object.keys(EVENT_PROPS), 'onLoad', 'onError', 'id', 'className', 'style'].forEach((key) => {
     delete options[key];
   });
+
   return options as GeoMapOptions;
 };
 
@@ -273,21 +293,28 @@ export const Layer = forwardRef<LayerHandle | undefined, LayerProps>(function La
   const { order = 0, onLayer, ...spec } = props;
   const state = useRef<{ layer: LayerHandle; spec: LayerSpec; order: number }>(undefined);
   const [layer, setLayer] = useState<LayerHandle>();
+
   useImperativeHandle(ref, () => layer, [layer]);
+
   const latest = useRef({ spec, order, onLayer });
+
   latest.current = { spec, order, onLayer };
 
   useEffect(() => {
     if (!binding) return;
+
     const { spec, order, onLayer } = latest.current;
     const created = binding.map.add(spec as LayerSpec);
+
     binding.order.place(created, order);
     state.current = { layer: created, spec, order };
     swipe?.set(created);
     setLayer(created);
     onLayer?.(created);
+
     return () => {
       const current = state.current;
+
       state.current = undefined;
       if (!current) return;
       binding.order.remove(current.layer);
@@ -298,13 +325,17 @@ export const Layer = forwardRef<LayerHandle | undefined, LayerProps>(function La
 
   useEffect(() => {
     const current = state.current;
+
     if (!binding || !current) return;
+
     const next = spec as LayerSpec;
     const change = layerChange(current.spec, next);
+
     current.spec = next;
     if (change?.rebuild) {
       const old = current.layer;
       const fresh = binding.map.rebuildLayer(old, next);
+
       binding.order.place(fresh, order, old);
       swipe?.unset(old);
       swipe?.set(fresh);
@@ -312,6 +343,7 @@ export const Layer = forwardRef<LayerHandle | undefined, LayerProps>(function La
       current.order = order;
       setLayer(fresh);
       latest.current.onLayer?.(fresh);
+
       return;
     }
     if (change) applyLayerChange(current.layer, next, change);
@@ -359,16 +391,19 @@ export const Marker = (props: MarkerProps): ReactNode => {
     [anchor, className, element],
   );
   const latest = useRef(props);
+
   latest.current = props;
 
   useEffect(() => {
     if (!map) return;
     marker.addTo(map);
+
     const offs = [
       marker.on('dragstart', (e) => latest.current.onDragStart?.(e.lonLat)),
       marker.on('drag', (e) => latest.current.onDrag?.(e.lonLat)),
       marker.on('dragend', (e) => latest.current.onDragEnd?.(e.lonLat)),
     ];
+
     return () => {
       offs.forEach((off) => {
         off();
@@ -378,6 +413,7 @@ export const Marker = (props: MarkerProps): ReactNode => {
   }, [map, marker]);
 
   const { lonLat, height = 0, base = 0, draggable = false, offset } = props;
+
   useLayoutEffect(() => {
     marker.setLonLat(lonLat);
   }, [marker, lonLat[0], lonLat[1]]);
@@ -423,15 +459,19 @@ export const Popup = (props: PopupProps): ReactNode => {
     [anchor, closeButton, closeOnClick, maxWidth, className, content],
   );
   const latest = useRef(props);
+
   latest.current = props;
 
   useEffect(() => {
     if (!map) return;
+
     const offs = [
       popup.on('open', () => latest.current.onOpen?.()),
       popup.on('close', () => latest.current.onClose?.()),
     ];
+
     if (marker) marker.setPopup(popup);
+
     return () => {
       offs.forEach((off) => {
         off();
@@ -443,6 +483,7 @@ export const Popup = (props: PopupProps): ReactNode => {
 
   const { lonLat, height, open, offset } = props;
   const opened = open ?? !marker;
+
   useLayoutEffect(() => {
     if (offset) popup.setOffset(offset);
   }, [popup, offset?.[0], offset?.[1]]);
@@ -480,12 +521,14 @@ export const Panel = (props: PanelProps): ReactNode => {
   useEffect(() => {
     if (!map) return;
     panel.addTo(map);
+
     return () => {
       panel.remove();
     };
   }, [map, panel]);
 
   const { lonLat, width, heading, pitch, height } = props;
+
   useLayoutEffect(() => {
     panel.setLonLat(lonLat);
   }, [panel, lonLat[0], lonLat[1]]);
@@ -506,20 +549,25 @@ export const Panel = (props: PanelProps): ReactNode => {
 export const Viewshed = (props: ViewshedOptions): ReactNode => {
   const binding = useContext(MapContext);
   const key = useMemo(() => ({}), []);
+
   useEffect(() => {
     if (!binding) return;
+
     return () => {
       binding.viewsheds.delete(key);
       binding.applyViewsheds();
     };
   }, [binding, key]);
+
   // Numbers, strings and the position: compared by value
   const options = JSON.stringify(props);
+
   useEffect(() => {
     if (!binding) return;
     binding.viewsheds.set(key, JSON.parse(options) as ViewshedOptions);
     binding.applyViewsheds();
   }, [binding, key, options]);
+
   return null;
 };
 
@@ -538,13 +586,18 @@ export const Swipe = (props: SwipeProps): ReactNode => {
   const map = useMap();
   const layers = useMemo(() => new Set<LayerHandle>(), []);
   const latest = useRef(props);
+
   latest.current = props;
+
   const group = useMemo<SwipeGroup | undefined>(() => {
     if (!map) return undefined;
+
     const apply = () => {
       const { position, side } = latest.current;
+
       map.setSwipe(layers.size > 0 ? { position, layers: [...layers], ...defined({ side }) } : undefined);
     };
+
     return {
       set: (layer) => {
         layers.add(layer);
@@ -558,6 +611,7 @@ export const Swipe = (props: SwipeProps): ReactNode => {
   }, [map, layers]);
 
   const { position, side } = props;
+
   useEffect(() => {
     if (map && layers.size > 0) map.setSwipe({ position, layers: [...layers], ...defined({ side }) });
   }, [map, layers, position, side]);

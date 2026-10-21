@@ -77,6 +77,7 @@ export const styleAttribution = (style: string | Style): string | undefined => {
   if (typeof style !== 'string') return undefined;
   if ((Object.values(OPENFREEMAP_STYLES) as string[]).includes(style)) return OPENFREEMAP_ATTRIBUTION;
   if ((Object.values(PLAN_STYLES) as string[]).includes(style)) return IGN_ATTRIBUTION;
+
   return undefined;
 };
 
@@ -90,16 +91,20 @@ export const size = (value: Json, fallback = 16): Size => {
   if (value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.stops)) {
     return (value.stops as Json[]).map((s) => {
       const [z, v] = s as [number, number];
+
       return [Number(z), Number(v)] as [number, number];
     });
   }
+
   return fallback;
 };
 
 /** Fetches a JSON document (a style, a TileJSON) */
 const json = async <T>(url: string): Promise<T> => {
   const response = await fetch(url, withHeaders(url));
+
   if (!response.ok) throw new Error(`${url}: ${response.status}`);
+
   return (await response.json()) as T;
 };
 
@@ -110,12 +115,15 @@ const json = async <T>(url: string): Promise<T> => {
 const resolveSource = async (source: Style['sources'][string]): Promise<{ tiles?: string[]; maxzoom?: number }> => {
   const given = source.url ?? source.tiles?.[0] ?? '';
   const archive = pmtilesUrl(given.replace(/\/\{z\}\/\{x\}\/\{y\}$/, ''));
+
   if (!archive)
     return {
       ...(source.tiles ? { tiles: source.tiles } : {}),
       ...(source.maxzoom === undefined ? {} : { maxzoom: source.maxzoom }),
     };
+
   const header = await pmtiles(archive).header();
+
   return { tiles: [`pmtiles://${archive}/{z}/{x}/{y}`], maxzoom: source.maxzoom ?? header.maxZoom };
 };
 
@@ -137,6 +145,7 @@ export const defaultWorkerUrl = (assetsUrl?: string | URL): string | URL => {
 export const tilePriority = (z: number, x: number, y: number, camera: Pick<Camera, 'center' | 'zoom'>): Priority => {
   // A raster tile of level z covers the map at zoom z - 1
   if (z - 1 > camera.zoom + 1) return 'low';
+
   const n = 2 ** z;
   const [lon, lat] = camera.center;
   const cx = mercatorX(lon) * n;
@@ -145,7 +154,9 @@ export const tilePriority = (z: number, x: number, y: number, camera: Pick<Camer
   const along = Math.abs(x + 0.5 - cx) % n;
   const dx = Math.min(along, n - along);
   const d = Math.hypot(dx, y + 0.5 - cy);
+
   if (d <= 1.5) return 'high';
+
   return d >= 4 ? 'low' : 'auto';
 };
 
@@ -187,8 +198,10 @@ export class BasemapWorkers {
   ) {
     this.workers = Array.from({ length: Math.max(1, count) }, () => {
       const worker = create(url);
+
       worker.onmessage = ({ data }: MessageEvent<BasemapResponse>) => {
         const p = this.pending.get(data.id);
+
         if (!p) return;
         this.pending.delete(data.id);
         if ('error' in data) p.reject(new Error(data.error));
@@ -200,8 +213,11 @@ export class BasemapWorkers {
         this.fail(worker, `the vector basemap worker ${url} failed${event.message ? `: ${event.message}` : ''}`);
       };
       worker.onmessageerror = () => this.fail(worker, `the vector basemap worker ${url} sent an unreadable message`);
+
       const rules = headerRules();
+
       if (rules.length > 0) worker.postMessage({ type: 'headers', rules } satisfies BasemapRequest);
+
       return worker;
     });
     this.unfollow = onHeaderRules((rules) => {
@@ -226,6 +242,7 @@ export class BasemapWorkers {
     const error = new Error(
       `isard: ${message}. If a bundler moves the worker, give its URL in the \`basemapWorkerUrl\` option (see "With a bundler" in the guide)`,
     );
+
     this.pending.forEach((p, id) => {
       if (p.worker !== worker) return;
       this.pending.delete(id);
@@ -241,8 +258,10 @@ export class BasemapWorkers {
   /** Sends a message to every worker (a renderer, or its removal) */
   broadcast(message: Extract<BasemapRequest, { type: 'init' } | { type: 'drop' }>): void {
     if (this.terminated) return;
+
     // A renderer tells the workers how many they are: they share the decoded tiles' budget
     const sent = message.type === 'init' ? { ...message, workers: this.workers.length } : message;
+
     // A sprite image is copied to each worker (structured clone)
     this.workers.forEach((w) => {
       w.postMessage(sent);
@@ -254,6 +273,7 @@ export class BasemapWorkers {
     return new Promise<BasemapResponse>((resolve, reject) => {
       if (this.terminated) return reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
       if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'));
+
       const id = this.next++;
       const abort = () => {
         if (!this.pending.delete(id)) return;
@@ -262,6 +282,7 @@ export class BasemapWorkers {
       };
       // The listener goes once the request is settled
       const settle = () => signal?.removeEventListener('abort', abort);
+
       this.pending.set(id, {
         resolve: (r) => {
           settle();
@@ -289,6 +310,7 @@ export class BasemapWorkers {
     owner: object,
   ): Promise<Float32Array | null> {
     const work: BasemapWork = { type: 'heights', url, encoding, ...(floor === undefined ? {} : { floor }) };
+
     return this.request(this.worker(z, x, y), work, owner, signal).then((r) => ('heights' in r ? r.heights : null));
   }
 
@@ -303,6 +325,7 @@ export class BasemapWorkers {
     const worker = this.worker(Math.max(0, z - 2), x >> 2, y >> 2);
     const cached = Math.max(16, Math.ceil(SOURCE_CACHE / this.workers.length));
     const work: BasemapWork = { type: 'reproject', job, cached };
+
     return this.request(worker, work, owner, signal).then((r) => ('image' in r ? r.image : null));
   }
 
@@ -324,7 +347,9 @@ export class BasemapWorkers {
     this.workers.forEach((w) => {
       w.terminate();
     });
+
     const pending = [...this.pending.values()];
+
     this.pending.clear();
     pending.forEach((p) => {
       p.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
@@ -338,6 +363,7 @@ type TileLabels = [layer: number, features: Feature<LabelCandidate>[]][];
 /** A tile's label candidates as features, by style layer */
 export const tileLabels = (candidates: readonly LabelCandidate[]): TileLabels => {
   const byLayer = new Map<number, Feature<LabelCandidate>[]>();
+
   candidates.forEach((p) => {
     const feature: Feature<LabelCandidate> = {
       type: 'Feature',
@@ -353,9 +379,11 @@ export const tileLabels = (candidates: readonly LabelCandidate[]): TileLabels =>
         : { type: 'Point', coordinates: [p.lon, p.lat] },
     };
     const list = byLayer.get(p.layer);
+
     if (list) list.push(feature);
     else byLayer.set(p.layer, [feature]);
   });
+
   return [...byLayer].sort((a, b) => b[0] - a[0]);
 };
 
@@ -388,10 +416,13 @@ export class VectorTiles {
     options: VectorTilesOptions = {},
   ) {
     const { pool, own } = map.basemapWorkers(options.workers, options.workerUrl);
+
     this.pool = pool;
     this.ownPool = own;
     this.namespace = pool.namespace();
+
     const style = options.style ?? OPENFREEMAP_STYLES.positron;
+
     this.attribution = options.attribution ?? styleAttribution(style);
     this.ready = this.load(style);
     // Reported once here; `ready`, the raster tiles and the labels fail with it
@@ -403,22 +434,30 @@ export class VectorTiles {
   private async load(input: string | Style) {
     const style = typeof input === 'string' ? await json<Style>(input) : input;
     const [name, source] = Object.entries(style.sources).find(([, s]) => s.type === 'vector') ?? [];
+
     if (!name || !source) throw new Error('the style has no vector source');
+
     const resolved = await resolveSource(source);
     const tilejson =
       !resolved.tiles && source.url ? await json<{ tiles: string[]; maxzoom?: number }>(source.url) : undefined;
     const tiles = tilejson === undefined ? resolved.tiles : tilejson.tiles;
     const maxzoom = resolved.maxzoom ?? tilejson?.maxzoom;
     const template = tiles?.[0];
+
     if (!template) throw new Error(`source ${name} has no tiles`);
+
     // Its raster sources of tiles, drawn into the same images (the shaded relief of a style at low zoom)
     const rasters: Record<string, RasterSource> = {};
+
     for (const [key, s] of Object.entries(style.sources)) {
       if (s.type !== 'raster') continue;
+
       const r = await resolveSource(s);
       const url = r.tiles?.[0];
+
       if (url) rasters[key] = { tiles: url, maxzoom: r.maxzoom ?? 22, tileSize: s.tileSize ?? 512 };
     }
+
     // Only the layers of those sources (and the background); other types (hillshade, heatmap…) are left out. The
     // application's style object stays as it is
     const layers = style.layers.filter(
@@ -427,16 +466,20 @@ export class VectorTiles {
         (l.source === name && l.type !== 'raster') ||
         (l.type === 'raster' && l.source !== undefined && rasters[l.source] !== undefined),
     );
+
     return { style: { ...style, layers }, tiles: template, maxzoom: maxzoom ?? 14, rasters };
   }
 
   /** The fonts of the style's labels, for its glyphs (the first of each `text-font`, as the workers take it) */
   private static fonts(style: Style): string[] {
     const fonts = new Set<string>();
+
     style.layers.forEach((layer) => {
       const font = layer.layout?.['text-font'];
+
       if (layer.type === 'symbol' && Array.isArray(font) && typeof font[0] === 'string') fonts.add(labelFont(font[0]));
     });
+
     return [...fonts];
   }
 
@@ -445,6 +488,7 @@ export class VectorTiles {
 
   private loadSprites(sprite: Style['sprite']): Promise<LoadedSprite[]> {
     this.sprites ??= loadSprites(sprite).catch(() => []);
+
     return this.sprites;
   }
 
@@ -455,6 +499,7 @@ export class VectorTiles {
 
   private request(vz: number, vx: number, vy: number, work: BasemapWork, signal?: AbortSignal) {
     if (this.destroyed) return Promise.reject(new DOMException('isard: vector tiles destroyed', 'AbortError'));
+
     return this.pool.request(this.pool.worker(vz, vx, vy), work, this, signal);
   }
 
@@ -466,9 +511,11 @@ export class VectorTiles {
     const patterns = layers.some((l) => l.paint?.['fill-pattern'] !== undefined);
     // The images are downloaded once, copied to each worker
     const sprites: Sprite[] = patterns && style.sprite ? await this.loadSprites(style.sprite) : [];
+
     if (this.destroyed) throw new DOMException('isard: vector tiles destroyed', 'AbortError');
     this.pool.broadcast({ type: 'init', key, tiles, maxzoom, layers, rasters, ...(sprites.length ? { sprites } : {}) });
     this.renderers.push(key);
+
     return { key, maxzoom };
   }
 
@@ -490,8 +537,10 @@ export class VectorTiles {
     const { layers = () => true, extraLayers = [], size: texture = 512, opacity = 1, before } = options;
     const drawn = (l: StyleLayer) => l.type !== 'symbol' && layers(l);
     const renderer = this.renderer(drawn, extraLayers);
+
     // Its failure is reported by `ready` and each tile
     renderer.catch(() => undefined);
+
     const loader = async (z: number, x: number, y: number, signal: AbortSignal) => {
       const { key, maxzoom } = await renderer;
       // The vector tile it is drawn from (see the worker)
@@ -505,6 +554,7 @@ export class VectorTiles {
         { type: 'render', key, z, x, y, size: texture, priority },
         signal,
       );
+
       return 'image' in response ? response.image : null;
     };
     const layer = this.map.addRaster({
@@ -517,8 +567,10 @@ export class VectorTiles {
       ...(this.attribution ? { attribution: this.attribution } : {}),
       ...(before ? { before } : {}),
     });
+
     this.layers.push(layer);
     this.ground ??= layer;
+
     return layer;
   }
 
@@ -559,21 +611,28 @@ export class VectorTiles {
       iconColor: (p) => p.icon?.color ?? '#000',
       iconOpacity: (p) => p.icon?.opacity ?? 1,
     });
+
     this.map.keepOnTop(symbol);
     this.layers.push(symbol);
+
     const renderer = this.ready.then(async ({ style }) => {
       // The style's fonts from its own glyphs
       if (style.glyphs) this.map.glyphs.register(style.glyphs, VectorTiles.fonts(style));
+
       // Its icons from its sprites, before the first labels
       const icons = style.layers.some((l) => l.type === 'symbol' && l.layout?.['icon-image'] !== undefined);
+
       if (icons && style.sprite) {
         (await this.loadSprites(style.sprite)).forEach((sprite) => {
           if (!this.destroyed) this.map.icons.addSprite(this.iconPrefix, sprite.icons, () => readPixels(sprite.image));
         });
       }
+
       return this.renderer((l) => l.type === 'symbol' && layers(l), []);
     });
+
     renderer.catch(() => undefined);
+
     /** The labels of the tiles, as features by style layer, the higher layers first: each list is given to the symbol
      * layer as a group, shaped once while the tile is kept */
     const tiles = new Lru<string, Promise<TileLabels>>(256);
@@ -584,12 +643,14 @@ export class VectorTiles {
     let retry = 0;
     const update = async () => {
       if (this.destroyed) return;
+
       const { key, maxzoom } = await renderer;
       const run = ++generation;
       const camera = this.map.getCamera();
       const zoom = Math.max(0, Math.min(Math.floor(camera.zoom), 24));
       const ground = this.ground && this.map.hasLayer(this.ground) ? this.map.engine.wantedTiles(this.ground.id) : [];
       const keys: string[] = [];
+
       if (ground.length > 0) {
         // The ground's tiles, the nearest first: a tile so many levels coarser than the finest in view has its
         // labels of a zoom as many under the view's, past the source's deepest level those of that level at the zoom
@@ -598,12 +659,15 @@ export class VectorTiles {
           (_, k) => [ground[3 * k], ground[3 * k + 1], ground[3 * k + 2]] as [number, number, number],
         );
         const top = groundTiles.reduce((t, [z]) => Math.max(t, z), 0);
+
         groundTiles.forEach(([z, x, y]) => {
           if (keys.length >= maxTiles) return;
+
           const at = Math.max(0, zoom - (top - z));
           const tz = Math.min(at, maxzoom, z);
           const shift = 2 ** (z - tz);
           const key = `${tz}/${Math.floor(x / shift)}/${Math.floor(y / shift)}${at > tz ? `@${at}` : ''}`;
+
           if (!keys.includes(key)) keys.push(key);
         });
       } else {
@@ -627,6 +691,7 @@ export class VectorTiles {
         const wanted = Array.from({ length: y1 - y0 + 1 }, (_, j) => y0 + j).flatMap((y) =>
           Array.from({ length: x1 - x0 + 1 }, (_, i): [number, number] => [x0 + i, y]),
         );
+
         // Nearest to the center first, at most `maxTiles` (tilted views reach far)
         wanted.sort(
           (a, b) => Math.hypot(a[0] + 0.5 - cx, a[1] + 0.5 - cy) - Math.hypot(b[0] + 0.5 - cx, b[1] + 0.5 - cy),
@@ -634,13 +699,18 @@ export class VectorTiles {
         // Past the source's deepest level, its tiles' labels at the zoom of the view (the layers of the deeper zooms)
         keys.push(...wanted.slice(0, maxTiles).map(([x, y]) => `${z}/${x}/${y}${zoom > z ? `@${zoom}` : ''}`));
       }
+
       // The same tiles as the labels shown: nothing to do
       const set = keys.join(' ');
+
       if (set === shown) return;
+
       const lists = await Promise.all(
         keys.map((k, index) => {
           const cached = tiles.get(k);
+
           if (cached) return cached;
+
           const [tile, deeper] = k.split('@');
           const [tz, x, y] = (tile ?? '').split('/').map(Number) as [number, number, number];
           // The nearest tiles first: the others wait for the raster tiles
@@ -659,14 +729,18 @@ export class VectorTiles {
             () => {
               // A network error is not kept: the tile is asked for again on the next update
               tiles.delete(k);
+
               return [];
             },
           );
+
           // A bounded cache of tiles' labels, the least recently used dropped
           tiles.set(k, p);
+
           return p;
         }),
       );
+
       if (run !== generation || this.destroyed) return;
       // A tile that failed is missing: the next update asks for it again, after a pause if no move brings one
       shown = keys.every((k) => tiles.has(k)) ? set : '';
@@ -676,12 +750,14 @@ export class VectorTiles {
           refresh();
         }, RETRY_LABELS_MS);
       }
+
       // The labels of the higher style layers first: they win the collisions; for each style layer, the tiles nearest
       // to the center first
       const layerIds = [...new Set(lists.flatMap((list) => list.map(([layer]) => layer)))].sort((a, b) => b - a);
       const groups = layerIds.flatMap((layer) =>
         lists.map((list) => list.find(([l]) => l === layer)?.[1]).filter((group) => group !== undefined),
       );
+
       symbol.setGroups(groups);
     };
     // The style failed to load: reported by `ready`
@@ -696,11 +772,13 @@ export class VectorTiles {
         refresh();
       }, 250);
     };
+
     this.cleanup.push(this.map.on('move', schedule), this.map.on('moveend', refresh), () => {
       clearTimeout(timer);
       clearTimeout(retry);
     });
     refresh();
+
     return symbol;
   }
 
@@ -753,9 +831,11 @@ export const basicStyle = (
   layers: readonly string[],
 ): Style => {
   const out: StyleLayer[] = [];
+
   layers.forEach((name, i) => {
     const color = BASIC_COLORS[i % BASIC_COLORS.length] as string;
     const base = { source: 'data', 'source-layer': name };
+
     out.push(
       { id: `${name}-fill`, type: 'fill', ...base, paint: { 'fill-color': color, 'fill-opacity': 0.18 } },
       { id: `${name}-line`, type: 'line', ...base, paint: { 'line-color': color, 'line-width': 1.2 } },
@@ -778,6 +858,7 @@ export const basicStyle = (
       paint: { 'text-color': '#1d2433', 'text-halo-color': '#fff', 'text-halo-width': 1.5 },
     });
   });
+
   return { version: 8, sources: { data: { type: 'vector', ...source } }, layers: out };
 };
 
@@ -818,6 +899,7 @@ export const pmtilesLayer = async (
   const attribution = options.attribution ?? (typeof credit === 'string' && credit ? plainText(credit) : undefined);
   const kind = options.kind ?? (header.tileType === 'mvt' ? 'vector' : 'raster');
   const credits = attribution ? { attribution } : {};
+
   if (kind === 'raster') {
     return map.addRaster({
       url: `pmtiles://${archiveUrl}`,
@@ -829,15 +911,18 @@ export const pmtilesLayer = async (
       ...credits,
     });
   }
+
   const layers = (metadata as { vector_layers?: { id?: unknown }[] }).vector_layers;
   const names = Array.isArray(layers) ? layers.map((l) => l?.id).filter((id) => typeof id === 'string') : [];
   const style = options.style ?? basicStyle({ url: `pmtiles://${archiveUrl}` }, names);
   const tiles = map.vectorTiles({ style, ...credits });
+
   tiles.raster({
     ...(options.opacity === undefined ? {} : { opacity: options.opacity }),
     ...(options.before ? { before: options.before } : {}),
   });
   tiles.labels();
+
   return tiles;
 };
 
@@ -845,11 +930,16 @@ export const pmtilesLayer = async (
  * for another URL */
 export const pmtilesRasterLoader = (url: string, size: number): RasterOptions['loader'] => {
   const archiveUrl = pmtilesUrl(url);
+
   if (!archiveUrl) return undefined;
+
   const archive = pmtiles(archiveUrl);
+
   return async (z, x, y, signal) => {
     const bytes = await archive.tile(z, x, y, signal);
+
     if (!bytes) return null;
+
     return createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), { resizeWidth: size, resizeHeight: size });
   };
 };

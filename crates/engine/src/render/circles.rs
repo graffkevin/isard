@@ -142,12 +142,14 @@ fn sort(points: &[f64], feature: &[u32]) -> Sorted {
         .iter()
         .map(|&k| {
             let o = merc[k as usize] - origin;
+
             Point {
                 offset: [o.x as f32, o.y as f32],
                 feature: feature[k as usize],
             }
         })
         .collect();
+
     Sorted {
         min,
         max,
@@ -181,12 +183,14 @@ pub struct CircleLayer {
 impl CircleLayer {
     pub fn new(gl: &glow::Context, points: &[f64], feature: &[u32], feature_count: usize) -> Result<Self, String> {
         overlay::pick_ids_fit(feature_count, "circle layer");
+
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let overlay = Overlay::new(&mut objects, gl, &[&Layout::CIRCLE.glsl(), VERTEX], &[FRAGMENT])?;
         let program = overlay.program;
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
+
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -198,8 +202,11 @@ impl CircleLayer {
             }
             gl.bind_vertex_array(None);
         }
+
         let features = Features::new(gl, feature_count, Layout::CIRCLE)?;
+
         objects.keep();
+
         let mut layer = Self {
             features,
             on_ground: false,
@@ -217,7 +224,9 @@ impl CircleLayer {
             drape: Drape::new(),
             count: 0,
         };
+
         layer.set_geometry(gl, points, feature);
+
         Ok(layer)
     }
 
@@ -230,6 +239,7 @@ impl CircleLayer {
             start,
             data,
         } = sort(points, feature);
+
         (self.min, self.max, self.grid) = (min, max, grid);
         self.origin = (min + max) / 2.0;
         self.start = start;
@@ -248,6 +258,7 @@ impl CircleLayer {
         if let Some((source, _)) = frame.relief {
             // A little margin around the points: the page table covers at least a cell
             let pad = DVec2::splat(1e-6);
+
             self.drape.update(frame.gl, self.min - pad, self.max + pad, source);
         }
     }
@@ -261,7 +272,9 @@ impl CircleLayer {
             ..
         } = frame;
         let [on_ground, layer, pick_u, slop] = &self.uniforms;
+
         self.overlay.begin(frame, self.origin, DEPTH_BIAS, &self.drape);
+
         // SAFETY: draw with objects owned by this layer
         unsafe {
             gl.uniform_1_f32(on_ground.as_ref(), if self.on_ground { 1.0 } else { 0.0 });
@@ -297,17 +310,23 @@ impl Layer for CircleLayer {
         if !self.shows(frame) {
             return false;
         }
+
         let look = self.look(frame);
         let mut visible = std::mem::take(&mut self.visible);
         let ranges = visible.update(&self.grid, &self.start, frame.view, look);
+
         if ranges.is_empty() {
             self.visible = visible;
+
             return false;
         }
         self.update_drape(frame);
+
         let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
+
         self.render(frame, ranges, None);
         self.visible = visible;
+
         false
     }
 
@@ -319,13 +338,17 @@ impl Layer for CircleLayer {
         if !self.shows(frame) {
             return;
         }
+
         let ranges = overlay::pick_ranges(&self.visible, &self.grid, &self.start, frame.view, self.look(frame));
+
         if ranges.is_empty() {
             return;
         }
+
         // The page table is the last frame's; hidden by the hills as on screen (the picking pass drew the ground's
         // depth)
         let _depth = DepthState::over_ground(frame.gl, frame.relief.is_some());
+
         self.render(frame, &ranges, Some(layer));
     }
 
@@ -347,6 +370,7 @@ impl Engine {
     #[wasm_bindgen(js_name = addCircles)]
     pub fn add_circles(&mut self, points: &[f64], feature: &[u32], feature_count: usize) -> Result<u32, JsValue> {
         let layer = CircleLayer::new(&self.gl, points, feature, feature_count)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -386,16 +410,21 @@ mod tests {
             1e308,
         ];
         let sorted = sort(&points, &[0, 1, 2, 3, 4]);
+
         assert_eq!(sorted.data.len(), 2);
         assert!(sorted.grid.len() <= 33 * 33, "{}", sorted.grid.len());
         assert_eq!(*sorted.start.last().unwrap(), 2);
+
         let mut features: Vec<u32> = sorted.data.iter().map(|p| p.feature).collect();
+
         features.sort_unstable();
         assert_eq!(features, [0, 3]);
         assert!(sorted.max.x - sorted.min.x < 1e-3);
         // Fewer features than points: the points without one are left out; none at all
         assert_eq!(sort(&points, &[0]).data.len(), 1);
+
         let none = sort(&[], &[]);
+
         assert!(none.data.is_empty() && none.grid.len() == 1 && none.start == [0, 0]);
     }
 }

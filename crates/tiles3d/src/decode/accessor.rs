@@ -30,6 +30,7 @@ impl Layout {
             _ => return Err("unsupported accessor type".into()),
         };
         let component_type = accessor["componentType"].as_u64().unwrap_or(0);
+
         Ok(Self {
             count,
             components,
@@ -101,10 +102,13 @@ impl Gltf<'_> {
         if let Some(values) = self.floats.borrow().get(&index) {
             return Ok(values.clone());
         }
+
         let values: Rc<[f32]> = self
             .accessor(index, |l| float_reader(l.component_type, l.normalized))?
             .into();
+
         self.floats.borrow_mut().insert(index, values.clone());
+
         Ok(values)
     }
 
@@ -113,8 +117,11 @@ impl Gltf<'_> {
         if let Some(values) = self.indices.borrow().get(&index) {
             return Ok(values.clone());
         }
+
         let values: Rc<[u32]> = self.accessor(index, |l| index_reader(l.component_type))?.into();
+
         self.indices.borrow_mut().insert(index, values.clone());
+
         Ok(values)
     }
 
@@ -130,8 +137,10 @@ impl Gltf<'_> {
         let read = reader(&layout)?;
         let (count, components, size, element) = (layout.count, layout.components, layout.size, layout.element());
         let total = count.checked_mul(components).ok_or("accessor too large")?;
+
         // Spent by the primitives that use them (`Gltf::spend`); not more than the budget left, before the allocation
         self.within(total)?;
+
         let mut out = if let Some(view_index) = self::index(&accessor["bufferView"]) {
             let bytes = self.view(view_index)?;
             let start = offset(&accessor["byteOffset"])?;
@@ -139,14 +148,19 @@ impl Gltf<'_> {
                 Value::Null => element,
                 s => self::index(s).filter(|&s| s >= element).ok_or("bad byteStride")?,
             };
+
             if !fits(bytes.len(), start, stride, count, element) {
                 return Err("accessor out of its buffer view".into());
             }
+
             let mut out = Vec::with_capacity(total);
+
             for i in 0..count {
                 let e = slice(&bytes, start + i * stride, element).ok_or("accessor out of its buffer view")?;
+
                 out.extend((0..components).map(|c| read(&e[c * size..])));
             }
+
             out
         } else if total <= MAX_ZEROS {
             vec![T::default(); total]
@@ -154,18 +168,22 @@ impl Gltf<'_> {
             return Err("accessor without buffer view too large".into());
         };
         let sparse = &accessor["sparse"];
+
         if !sparse.is_null() {
             self.sparse(sparse, &layout, read, &mut out)?;
         }
+
         Ok(out)
     }
 
     /// Applies the substitutions of a sparse accessor: values (tightly packed) at the given element indices
     fn sparse<T: Copy>(&self, sparse: &Value, layout: &Layout, read: Read<T>, out: &mut [T]) -> Result<(), String> {
         let count = index(&sparse["count"]).ok_or("sparse accessor without count")?;
+
         if count > layout.count {
             return Err("sparse accessor with too many values".into());
         }
+
         let (indices, values) = (&sparse["indices"], &sparse["values"]);
         let index_type = indices["componentType"].as_u64().unwrap_or(0);
         let (index_read, index_size) = (index_reader(index_type)?, component_size(index_type)?);
@@ -174,6 +192,7 @@ impl Gltf<'_> {
         let value_bytes = self.view(index(&values["bufferView"]).ok_or("sparse values without bufferView")?)?;
         let value_start = offset(&values["byteOffset"])?;
         let (components, size, element) = (layout.components, layout.size, layout.element());
+
         if !fits(index_bytes.len(), index_start, index_size, count, index_size)
             || !fits(value_bytes.len(), value_start, element, count, element)
         {
@@ -188,10 +207,12 @@ impl Gltf<'_> {
                 .get_mut(i.saturating_mul(components)..)
                 .and_then(|o| o.get_mut(..components))
                 .ok_or("sparse index out of the accessor")?;
+
             for (c, t) in target.iter_mut().enumerate() {
                 *t = read(&v[c * size..]);
             }
         }
+
         Ok(())
     }
 }
@@ -207,10 +228,12 @@ mod tests {
         // Base positions all at the origin but the substituted vertices 1 and 2; uv without buffer view (zeros) and
         // one sparse value
         let mut bin = f32s(&[0.0; 9]);
+
         bin.extend(f32s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0])); // 36: values
         bin.extend([1u8, 0, 2, 0]); // 60: u16 indices
         bin.extend(f32s(&[0.5, 0.25])); // 64: uv value
         bin.extend([2u8, 0, 0, 0]); // 72: u8 index
+
         let json = json!({
             "asset": {"version": "2.0"},
             "buffers": [{"byteLength": 76}],
@@ -239,13 +262,18 @@ mod tests {
         let mesh = triangle(&json, &bin).unwrap();
         let p = &mesh.primitives[0];
         let at = |i: usize| vertex(&mesh, i);
+
         assert!(at(0).length() < 1e-6 && (at(1) - DVec3::X).length() < 1e-6 && (at(2) - DVec3::Y).length() < 1e-6);
         assert_eq!(*p.uvs, [0.0, 0.0, 0.0, 0.0, 0.5, 0.25]);
+
         // A sparse index past the accessor, too many sparse values: errors
         let mut bad = json.clone();
+
         bad["accessors"][1]["sparse"]["indices"]["componentType"] = json!(5125);
         assert!(triangle(&bad, &bin).is_err());
+
         let mut bad = json;
+
         bad["accessors"][0]["sparse"]["count"] = json!(4);
         assert!(triangle(&bad, &bin).is_err());
     }

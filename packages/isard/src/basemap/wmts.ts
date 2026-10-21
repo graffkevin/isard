@@ -21,28 +21,36 @@ const numbers = (text: string | undefined) => (text ?? '').trim().split(/\s+/).m
 export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): TileGrid => {
   const contents = child(parseXml(xml), 'Contents');
   const entry = children(contents, 'Layer').find((l) => childText(l, 'Identifier') === layer);
+
   if (!entry) throw new Error(`isard: no WMTS layer ${layer}`);
+
   const links = children(entry, 'TileMatrixSetLink');
   const link = matrixSet === undefined ? links[0] : links.find((l) => childText(l, 'TileMatrixSet') === matrixSet);
   const name = childText(link, 'TileMatrixSet');
   const set = children(contents, 'TileMatrixSet').find((s) => childText(s, 'Identifier') === name);
+
   if (!name || !set) throw new Error(`isard: no tile matrix set ${matrixSet ?? ''} for the WMTS layer ${layer}`);
+
   const crs = childText(set, 'SupportedCRS') ?? '';
   const geographic = isGeographic(crs);
   // EPSG's geographic CRSs have their latitude first (CRS:84 and the IGN's WGS84G do not)
   const latFirst = geographic && epsgCode(crs) === 4326 && /EPSG/i.test(crs);
   const unit = geographic ? METRES_PER_DEGREE : 1;
   const limits = new Map<string, TileMatrix['limits']>();
+
   children(child(link, 'TileMatrixSetLimits'), 'TileMatrixLimits').forEach((l) => {
     const [minRow, maxRow, minCol, maxCol] = ['MinTileRow', 'MaxTileRow', 'MinTileCol', 'MaxTileCol'].map((k) =>
       Number(childText(l, k)),
     ) as [number, number, number, number];
+
     limits.set(childText(l, 'TileMatrix') ?? '', [minCol, minRow, maxCol, maxRow]);
   });
+
   const matrices = children(set, 'TileMatrix').map((m): TileMatrix => {
     const id = childText(m, 'Identifier') ?? '';
     const [a = 0, b = 0] = numbers(childText(m, 'TopLeftCorner'));
     const limit = limits.get(id);
+
     return {
       id,
       resolution: (Number(childText(m, 'ScaleDenominator')) * PIXEL) / unit,
@@ -60,6 +68,7 @@ export const parseWmtsGrid = (xml: string, layer: string, matrixSet?: string): T
   const [west, south] = numbers(childText(box, 'LowerCorner'));
   const [east, north] = numbers(childText(box, 'UpperCorner'));
   const bounds = [west, south, east, north];
+
   return {
     crs,
     matrices: served,
@@ -83,6 +92,8 @@ export const wmtsGrid = async (
     capabilities,
     withHeaders(capabilities, options.signal ? { signal: options.signal } : {}),
   );
+
   if (!response.ok) throw new Error(`isard: ${response.status} for the WMTS capabilities`);
+
   return parseWmtsGrid(await response.text(), layer, matrixSet);
 };

@@ -35,15 +35,19 @@ const pool = (count: number) => {
   const workers: FakeWorker[] = [];
   const p = new BasemapWorkers(count, 'worker.js', () => {
     const w = new FakeWorker();
+
     workers.push(w);
+
     return w as unknown as PoolWorker;
   });
+
   return { p, workers };
 };
 
 const work = { type: 'labels', key: 'k', z: 1, x: 0, y: 0 } as const;
 const lastId = (w: FakeWorker) => {
   const m = w.messages.at(-1);
+
   return m && 'id' in m ? m.id : -1;
 };
 
@@ -51,6 +55,7 @@ describe('pool keys and workers', () => {
   test('renderer keys are unique across the VectorTiles of a pool', () => {
     const { p } = pool(1);
     const [a, b] = [p.namespace(), p.namespace()];
+
     expect(a).not.toBe(b);
     expect(rendererKey(a, 0)).not.toBe(rendererKey(b, 0));
     expect(rendererKey(a, 0)).not.toBe(rendererKey(a, 1));
@@ -65,6 +70,7 @@ describe('pool keys and workers', () => {
       ] as const
     ).forEach(([z, x, y]) => {
       const i = workerIndex(z, x, y, 3);
+
       expect(i).toBe(workerIndex(z, x, y, 3));
       expect(i).toBeGreaterThanOrEqual(0);
       expect(i).toBeLessThan(3);
@@ -80,6 +86,7 @@ describe('pool requests', () => {
     const ida = lastId(w);
     const b = p.request(w as unknown as PoolWorker, work, {});
     const idb = lastId(w);
+
     expect(ida).not.toBe(idb);
     w.reply({ id: idb, labels: [] });
     w.reply({ id: ida, error: 'nope' });
@@ -96,6 +103,7 @@ describe('pool requests', () => {
     const ida = lastId(w);
     const b = p.request(w as unknown as PoolWorker, work, other);
     const idb = lastId(w);
+
     p.cancel(mine);
     await expect(a).rejects.toThrow('destroyed');
     expect(w.messages).toContainEqual({ type: 'abort', id: ida });
@@ -110,6 +118,7 @@ describe('pool requests', () => {
     const controller = new AbortController();
     const a = p.request(w as unknown as PoolWorker, work, {}, controller.signal);
     const id = lastId(w);
+
     controller.abort();
     await expect(a).rejects.toThrow('aborted');
     expect(w.messages).toContainEqual({ type: 'abort', id });
@@ -124,6 +133,7 @@ describe('pool requests', () => {
     const a = p.request(w0 as unknown as PoolWorker, work, {});
     const b = p.request(w1 as unknown as PoolWorker, work, {});
     const idb = lastId(w1);
+
     w0.crash();
     await expect(a).rejects.toThrow('basemapWorkerUrl');
     w1.reply({ id: idb, labels: [] });
@@ -132,11 +142,14 @@ describe('pool requests', () => {
 
   test('broadcast reaches every worker; terminate stops them and fails what is pending', async () => {
     const { p, workers } = pool(3);
+
     p.broadcast({ type: 'drop', key: 'v0:r0' });
     workers.forEach((w) => {
       expect(w.messages).toEqual([{ type: 'drop', key: 'v0:r0' }]);
     });
+
     const a = p.request(workers[0] as unknown as PoolWorker, work, {});
+
     p.terminate();
     await expect(a).rejects.toThrow('destroyed');
     workers.forEach((w) => {
@@ -148,6 +161,7 @@ describe('pool requests', () => {
 
 describe('tilePriority', () => {
   const camera = { center: [0, 0] as [number, number], zoom: 4 };
+
   test('high near the center, low far away or finer than the view', () => {
     // Level 5 tiles cover zoom 4; the center is at tile (16, 16)
     expect(tilePriority(5, 16, 16, camera)).toBe('high');

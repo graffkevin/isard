@@ -48,8 +48,11 @@ export class TileLoader implements TileLoaderLike {
     priority?: 'high' | 'low',
   ): Promise<DecodedTile> {
     if (this.failed) return Promise.reject(this.failed);
+
     const worker = this.leastBusy();
+
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
+
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as Pending['resolve'], reject, worker });
       this.send(worker, { type: 'load', id, url, transform, yUp, reload, ...(priority ? { priority } : {}) });
@@ -69,17 +72,23 @@ export class TileLoader implements TileLoaderLike {
     priority?: 'high' | 'low',
   ): Promise<Uint8Array<ArrayBuffer>> {
     if (this.failed) return Promise.reject(this.failed);
+
     const worker = this.leastBusy();
+
     this.busy.set(worker, (this.busy.get(worker) ?? 0) + 1);
+
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as Pending['resolve'], reject, worker });
+
       const message = { type: 'points', id, url, offset, size, laz, layout, grid, count } as const;
+
       this.send(worker, { ...message, ...(priority ? { priority } : {}) });
     });
   }
 
   abort(id: number): void {
     const pending = this.pending.get(id);
+
     if (pending) this.send(pending.worker, { type: 'abort', id });
   }
 
@@ -101,6 +110,7 @@ export class TileLoader implements TileLoaderLike {
     if (this.workers.length === 0) {
       Array.from({ length: this.size }).forEach(() => {
         const worker = new Worker(this.workerUrl, { type: 'module' });
+
         worker.onmessage = (event: MessageEvent<WorkerReply>) => this.receive(worker, event.data);
         // A worker that fails to load (a bundler serving it from elsewhere) or to read a message fails its requests
         worker.onerror = (event) => {
@@ -109,15 +119,21 @@ export class TileLoader implements TileLoaderLike {
         };
         worker.onmessageerror = () =>
           this.fail(worker, `the decoding worker ${this.workerUrl} sent an unreadable message`);
+
         const { module, decoders, formats, points } = this;
+
         this.send(worker, { type: 'init', module, decoders, formats, points });
+
         const rules = headerRules();
+
         if (rules.length > 0) this.send(worker, { type: 'headers', rules });
         this.workers.push(worker);
         this.busy.set(worker, 0);
       });
     }
+
     const load = (worker: Worker) => this.busy.get(worker) ?? 0;
+
     return this.workers.reduce(
       (best, worker) => (load(worker) < load(best) ? worker : best),
       this.workers[0] as Worker,
@@ -130,7 +146,9 @@ export class TileLoader implements TileLoaderLike {
 
   private receive(worker: Worker, reply: WorkerReply): void {
     this.busy.set(worker, Math.max(0, (this.busy.get(worker) ?? 1) - 1));
+
     const pending = this.pending.get(reply.id);
+
     if (!pending) return;
     this.pending.delete(reply.id);
     if (reply.type === 'tile') pending.resolve(reply.tile);
@@ -144,6 +162,7 @@ export class TileLoader implements TileLoaderLike {
     const error = new Error(
       `isard: ${message}. If a bundler moves the worker, give its URL in the \`workerUrl\` option (see "With a bundler" in the guide)`,
     );
+
     this.pending.forEach((pending, id) => {
       if (pending.worker !== worker) return;
       this.pending.delete(id);

@@ -165,6 +165,7 @@ impl GroundLayer {
             &format!("{PRELUDE}{earth}#line 1\n{code}\n{MAIN}"),
         )?;
         let mut custom = HashMap::new();
+
         // SAFETY: queries on a linked program
         unsafe {
             for i in 0..gl.get_program_parameter_i32(program, glow::ACTIVE_UNIFORMS) as u32 {
@@ -172,14 +173,17 @@ impl GroundLayer {
                     continue;
                 };
                 let name = active.name.trim_end_matches("[0]").to_owned();
+
                 if name.starts_with("u_") && (UNIFORMS.contains(&name.as_str()) || is_projection(&name)) {
                     continue;
                 }
+
                 if let Some(location) = gl.get_uniform_location(program, &name) {
                     custom.insert(name, (location, active.utype, active.size));
                 }
             }
         }
+
         Ok(Self {
             program,
             uniforms: gl::uniforms(gl, program, UNIFORMS),
@@ -206,7 +210,9 @@ impl GroundLayer {
                 "no uniform {name} in the ground shader (unused uniforms are removed by the compiler)"
             ));
         };
+
         self.values.insert(name.to_owned(), Values::of(kind, values));
+
         Ok(())
     }
 
@@ -235,17 +241,20 @@ impl GroundLayer {
             Some(t) => t.unit,
             None => FIRST_UNIT + self.textures.len() as u32,
         };
+
         if unit >= MAX_UNITS {
             return Err(format!(
                 "too many textures in the ground layer ({} at most)",
                 MAX_UNITS - FIRST_UNIT
             ));
         }
+
         let expected = gl::area(width, height)
             .and_then(|texels| texels.checked_mul(usize::try_from(depth.max(1)).ok()?))
             .and_then(|texels| texels.checked_mul(bytes))
             .filter(|_| width > 0 && height > 0)
             .ok_or_else(|| format!("texture {name}: bad size {width} × {height} × {depth}"))?;
+
         if data.is_some_and(|d| d.len() < expected) {
             return Err(format!(
                 "texture {name}: {} bytes, {expected} expected",
@@ -259,12 +268,15 @@ impl GroundLayer {
         // SAFETY: creation and upload on the live context
         unsafe {
             let texture = gl.create_texture()?;
+
             gl.bind_texture(target, Some(texture));
+
             let filter = if linear && !integer {
                 glow::LINEAR
             } else {
                 glow::NEAREST
             };
+
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, filter),
                 (glow::TEXTURE_MAG_FILTER, filter),
@@ -276,6 +288,7 @@ impl GroundLayer {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             if depth > 0 {
                 gl.tex_storage_3d(target, 1, internal, width, height, depth);
+
                 if let Some(data) = data {
                     gl.tex_sub_image_3d(
                         target,
@@ -293,6 +306,7 @@ impl GroundLayer {
                 }
             } else {
                 gl.tex_storage_2d(target, 1, internal, width, height);
+
                 if let Some(data) = data {
                     gl.tex_sub_image_2d(
                         target,
@@ -319,6 +333,7 @@ impl GroundLayer {
                 },
             );
         }
+
         Ok(())
     }
 
@@ -340,6 +355,7 @@ impl GroundLayer {
         let expected = gl::area(width, height)
             .and_then(|texels| texels.checked_mul(bytes))
             .unwrap_or(usize::MAX);
+
         if data.len() < expected
             || !gl::region_fits(x, y, width, height, (t.size.0, t.size.1))
             || layer < 0
@@ -351,7 +367,9 @@ impl GroundLayer {
         unsafe {
             gl.bind_texture(t.target, Some(t.handle));
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+
             let pixels = glow::PixelUnpackData::Slice(Some(&data[..expected]));
+
             if t.target == glow::TEXTURE_2D_ARRAY {
                 gl.tex_sub_image_3d(t.target, 0, x, y, layer, width, height, 1, pixel_format, kind, pixels);
             } else {
@@ -359,6 +377,7 @@ impl GroundLayer {
             }
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
         }
+
         Ok(())
     }
 
@@ -369,6 +388,7 @@ impl GroundLayer {
                 continue;
             };
             let l = Some(location);
+
             // SAFETY: uniform uploads on the program in use, sizes from the slices
             unsafe {
                 match (values, *kind) {
@@ -403,6 +423,7 @@ impl Layer for GroundLayer {
         if !self.visible {
             return false;
         }
+
         let &Frame {
             gl,
             camera,
@@ -429,6 +450,7 @@ impl Layer for GroundLayer {
         let offset = camera.center - self.anchor;
         let (lo, hi) = (self.min - self.anchor, self.max - self.anchor);
         let ([fr, fg, fb], [start, end]) = fog.unwrap_or(([0.0; 3], [0.0; 2]));
+
         // SAFETY: uniforms, bindings and draws on the live context; the state is set back at the end
         unsafe {
             gl.use_program(Some(self.program));
@@ -449,6 +471,7 @@ impl Layer for GroundLayer {
             for (name, t) in &self.textures {
                 gl.active_texture(glow::TEXTURE0 + t.unit);
                 gl.bind_texture(t.target, Some(t.handle));
+
                 if let Some((location, _, _)) = self.custom.get(name) {
                     gl.uniform_1_i32(Some(location), t.unit as i32);
                 }
@@ -456,8 +479,10 @@ impl Layer for GroundLayer {
             gl.active_texture(glow::TEXTURE0);
             self.apply_values(gl);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+
             let depth = DepthState::ground(gl, relief.is_some());
             let (min, max) = (self.min, self.max);
+
             ground.redraw(gl, view, |a, b| {
                 a.x <= max.x && a.y <= max.y && b.x >= min.x && b.y >= min.y
             });
@@ -469,6 +494,7 @@ impl Layer for GroundLayer {
                 glow::ONE_MINUS_SRC_ALPHA,
             );
         }
+
         false
     }
 
@@ -476,6 +502,7 @@ impl Layer for GroundLayer {
         // SAFETY: objects owned by this layer, not used afterwards
         unsafe {
             gl.delete_program(self.program);
+
             for t in self.textures.values() {
                 gl.delete_texture(t.handle);
             }
@@ -508,6 +535,7 @@ impl Engine {
             DVec2::new(min_x, min_y),
             DVec2::new(max_x, max_y),
         )?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -531,6 +559,7 @@ impl Engine {
         if let Some((layer, _)) = self.layer_mut::<GroundLayer>(id) {
             layer.set_uniform(name, values)?;
         }
+
         Ok(())
     }
 
@@ -553,6 +582,7 @@ impl Engine {
         if let Some((layer, gl)) = self.layer_mut::<GroundLayer>(id) {
             layer.set_texture(gl, name, format, width, height, depth, linear, data.as_deref())?;
         }
+
         Ok(())
     }
 
@@ -573,6 +603,7 @@ impl Engine {
         if let Some((ground, gl)) = self.layer_mut::<GroundLayer>(id) {
             ground.update_texture(gl, name, x, y, layer, width, height, data)?;
         }
+
         Ok(())
     }
 }

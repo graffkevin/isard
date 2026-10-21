@@ -155,12 +155,14 @@ impl Engine {
         #[wasm_bindgen(unchecked_param_type = "() => void")] redraw: js_sys::Function,
     ) -> Result<Engine, JsValue> {
         let attributes = web_sys::WebGlContextAttributes::new();
+
         attributes.set_alpha(false);
         attributes.set_antialias(true);
         attributes.set_depth(true);
         // 3D Tiles: parents standing in for loading children only fill the pixels no finer tile covers
         attributes.set_stencil(true);
         attributes.set_power_preference(web_sys::WebGlPowerPreference::HighPerformance);
+
         let context = canvas
             .get_context_with_context_options("webgl2", &attributes)?
             .ok_or("WebGL2 is not available")?
@@ -183,6 +185,7 @@ impl Engine {
             globe.delete(&gl);
             grid.delete(&gl);
         })?;
+
         Ok(Self {
             gl,
             raw,
@@ -228,6 +231,7 @@ impl Engine {
             self.camera.width = width.max(1.0);
             self.camera.height = height.max(1.0);
         }
+
         if pixel_ratio.is_finite() && pixel_ratio > 0.0 {
             self.pixel_ratio = pixel_ratio;
         }
@@ -247,6 +251,7 @@ impl Engine {
     #[wasm_bindgen(js_name = setFirstPerson)]
     pub fn set_first_person(&mut self, lon: f64, lat: f64, height: f64, bearing: f64, pitch: f64, fov: f64) {
         let finite = |v: f64, default: f64| if v.is_finite() { v } else { default };
+
         self.camera.center = camera::mercator(finite(lon, 0.0), finite(lat, 0.0).clamp(-85.0, 85.0));
         // Fine enough a local frame for an eye a few metres up
         self.camera.zoom = 20.0_f64.min(self.camera.max_zoom);
@@ -266,6 +271,7 @@ impl Engine {
     #[wasm_bindgen(unchecked_return_type = "Camera")]
     pub fn camera(&self) -> JsValue {
         let c = camera::lon_lat(self.camera.center);
+
         js::object(&[
             ("center", js::pair(c.x, c.y)),
             ("zoom", self.camera.zoom.into()),
@@ -312,6 +318,7 @@ impl Engine {
             } else {
                 (-0.01 * radius, 0.01 * radius)
             };
+
             self.camera.body = geo::geodesy::Body {
                 radius,
                 flattening,
@@ -336,6 +343,7 @@ impl Engine {
             let &[sr, sg, sb, hr, hg, hb, fr, fg, fb, sky_horizon, horizon_fog, fog_ground] = s else {
                 return None;
             };
+
             Some(Atmosphere {
                 sky: [sr, sg, sb],
                 horizon: [hr, hg, hb],
@@ -377,6 +385,7 @@ impl Engine {
         let body = self.body();
         let (min_z, max_z) = terrain_levels(&body, max_z);
         let geoid = terrain_geoid(geoid, &body);
+
         match (url, &mut self.terrain) {
             (Some(url), Some((source, current)))
                 if source.options.url == url
@@ -403,6 +412,7 @@ impl Engine {
                         loader,
                     },
                 )?;
+
                 if let Some((old, _)) = self.terrain.replace((source, exaggeration)) {
                     old.delete(&self.gl);
                 }
@@ -414,6 +424,7 @@ impl Engine {
             }
         }
         (self.redraw)();
+
         Ok(())
     }
 
@@ -429,6 +440,7 @@ impl Engine {
     pub fn stats(&self) -> js_sys::Array {
         // The relief comes last, with id 0
         let terrain = self.terrain.as_ref().map(|(source, _)| (0, source));
+
         self.layers
             .iter()
             .filter_map(|(id, slot)| match slot {
@@ -438,6 +450,7 @@ impl Engine {
             .chain(terrain)
             .map(|(id, layer)| {
                 let s = layer.stats;
+
                 js::object(&[
                     ("id", id.into()),
                     ("drawn", s.drawn.into()),
@@ -470,6 +483,7 @@ impl Engine {
     #[must_use]
     pub fn local_matrix(&self, lon: f64, lat: f64, altitude: f64) -> Vec<f32> {
         let view = self.drawn.clone().unwrap_or_else(|| self.camera.view());
+
         (view.view_proj * view.enu_matrix(glam::DVec3::new(lon, lat, altitude)))
             .to_cols_array()
             .map(|v| v as f32)
@@ -492,6 +506,7 @@ impl Engine {
         if !lon.is_finite() || !lat.is_finite() {
             return None;
         }
+
         ground_elevation(self.terrain.as_ref(), camera::mercator(lon, lat))
     }
 
@@ -519,15 +534,18 @@ impl Engine {
                 let headers = (0..count)
                     .filter_map(|_| Some((pairs.next()?, pairs.next()?)))
                     .collect();
+
                 (prefix, headers)
             })
             .collect();
+
         js::set_request_headers(rules);
     }
 
     /// Loads in advance the tiles of a camera flight's destination; `clearPreload` when the flight ends
     pub fn preload(&mut self, lon: f64, lat: f64, zoom: f64, pitch: f64, bearing: f64) {
         let mut camera = self.camera.clone();
+
         camera.set_view(lon, lat, zoom, pitch, bearing);
         self.preload_generation += 1;
         self.preload = Some((self.preload_generation, camera));
@@ -544,8 +562,10 @@ impl Engine {
         if ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
             return;
         }
+
         let (from, to) = (DVec2::new(x0, y0), DVec2::new(x1, y1));
         let altitude = self.grabbed(from);
+
         self.camera.pan_at(from, to, altitude);
         self.grab = Some((to, altitude));
         self.handled = true;
@@ -557,6 +577,7 @@ impl Engine {
         if ![delta, x, y].iter().all(|v| v.is_finite()) {
             return;
         }
+
         let at = DVec2::new(x, y);
         // The relief kept on the CPU first: a wheel notch never waits for the GPU (a read back stalls it)
         let altitude = match self.grab {
@@ -566,6 +587,7 @@ impl Engine {
                 None => self.grabbed(at),
             },
         };
+
         self.camera.zoom_at_altitude(delta, at, altitude);
         self.grab = Some((at, altitude));
         self.handled = true;
@@ -588,6 +610,7 @@ impl Engine {
     #[wasm_bindgen(unchecked_return_type = "[lon: number, lat: number] | undefined")]
     pub fn ground(&mut self, x: f64, y: f64) -> JsValue {
         let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
+
         self.camera
             .ground_at(&self.camera.view(), x, y, altitude)
             .map(camera::lon_lat)
@@ -611,14 +634,19 @@ impl Engine {
         // globe, hidden by the body
         let shift = -(m.x - self.camera.center.x).round();
         let p = view.position(m, shift);
+
         if view.globe.factor > 0.0 && !view.faces_camera(p) {
             return JsValue::UNDEFINED;
         }
+
         let clip = view.view_proj * glam::DVec4::new(p.x, p.y, p.z + altitude * view.vertical, 1.0);
+
         if clip.w <= 0.0 {
             return JsValue::UNDEFINED;
         }
+
         let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+
         js::pair(
             f64::midpoint(x, 1.0) * self.camera.width,
             f64::midpoint(-y, 1.0) * self.camera.height,
@@ -633,21 +661,26 @@ impl Engine {
         let view = self.camera.view();
         let (w, h) = (self.camera.width, self.camera.height);
         let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
+
         for k in 0..=STEPS {
             let t = f64::from(k) / f64::from(STEPS);
+
             for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
                 let m = self
                     .camera
                     .ground_at(&view, x, y, self.camera.elevation)
                     .unwrap_or_else(|| {
                         let (_, far) = self.camera.ray(&view, x, y);
+
                         self.camera.center + DVec2::new(far.x, far.y) / view.world_size
                     });
                 let p = camera::lon_lat(m);
+
                 lo = lo.min(p);
                 hi = hi.max(p);
             }
         }
+
         Box::new([lo.x.max(-180.0), lo.y.max(-85.06), hi.x.min(180.0), hi.y.min(85.06)])
     }
 
@@ -684,6 +717,7 @@ impl Engine {
                 loader,
             },
         )?;
+
         Ok(self.push(Slot::Raster(Box::new(layer))))
     }
 
@@ -702,6 +736,7 @@ impl Engine {
                 Slot::Raster(layer) => layer.delete(&self.gl),
                 Slot::Layer(mut layer) => layer.delete(&self.gl),
             }
+
             for (_, slot) in &mut self.layers {
                 if let Slot::Layer(layer) = slot {
                     layer.forget(id);
@@ -715,6 +750,7 @@ impl Engine {
     pub fn move_layer(&mut self, id: u32, index: usize) {
         if let Some(from) = self.layers.iter().position(|(i, _)| *i == id) {
             let layer = self.layers.remove(from);
+
             self.layers.insert(index.min(self.layers.len()), layer);
         }
     }
@@ -724,6 +760,7 @@ impl Engine {
     /// the horizon shows the halo beyond, not the base)
     fn draw_backdrop(&self, view: &View) {
         let depth = globe::depth(view, self.terrain.as_ref().map(|(_, e)| *e));
+
         self.sky.draw(&self.gl, view, depth);
         self.globe.draw(&self.gl, view, depth);
     }
@@ -731,29 +768,38 @@ impl Engine {
     pub fn render(&mut self) -> bool {
         self.frame += 1;
         self.follow_relief();
+
         let view = self.camera.view();
         let (w, h) = (
             self.camera.width * self.pixel_ratio,
             self.camera.height * self.pixel_ratio,
         );
         let mut loading = false;
+
         self.begin_frame(w, h);
+
         // Camera motion, for the foveated loading
         let key = key_of(&self.camera);
         let now = js_sys::Date::now();
+
         if key != self.last_camera {
             self.last_camera = key;
             self.moved_at = now;
         }
+
         let moving = now - self.moved_at < MOVING_MS;
         let preload = self.preload.as_ref().map(|(generation, camera)| {
             let mut camera = camera.clone();
+
             camera.width = self.camera.width;
             camera.height = self.camera.height;
+
             (*generation, camera.view())
         });
+
         self.drawn = Some(view.clone());
         self.draw_backdrop(&view);
+
         let redraw = self.redraw.clone();
         let ctx = DrawContext {
             view: &view,
@@ -764,46 +810,59 @@ impl Engine {
             loading: self.loading,
             now,
         };
+
         self.raster_pass.begin_frame();
         if let Some((terrain, _)) = &mut self.terrain {
             loading |= terrain.prepare(&self.gl, &ctx);
         }
+
         // Taken out while they draw: each layer gets the engine's state, the rasters the relief to drape on
         let mut layers = std::mem::take(&mut self.layers);
+
         self.place_labels(&mut layers, &view);
+
         let mut i = 0;
+
         while i < layers.len() {
             let id = layers[i].0;
+
             if let Slot::Layer(layer) = &mut layers[i].1 {
                 loading |= self.draw_layer(layer.as_mut(), id, &view);
                 i += 1;
                 continue;
             }
+
             // Consecutive raster layers: one composited pass (up to STACK layers)
             let mut j = i;
+
             while j < layers.len() && j - i < STACK && matches!(layers[j].1, Slot::Raster(_)) {
                 j += 1;
             }
+
             // Each in its columns of the canvas: all of it, or its side of the swipe
             let mut stack: Vec<&mut RasterSource> = layers[i..j]
                 .iter_mut()
                 .filter_map(|(id, slot)| match slot {
                     Slot::Raster(source) => {
                         source.clip = self.swipe_columns(*id).unwrap_or(crate::render::raster::UNCLIPPED);
+
                         Some(source.as_mut())
                     }
                     Slot::Layer(_) => None,
                 })
                 .collect();
+
             for source in &mut stack {
                 loading |= source.prepare(&self.gl, &ctx);
             }
+
             let terrain = self
                 .terrain
                 .as_mut()
                 .map(|(source, exaggeration)| (source, *exaggeration));
             let fog = self.sky.atmosphere.map(|a| a.fog(&view));
             let (frame, fade) = (self.frame, self.loading.fade_ms);
+
             self.raster_pass
                 .draw(&self.gl, &view, &mut stack, terrain, frame, now, fade, fog);
             for source in &stack {
@@ -825,6 +884,7 @@ impl Engine {
         #[cfg(feature = "tiles3d")]
         self.draw_panorama(&view);
         self.draw_viewshed(&view);
+
         loading
     }
 }
@@ -848,8 +908,10 @@ impl Engine {
                     *self
                         .settle_base
                         .get_or_insert((self.camera.center, self.camera.zoom, self.camera.elevation));
+
                 (self.camera.center, self.camera.zoom, self.camera.elevation) = base;
                 self.camera.settle_elevation(h);
+
                 if still {
                     self.last_camera = key_of(&self.camera);
                 }
@@ -864,21 +926,26 @@ impl Engine {
     /// still loading
     fn draw_layer(&self, layer: &mut dyn Layer, id: u32, view: &View) -> bool {
         let columns = self.swipe_columns(id);
+
         if let Some([from, to]) = columns {
             let height = (self.camera.height * self.pixel_ratio).ceil() as i32;
             let from = from.max(0.0) as i32;
             let to = to.min((self.camera.width * self.pixel_ratio).ceil() as f32) as i32;
+
             // SAFETY: state change on the live context, set back below
             unsafe {
                 self.gl.enable(glow::SCISSOR_TEST);
                 self.gl.scissor(from, 0, (to - from).max(0), height);
             }
         }
+
         let loading = layer.draw(&self.frame_state(view));
+
         if columns.is_some() {
             // SAFETY: state change on the live context
             unsafe { self.gl.disable(glow::SCISSOR_TEST) };
         }
+
         loading
     }
 
@@ -886,6 +953,7 @@ impl Engine {
     fn swipe_columns(&self, id: u32) -> Option<[f32; 2]> {
         let swipe = self.swipe.as_ref().filter(|s| s.layers.contains(&id))?;
         let x = (swipe.x * self.pixel_ratio) as f32;
+
         Some(if swipe.right { [x, 1e9] } else { [-1e9, x] })
     }
 
@@ -899,11 +967,15 @@ impl Engine {
     /// it is cleared)
     fn begin_frame(&self, w: f64, h: f64) {
         let gl = &self.gl;
+
         gl::reset_state(gl);
+
         // SAFETY: frame setup on the live context
         unsafe {
             gl.viewport(0, 0, w.round() as i32, h.round() as i32);
+
             let [r, g, b] = self.background;
+
             gl.clear_color(r, g, b, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
         }
@@ -925,9 +997,11 @@ impl Engine {
             .label_grid
             .take()
             .unwrap_or_else(|| geo::collision::Grid::new(width, height));
+
         grid.reset(width, height);
         {
             let frame = self.frame_state(view);
+
             for (_, slot) in layers.iter_mut().rev() {
                 if let Slot::Layer(layer) = slot {
                     layer.place(&frame, &mut grid);
@@ -942,12 +1016,16 @@ impl Engine {
     /// relief tiles there
     fn cpu_altitude(&self, x: f64, y: f64) -> Option<f64> {
         self.terrain.as_ref()?;
+
         let view = self.camera.view();
         let mut altitude = self.camera.elevation;
+
         for _ in 0..3 {
             let m = self.camera.ground_at(&view, x, y, altitude)?;
+
             altitude = ground_elevation(self.terrain.as_ref(), m)?;
         }
+
         Some(altitude)
     }
 
@@ -980,6 +1058,7 @@ impl Engine {
             return None;
         };
         let layer: &mut dyn Any = layer.as_mut();
+
         Some((layer.downcast_mut()?, &self.gl))
     }
 
@@ -993,8 +1072,10 @@ impl Engine {
 
     fn push(&mut self, slot: Slot) -> u32 {
         let id = self.next_id;
+
         self.next_id += 1;
         self.layers.push((id, slot));
+
         id
     }
 
@@ -1008,6 +1089,7 @@ impl Drop for Engine {
     /// harmless. The downloads stop as the sources drop
     fn drop(&mut self) {
         let gl = &self.gl;
+
         for (_, slot) in self.layers.drain(..) {
             match slot {
                 Slot::Raster(layer) => layer.delete(gl),
@@ -1021,6 +1103,7 @@ impl Drop for Engine {
         self.globe.delete(gl);
         self.sky.delete(gl);
         self.grid.delete(gl);
+
         // SAFETY: objects owned by the engine, not used afterwards
         unsafe {
             if let Some(target) = self.pick_target.take() {
@@ -1042,6 +1125,7 @@ impl Drop for Engine {
             if let Some(atlas) = self.glyphs.take() {
                 gl.delete_texture(atlas.texture);
             }
+
             if let Some(atlas) = self.icons.take() {
                 gl.delete_texture(atlas.texture);
             }
@@ -1053,5 +1137,6 @@ impl Drop for Engine {
 /// what the camera orbits; None without relief or before its tiles
 fn ground_elevation(terrain: Option<&(RasterSource, f32)>, m: DVec2) -> Option<f64> {
     let (source, exaggeration) = terrain?;
+
     source.altitude(m).map(|h| h * f64::from(*exaggeration))
 }

@@ -126,6 +126,8 @@ Grouped by theme in entry points of their own (each also exported by `isard` its
 | `isard/formats` | `parseKml`, `parseGpx`, `parseTopoJson` |
 | `isard/projections` | `getCrs`, `registerCrs`, `lambertConformalConic`, `transverseMercator`, `reproject`, `wmtsGrid`, `parseWmtsGrid`, the `Crs` and `TileGrid` types |
 | `isard/geoplateforme` | `geoplateformeWmts`, `geoplateformeWms`, `geoplateformeWfs`, `lambert93Grid`, `IGN_ATTRIBUTION` |
+| `isard/react` | `IsardMap`, `Layer`, `Marker`, `Popup`, `Panel`, `Viewshed`, `Swipe`, `useMap`, `useMapEvent` ([React](./react/)) |
+| `isard/vite` | the Vite plugin serving the engines and workers ([with a bundler](./guide/getting-started#with-a-bundler)) |
 
 | | |
 |---|---|

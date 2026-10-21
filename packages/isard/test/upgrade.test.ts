@@ -15,7 +15,9 @@ let open: (() => void) | undefined;
 let fullStatus = 200;
 const fetchMock = mock(async (url: unknown) => {
   const full = String(url).includes('full');
+
   if (full && gate) await gate;
+
   return new Response(EMPTY_WASM, { status: full ? fullStatus : 200 });
 });
 const fullFetches = () => fetchMock.mock.calls.filter(([url]) => String(url).includes('full')).length;
@@ -79,7 +81,9 @@ const create = async (options: GeoMapOptions = {}): Promise<Map> => {
     wasmUrl: 'full.wasm',
     ...options,
   });
+
   maps.push(map);
+
   return map;
 };
 
@@ -97,26 +101,34 @@ const created = (engine: FakeEngine) =>
 describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => {
   test('the map moves onto it with its camera, settings and layers in order', async () => {
     hold();
+
     const map = await create({ maxPitch: 60 });
     const core = engineOf(map);
+
     expect(core).toBeInstanceOf(CoreFakeEngine);
+
     const below = map.addLines({ data: point });
     const tiles = map.addTiles3d({ url: 'city/tileset.json' });
     const above = map.addCircles({ data: point });
+
     // Waiting: not in the core engine, which has no 3D Tiles
     expect(tiles.id).toBe(-1);
     expect(tiles.stats()).toBeUndefined();
     tiles.setStyle({ opacity: 0.5 });
     map.setMinZoom(3);
     map.setCamera({ center: [5, 45], zoom: 12 });
+
     // No idle while it loads
     const idle = mock(() => {});
+
     map.on('idle', idle);
     frames.flush();
     expect(idle).not.toHaveBeenCalled();
     release();
     await settle();
+
     const full = engineOf(map);
+
     expect(full).not.toBe(core);
     expect(full).not.toBeInstanceOf(CoreFakeEngine);
     expect(core.freed).toBe(true);
@@ -133,15 +145,21 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
 
   test('layers added and moved while it loads keep their order', async () => {
     hold();
+
     const map = await create();
     const core = engineOf(map);
     const a = map.addLines({ data: point });
+
     map.addTiles3d({ url: 'city/tileset.json' });
+
     const b = map.addCircles({ data: point });
+
     // Under a: index 0 in the core engine, which does not hold the 3D Tiles layer
     b.moveBefore(a);
     expect(core.last('moveLayer')).toEqual([b.id, 0]);
+
     const c = map.addFills({ data: point });
+
     release();
     await settle();
     expect(created(engineOf(map))).toEqual(['addCircles', 'addLines', 'addTiles3d', 'addFills']);
@@ -150,10 +168,14 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
 
   test('a map destroyed while it loads stays destroyed', async () => {
     hold();
+
     const map = await create();
+
     map.addTiles3d({ url: 'city/tileset.json' });
     map.destroy();
+
     const engines = FakeEngine.instances.length;
+
     release();
     await settle();
     expect(FakeEngine.instances.length).toBe(engines);
@@ -163,9 +185,11 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
   test('a failed download is reported, the layer waits; the next 3D Tiles layer tries again', async () => {
     fullStatus = 500;
     hold();
+
     const map = await create();
     const first = map.addTiles3d({ url: 'a/tileset.json' });
     const idle = mock(() => {});
+
     map.on('idle', idle);
     // Not idle while it loads
     frames.flush();
@@ -179,7 +203,9 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
     frames.flush();
     expect(idle).toHaveBeenCalled();
     fullStatus = 200;
+
     const second = map.addTiles3d({ url: 'b/tileset.json' });
+
     await settle();
     expect(fullFetches()).toBeGreaterThanOrEqual(2);
     expect(
@@ -193,13 +219,19 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
 
   test('a context lost and restored while it loads: the other layers are back, the 3D Tiles layer still waits', async () => {
     hold();
+
     const map = await create();
+
     map.addLines({ data: point });
+
     const tiles = map.addTiles3d({ url: 'city/tileset.json' });
     const later = map.addCircles({ data: point });
+
     canvasOf(map).dispatch('webglcontextlost');
     expect(() => canvasOf(map).dispatch('webglcontextrestored')).not.toThrow();
+
     const restored = engineOf(map);
+
     expect(restored).toBeInstanceOf(CoreFakeEngine);
     expect(created(restored)).toEqual(['addLines', 'addCircles']);
     expect(later.id).toBeGreaterThanOrEqual(0);
@@ -215,10 +247,14 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
 
   test('a context lost when it arrives: the map moves onto it once the context is restored', async () => {
     hold();
+
     const map = await create();
+
     map.addTiles3d({ url: 'city/tileset.json' });
     canvasOf(map).dispatch('webglcontextlost');
+
     const core = engineOf(map);
+
     release();
     await settle();
     expect(engineOf(map)).toBe(core);
@@ -230,6 +266,7 @@ describe('the engine with 3D Tiles, loaded for the first 3D Tiles layer', () => 
   test("tiles3d: 'preload' compiles it once idle without running it; the first 3D Tiles layer does not download it", async () => {
     const before = fullFetches();
     const map = await create({ tiles3d: 'preload' });
+
     expect(fullFetches()).toBe(before);
     frames.flush();
     await settle();
@@ -247,10 +284,13 @@ describe('context loss', () => {
     const map = await create();
     const buildings = map.addExtrusions();
     const network = map.addNetwork({ nodes: Float64Array.of(0, 0, 1, 1), edges: Uint32Array.of(0, 1) });
+
     buildings.linkNetwork(network, 600);
     canvasOf(map).dispatch('webglcontextlost');
     canvasOf(map).dispatch('webglcontextrestored');
+
     const fresh = engineOf(map);
+
     expect(fresh.last('linkExtrusionNetwork')).toEqual([buildings.id, network.id, 600]);
     // Never linked to an id of the old engine
     expect(fresh.args('linkExtrusionNetwork').every(([, id]) => id === network.id)).toBe(true);
@@ -261,6 +301,7 @@ describe('context loss', () => {
     const first = map.addLines({ data: point });
     const failing = map.addCircles({ data: point });
     const last = map.addFills({ data: point });
+
     canvasOf(map).dispatch('webglcontextlost');
     // The next engine fails to create circles
     FakeEngine.failNext.add('addCircles');
@@ -274,10 +315,13 @@ describe('context loss', () => {
 
   test('a context restored after destroy brings nothing back', async () => {
     const map = await create();
+
     map.addLines({ data: point });
     canvasOf(map).dispatch('webglcontextlost');
     map.destroy();
+
     const engines = FakeEngine.instances.length;
+
     canvasOf(map).dispatch('webglcontextrestored');
     expect(FakeEngine.instances.length).toBe(engines);
     expect(canvasOf(map).listeners.get('webglcontextrestored')?.size ?? 0).toBe(0);
@@ -287,8 +331,11 @@ describe('context loss', () => {
     const map = await create();
     const engine = engineOf(map);
     const glyphs = map.glyphs;
+
     map.destroy();
+
     const calls = engine.calls.length;
+
     // A range arriving late uploads its page
     (glyphs as unknown as { flush(): void }).flush();
     expect(engine.calls.length).toBe(calls);
@@ -298,9 +345,12 @@ describe('context loss', () => {
 describe('hover', () => {
   test('a mouse moving over a map nobody listens to draws nothing', async () => {
     const map = await create();
+
     frames.flush();
+
     const engine = engineOf(map);
     const renders = engine.args('render').length;
+
     Array.from({ length: 10 }, (_, i) => i).forEach((i) => {
       canvasOf(map).dispatch('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: i, clientY: i });
       frames.flush();
@@ -311,10 +361,13 @@ describe('hover', () => {
 
   test('hoverfeature alone: frames for the picking, no position computed', async () => {
     const map = await create();
+
     map.on('hoverfeature', () => {});
     frames.flush();
+
     const engine = engineOf(map);
     const renders = engine.args('render').length;
+
     map.hover([3, 4]);
     frames.run();
     expect(engine.args('render').length).toBe(renders + 1);
@@ -324,11 +377,16 @@ describe('hover', () => {
 
   test("the canvas's place is read once, not on every pointer move", async () => {
     const map = await create();
+
     map.on('hover', () => {});
+
     const canvas = canvasOf(map);
+
     canvas.left = 100;
     canvas.top = 50;
+
     const events: unknown[] = [];
+
     map.on('hover', (e) => events.push(e.point));
     Array.from({ length: 5 }, (_, i) => i).forEach((i) => {
       canvas.dispatch('pointermove', { pointerId: 1, pointerType: 'mouse', clientX: 110 + i, clientY: 60 });
@@ -347,8 +405,11 @@ describe('hover', () => {
 
   test('a picking the engine refuses stops the poll under way; an answer that never comes is given up', async () => {
     const map = await create();
+
     map.on('hoverfeature', () => {});
+
     const engine = engineOf(map);
+
     map.hover([1, 1]);
     frames.run();
     // The poll runs; the next request is refused
@@ -356,7 +417,9 @@ describe('hover', () => {
     map.hover([2, 2]);
     frames.flush(100);
     expect(frames.pending).toBe(0);
+
     const polls = engine.args('pollPick').length;
+
     // Never answered: at most 30 polls
     engine.canPick = true;
     map.hover([3, 3]);
@@ -369,6 +432,7 @@ describe('hover', () => {
 describe('models, on the engine with 3D Tiles', () => {
   test('the first model moves the map onto it; instances set meanwhile are kept', async () => {
     hold();
+
     const map = await create();
     const below = map.addLines({ data: point });
     const models = map.addModels({
@@ -376,16 +440,21 @@ describe('models, on the engine with 3D Tiles', () => {
       instances: [{ lonLat: [3, 44], heading: 90 }],
       altitudeReference: 'sea',
     });
+
     expect(models.id).toBe(-1);
     expect(engineOf(map).args('addModels')).toEqual([]);
     models.setInstances([{ lonLat: [3, 44] }, { lonLat: [3.1, 44.1], altitude: 20, scale: 2 }]);
     release();
     await settle();
+
     const full = engineOf(map);
+
     expect(full).not.toBeInstanceOf(CoreFakeEngine);
     expect(created(full)).toEqual(['addLines', 'addModels']);
     expect(below.id).toBeGreaterThanOrEqual(0);
+
     const [url, numbers, ground] = full.last('addModels') ?? [];
+
     expect(url).toBe('turbine.glb');
     expect([...(numbers as Float64Array)]).toEqual([3, 44, 0, 0, 0, 0, 1, 3.1, 44.1, 20, 0, 0, 0, 2]);
     expect(ground).toBe(false);
@@ -398,11 +467,13 @@ describe('models, on the engine with 3D Tiles', () => {
   test("a model's bytes go by a blob URL, revoked once removed; a model needs a url or data", async () => {
     const revoked: string[] = [];
     const revoke = URL.revokeObjectURL;
+
     URL.revokeObjectURL = (url: string) => revoked.push(url);
     try {
       const map = await create({ tiles3d: true });
       const models = map.addModels({ data: new Uint8Array([1, 2, 3]), instances: [] });
       const [url] = engineOf(map).last('addModels') ?? [];
+
       expect(String(url)).toStartWith('blob:');
       // Kept for a context loss
       canvasOf(map).dispatch('webglcontextlost');
@@ -419,6 +490,7 @@ describe('models, on the engine with 3D Tiles', () => {
 
   test('a model and a context loss: created again in the new engine', async () => {
     const map = await create({ tiles3d: true });
+
     map.addModels({ url: 'a.glb', instances: [{ lonLat: [0, 0] }] });
     canvasOf(map).dispatch('webglcontextlost');
     canvasOf(map).dispatch('webglcontextrestored');
@@ -429,31 +501,43 @@ describe('models, on the engine with 3D Tiles', () => {
 describe('point clouds, on the engine with 3D Tiles', () => {
   test('the first point cloud moves the map onto it; its style set meanwhile is kept', async () => {
     hold();
+
     const map = await create();
     const below = map.addLines({ data: point });
     const cloud = map.addPointCloud({ url: 'https://example.org/lidar.copc.laz', pointSize: 3 });
+
     expect(cloud.format).toBe('copc');
     expect(cloud.id).toBe(-1);
     expect(cloud.stats()).toBeUndefined();
     cloud.setStyle({ colorBy: 'elevation', edl: true, classifications: { 2: { visible: false } } });
     release();
     await settle();
+
     const full = engineOf(map);
+
     expect(full).not.toBeInstanceOf(CoreFakeEngine);
     expect(created(full)).toEqual(['addLines', 'addPointCloud']);
     expect(below.id).toBeGreaterThanOrEqual(0);
+
     const [url, resolve] = full.last('addPointCloud') ?? [];
+
     expect(url).toBe('https://example.org/lidar.copc.laz');
+
     // The engine asks the page for the CRS of the file's WKT
     const crs = (resolve as (wkt?: string) => { geoid: boolean; verticalScale: number })(
       'PROJCS["RGF93 v1 / Lambert-93",GEOGCS["RGF93 v1"],UNIT["metre",1],AUTHORITY["EPSG","2154"]]',
     );
+
     expect(crs).toMatchObject({ geoid: true, verticalScale: 1 });
     expect(() => (resolve as (wkt?: string) => unknown)(undefined)).toThrow('names no CRS');
+
     const [id, numbers, palette, ramp] = full.last('setPointCloudStyle') ?? [];
+
     expect(id).toBe(cloud.id);
+
     // Elevation, 3 px, adaptive, round, EDL of strength 1, no rate limit
     const n = [...(numbers as Float64Array)];
+
     expect([n[0], n[1], n[3], n[4], n[5], n[13]]).toEqual([2, 3, 1, 1, 1, 0]);
     expect((palette as Uint8Array)[2 * 4 + 3]).toBe(0);
     expect((ramp as Uint8Array).length).toBe(1024);
@@ -463,8 +547,11 @@ describe('point clouds, on the engine with 3D Tiles', () => {
   test('the Géoplateforme is asked 8 times a second at most; a tileset.json is 3D Tiles', async () => {
     const map = await create({ tiles3d: true });
     const lidar = map.addPointCloud({ url: 'https://data.geopf.fr/telechargement/download/x.copc.laz' });
+
     expect(engineOf(map).last('setPointCloudStyle')?.[1]).toSatisfy((n) => (n as Float64Array)[13] === 8);
+
     const tiles = map.addPointCloud({ url: 'points/tileset.json', pointSize: 4 });
+
     expect(tiles.format).toBe('3dtiles');
     expect(engineOf(map).last('setTiles3dStyle')).toEqual([tiles.id, 16, 1, 4, new Float32Array()]);
     tiles.setStyle({ pointSize: 5 });
@@ -477,6 +564,7 @@ describe('point clouds, on the engine with 3D Tiles', () => {
     const map = await create({ tiles3d: true });
     const cloud = map.addPointCloud({ url: 'a.copc.laz' });
     const engine = engineOf(map) as unknown as Record<string, unknown>;
+
     engine.pointCloudPoint = (_id: number, index: number) =>
       index === 3 ? { lonLat: [2.35, 48.85], height: 80, altitude: 36, classification: 6, intensity: 9 } : undefined;
     expect(cloud.featureAt(3)).toMatchObject({
@@ -507,6 +595,7 @@ describe('custom layers', () => {
       ),
       onRemove: mock((_gl: WebGL2RenderingContext, _map: unknown) => calls.push('remove')),
     };
+
     return { layer, calls, frames };
   };
   /** Draws a frame of the engine, calling the custom layers it holds as the engine does */
@@ -521,6 +610,7 @@ describe('custom layers', () => {
     const { layer, calls, frames } = custom('3d');
     const handle = map.addCustomLayer(layer);
     const engine = engineOf(map);
+
     expect(layer.onAdd).toHaveBeenCalledTimes(1);
     expect(layer.onAdd.mock.calls[0]?.[1]).toBe(map);
     expect(engine.last('addCustomLayer')?.[1]).toBe(true);
@@ -545,13 +635,16 @@ describe('custom layers', () => {
   test("'2d' by default; an error of the page is reported, the frame goes on; matrices only while drawing", async () => {
     const map = await create();
     const { layer } = custom();
+
     map.addCustomLayer(layer);
+
     const failing = map.addCustomLayer({
       render: () => {
         throw new Error('page bug');
       },
     });
     const engine = engineOf(map);
+
     expect(engine.args('addCustomLayer').map(([, depth]) => depth)).toEqual([false, false]);
     // Outside the engine's frame: no matrix
     expect(() => draw(engine)).not.toThrow();
@@ -562,13 +655,19 @@ describe('custom layers', () => {
 
   test('the camera of the frame while the engine draws, without asking the busy engine', async () => {
     const map = await create();
+
     map.setCamera({ center: [5, 45], zoom: 12 });
+
     const { layer, frames: seen } = custom();
+
     map.addCustomLayer(layer);
+
     const engine = engineOf(map);
     let asked = 0;
+
     engine.onRender = () => {
       const before = engine.args('camera').length;
+
       FakeEngine.matrix = new Float32Array(16);
       draw(engine);
       FakeEngine.matrix = undefined;
@@ -587,6 +686,7 @@ describe('custom layers', () => {
     const map = await create();
     const below = map.addLines({ data: point });
     const { layer, calls } = custom('3d');
+
     map.addCustomLayer(layer, { before: below });
     canvasOf(map).dispatch('webglcontextlost');
     canvasOf(map).dispatch('webglcontextrestored');
@@ -598,13 +698,17 @@ describe('custom layers', () => {
 
   test('the map moving onto the engine with 3D Tiles keeps its objects (the same context)', async () => {
     hold();
+
     const map = await create();
     const { layer, calls } = custom('3d');
+
     map.addCustomLayer(layer);
     map.addTiles3d({ url: 'city/tileset.json' });
     release();
     await settle();
+
     const full = engineOf(map);
+
     expect(full).not.toBeInstanceOf(CoreFakeEngine);
     expect(full.args('addCustomLayer').length).toBe(1);
     expect(calls).toEqual(['add']);

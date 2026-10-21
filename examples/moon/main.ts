@@ -66,6 +66,7 @@ map.on('click', ({ lonLat }) => {
 document.querySelectorAll<HTMLButtonElement>('button[data-view]').forEach((button) => {
   button.addEventListener('click', () => {
     const view = button.dataset.view ?? '';
+
     history.replaceState(null, '', view === 'globe' ? location.pathname : `#${view}`);
     map.flyTo(views[view] ?? globe, { duration: 5000 });
   });

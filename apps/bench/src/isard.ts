@@ -10,6 +10,7 @@ const container: HTMLDivElement = found;
 const zoom = (range: number, lat: number): number => {
   const centerDistance = (0.5 * container.clientHeight) / Math.tan(((FOV / 2) * Math.PI) / 180);
   const metresAround = 2 * Math.PI * 6_378_137 * Math.cos((lat * Math.PI) / 180);
+
   return Math.log2(((centerDistance / range) * metresAround) / 512);
 };
 
@@ -45,6 +46,7 @@ await benchmark({
   meshTiles: () => mesh.stats()?.drawn ?? 0,
   info(): string {
     const s = mesh.stats();
+
     return s ? `3D tiles: ${s.drawn} drawn, ${s.loaded} kept (${s.gpuMb.toFixed(0)} MB)` : '';
   },
 });

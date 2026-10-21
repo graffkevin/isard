@@ -39,6 +39,7 @@ let named: Map<string, string> | undefined;
 const namedHex = (name: string): string | undefined => {
   if (!named) {
     const words = NAMES.split(' ');
+
     named = new Map(
       Array.from({ length: Math.floor(words.length / 2) }, (_, i) => [
         words[2 * i] as string,
@@ -46,6 +47,7 @@ const namedHex = (name: string): string | undefined => {
       ]),
     );
   }
+
   return named.get(name);
 };
 
@@ -53,14 +55,17 @@ const clamp = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) :
 
 const hex = (digits: string): Rgba | undefined => {
   if (!/^[0-9a-f]+$/.test(digits) || ![3, 4, 6, 8].includes(digits.length)) return undefined;
+
   const full = digits.length <= 4 ? [...digits].map((h) => h + h).join('') : digits;
   const v = (i: number) => Number.parseInt(full.slice(i, i + 2), 16) / 255;
+
   return [v(0), v(2), v(4), full.length === 8 ? v(6) : 1];
 };
 
 /** An alpha: a number from 0 to 1 or a percentage */
 const alpha = (p: string | undefined): number => {
   if (p === undefined) return 1;
+
   return clamp(p.endsWith('%') ? Number.parseFloat(p) / 100 : Number.parseFloat(p));
 };
 
@@ -69,36 +74,52 @@ const hsl = (h: number, s: number, l: number): [number, number, number] => {
   const p = 2 * l - q;
   const hue = (t: number) => {
     const u = ((t % 1) + 1) % 1;
+
     if (u < 1 / 6) return p + (q - p) * 6 * u;
     if (u < 1 / 2) return q;
     if (u < 2 / 3) return p + (q - p) * (2 / 3 - u) * 6;
+
     return p;
   };
+
   return [hue(h + 1 / 3), hue(h), hue(h - 1 / 3)];
 };
 
 /** A CSS color to RGBA 0-1; undefined if it is not one */
 export const parseCssColor = (value: unknown): Rgba | undefined => {
   if (typeof value !== 'string') return undefined;
+
   const c = value.trim().toLowerCase();
+
   if (c.startsWith('#')) return hex(c.slice(1));
   if (c === 'transparent') return [0, 0, 0, 0];
+
   const name = namedHex(c);
+
   if (name) return hex(name);
+
   const match = /^(rgba?|hsla?)\(([^)]*)\)$/.exec(c);
+
   if (!match?.[1] || match[2] === undefined) return undefined;
+
   const parts = match[2].split(/[\s,/]+/).filter(Boolean);
+
   if (parts.length < 3 || parts.slice(0, 3).some((p) => Number.isNaN(Number.parseFloat(p)))) return undefined;
+
   const a = alpha(parts[3]);
+
   if (match[1].startsWith('rgb')) {
     const channel = (p: string) => clamp(p.endsWith('%') ? Number.parseFloat(p) / 100 : Number.parseFloat(p) / 255);
+
     return [channel(parts[0] as string), channel(parts[1] as string), channel(parts[2] as string), a];
   }
+
   const h = Number.parseFloat(parts[0] as string) / 360;
   const [r, g, b] = hsl(
     h,
     clamp(Number.parseFloat(parts[1] as string) / 100),
     clamp(Number.parseFloat(parts[2] as string) / 100),
   );
+
   return [r, g, b, a];
 };

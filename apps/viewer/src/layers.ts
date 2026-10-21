@@ -42,8 +42,10 @@ export const tileLayerNames = (bytes: Uint8Array): string[] => {
   const varint = () => {
     let value = 0;
     let scale = 1;
+
     for (;;) {
       const b = bytes[pos++];
+
       if (b === undefined) throw new Error('truncated');
       value += (b & 0x7f) * scale;
       if (b < 0x80) return value;
@@ -57,14 +59,19 @@ export const tileLayerNames = (bytes: Uint8Array): string[] => {
     else if (wire === 5) pos += 4;
     else throw new Error(`wire type ${wire}`);
   };
+
   while (pos < bytes.length) {
     const key = varint();
+
     if (key >> 3 === 3 && (key & 7) === 2) {
       const end = varint() + pos;
+
       while (pos < end) {
         const k = varint();
+
         if (k >> 3 === 1 && (k & 7) === 2) {
           const length = varint();
+
           names.push(new TextDecoder().decode(bytes.subarray(pos, pos + length)));
           pos += length;
         } else skip(k & 7);
@@ -72,6 +79,7 @@ export const tileLayerNames = (bytes: Uint8Array): string[] => {
       pos = end;
     } else skip(key & 7);
   }
+
   return names;
 };
 
@@ -98,7 +106,9 @@ export class Layers {
   /** Adds (or replaces) a layer */
   add(message: AddMessage, extra: { blob?: string } = {}): Entry {
     const old = this.entries.get(message.id);
+
     if (old) this.drop(old, old.blob !== extra.blob);
+
     const entry: Entry = {
       id: message.id,
       message,
@@ -109,13 +119,16 @@ export class Layers {
       generation: 0,
       ...(extra.blob ? { blob: extra.blob } : {}),
     };
+
     this.entries.set(message.id, entry);
     this.show(entry);
+
     return entry;
   }
 
   remove(id: string): void {
     const entry = this.entries.get(id);
+
     if (!entry) return;
     this.drop(entry, true);
     this.entries.delete(id);
@@ -130,6 +143,7 @@ export class Layers {
 
   setVisible(id: string, visible: boolean): void {
     const entry = this.entries.get(id);
+
     if (!entry || entry.visible === visible) return;
     entry.visible = visible;
     if (visible) this.show(entry);
@@ -148,12 +162,18 @@ export class Layers {
       this.removeHandle(h);
     });
     this.highlight = [];
+
     const entry = this.entries.get(id);
+
     if (index === null || !entry || entry.message.type !== 'addGeoJSON') return;
+
     const feature = entry.message.data.features[index];
+
     if (!feature?.geometry) return;
+
     const data = { type: 'FeatureCollection', features: [feature] } as FeatureCollection;
     const width = (entry.message.style?.width ?? 2) + 3;
+
     this.highlight = [
       this.map.addLines({ data, color: HIGHLIGHT, width }),
       this.map.addCircles({
@@ -186,13 +206,16 @@ export class Layers {
 
   private show(entry: Entry): void {
     const generation = ++entry.generation;
+
     entry.error = undefined;
+
     const done = (handles: Handle[]) => {
       // Hidden or replaced meanwhile
       if (generation !== entry.generation || this.entries.get(entry.id) !== entry) {
         handles.forEach((h) => {
           this.removeHandle(h);
         });
+
         return;
       }
       entry.handles.push(...handles);
@@ -204,8 +227,10 @@ export class Layers {
       this.report(entry.error, entry.id);
       this.onChange();
     };
+
     try {
       const result = this.create(entry);
+
       if (Array.isArray(result)) done(result);
       else result.then(done, fail);
     } catch (error) {
@@ -216,9 +241,11 @@ export class Layers {
   private create(entry: Entry): Handle[] | Promise<Handle[]> {
     const m = entry.message;
     const map = this.map;
+
     switch (m.type) {
       case 'addGeoJSON':
         entry.bounds = collectionBounds(m.data);
+
         return this.geojson(m.data, m.style ?? {});
       case 'addRaster':
         return [
@@ -237,7 +264,9 @@ export class Layers {
             const header = await new PMTiles(absolute(m.url.replace(/^pmtiles:\/\//, '')))
               .header()
               .catch(() => undefined);
+
             if (header) entry.bounds = header.bounds;
+
             return [handle];
           });
       case 'addVectorTiles':
@@ -249,10 +278,14 @@ export class Layers {
       case 'addModels': {
         const center = map.getCamera().center as LonLat;
         const instances = m.instances.length > 0 ? m.instances : [{ lonLat: center }];
+
         if (m.instances.length === 0) m.instances = instances;
+
         const lons = instances.map((i) => i.lonLat[0]);
         const lats = instances.map((i) => i.lonLat[1]);
+
         entry.bounds = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
+
         return [map.addModels({ url: m.url, instances })];
       }
     }
@@ -267,6 +300,7 @@ export class Layers {
     const colorOf = prop
       ? (p: Record<string, unknown> | null) => {
           const c = p?.[prop];
+
           return typeof c === 'string' && c ? c : color;
         }
       : undefined;
@@ -280,18 +314,24 @@ export class Layers {
         });
       } else types.add(g.type.replace('Multi', ''));
     };
+
     data.features.forEach((f) => {
       scan(f.geometry);
     });
+
     const handles: Handle[] = [];
     const height = (p: Record<string, unknown> | null, key: string | number | undefined) => {
       if (typeof key === 'number') return key;
+
       const v = key ? Number(p?.[key]) : 0;
+
       return Number.isFinite(v) ? v : 0;
     };
+
     if (types.has('Polygon')) {
       if (style.extrude) {
         const { height: h, base } = style.extrude;
+
         handles.push(
           map.addExtrusions({
             data: collection,
@@ -320,13 +360,16 @@ export class Layers {
         }),
       );
     }
+
     const label = style.label;
+
     if (label) {
       handles.push(
         map.addSymbols({
           data: collection,
           text: (p) => {
             const v = p?.[label];
+
             return v === undefined || v === null ? '' : String(v);
           },
           size: 12,
@@ -338,6 +381,7 @@ export class Layers {
         }),
       );
     }
+
     return handles;
   }
 
@@ -347,19 +391,24 @@ export class Layers {
     const [minZoom, maxZoom] = [m.minZoom ?? 0, m.maxZoom ?? 14];
     const layerNames = async (): Promise<string[]> => {
       if (m.layers?.length) return m.layers;
+
       const camera = this.map.getCamera();
       const z = Math.round(Math.max(minZoom, Math.min(maxZoom, camera.zoom)));
       const n = 2 ** z;
       const [lon, lat] = camera.center;
       const x = Math.min(n - 1, Math.floor(lon2x(lon) * n));
       const y = Math.min(n - 1, Math.floor(lat2y(lat) * n));
+
       for (const [tz, tx, ty] of [
         [z, x, y],
         [minZoom, Math.floor(x / 2 ** (z - minZoom)), Math.floor(y / 2 ** (z - minZoom))],
       ] as [number, number, number][]) {
         const response = await fetch(url.replace('{z}', `${tz}`).replace('{x}', `${tx}`).replace('{y}', `${ty}`));
+
         if (!response.ok || response.status === 204) continue;
+
         const names = tileLayerNames(new Uint8Array(await response.arrayBuffer()));
+
         if (names.length) return names;
       }
       throw new Error('no vector tile here to read the layers from: give `layers`');
@@ -368,8 +417,10 @@ export class Layers {
       (m.style as Style | undefined) ??
       basicStyle({ tiles: [url], minzoom: minZoom, maxzoom: maxZoom }, await layerNames());
     const tiles = this.map.vectorTiles({ style, ...(m.attribution ? { attribution: m.attribution } : {}) });
+
     tiles.raster();
     tiles.labels();
+
     return [tiles];
   }
 }
@@ -387,5 +438,6 @@ export const boundsCamera = (
   const zoom = Math.log2(Math.min(w / (dx * 512), h / (dy * 512)));
   const cy = (lat2y(south) + lat2y(north)) / 2;
   const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * cy))) * 180) / Math.PI;
+
   return { center: [(west + east) / 2, lat], zoom: Math.max(0, Math.min(18, zoom)) };
 };

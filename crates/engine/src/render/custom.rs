@@ -31,19 +31,26 @@ pub struct CustomLayer {
 impl Layer for CustomLayer {
     fn draw(&mut self, frame: &Frame) -> bool {
         let gl = frame.gl;
+
         VIEW.set(Some(frame.view.clone()));
         // SAFETY: state changes on a live context, set back after the callback
         unsafe {
             gl.disable(glow::CULL_FACE);
             gl.front_face(glow::CCW);
+
             if self.depth {
                 gl.enable(glow::DEPTH_TEST);
             }
         }
+
         let _ = self.render.call0(&JsValue::NULL);
+
         VIEW.set(None);
+
         let size = |side: f64| (side * frame.pixel_ratio).round() as i32;
+
         gl::reset_after_page(gl, size(frame.camera.width), size(frame.camera.height));
+
         false
     }
 
@@ -64,7 +71,9 @@ impl Engine {
         let m = view
             .as_ref()
             .map(|v| (v.view_proj * v.enu_matrix(glam::DVec3::new(lon, lat, altitude))).to_cols_array());
+
         VIEW.set(view);
+
         Some(m?.map(|v| v as f32).to_vec())
     }
 

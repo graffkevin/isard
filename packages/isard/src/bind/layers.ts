@@ -65,6 +65,7 @@ export type LayerChange =
  */
 export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | undefined => {
   if (prev.type !== next.type) return { rebuild: true };
+
   const before = prev as Spec;
   const after = next as Spec;
   const styleKeys = STYLE_KEYS[next.type];
@@ -73,14 +74,18 @@ export const layerChange = (prev: LayerSpec, next: LayerSpec): LayerChange | und
   const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
     (key) => key !== 'type' && !Object.is(before[key], after[key]),
   );
+
   if (keys.length === 0) return undefined;
+
   const isStyle = (key: string) => key !== 'before' && (styleKeys === 'all' || styleKeys.has(key));
+
   // A style or setting taken away: the layer goes back to its defaults, as made anew
   if (keys.some((key) => !(key in after) || !(own?.has(key) || isStyle(key)))) return { rebuild: true };
   keys.forEach((key) => {
     if (own?.has(key)) change.own[key] = after[key];
     else change.style[key] = after[key];
   });
+
   return change;
 };
 
@@ -103,6 +108,7 @@ export const applyLayerChange = (
   const target = layer as unknown as Settable;
   const spec = next as Spec;
   const own = change.own;
+
   if ('data' in own) target.setData?.(own.data);
   if ('costs' in own) target.setCosts?.(own.costs);
   if ('edgeWidths' in own) target.setEdgeWidths?.(own.edgeWidths);
@@ -132,6 +138,7 @@ export class LayerOrder {
   place(layer: Layer, order: number, old?: Layer): void {
     const index = old ? this.entries.findIndex((e) => e.layer === old) : -1;
     const entry = index >= 0 ? this.entries[index] : undefined;
+
     if (entry) {
       entry.layer = layer;
       entry.order = order;
@@ -139,14 +146,17 @@ export class LayerOrder {
       this.entries.push({ layer, order, seq: this.seq++ });
     }
     this.entries.sort((a, b) => a.order - b.order || a.seq - b.seq);
+
     const at = this.entries.findIndex((e) => e.layer === layer);
     const above = this.entries[at + 1]?.layer;
+
     if (above) layer.moveBefore(above);
   }
 
   /** Forgets a layer removed */
   remove(layer: Layer): void {
     const index = this.entries.findIndex((e) => e.layer === layer);
+
     if (index >= 0) this.entries.splice(index, 1);
   }
 }

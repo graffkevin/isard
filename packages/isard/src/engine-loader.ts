@@ -52,6 +52,7 @@ export type AssetFile =
 /** The folder the assets are served from for the whole page, as `isard/vite` sets it; undefined: next to the module */
 const pageAssets = (): string | undefined => {
   const url = (globalThis as { isardAssetsUrl?: unknown }).isardAssetsUrl;
+
   return typeof url === 'string' ? url : undefined;
 };
 
@@ -65,10 +66,13 @@ export const assetUrl = (
   assetsUrl?: string | URL,
 ): string | URL => {
   if (explicit) return explicit;
+
   const folder = assetsUrl ?? pageAssets();
+
   if (folder) {
     const base = typeof document === 'undefined' ? undefined : document.baseURI;
     const dir = String(folder).endsWith('/') ? String(folder) : `${String(folder)}/`;
+
     return new URL(file, base ? new URL(dir, base) : dir);
   }
   switch (file) {
@@ -98,33 +102,43 @@ export const engineUrl = (
 /** Downloads and compiles a build (once per page, unless it failed: a later call tries again) */
 const compileEngine = (kind: EngineKind, url: string | URL): Promise<WebAssembly.Module> => {
   const compiled = modules[kind];
+
   if (compiled) return compiled;
+
   const compiling = compile(url).catch((error: unknown) => {
     // A later call tries again (a network error, a wrong URL fixed)
     delete modules[kind];
     throw error;
   });
+
   modules[kind] = compiling;
+
   return compiling;
 };
 
 /** A build compiled and instantiated with its bindings (once per page, unless it failed) */
 export const loadEngine = (kind: EngineKind, url: string | URL): Promise<Bindings> => {
   const loaded = engines[kind];
+
   if (loaded) return loaded;
+
   const loading = (async () => {
     // The bindings by dynamic import: an application bundles the ones it loads only
     const [module, bindings] = await Promise.all([
       compileEngine(kind, url),
       kind === 'core' ? import('./wasm/isard_core.js') : import('./wasm/isard.js'),
     ]);
+
     await bindings.default({ module_or_path: module });
+
     return { module, Engine: bindings.Engine as unknown as EngineClass };
   })().catch((error: unknown) => {
     delete engines[kind];
     throw error;
   });
+
   engines[kind] = loading;
+
   return loading;
 };
 
@@ -142,12 +156,14 @@ export const preloadFullEngine = (url: string | URL, wanted: () => boolean): voi
   const start = () => {
     if (wanted()) compileEngine('full', url).catch(() => undefined);
   };
+
   if (typeof requestIdleCallback === 'function') requestIdleCallback(start, { timeout: 2000 });
   else setTimeout(start, 0);
 };
 
 const compile = async (url: string | URL): Promise<WebAssembly.Module> => {
   const response = await fetch(url);
+
   if (!response.ok) throw new Error(`isard: failed to load the engine from ${url}: ${response.status}`);
   try {
     return await WebAssembly.compileStreaming(response.clone());
@@ -162,6 +178,7 @@ const compile = async (url: string | URL): Promise<WebAssembly.Module> => {
 export const pointsUrl = (options: Pick<GeoMapOptions, 'pointsWasmUrl' | 'assetsUrl'>): string => {
   const url = assetUrl('isard_points_bg.wasm', options.pointsWasmUrl, options.assetsUrl);
   const base = typeof document === 'undefined' ? undefined : document.baseURI;
+
   return base ? new URL(url, base).href : String(url);
 };
 
@@ -174,7 +191,9 @@ export const startTileLoader = (
 ): TileLoader | undefined => {
   const { workers: count, workerUrl, decoders } = options;
   const workers = count ?? defaultWorkerCount();
+
   if (workers === false || workers <= 0 || typeof Worker === 'undefined') return undefined;
+
   return new TileLoader(
     module,
     assetUrl('decoder.worker.js', workerUrl, options.assetsUrl),
@@ -194,6 +213,7 @@ export const destroyedEngine = (camera: Camera): Engine => {
       get: (_, name) => {
         if (name === 'camera') return () => camera;
         if (name === 'bounds') return () => Float64Array.of(-180, -85, 180, 85);
+
         return () => undefined;
       },
     },

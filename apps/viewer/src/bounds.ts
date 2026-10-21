@@ -13,6 +13,7 @@ export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined =>
       b[1] = Math.min(b[1], c[1]);
       b[2] = Math.max(b[2], c[0]);
       b[3] = Math.max(b[3], c[1]);
+
       return;
     }
     for (const x of c) visit(x);
@@ -26,8 +27,10 @@ export const collectionBounds = (data: GeoJsonCollection): Bounds | undefined =>
       });
     }
   };
+
   (data.features ?? []).forEach((f) => {
     geometry(f.geometry);
   });
+
   return Number.isFinite(b[0]) ? b : undefined;
 };

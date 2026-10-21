@@ -99,6 +99,7 @@ type Factory<T> = (options: { wasmBinary: ArrayBuffer }) => Promise<T>;
  * `'unsafe-eval'` under a Content Security Policy (see `DecoderUrls`) */
 const factory = async <T>(url: string, name: string): Promise<Factory<T>> => {
   const source = await (await fetch(url)).text();
+
   return new Function(`${source}\nreturn ${name};`)() as Factory<T>;
 };
 
@@ -107,6 +108,7 @@ const instantiate = async <T>(base: string, script: string, wasm: string, name: 
     factory<T>(`${base}${script}`, name),
     fetch(`${base}${wasm}`).then((r) => r.arrayBuffer()),
   ]);
+
   return create({ wasmBinary: binary });
 };
 
@@ -118,6 +120,7 @@ let basis: Promise<BasisModule> | undefined;
 /** Decodes the Draco primitives of a tile (their points alone for point clouds) */
 export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): Promise<DracoGeometry[]> => {
   const meshes = requests.some((r) => !r.points);
+
   if (meshes) {
     draco ??= instantiate<DracoModule>(
       urls.draco,
@@ -134,43 +137,56 @@ export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): 
       'DracoDecoderModule',
     );
   }
+
   const [forMeshes, forPoints] = await Promise.all([meshes ? draco : undefined, dracoPoints]);
+
   return requests.map((request) => {
     const module = (request.points ? forPoints : forMeshes) as DracoModule;
     const decoder = new module.Decoder();
     const mesh = request.points ? new module.PointCloud() : new module.Mesh();
+
     try {
       const data = new Int8Array(request.data.buffer, request.data.byteOffset, request.data.byteLength);
       const status = request.points
         ? decoder.DecodeArrayToPointCloud(data, data.byteLength, mesh)
         : decoder.DecodeArrayToMesh(data, data.byteLength, mesh);
+
       if (!status.ok()) throw new Error(`Draco: ${status.error_msg()}`);
+
       const floats = (id: number): Float32Array => {
         const attribute = decoder.GetAttributeByUniqueId(mesh, id);
         const count = mesh.num_points() * attribute.num_components();
         const pointer = module._malloc(count * 4);
+
         try {
           decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, module.DT_FLOAT32, count * 4, pointer);
+
           return module.HEAPF32.slice(pointer / 4, pointer / 4 + count);
         } finally {
           module._free(pointer);
         }
       };
+
       if (request.points) {
         const geometry: DracoGeometry = {
           mesh: request.mesh,
           primitive: request.primitive,
           positions: floats(request.position),
         };
+
         if (request.color !== undefined) geometry.colors = floats(request.color);
         if (request.normal !== undefined) geometry.normals = floats(request.normal);
+
         return geometry;
       }
+
       const triangles = (): Uint32Array => {
         const count = mesh.num_faces() * 3;
         const pointer = module._malloc(count * 4);
+
         try {
           decoder.GetTrianglesUInt32Array(mesh, count * 4, pointer);
+
           return module.HEAPU32.slice(pointer / 4, pointer / 4 + count);
         } finally {
           module._free(pointer);
@@ -183,7 +199,9 @@ export const decodeDraco = async (urls: DecoderUrls, requests: DracoRequest[]): 
         positions: floats(request.position),
         indices,
       };
+
       if (request.uv !== undefined) geometry.uvs = floats(request.uv);
+
       return geometry;
     } finally {
       module.destroy(mesh);
@@ -198,6 +216,7 @@ const target = (formats: TextureFormats, alpha: boolean): { basis: number; gl: n
   if (formats.bptc) return { basis: 6, gl: 0x8e8c }; // BC7
   if (formats.etc) return alpha ? { basis: 1, gl: 0x9278 } : { basis: 0, gl: 0x9274 }; // ETC2 RGBA / ETC1 as ETC2 RGB
   if (formats.s3tc) return alpha ? { basis: 3, gl: 0x83f3 } : { basis: 2, gl: 0x83f0 }; // BC3 / BC1
+
   return { basis: 13, gl: 0x8058 }; // RGBA8, uncompressed
 };
 
@@ -209,19 +228,26 @@ export const transcodeKtx2 = async (
 ): Promise<CompressedTexture> => {
   basis ??= instantiate<BasisModule>(urls.basis, 'basis_transcoder.js', 'basis_transcoder.wasm', 'BASIS').then((m) => {
     m.initializeBasis();
+
     return m;
   });
+
   const module = await basis;
   const file = new module.KTX2File(bytes);
+
   try {
     if (!file.isValid() || !file.startTranscoding()) throw new Error('KTX2: invalid file');
+
     const { basis: format, gl } = target(formats, file.getHasAlpha());
     const levels: CompressedTexture['levels'] = Array.from({ length: file.getLevels() }, (_, level) => {
       const { origWidth: width, origHeight: height } = file.getImageLevelInfo(level, 0, 0);
       const data = new Uint8Array(file.getImageTranscodedSizeInBytes(level, 0, 0, format));
+
       if (!file.transcodeImage(data, level, 0, 0, format, 0, -1, -1)) throw new Error('KTX2: transcoding failed');
+
       return { width, height, data };
     });
+
     return { format: gl, levels };
   } finally {
     file.close();

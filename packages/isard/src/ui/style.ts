@@ -127,7 +127,9 @@ const styled = new WeakSet<Document>();
 export const injectStyle = (doc: Document): void => {
   if (styled.has(doc)) return;
   styled.add(doc);
+
   const style = doc.createElement('style');
+
   style.dataset.isard = '';
   style.textContent = CSS;
   doc.head.prepend(style);

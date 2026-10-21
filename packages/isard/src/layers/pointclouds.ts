@@ -117,12 +117,15 @@ export const ELEVATION_RAMP: Ramp = [
 /** The colors of the 256 classes (RGBA, alpha 0 hides one) */
 export const classPalette = (overrides: Record<number, ClassStyle> = {}): Uint8Array => {
   const out = new Uint8Array(256 * 4);
+
   for (let code = 0; code < 256; code += 1) {
     const base = CLASSIFICATIONS[code] ?? { color: '#c8c8c8', visible: true };
     const own = overrides[code] ?? {};
     const [r = 0, g = 0, b = 0] = parseColor(own.color ?? base.color);
+
     out.set([r * 255, g * 255, b * 255, (own.visible ?? base.visible) ? 255 : 0], code * 4);
   }
+
   return out;
 };
 
@@ -130,13 +133,17 @@ export const classPalette = (overrides: Record<number, ClassStyle> = {}): Uint8A
 const section = (wkt: string, keywords: string[]): string | undefined => {
   for (const keyword of keywords) {
     const start = wkt.indexOf(`${keyword}[`);
+
     if (start < 0) continue;
+
     let depth = 0;
+
     for (let i = start + keyword.length; i < wkt.length; i += 1) {
       if (wkt[i] === '[') depth += 1;
       else if (wkt[i] === ']' && --depth === 0) return wkt.slice(start, i + 1);
     }
   }
+
   return undefined;
 };
 
@@ -144,6 +151,7 @@ const section = (wkt: string, keywords: string[]): string | undefined => {
 const lastCode = (part: string): number | undefined => {
   const codes = [...part.matchAll(/(?:AUTHORITY|ID)\[\s*"EPSG"\s*,\s*"?(\d+)"?\s*\]/g)];
   const last = codes.at(-1)?.[1];
+
   return last === undefined ? undefined : Number(last);
 };
 
@@ -151,6 +159,7 @@ const lastCode = (part: string): number | undefined => {
 const lastUnit = (part: string | undefined): number | undefined => {
   const units = [...(part ?? '').matchAll(/(?:LENGTH)?UNIT\[\s*"[^"]*"\s*,\s*([\d.eE+-]+)/g)];
   const factor = Number(units.at(-1)?.[1]);
+
   return Number.isFinite(factor) && factor > 0 ? factor : undefined;
 };
 
@@ -161,6 +170,7 @@ export const wktCrs = (wkt: string): { code: number | undefined; verticalScale: 
   const code = lastCode(projected ?? geographic ?? '') ?? (/Lambert[- ]93/i.test(wkt) ? 2154 : undefined);
   const vertical = section(wkt, ['VERT_CS', 'VERTCRS']);
   const verticalScale = lastUnit(vertical ?? projected);
+
   return { code, verticalScale };
 };
 
@@ -175,7 +185,9 @@ export const pointCloudCrs = (
   const parsed = wkt ? wktCrs(wkt) : { code: undefined, verticalScale: undefined };
   const crs = ((): Crs => {
     if (options.crs !== undefined) return getCrs(options.crs);
+
     const code = parsed.code;
+
     if (code === undefined) throw new Error('the file names no CRS: give it as `crs`');
     try {
       return getCrs(`EPSG:${code}`);
@@ -186,13 +198,17 @@ export const pointCloudCrs = (
   const code = typeof options.crs === 'string' ? (epsgCode(options.crs) ?? parsed.code) : parsed.code;
   const inverse = (xy: Float64Array) => {
     const out = new Float64Array(xy.length);
+
     for (let i = 0; i + 1 < xy.length; i += 2) {
       const [lon = Number.NaN, lat = Number.NaN] = crs.inverse([xy[i] as number, xy[i + 1] as number]);
+
       out[i] = lon;
       out[i + 1] = lat;
     }
+
     return out;
   };
+
   return {
     inverse,
     geoid: options.geoid ?? (FRENCH(code) || /IGN69|NGF/.test(wkt ?? '')),
@@ -206,6 +222,7 @@ const styleNumbers = (s: PointCloudStyle, rate: number): Float64Array => {
   const edl: { strength?: number; radius?: number } | undefined = s.edl === true ? {} : s.edl || undefined;
   const [emin = Number.NaN, emax = Number.NaN] = s.elevationRange ?? [];
   const [imin = Number.NaN, imax = Number.NaN] = s.intensityRange ?? [];
+
   return Float64Array.of(
     s.colorBy ? colors.indexOf(s.colorBy) : -1,
     s.pointSize,
@@ -234,12 +251,16 @@ export class PointCloudLayer extends Layer {
   /** @internal */
   constructor(map: LayerHost, options: PointCloudOptions) {
     super(map);
+
     // Against the page: the decoding workers fetch it, and a relative URL would be theirs
     const base = typeof document === 'undefined' ? undefined : document.baseURI;
+
     this.url = base ? new URL(options.url, base).href : options.url;
     this.format = options.format ?? (/\.json(?:[?#]|$)/i.test(options.url) ? '3dtiles' : 'copc');
     this.options = options;
+
     const tiles = this.format === '3dtiles';
+
     this.style = {
       ...(options.colorBy ? { colorBy: options.colorBy } : {}),
       pointSize: options.pointSize ?? 2,
@@ -277,6 +298,7 @@ export class PointCloudLayer extends Layer {
   /** Loading counters; undefined once removed and while the engine with 3D Tiles loads */
   stats(): PointCloudStats | Tiles3dStats | undefined {
     if (this.id < 0) return undefined;
+
     return this.format === '3dtiles' ? this.map.engine.tiles3dStats(this.id) : this.map.engine.pointCloudStats(this.id);
   }
 
@@ -289,8 +311,11 @@ export class PointCloudLayer extends Layer {
    * attributes as properties */
   featureAt(index: number): Feature<PointCloudPoint> | undefined {
     if (this.id < 0 || this.format === '3dtiles') return undefined;
+
     const point = this.map.engine.pointCloudPoint(this.id, index);
+
     if (!point) return undefined;
+
     return {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [...point.lonLat, point.height] },
@@ -300,11 +325,15 @@ export class PointCloudLayer extends Layer {
 
   private apply(engine: Engine, id: number): void {
     const s = this.style;
+
     if (this.format === '3dtiles') {
       engine.setTiles3dStyle(id, s.maxScreenSpaceError, 1, s.pointSize, new Float32Array());
+
       return;
     }
+
     const rate = this.options.requestsPerSecond ?? (/^https?:\/\/data\.geopf\.fr\//.test(this.url) ? 8 : 0);
+
     engine.setPointCloudStyle(
       id,
       styleNumbers(s, rate),
@@ -319,7 +348,9 @@ export class PointCloudLayer extends Layer {
       this.format === '3dtiles'
         ? engine.addTiles3d(this.url, this.style.maxScreenSpaceError)
         : engine.addPointCloud(this.url, (wkt) => pointCloudCrs(wkt, this.options));
+
     this.apply(engine, id);
+
     return id;
   }
 }

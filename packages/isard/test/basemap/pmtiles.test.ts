@@ -56,6 +56,7 @@ describe('directories', () => {
       ...[0 + 1, 0, 100 + 1].flatMap(varint),
     ]);
     const entries = parseDirectory(bytes);
+
     expect(entries).toEqual([
       { tileId: 5, offset: 0, length: 10, runLength: 1 },
       { tileId: 6, offset: 10, length: 20, runLength: 3 },
@@ -82,6 +83,7 @@ describe('the fixture', () => {
 
   test('its header', () => {
     const header = parseHeader(fixture);
+
     expect(header.tileType).toBe('mvt');
     expect([header.minZoom, header.maxZoom]).toEqual([0, 3]);
     expect(header.internalCompression).toBe(2);
@@ -91,6 +93,7 @@ describe('the fixture', () => {
 
   test('its tiles through leaf directories, gunzipped; nothing elsewhere', async () => {
     const archive = new PMTiles(new Blob([fixture]));
+
     expect((await archive.metadata()).vector_layers).toEqual([{ id: 'places' }, { id: 'roads' }]);
     for (const [z, x, y] of [
       [0, 0, 0],
@@ -99,6 +102,7 @@ describe('the fixture', () => {
       [3, 4, 2],
     ] as [number, number, number][]) {
       const tile = await archive.tile(z, x, y);
+
       // A vector tile: its first layer's tag (field 3, bytes)
       expect(tile?.[0]).toBe(0x1a);
     }
@@ -114,6 +118,7 @@ describe('archives written here', () => {
     const tiles = [0, 1, 2, 3].map((x) => ({ z: 2, x, y: 0, data: png(x === 3 ? 9 : 1) }));
     const bytes = writePmtiles(tiles, { tileType: 'png' });
     const archive = new PMTiles(new Blob([bytes]));
+
     expect((await archive.header()).tileType).toBe('png');
     for (const t of tiles) expect(await archive.tile(t.z, t.x, t.y)).toEqual(t.data);
   });
@@ -123,11 +128,13 @@ describe('archives written here', () => {
       Array.from({ length: 16 }, (_, y) => ({ z: 4, x, y, data: png(x * 16 + y) })),
     );
     const archive = new PMTiles(new Blob([writePmtiles(tiles, { tileType: 'png', gzip: true, leafSize: 10 })]));
+
     for (const t of tiles) expect(await archive.tile(t.z, t.x, t.y)).toEqual(t.data);
   });
 
   test('brotli is refused with a message', async () => {
     const bytes = writePmtiles([{ z: 0, x: 0, y: 0, data: png(1) }]);
+
     bytes[98] = 3;
     await expect(new PMTiles(new Blob([bytes])).tile(0, 0, 0)).rejects.toThrow('brotli');
   });
@@ -141,22 +148,31 @@ describe('over HTTP', () => {
     port: 0,
     fetch(request) {
       const range = request.headers.get('Range');
+
       requests.push(range);
+
       const match = /bytes=(\d+)-(\d+)/.exec(range ?? '');
+
       if (!ranges || !match) return new Response(fixture);
+
       const [start, end] = [Number(match[1]), Math.min(Number(match[2]), fixture.length - 1)];
+
       return new Response(fixture.subarray(start, end + 1), {
         status: 206,
         headers: { 'Content-Range': `bytes ${start}-${end}/${fixture.length}` },
       });
     },
   });
+
   afterAll(() => server.stop(true));
+
   const url = `http://127.0.0.1:${server.port}/tiny.pmtiles`;
 
   test('by ranges: the head once, then each tile; directories kept', async () => {
     requests.length = 0;
+
     const archive = new PMTiles(url);
+
     await archive.tile(3, 4, 2);
     await archive.tile(3, 4, 2);
     // The head (16 KB), a leaf directory, then the tile twice: the leaf is kept
@@ -167,7 +183,9 @@ describe('over HTTP', () => {
   test('a server ignoring ranges: the whole small file kept', async () => {
     ranges = false;
     requests.length = 0;
+
     const archive = new PMTiles(`${url}?whole`);
+
     expect(await archive.tile(2, 2, 1)).toBeDefined();
     expect(await archive.tile(0, 0, 0)).toBeDefined();
     expect(requests.length).toBe(1);
@@ -180,7 +198,9 @@ describe('over HTTP', () => {
       'http://127.0.0.1:5190/viewer/files/x.pmtiles',
     );
     expect(pmtilesTile('https://a.b/0/0/0')).toBe(false);
+
     const tile = pmtilesTile(`pmtiles://${url}/1/1/0`);
+
     expect(tile && (await tile)?.[0]).toBe(0x1a);
   });
 });
@@ -188,6 +208,7 @@ describe('over HTTP', () => {
 describe('basicStyle', () => {
   test('fills, lines, circles and labels for each layer of a source', () => {
     const style = basicStyle({ url: 'pmtiles://a.pmtiles' }, ['water', 'roads']);
+
     expect(style.sources.data).toEqual({ type: 'vector', url: 'pmtiles://a.pmtiles' });
     expect(style.layers.map((l) => l.id)).toEqual([
       'water-fill',
@@ -208,9 +229,12 @@ const LIVE = 'https://r2-public.protomaps.com/protomaps-sample-datasets/cb_2018_
 test.skipIf(!process.env.ISARD_LIVE)('a public archive (ISARD_LIVE=1): header, metadata, a tile', async () => {
   const archive = new PMTiles(LIVE);
   const header = await archive.header();
+
   expect(header.tileType).toBe('mvt');
   expect(((await archive.metadata()).vector_layers as { id: string }[]).map((l) => l.id)).toContain('zcta');
+
   // New York at level 7
   const tile = await archive.tile(7, 37, 48);
+
   expect(tile?.length).toBeGreaterThan(1000);
 });

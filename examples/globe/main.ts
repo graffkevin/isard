@@ -60,6 +60,7 @@ let last = performance.now();
 const turn = (now: number) => {
   if (turning && map) {
     const { center } = map.getCamera();
+
     map.setCamera({ center: [center[0] + ((now - last) / 1000) * 4, center[1]] });
   }
   last = now;
@@ -69,9 +70,12 @@ requestAnimationFrame(turn);
 
 const show = async (index: number) => {
   const shownBody = bodies[index];
+
   if (!shownBody) return;
+
   const ticket = ++shown;
   const { body, name, text, lon, mosaic } = shownBody;
+
   element('name').textContent = name;
   element('text').textContent = text;
   map?.destroy();
@@ -84,6 +88,7 @@ const show = async (index: number) => {
     projection: 'globe',
     ...(body === 'earth' && { basemap: 'ign-ortho' as const }),
   });
+
   if (ticket !== shown) {
     created.destroy();
 

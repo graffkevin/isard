@@ -62,6 +62,7 @@ export interface SpriteSource {
 /** The sprites of a style's `sprite`: one URL, or several with their ids (MapLibre's style specification) */
 export const spriteSources = (sprite: string | readonly SpriteSource[] | undefined): SpriteSource[] => {
   if (typeof sprite === 'string') return sprite ? [{ id: 'default', url: sprite }] : [];
+
   return Array.isArray(sprite) ? sprite.filter((s) => typeof s?.url === 'string' && typeof s.id === 'string') : [];
 };
 
@@ -75,6 +76,7 @@ export const spriteName = (id: string, name: string): string => {
 export const spriteFile = (url: string, extension: 'json' | 'png', ratio: number): string => {
   const suffix = `${ratio > 1 ? '@2x' : ''}.${extension}`;
   const query = url.search(/[?#]/);
+
   return query < 0 ? `${url}${suffix}` : `${url.slice(0, query)}${suffix}${url.slice(query)}`;
 };
 
@@ -95,28 +97,36 @@ export const loadSprites = async (
       fetch(spriteFile(url, 'json', r), withHeaders(spriteFile(url, 'json', r))),
       fetch(spriteFile(url, 'png', r), withHeaders(spriteFile(url, 'png', r))),
     ]);
+
     if (!json.ok || !png.ok) return r > 1 ? one({ id, url }, 1) : undefined;
+
     const index = (await json.json()) as SpriteIndex;
     const icons: SpriteIndex = Object.fromEntries(
       Object.entries(index).map(([name, icon]) => [spriteName(id, name), icon]),
     );
+
     return { icons, image: await createImageBitmap(await png.blob()) };
   };
   const loaded = await Promise.all(spriteSources(sprite).map((s) => one(s, ratio).catch(() => undefined)));
+
   return loaded.filter((s): s is LoadedSprite => s !== undefined);
 };
 
 /** The pixels of an image (read back through a canvas) */
 export const readPixels = (image: CanvasImageSource & { width: number; height: number }): Pixels | undefined => {
   const { width, height } = image;
+
   if (!(width > 0 && height > 0)) return undefined;
+
   const canvas =
     typeof OffscreenCanvas === 'function'
       ? new OffscreenCanvas(width, height)
       : Object.assign(document.createElement('canvas'), { width, height });
   const g = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+
   if (!g) return undefined;
   g.drawImage(image, 0, 0);
+
   return g.getImageData(0, 0, width, height);
 };
 
@@ -184,11 +194,15 @@ export class Icons {
         read = true;
         pixels = sheet();
       }
+
       return pixels;
     };
+
     Object.entries(index).forEach(([name, icon]) => {
       if (!icon || typeof icon !== 'object') return;
+
       const { x, y, width, height, ...options } = icon;
+
       this.define(`${prefix}${name}`, { pixels: once, x, y, width, height, options }, false);
     });
     this.version += 1;
@@ -219,29 +233,41 @@ export class Icons {
   /** The icon of this name, packed into the atlas on first use; undefined if there is none (`flush` uploads it) */
   get(name: string): Icon | undefined {
     const hit = this.packed.get(name);
+
     if (hit !== undefined) return hit ?? undefined;
+
     const source = this.sources.get(name);
+
     if (!source) return undefined;
+
     const icon = this.pack(source);
+
     this.packed.set(name, icon ?? null);
+
     return icon;
   }
 
   /** Sends the rows changed since the last upload to the engine */
   flush(): void {
     const dirty = this.dirty;
+
     this.dirty = undefined;
     if (!dirty || !this.engine) return;
+
     const [y0, y1] = dirty;
     const row = this.size * 4;
+
     this.engine.updateIconAtlas(0, y0, this.size, y1 - y0, this.data.subarray(y0 * row, y1 * row));
   }
 
   private upload(): void {
     const engine = this.engine;
+
     if (!engine) return;
     engine.setIconAtlas(this.size, this.size);
+
     const used = this.shelves.reduce((m, s) => Math.max(m, s.y + s.height), 0);
+
     if (used > 0) engine.updateIconAtlas(0, 0, this.size, used, this.data.subarray(0, used * this.size * 4));
   }
 
@@ -249,26 +275,36 @@ export class Icons {
   private pack(source: IconSource): Icon | undefined {
     const pixels = source.pixels();
     const { x, y, width: w, height: h } = source;
+
     if (!pixels || !(w > 0 && h > 0) || x < 0 || y < 0 || x + w > pixels.width || y + h > pixels.height) {
       return undefined;
     }
+
     const place = this.place(w + 2, h + 2);
+
     if (!place) return undefined;
+
     const [px, py] = [place[0] + 1, place[1] + 1];
+
     for (let row = 0; row < h; row += 1) {
       for (let col = 0; col < w; col += 1) {
         const from = ((y + row) * pixels.width + x + col) * 4;
         const to = ((py + row) * this.size + px + col) * 4;
         const a = pixels.data[from + 3] ?? 0;
+
         this.data[to] = ((pixels.data[from] ?? 0) * a + 127) / 255;
         this.data[to + 1] = ((pixels.data[from + 1] ?? 0) * a + 127) / 255;
         this.data[to + 2] = ((pixels.data[from + 2] ?? 0) * a + 127) / 255;
         this.data[to + 3] = a;
       }
     }
+
     const [d0, d1] = this.dirty ?? [place[1], place[1]];
+
     this.dirty = [Math.min(d0, place[1]), Math.max(d1, place[1] + h + 2)];
+
     const { pixelRatio, sdf, stretchX, stretchY, content } = source.options;
+
     return {
       x: px,
       y: py,
@@ -286,19 +322,25 @@ export class Icons {
   private place(w: number, h: number): [number, number] | undefined {
     for (;;) {
       const shelf = this.shelves.find((s) => s.height >= h && s.height <= h + 8 && s.x + w <= this.size);
+
       if (shelf) {
         shelf.x += w;
+
         return [shelf.x - w, shelf.y];
       }
+
       const last = this.shelves.at(-1);
       const y = last ? last.y + last.height : 0;
+
       if (y + h <= this.size && w <= this.size) {
         this.shelves.push({ y, height: h, x: w });
+
         return [0, y];
       }
       if (this.size * 2 > this.maxSize) {
         if (!this.full) console.warn(`isard: the icon atlas is full (${this.size} × ${this.size})`);
         this.full = true;
+
         return undefined;
       }
       this.grow();
@@ -309,6 +351,7 @@ export class Icons {
   private grow(): void {
     const size = this.size * 2;
     const data = new Uint8Array(size * size * 4);
+
     for (let row = 0; row < this.size; row += 1) {
       data.set(this.data.subarray(row * this.size * 4, (row + 1) * this.size * 4), row * size * 4);
     }
@@ -366,6 +409,7 @@ export const stretch = (
   const cuts = [...new Set([0, length, ...spans.flat()])].sort((a, b) => a - b);
   const pieces = cuts.slice(1).map((b, i): [number, number, boolean] => {
     const a = cuts[i] ?? 0;
+
     return [a, b, spans.some(([s, e]) => s <= a && b <= e)];
   });
   const [c0, c1] = content ? [clamp(content[0]), clamp(content[1])] : [0, length];
@@ -377,12 +421,14 @@ export const stretch = (
   // Laid out position of an image coordinate
   const at = (x: number) => pieces.reduce((n, [a, b, s]) => n + Math.max(0, Math.min(x, b) - a) * (s ? k : scale), 0);
   const origin = lo - at(c0);
+
   return pieces.map(([a, b]) => [a, b, origin + at(a), origin + at(b)]);
 };
 
 /** Where an anchor's side lies along an axis of the icon: at its start 0, at its end 1, else the middle */
 const align = (start: boolean, end: boolean): number => {
   if (start) return 0;
+
   return end ? 1 : 0.5;
 };
 
@@ -399,9 +445,11 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
       const scaled = size / pixelRatio;
       const centered = (length: number, lo: number, hi: number): Pieces => {
         const c = (lo + hi) / 2;
+
         return [[0, length, c - (length * scaled) / 2, c + (length * scaled) / 2]];
       };
       const content = icon.content;
+
       return [
         fit === 'height'
           ? centered(w, x0, x1)
@@ -411,10 +459,12 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
           : stretch(h, icon.stretchY, content && [content[1], content[3]], y0, y1, own),
       ];
     }
+
     const [dw, dh] = [(w / pixelRatio) * size, (h / pixelRatio) * size];
     const ax = align(anchor.includes('left'), anchor.includes('right'));
     const ay = align(anchor.startsWith('top'), anchor.startsWith('bottom'));
     const [left, top] = [offset[0] * size - dw * ax, offset[1] * size - dh * ay];
+
     return [[[0, w, left, left + dw]], [[0, h, top, top + dh]]];
   })();
   const angle = ((Number(rotate) || 0) * Math.PI) / 180;
@@ -427,6 +477,7 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
     Number.NEGATIVE_INFINITY,
     Number.NEGATIVE_INFINITY,
   ];
+
   ys.forEach(([v0, v1, top, bottom]) => {
     xs.forEach(([u0, u1, left, right]) => {
       if (right <= left || bottom <= top) return;
@@ -442,6 +493,7 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
         kind,
         angle,
       ]);
+
       // The box of the turned corners
       const corners: [number, number][] = [
         [left, top],
@@ -449,8 +501,10 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
         [left, bottom],
         [right, bottom],
       ];
+
       corners.forEach(([px, py]) => {
         const [rx, ry] = [px * cs - py * sn, px * sn + py * cs];
+
         box[0] = Math.min(box[0], rx);
         box[1] = Math.min(box[1], ry);
         box[2] = Math.max(box[2], rx);
@@ -458,5 +512,6 @@ export const layoutIcon = (icon: Icon, options: IconLayoutOptions): IconLayout =
       });
     });
   });
+
   return { quads, box: quads.length ? box : [0, 0, 0, 0] };
 };

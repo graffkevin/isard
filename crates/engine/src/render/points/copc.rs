@@ -57,9 +57,11 @@ impl Crs {
             .map_err(|e| format!("{e:?}"))?;
         let out: js_sys::Float64Array = out.dyn_into().map_err(|_| "the CRS's inverse gave no Float64Array")?;
         let out = out.to_vec();
+
         if out.len() != xy.len() || !out.iter().all(|v| v.is_finite()) {
             return Err("the CRS's inverse gave positions that are not numbers".into());
         }
+
         Ok(out)
     }
 
@@ -155,6 +157,7 @@ impl Style {
         let d = Self::default();
         let at = |i: usize| n.get(i).copied().unwrap_or(f64::NAN);
         let positive = |i: usize, default: f64| Some(at(i)).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(default);
+
         Self {
             color_by: Some(at(0)).filter(|v| *v >= 0.0).map(ColorBy::from_number),
             size: positive(1, d.size).min(64.0),
@@ -188,11 +191,15 @@ impl Bucket {
         if rate <= 0.0 {
             return true;
         }
+
         let elapsed = (now - self.at).max(0.0) / 1000.0;
+
         self.tokens = (self.tokens + elapsed * rate).min(rate.max(1.0));
         self.at = now;
+
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
+
             true
         } else {
             false
@@ -212,6 +219,7 @@ pub fn grid_side(side: f64) -> usize {
 pub fn intensity_range(vertices: &[u8]) -> Option<[f64; 2]> {
     let mut histogram = vec![0u32; 4096];
     let mut count = 0u32;
+
     for v in vertices.as_chunks::<STRIDE>().0 {
         histogram[usize::from(u16::from_le_bytes([v[INTENSITY], v[INTENSITY + 1]]) >> 4)] += 1;
         count += 1;
@@ -219,16 +227,20 @@ pub fn intensity_range(vertices: &[u8]) -> Option<[f64; 2]> {
     if count == 0 {
         return None;
     }
+
     let at = |q: f64| {
         let target = (f64::from(count - 1) * q).round() as u32;
         let mut seen = 0;
         let bin = histogram.iter().position(|&n| {
             seen += n;
+
             seen > target
         });
+
         f64::from(bin.unwrap_or(0) as u32 * 16)
     };
     let (lo, hi) = (at(0.02), at(0.98));
+
     Some([lo, if hi > lo { hi } else { lo + 16.0 }])
 }
 
@@ -303,12 +315,15 @@ impl PointCloudLayer {
             picked: RefCell::default(),
             redraw: redraw.clone(),
         };
+
         if layer.loader.is_none() {
             layer.fail("point clouds are decoded by the decoding workers: `workers: false` leaves them out");
             layer.head = None;
+
             return Ok(layer);
         }
         layer.fetch_head(HEAD_BYTES, 0.0);
+
         Ok(layer)
     }
 
@@ -318,11 +333,14 @@ impl PointCloudLayer {
 
     fn fetch_head(&self, length: u64, delay_ms: f64) {
         let (inbox, redraw, url) = (self.inbox.clone(), self.redraw.clone(), self.url.clone());
+
         wasm_bindgen_futures::spawn_local(async move {
             if delay_ms > 0.0 {
                 js::sleep(delay_ms as i32).await;
             }
+
             let bytes = fetch_range(&url, 0, length, "high").await;
+
             inbox.borrow_mut().push(Arrival::Head(bytes));
             redraw();
         });
@@ -332,10 +350,14 @@ impl PointCloudLayer {
         let Some(page) = self.cloud.as_ref().and_then(|c| c.hierarchy.page(node)) else {
             return;
         };
+
         self.pages.insert(node, None);
+
         let (inbox, redraw, url) = (self.inbox.clone(), self.redraw.clone(), self.url.clone());
+
         wasm_bindgen_futures::spawn_local(async move {
             let bytes = fetch_range(&url, page.offset, page.size, "high").await;
+
             inbox.borrow_mut().push(Arrival::Page(node, bytes));
             redraw();
         });
@@ -347,6 +369,7 @@ impl PointCloudLayer {
             Head::Ready(copc) => *copc,
             Head::More(n) if n <= MAX_HEAD && bytes.len() < n => {
                 self.fetch_head(n as u64, 0.0);
+
                 return Ok(());
             }
             Head::More(_) => return Err("VLRs too large".into()),
@@ -374,10 +397,12 @@ impl PointCloudLayer {
         let lonlat = crs.inverse(&[cx, cy, cx + info.halfsize, cy])?;
         let a = geodesy::to_ecef(lonlat[0], lonlat[1], 0.0);
         let b = geodesy::to_ecef(lonlat[2], lonlat[3], 0.0);
+
         crs.metres = a.distance(b) / info.halfsize;
         if !(crs.metres.is_finite() && crs.metres > 0.0) {
             return Err("the CRS does not place the points".into());
         }
+
         let h = &copc.header;
         let layout = Layout {
             format: h.point_format,
@@ -391,9 +416,11 @@ impl PointCloudLayer {
             crs,
             layout,
         };
+
         place(&mut cloud, &[0])?;
         self.states.grow(1, |_| true);
         self.cloud = Some(cloud);
+
         Ok(())
     }
 
@@ -403,8 +430,11 @@ impl PointCloudLayer {
             return Ok(());
         };
         let added = cloud.hierarchy.add_page(node, parse_page(bytes)?)?;
+
         place(cloud, &added)?;
+
         let nodes = &cloud.hierarchy.nodes;
+
         // The page's node may now hold points
         if matches!(nodes[node].content, Content::Points { .. }) && matches!(self.states.get(node), Some(State::Empty))
         {
@@ -412,16 +442,19 @@ impl PointCloudLayer {
         }
         self.states
             .grow(nodes.len(), |i| !matches!(nodes[i].content, Content::Points { .. }));
+
         Ok(())
     }
 
     fn receive(&mut self, gl: &glow::Context, raw: &web_sys::WebGl2RenderingContext, frame: u64, budget_ms: f64) {
         let now = js_sys::Date::now();
         let arrivals: Vec<_> = self.inbox.borrow_mut().drain(..).collect();
+
         for arrival in arrivals {
             match arrival {
                 Arrival::Head(bytes) => {
                     let attempt = self.head.unwrap_or(0);
+
                     match bytes {
                         Ok(bytes) => {
                             // A file that is not COPC, or a CRS the page does not know: given up
@@ -461,26 +494,33 @@ impl PointCloudLayer {
                 Arrival::Points(..) => {}
             }
         }
+
         let start = js::now();
         let mut uploaded = 0;
+
         while uploaded == 0 || js::now() - start < budget_ms {
             let Some((node, vertices)) = self.queue.pop_front() else {
                 break;
             };
+
             uploaded += 1;
             if !matches!(self.states.get(node), Some(State::Loading(_))) {
                 continue;
             }
+
             let Ok(array) = vertices.dyn_into::<js_sys::Uint8Array>() else {
                 self.states.replace(node, State::Failed(now + COOLDOWN_MS));
                 continue;
             };
+
             if self.auto_intensity.is_none() {
                 self.auto_intensity = intensity_range(&array.to_vec());
             }
+
             let Some(&(anchor, up, base)) = self.anchors.get(&node) else {
                 continue;
             };
+
             match GpuPoints::upload_js(gl, raw, &array) {
                 Ok(points) => {
                     self.states.replace(
@@ -524,6 +564,7 @@ impl PointCloudLayer {
             .map_err(|_| "the decoding workers do not decode point clouds")?;
         let id = next_request();
         let args = js_sys::Array::new();
+
         for value in [
             JsValue::from(id),
             JsValue::from_str(&self.url),
@@ -537,20 +578,26 @@ impl PointCloudLayer {
         ] {
             args.push(&value);
         }
+
         let promise: js_sys::Promise = load
             .apply(loader, &args)
             .map_err(|e| format!("{e:?}"))?
             .dyn_into()
             .map_err(|_| "loadPoints gave no promise")?;
+
         self.anchors.insert(node, (anchor, up, base));
         self.states
             .replace(node, State::Loading(Loading { id, controller: None }));
+
         let (inbox, redraw) = (self.inbox.clone(), self.redraw.clone());
+
         wasm_bindgen_futures::spawn_local(async move {
             let result = JsFuture::from(promise).await.map_err(|e| format!("{e:?}"));
+
             inbox.borrow_mut().push(Arrival::Points(node, id, result));
             redraw();
         });
+
         Ok(())
     }
 
@@ -559,8 +606,10 @@ impl PointCloudLayer {
         if self.waking.replace(true) {
             return;
         }
+
         let (waking, redraw) = (self.waking.clone(), self.redraw.clone());
         let ms = (1000.0 / rate.max(0.1)).ceil() as i32;
+
         wasm_bindgen_futures::spawn_local(async move {
             js::sleep(ms).await;
             waking.set(false);
@@ -585,13 +634,16 @@ impl PointCloudLayer {
             ColorBy::Elevation => {
                 let z = self.cloud.as_ref().map_or([0.0, 100.0], |c| {
                     let h = &c.copc.header;
+
                     [h.min[2] * c.crs.vertical, h.max[2] * c.crs.vertical]
                 });
+
                 file(s.elevation, z)
             }
             ColorBy::Intensity => file(s.intensity, self.auto_intensity.unwrap_or([0.0, 65535.0])),
             _ => [0.0, 1.0],
         };
+
         Look {
             color_by,
             size: s.size,
@@ -610,6 +662,7 @@ impl PointCloudLayer {
             return (Vec::new(), Vec::new());
         };
         let info = &cloud.hierarchy.info;
+
         self.selection
             .draw
             .iter()
@@ -619,6 +672,7 @@ impl PointCloudLayer {
                 };
                 let lat = cloud.hierarchy.nodes[i].geodetic.y;
                 let spacing = info.spacing * cloud.crs.metres / f64::from(1u32 << level.min(31));
+
                 Some((
                     i,
                     Draw {
@@ -635,7 +689,9 @@ impl PointCloudLayer {
 
     fn draw_cloud(&mut self, frame: &Frame) -> bool {
         let (gl, view) = (frame.gl, frame.view);
+
         self.receive(gl, frame.raw, frame.number, frame.loading.upload_budget_ms);
+
         let waiting = self.head.is_some() && self.cloud.is_none();
         let Some(cloud) = &self.cloud else {
             return waiting && self.head == Some(0);
@@ -648,6 +704,7 @@ impl PointCloudLayer {
             _ => Readiness::Pending,
         };
         let mut selection = std::mem::take(&mut self.selection);
+
         select(
             &cloud.hierarchy,
             view,
@@ -656,14 +713,18 @@ impl PointCloudLayer {
             &ready,
             &mut selection,
         );
+
         let mut stale = Vec::new();
+
         self.states.take_stale(&selection.visible, &mut stale);
         for loading in &stale {
             self.abort(loading);
         }
+
         // Pages first: the nodes under them wait for them
         let rate = self.style.rate;
         let mut held = false;
+
         for &node in &selection.pages {
             let cooling = self.pages.get(&node).is_some_and(|until| until.is_none_or(|t| now < t));
             let fits = self
@@ -671,6 +732,7 @@ impl PointCloudLayer {
                 .as_ref()
                 .and_then(|c| c.hierarchy.page(node))
                 .is_some_and(|p| p.size <= MAX_PAGE);
+
             if !cooling && fits {
                 if self.bucket.take(rate, now) {
                     self.fetch_page(node);
@@ -679,9 +741,11 @@ impl PointCloudLayer {
                 }
             }
         }
+
         let mut requests = Vec::new();
         let max_requests = (frame.loading.mesh_requests / 2).max(2);
         let budget = gpu_budget(self.style.budget);
+
         self.states
             .plan_requests(&selection.request, &[], max_requests, budget, &mut requests);
         for (rank, &node) in requests.iter().enumerate() {
@@ -689,12 +753,15 @@ impl PointCloudLayer {
                 held = true;
                 break;
             }
+
             if let Err(e) = self.request(node, rank < URGENT_REQUESTS) {
                 self.fail(&e);
                 self.states.replace(node, State::Failed(now + COOLDOWN_MS));
             }
         }
+
         let drawn: Vec<usize> = selection.draw.iter().map(|&(i, _)| i).collect();
+
         self.states.touch(&drawn, frame.number);
         for i in self.states.over_budget(budget, frame.number) {
             if let Some(State::Ready(node)) = self.states.replace(i, State::Unloaded) {
@@ -703,7 +770,9 @@ impl PointCloudLayer {
         }
         self.selection = selection;
         self.render(frame);
+
         let (in_flight, loaded, gpu_bytes) = self.states.counts();
+
         self.stats = PointCloudStats {
             points: self
                 .selection
@@ -726,6 +795,7 @@ impl PointCloudLayer {
         if held {
             self.wake(rate);
         }
+
         held || in_flight > 0 || !self.queue.is_empty() || self.pages.values().any(Option::is_none)
     }
 
@@ -733,6 +803,7 @@ impl PointCloudLayer {
         let (gl, view) = (frame.gl, frame.view);
         let look = self.look();
         let (strength, radius) = self.style.edl;
+
         if strength > 0.0 && self.edl.is_none() {
             match Edl::new(gl) {
                 Ok(edl) => self.edl = Some(edl),
@@ -742,17 +813,23 @@ impl PointCloudLayer {
                 }
             }
         }
+
         // With EDL, into its framebuffer at the size of the canvas, then laid over the frame
         let edl = strength > 0.0 && self.edl.is_some();
+
         if edl && let Some(pass) = self.edl.as_mut() {
             let size = (
                 (frame.camera.width * frame.pixel_ratio).round() as i32,
                 (frame.camera.height * frame.pixel_ratio).round() as i32,
             );
+
             pass.begin(gl, size);
         }
+
         let (_, draws) = self.draws(view);
+
         self.program.draw(gl, frame.pixel_ratio, &look, &draws, None);
+
         if edl && let Some(pass) = &self.edl {
             pass.finish(gl, view, strength, radius * frame.pixel_ratio);
         }
@@ -763,6 +840,7 @@ impl PointCloudLayer {
         let picked = self.picked.borrow();
         let k = picked.partition_point(|&(_, first)| first <= index);
         let &(node, first) = picked.get(k.checked_sub(1)?)?;
+
         Some((node, index - first))
     }
 
@@ -786,10 +864,13 @@ impl PointCloudLayer {
             ("returnNumber", v[RETURNS].into()),
             ("numberOfReturns", v[RETURNS + 1].into()),
         ];
+
         if cloud.layout.format >= 7 {
             let rgb = js_sys::Array::of3(&v[12].into(), &v[13].into(), &v[14].into());
+
             entries.push(("rgb", rgb.into()));
         }
+
         Some(js::object(&entries))
     }
 }
@@ -804,15 +885,19 @@ fn place(cloud: &mut Cloud, nodes: &[usize]) -> Result<(), String> {
     if nodes.is_empty() {
         return Ok(());
     }
+
     let centers: Vec<[f64; 3]> = nodes.iter().map(|&i| cloud.hierarchy.center(i)).collect();
     let xy: Vec<f64> = centers.iter().flat_map(|c| [c[0], c[1]]).collect();
     let lonlat = cloud.crs.inverse(&xy)?;
+
     for ((&i, c), ll) in nodes.iter().zip(&centers).zip(lonlat.as_chunks::<2>().0) {
         let h = cloud.crs.ground(ll[0], ll[1]) + c[2] * cloud.crs.vertical;
+
         cloud
             .hierarchy
             .place(i, DVec3::new(ll[0], ll[1], h), cloud.crs.metres, cloud.crs.vertical);
     }
+
     Ok(())
 }
 
@@ -824,7 +909,9 @@ fn node_grid(cloud: &Cloud, node: usize) -> Result<(Grid, DVec3, DVec3, f64), St
     let (lo, hi) = ([min[0], min[1]], [min[0] + side, min[1] + side]);
     let nodes = Grid::nodes(lo, hi, k);
     let mut xy: Vec<f64> = nodes.iter().flatten().copied().collect();
+
     xy.extend([min[0] + side / 2.0, min[1] + side / 2.0]);
+
     let lonlat = cloud.crs.inverse(&xy)?;
     let (pairs, center) = lonlat.as_chunks::<2>().0.split_at(k * k);
     let [lon, lat] = center[0];
@@ -842,6 +929,7 @@ fn node_grid(cloud: &Cloud, node: usize) -> Result<(Grid, DVec3, DVec3, f64), St
             .collect(),
         up: pairs.iter().map(|&[lon, lat]| geodesy::enu(lon, lat)[2]).collect(),
     };
+
     Ok((grid, anchor, up, base))
 }
 
@@ -859,15 +947,19 @@ impl Layer for PointCloudLayer {
         // Each point an id of its own: the nodes numbered in turn, as many as 24 bits hold
         let mut picked = Vec::new();
         let mut first = 1u32;
+
         for (&i, d) in nodes.iter().zip(&draws) {
             let count = d.points.count as u32;
+
             if first.saturating_add(count) > MAX_PICK {
                 break;
             }
             picked.push((i, first - 1));
             first += count;
         }
+
         let firsts: Vec<u32> = picked.iter().map(|&(_, f)| f).collect();
+
         self.program.draw(
             frame.gl,
             frame.pixel_ratio,
@@ -888,6 +980,7 @@ impl Layer for PointCloudLayer {
         }
         self.queue.clear();
         self.program.delete(gl);
+
         if let Some(edl) = &self.edl {
             edl.delete(gl);
         }
@@ -975,6 +1068,7 @@ impl Engine {
         #[wasm_bindgen(unchecked_param_type = "(wkt: string | undefined) => PointCloudCrs")] resolve: js_sys::Function,
     ) -> Result<u32, JsValue> {
         let layer = PointCloudLayer::new(&self.gl, url, resolve, self.loader.clone(), &self.redraw)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -996,6 +1090,7 @@ impl Engine {
     pub fn point_cloud_stats(&self, id: u32) -> JsValue {
         self.layer::<PointCloudLayer>(id).map_or(JsValue::UNDEFINED, |layer| {
             let s = layer.stats;
+
             js::object(&[
                 ("points", (s.points as f64).into()),
                 ("nodes", s.nodes.into()),
@@ -1025,9 +1120,11 @@ impl Engine {
                 js::pair(h.min[2] * cloud.crs.vertical, h.max[2] * cloud.crs.vertical),
             ),
         ];
+
         if let Some(wkt) = &cloud.copc.wkt {
             entries.push(("wkt", JsValue::from_str(wkt)));
         }
+
         js::object(&entries)
     }
 
@@ -1064,12 +1161,14 @@ mod tests {
             1e6,
             8.0,
         ]);
+
         assert_eq!(s.color_by, Some(ColorBy::Elevation));
         assert_eq!((s.size, s.max_size, s.adaptive, s.round), (3.0, 10.0, false, true));
         assert_eq!(s.edl, (1.5, 2.0));
         assert_eq!(s.elevation, [30.0, 90.0]);
         assert!(s.intensity[0].is_nan());
         assert_eq!((s.max_error, s.budget, s.rate), (4.0, 1_000_000, 8.0));
+
         // Nothing given, or out of range: the defaults
         let d = Style::parse(&[
             -1.0,
@@ -1087,6 +1186,7 @@ mod tests {
             -5.0,
             -1.0,
         ]);
+
         assert_eq!(d.color_by, None);
         assert_eq!(
             (d.size, d.max_size, d.edl, d.max_error, d.budget, d.rate),
@@ -1100,6 +1200,7 @@ mod tests {
         let mut b = Bucket::default();
         // A second's worth at once, then one every 125 ms at 8 a second
         let first: usize = (0..20).filter(|_| b.take(8.0, 1000.0)).count();
+
         assert_eq!(first, 8);
         assert!(!b.take(8.0, 1100.0));
         assert!(b.take(8.0, 1130.0));
@@ -1119,12 +1220,16 @@ mod tests {
     #[test]
     fn intensities_range_over_their_bulk() {
         let mut v = Vec::new();
+
         for i in 0..1000u16 {
             let mut vertex = [0u8; STRIDE];
+
             vertex[INTENSITY..INTENSITY + 2].copy_from_slice(&(if i == 999 { 60_000 } else { i }).to_le_bytes());
             v.extend(vertex);
         }
+
         let [lo, hi] = intensity_range(&v).unwrap();
+
         assert!((lo - 16.0).abs() < 1.0 && (hi - 976.0).abs() < 1.0, "{lo} {hi}");
         assert_eq!(intensity_range(&[]), None);
         assert_eq!(intensity_range(&[0; STRIDE]), Some([0.0, 16.0]));

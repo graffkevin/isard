@@ -23,6 +23,7 @@ pub(super) fn split(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), 
 
 pub(super) fn u32_at(bytes: &[u8], offset: usize) -> Result<usize, String> {
     let b = slice(bytes, offset, 4).ok_or("truncated tile")?;
+
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
 }
 
@@ -37,6 +38,7 @@ fn trim_padding(text: &[u8]) -> &[u8] {
         .iter()
         .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
         .map_or(0, |i| i + 1);
+
     &text[..end]
 }
 
@@ -47,11 +49,15 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> 
     let batch_binary = u32_at(bytes, 24)?;
     let mut rtc = DVec3::ZERO;
     let mut batch_length = 0;
+
     if feature_json > 0 {
         let text = slice(bytes, 28, feature_json).ok_or("truncated feature table")?;
         let table: Value = serde_json::from_slice(trim_padding(text)).map_err(|e| e.to_string())?;
+
         batch_length = index(&table["BATCH_LENGTH"]).unwrap_or(0);
+
         let center = &table["RTC_CENTER"];
+
         if let Some([x, y, z]) = center.as_array().map(Vec::as_slice) {
             rtc = DVec3::new(
                 x.as_f64().unwrap_or(0.0),
@@ -65,9 +71,11 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> 
                 .and_then(|offset| slice(binary, offset, 12))
                 .ok_or("RTC_CENTER out of the feature table")?;
             let f = |i: usize| f64::from(f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]));
+
             rtc = DVec3::new(f(0), f(4), f(8));
         }
     }
+
     let glb = [feature_json, feature_binary, batch_json, batch_binary]
         .into_iter()
         .try_fold(28usize, usize::checked_add)
@@ -78,6 +86,7 @@ fn b3dm_glb(bytes: &[u8]) -> Result<(&[u8], DVec3, Option<BatchTable>), String> 
         .flatten()
         .and_then(|text| serde_json::from_slice::<Value>(trim_padding(text)).ok())
         .map(|table| (table, batch_length));
+
     Ok((bytes.get(glb..).ok_or("truncated b3dm")?, rtc, batch))
 }
 
@@ -90,12 +99,15 @@ pub(super) fn parse_glb(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
     if bytes.get(..4) != Some(b"glTF") || u32_at(bytes, 4)? != 2 {
         return Err("glTF 2.0 binary expected".into());
     }
+
     // The declared length bounds the chunks (trailing bytes are not part of it)
     let bytes = &bytes[..u32_at(bytes, 8)?.min(bytes.len())];
     let json_length = u32_at(bytes, 12)?;
+
     if u32_at(bytes, 16)? != JSON_CHUNK {
         return Err("glTF binary without its JSON chunk".into());
     }
+
     let text = slice(bytes, 20, json_length).ok_or("truncated glTF")?;
     let json: Value = serde_json::from_slice(trim_padding(text)).map_err(|e| e.to_string())?;
     let bin_start = 20 + json_length;
@@ -104,6 +116,7 @@ pub(super) fn parse_glb(bytes: &[u8]) -> Result<(Value, &[u8]), String> {
         (Ok(length), Ok(BIN_CHUNK)) => slice(bytes, bin_start + 8, length).ok_or("truncated glTF binary")?,
         _ => &[],
     };
+
     Ok((json, bin))
 }
 
@@ -133,24 +146,31 @@ mod tests {
         let binary = f32s(&[1000.0, 2000.0, 3000.0]);
         let mut b3dm = b"b3dm".to_vec();
         let total = 28 + table.len() + binary.len() + inner.len();
+
         for v in [1, total, table.len(), binary.len(), 0, 0] {
             b3dm.extend((v as u32).to_le_bytes());
         }
         b3dm.extend(table);
         b3dm.extend(binary);
         b3dm.extend(&inner);
+
         let mesh = decode(&b3dm, &DMat4::IDENTITY, false, &[]).unwrap();
+
         assert!(
             (mesh.anchor - DVec3::new(1000.5, 2000.5, 3000.0)).length() < 1e-6,
             "{}",
             mesh.anchor
         );
+
         // Its offset out of the binary body: an error
         let mut bad = b3dm.clone();
+
         bad[28 + table.len() - 7] = b'9';
         assert!(decode(&bad, &DMat4::IDENTITY, false, &[]).is_err());
+
         // Header sizes that overflow
         let mut bad = b3dm;
+
         bad[12..28].fill(0xff);
         assert!(decode(&bad, &DMat4::IDENTITY, false, &[]).is_err());
     }
@@ -158,9 +178,12 @@ mod tests {
     #[test]
     fn only_a_bin_chunk_is_the_binary() {
         let mut bytes = with_nodes_glb();
+
         assert!(decode(&bytes, &DMat4::IDENTITY, false, &[]).is_ok());
+
         // Change the type of the second chunk: no binary any more, the accessor is out of range
         let json_length = u32_at(&bytes, 12).unwrap();
+
         bytes[20 + json_length + 4] = b'X';
         assert!(decode(&bytes, &DMat4::IDENTITY, false, &[]).is_err());
         // A JSON document is told apart

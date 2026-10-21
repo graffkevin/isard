@@ -7,7 +7,9 @@ const NAMES = ['isard', 'iTowns', '3DTilesRendererJS'];
 
 const element = <T extends HTMLElement>(id: string, type: new () => T): T => {
   const found = document.getElementById(id);
+
   if (!(found instanceof type)) throw new Error(`#${id} missing`);
+
   return found;
 };
 
@@ -27,12 +29,15 @@ const freshFrame = async (): Promise<void> => {
   try {
     frame.contentDocument?.querySelectorAll('canvas').forEach((canvas) => {
       const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+
       gl?.getExtension('WEBGL_lose_context')?.loseContext();
     });
   } catch {
     // Nothing to free (an empty or cross-origin frame)
   }
+
   const next = document.createElement('iframe');
+
   next.id = frame.id;
   next.title = frame.title;
   frame.replaceWith(next);
@@ -57,6 +62,7 @@ const warmUp = async (): Promise<void> => {
 const once = async (page: string): Promise<BenchResult> => {
   await freshFrame();
   await warmUp();
+
   return new Promise((resolve) => {
     const finish = (result: BenchResult) => {
       clearTimeout(timer);
@@ -68,6 +74,7 @@ const once = async (page: string): Promise<BenchResult> => {
     };
     const name = NAMES[ENGINES.indexOf(page as (typeof ENGINES)[number])] ?? page;
     const timer = setTimeout(() => finish({ engine: `${name} (timed out)`, phases: [], info: '' }), ENGINE_TIMEOUT_MS);
+
     addEventListener('message', listener);
     frame.src = `./${page}.html?run=${Date.now()}`;
   });
@@ -95,11 +102,14 @@ const phase = (result: BenchResult, name: string): PhaseResult | undefined => {
 const motion = (result: BenchResult, key: 'fps' | 'slowFrames'): number | undefined => {
   const phases = result.phases.filter((p) => MOTION.includes(p.phase));
   const frames = phases.reduce((n, p) => n + p.frames, 0);
+
   if (!frames) return undefined;
   if (key === 'fps') {
     const ms = phases.reduce((n, p) => n + p.durationMs, 0);
+
     return Math.round((frames / ms) * 1000);
   }
+
   return Math.round(phases.reduce((n, p) => n + p.slowFrames * p.frames, 0) / frames);
 };
 
@@ -150,9 +160,11 @@ const seconds = (ms: number | undefined): number | undefined => {
 const cells = (values: (number | undefined | null)[], higher: boolean, missing = 'never'): string => {
   const numbers = values.filter((v): v is number => typeof v === 'number');
   const best = higher ? Math.max(...numbers) : Math.min(...numbers);
+
   return values
     .map((v) => {
       if (v === null) return '<td class="pending">…</td>';
+
       return `<td class="${v === best && numbers.length > 1 ? 'best' : ''}">${v ?? missing}</td>`;
     })
     .join('');
@@ -174,6 +186,7 @@ const summaryTable = (results: BenchResult[]): string => {
         m.missing,
       )}</tr>`,
   );
+
   return `<table class="summary">${head}${rows.join('')}</table>`;
 };
 
@@ -182,7 +195,9 @@ const detailTable = (results: BenchResult[]): string => {
   const rows = (results[0]?.phases.map((p) => p.phase) ?? []).flatMap((name) =>
     METRICS.flatMap(([key, label, higher]) => {
       const values = results.map((r) => r.phases.find((p) => p.phase === name)?.[key]);
+
       if (values.every((v) => v === undefined)) return [];
+
       return [
         `<tr><td>${name}: ${label}</td>${cells(
           values.map((v) => (typeof v === 'number' ? v : undefined)),
@@ -191,6 +206,7 @@ const detailTable = (results: BenchResult[]): string => {
       ];
     }),
   );
+
   return `<table>${head}${rows.join('')}</table>`;
 };
 
@@ -200,6 +216,7 @@ const detailTable = (results: BenchResult[]): string => {
  */
 button.onclick = async () => {
   button.disabled = true;
+
   const rounds: { title: string; order: readonly string[]; results: BenchResult[] }[] = [
     { title: 'Round 2, warm caches (reference)', order: [...ENGINES].reverse(), results: [] },
     { title: 'Round 1, cold caches (first visit)', order: ENGINES, results: [] },
@@ -211,10 +228,12 @@ button.onclick = async () => {
           r.results.length > 0
             ? `<details><summary>Details per phase</summary>${detailTable(r.results)}</details>`
             : '';
+
         return `<h2>${r.title}</h2>${summaryTable(r.results)}${details}`;
       })
       .join('');
   };
+
   render();
   for (const round of [...rounds].reverse()) {
     for (const engine of round.order) {

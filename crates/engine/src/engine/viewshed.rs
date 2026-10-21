@@ -156,6 +156,7 @@ impl Cone {
         let (b, t) = (self.heading.to_radians(), self.tilt.to_radians());
         let forward = DVec3::new(b.sin() * t.cos(), -b.cos() * t.cos(), t.sin());
         let right = DVec3::new(b.cos(), b.sin(), 0.0);
+
         [right, forward.cross(right), forward]
     }
 
@@ -202,7 +203,9 @@ impl Viewshed {
         let cube_target = objects.framebuffer()?;
         // On a failure, `objects` deletes the others
         let outline = outline::Outline::new(gl)?;
+
         objects.keep();
+
         let uniforms = gl::uniforms(
             gl,
             program,
@@ -218,6 +221,7 @@ impl Viewshed {
             ],
         );
         let tint_uniforms = gl::uniforms(gl, tint, ["u_accumulation", "u_visible", "u_hidden", "u_opacity"]);
+
         // SAFETY: storage of a texture just created on the live context
         unsafe {
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, Some(cube));
@@ -234,6 +238,7 @@ impl Viewshed {
             gl.tex_parameter_i32(glow::TEXTURE_CUBE_MAP, glow::TEXTURE_COMPARE_FUNC, glow::LEQUAL as i32);
             gl.bind_texture(glow::TEXTURE_CUBE_MAP, None);
         }
+
         Ok(Self {
             settings,
             program,
@@ -281,11 +286,13 @@ impl Viewshed {
             return Ok(screen);
         }
         self.delete_screen(gl);
+
         let mut objects = Objects::new(gl);
         let depth = objects.texture()?;
         let depth_target = objects.framebuffer()?;
         let accumulation = objects.texture()?;
         let accumulation_target = objects.framebuffer()?;
+
         objects.keep();
         // SAFETY: storage and attachment of objects just created on the live context
         unsafe {
@@ -308,6 +315,7 @@ impl Viewshed {
             gl.bind_texture(glow::TEXTURE_2D, None);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
+
         let screen = Screen {
             depth,
             depth_target,
@@ -315,7 +323,9 @@ impl Viewshed {
             accumulation_target,
             size,
         };
+
         self.screen = Some(screen);
+
         Ok(screen)
     }
 }
@@ -326,11 +336,13 @@ pub(super) fn face_view(view: &View, eye: DVec3, face: u32, near: f64, far: f64)
     let (look, up) = face_axes(face);
     let projection = glam::dcamera::rh::proj::opengl::perspective(std::f64::consts::FRAC_PI_2, 1.0, near, far);
     let mut face_view = view.clone();
+
     face_view.view_proj = projection * glam::dcamera::rh::view::look_to_mat4(eye, look, up);
     face_view.inverse = face_view.view_proj.inverse();
     face_view.eye = eye;
     face_view.near = near;
     face_view.far = far;
+
     face_view
 }
 
@@ -351,6 +363,7 @@ impl Engine {
     /// set; the state is set back but for the framebuffer
     pub(super) unsafe fn draw_solid_depth(&self, view: &View) {
         let gl = &self.gl;
+
         gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after
         unsafe {
@@ -363,7 +376,9 @@ impl Engine {
             if let Some((terrain, _)) = &self.terrain {
                 self.raster_pass.draw_depth(gl, view, terrain);
             }
+
             let frame = self.frame_state(view);
+
             for (_, slot) in &self.layers {
                 if let Slot::Layer(layer) = slot {
                     gl.enable(glow::DEPTH_TEST);
@@ -385,6 +400,7 @@ impl Engine {
             (self.camera.width * self.pixel_ratio).round() as i32,
             (self.camera.height * self.pixel_ratio).round() as i32,
         );
+
         if !viewshed.settings.observers.is_empty()
             && let Ok(screen) = viewshed.screen_target(&self.gl, size)
         {
@@ -396,6 +412,7 @@ impl Engine {
     fn draw_viewshed_passes(&self, viewshed: &Viewshed, view: &View, screen: Screen) {
         let gl = &self.gl;
         let size = screen.size;
+
         // SAFETY: offscreen passes on the live context, the accumulation cleared for the observers
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(screen.depth_target));
@@ -408,8 +425,10 @@ impl Engine {
         for observer in &viewshed.settings.observers {
             self.draw_observer(viewshed, view, observer, screen);
         }
+
         let s = &viewshed.settings;
         let [accumulation, visible, hidden, opacity] = &viewshed.tint_uniforms;
+
         // SAFETY: the tint over the default framebuffer, the state set back after
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
@@ -430,11 +449,14 @@ impl Engine {
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         gl::reset_state(gl);
+
         if let Some(color) = s.outline {
             let mut segments = Vec::new();
+
             for observer in &s.observers {
                 if let Some(cone) = &observer.cone {
                     let (eye, k) = self.eye(view, observer);
+
                     outline::segments(eye, cone, observer.range * k, &mut segments);
                 }
             }
@@ -449,6 +471,7 @@ impl Engine {
         let m = geo::camera::mercator(s.position.x, s.position.y);
         let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
         let eye = view.geodetic(DVec3::new(s.position.x, s.position.y, ground + s.height));
+
         (eye, view.pixels_per_metre(s.position.y))
     }
 
@@ -459,6 +482,7 @@ impl Engine {
         let near = (0.2 * k).max(range / 20_000.0);
         let far = range * 1.05;
         let gl = &self.gl;
+
         // SAFETY: offscreen passes on the live context, the state set back after
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(viewshed.cube_target));
@@ -477,19 +501,25 @@ impl Engine {
             gl.viewport(0, 0, screen.size.0, screen.size.1);
 
             let [inverse, observer, range_u, flat, depth, cube, axes_u, cone_u] = &viewshed.uniforms;
+
             gl.use_program(Some(viewshed.program));
             gl.uniform_matrix_4_f32_slice(inverse.as_ref(), false, &gl::mat4(&view.inverse));
             gl.uniform_3_f32(observer.as_ref(), eye.x as f32, eye.y as f32, eye.z as f32);
             gl.uniform_4_f32(range_u.as_ref(), range as f32, near as f32, far as f32, k as f32);
+
             let flat_ground = self.terrain.is_none() && view.globe.factor <= 0.0;
+
             gl.uniform_1_f32(flat.as_ref(), if flat_ground { 1.0 } else { 0.0 });
             gl.uniform_1_i32(depth.as_ref(), 0);
             gl.uniform_1_i32(cube.as_ref(), 1);
+
             let (axes, cone) = s.cone.map_or(([DVec3::ZERO; 3], [0.0, 0.0, 0.0]), |cone| {
                 let (x, y) = cone.tangents();
+
                 (cone.axes(), [x as f32, y as f32, 1.0])
             });
             let columns = axes.map(|a| [a.x as f32, a.y as f32, a.z as f32]).concat();
+
             gl.uniform_matrix_3_f32_slice(axes_u.as_ref(), false, &columns);
             gl.uniform_3_f32_slice(cone_u.as_ref(), &cone);
             gl.active_texture(glow::TEXTURE0);
@@ -557,11 +587,13 @@ impl Engine {
             },
             outline: (outline.len() >= 3).then(|| rgb(outline)),
         };
+
         match &mut self.viewshed {
             Some(viewshed) => viewshed.settings = settings,
             None => self.viewshed = Some(Viewshed::new(&self.gl, settings).map_err(|e| JsValue::from_str(&e))?),
         }
         (self.redraw)();
+
         Ok(())
     }
 

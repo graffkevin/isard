@@ -59,7 +59,9 @@ await Promise.all(
  * chunks of their common code (the package), loaded once by the browser for all of them. */
 const bundle = async (entries: string[], outdir: string, options: { split?: boolean; empty?: boolean } = {}) => {
   const { split = false, empty = true } = options;
+
   if (empty) rmSync(join(root, outdir), { recursive: true, force: true });
+
   const common = {
     target: 'browser',
     format: 'esm',
@@ -90,6 +92,7 @@ const bundle = async (entries: string[], outdir: string, options: { split?: bool
         }),
       ];
   const failed = (await Promise.all(builds)).find((result) => !result.success);
+
   if (failed) throw new AggregateError(failed.logs, `bundling ${entries.join(', ')} failed`);
   mkdirSync(join(root, outdir), { recursive: true });
   copyFileSync(join(root, wasm), join(root, outdir, 'isard_bg.wasm'));
@@ -101,13 +104,16 @@ const bundle = async (entries: string[], outdir: string, options: { split?: bool
  * workers bundled (loaded by URL, they must stand alone) and the engine next to them */
 const buildPackage = async (): Promise<void> => {
   const dist = join(root, pkg, 'dist');
+
   rmSync(dist, { recursive: true, force: true });
   await $`bunx tsc -p ${pkg}/tsconfig.build.json`;
   mkdirSync(join(dist, 'wasm'), { recursive: true });
   ['isard', 'isard_core', 'isard_points'].forEach((name) => {
     copyFileSync(join(root, bindings, `${name}.js`), join(dist, `wasm/${name}.js`));
+
     // Without `Symbol.dispose` (ES2025 lib), which fails the type check of applications on an older lib
     const declarations = readFileSync(join(root, bindings, `${name}.d.ts`), 'utf8');
+
     writeFileSync(join(dist, `wasm/${name}.d.ts`), declarations.replace(/^\s*\[Symbol\.dispose\]\(\): void;\n/gm, ''));
   });
   // After tsc: the workers it emitted module by module (imported for their types) are replaced
@@ -126,10 +132,15 @@ const bundles: Promise<void>[] = [
   bundle(['apps/demo/src/main.ts'], 'apps/demo/dist'),
   buildViewer(),
   // The examples together: each page loads its own entry, the package's code and the engine once for all of them
-  bundle([...new Bun.Glob('examples/*/main.{ts,tsx}').scanSync(root)], 'examples/dist', { split: true }),
+  bundle(
+    ['examples/*/main.ts', 'examples/react/*/main.tsx'].flatMap((pattern) => [...new Bun.Glob(pattern).scanSync(root)]),
+    'examples/dist',
+    { split: true },
+  ),
 ];
 if (process.argv.includes('--bench')) {
   const pages = ['runner', 'itowns', 'isard', 'tiles-renderer'].map((page) => `apps/bench/src/${page}.ts`);
+
   bundles.push(bundle(pages, 'apps/bench/dist'));
 }
 await Promise.all(bundles);

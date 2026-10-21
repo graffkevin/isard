@@ -30,6 +30,7 @@ if (!readFileSync(join(root, 'CHANGELOG.md'), 'utf8').includes(`## [${version}]`
 ['engine', 'geo', 'pointcloud', 'tiles3d'].forEach((crate) => {
   const manifest = readFileSync(join(root, 'crates', crate, 'Cargo.toml'), 'utf8');
   const crateVersion = /^version = "([^"]+)"/m.exec(manifest)?.[1];
+
   if (crateVersion !== version) fail(`crates/${crate} is at ${crateVersion}, the package at ${version}: align them`);
 });
 
@@ -49,12 +50,14 @@ if (publish) {
   // npm ≥ 11.5: trusted publishing (OpenID Connect from the workflow), provenance attached
   await $`npx --yes npm@11 publish --access public --provenance`;
   $.cwd(root);
+
   // The tag and the GitHub release, its notes the changelog section of the version
   const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
   const start = changelog.indexOf(`## [${version}]`);
   const next = changelog.indexOf('\n## [', start + 1);
   const notes = changelog.slice(changelog.indexOf('\n', start) + 1, next < 0 ? undefined : next).trim();
   const sha = process.env.RELEASE_SHA ?? (await $`git rev-parse HEAD`.text()).trim();
+
   await $`gh release create v${version} --target ${sha} --title ${`isard ${version}`} --notes ${notes}`;
   process.exit(0);
 }

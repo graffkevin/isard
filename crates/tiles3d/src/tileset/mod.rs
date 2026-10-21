@@ -120,6 +120,7 @@ fn classify(url: &str, uri: &str) -> Content {
     let path = absolute.split(['?', '#']).next().unwrap_or("");
     let file = path.rsplit('/').next().unwrap_or("");
     let extension = file.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+
     match extension.as_str() {
         "json" => Content::Tileset(absolute),
         "i3dm" | "cmpt" | "gltf" | "vctr" | "geom" | "geojson" => Content::Unsupported,
@@ -156,17 +157,22 @@ impl Tree {
         {
             let expanded = self.expand(p, placeholder, json, url);
             let tileset = self.node_tileset.get(p).copied().unwrap_or(0);
+
             self.node_tileset.resize(self.nodes.len(), tileset);
+
             return expanded;
         }
+
         let above = parent.and_then(|p| self.node_tileset.get(p).copied());
         let mut ancestor = above;
+
         while let Some(t) = ancestor {
             if self.tilesets[t].0 == url {
                 return Err(format!("tileset {url} includes itself"));
             }
             ancestor = self.tilesets[t].1;
         }
+
         let tileset: TilesetJson = serde_json::from_slice(json).map_err(|e| format!("tileset: {e}"))?;
         let y_up = !tileset
             .asset
@@ -175,6 +181,7 @@ impl Tree {
             .is_some_and(|a| a.eq_ignore_ascii_case("z"));
         let (transform, depth, replace) = parent.map_or((DMat4::IDENTITY, 0, true), |p| {
             let n = &self.nodes[p];
+
             (n.transform, n.depth + 1, n.replace)
         });
         let first = self.nodes.len();
@@ -183,13 +190,16 @@ impl Tree {
             // Nothing half-added: the nodes of a refused tileset are not in the tree
             self.nodes.truncate(first);
             self.pending.retain(|&node, _| node < first);
+
             return added;
         };
+
         self.tilesets.push((url.to_owned(), above));
         self.node_tileset.resize(self.nodes.len(), self.tilesets.len() - 1);
         if let Some(p) = parent {
             self.nodes[p].children.push(root);
         }
+
         Ok(root)
     }
 
@@ -217,12 +227,15 @@ impl Tree {
             y_up: base.y_up,
             depth: base.depth,
         };
+
         self.nodes.push(node(contents.next().unwrap_or(Content::None)));
         for content in contents {
             let companion = self.nodes.len();
+
             self.nodes.push(node(content));
             self.nodes[index].companions.push(companion);
         }
+
         index
     }
 
@@ -241,6 +254,7 @@ impl Tree {
         if self.nodes.len() >= self.max_nodes {
             return Err(format!("tileset: more than {} tiles", self.max_nodes));
         }
+
         let transform = tile.transform.map_or(*parent, |t| *parent * DMat4::from_cols_array(&t));
         let volume = Volume::parse(&tile.bounding_volume)?;
         let (center, radius) = volume.sphere(&transform)?;
@@ -275,6 +289,7 @@ impl Tree {
             }
             _ => None,
         };
+
         if let Some(implicit) = tile.implicit_tiling.as_ref().or(extension.as_ref()) {
             let tiling = Implicit::new(implicit, url, &uris, volume, &base)?;
             let root = Coord {
@@ -283,14 +298,19 @@ impl Tree {
                 y: 0,
                 z: 0,
             };
+
             return Ok(self.placeholder(&Rc::new(tiling), root, None, depth));
         }
+
         let contents = uris.iter().map(|uri| classify(url, uri)).collect();
         let index = self.push(&base, contents);
+
         for child in &tile.children {
             let c = self.add_tile(child, url, &transform, replace, y_up, depth + 1)?;
+
             self.nodes[index].children.push(c);
         }
+
         Ok(index)
     }
 }
@@ -300,16 +320,20 @@ fn resolve(base: &str, uri: &str) -> String {
     if uri.contains("://") || uri.starts_with("data:") {
         return uri.to_owned();
     }
+
     let (path, query) = base.split_once('?').map_or((base, ""), |(p, q)| (p, q));
     let root = if let Some(rest) = uri.strip_prefix('/') {
         let origin_end = path
             .find("://")
             .map_or(0, |i| path[i + 3..].find('/').map_or(path.len(), |j| i + 3 + j));
+
         format!("{}/{rest}", &path[..origin_end])
     } else {
         let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+
         format!("{dir}{}", uri.replace('\\', "/"))
     };
+
     if query.is_empty() || uri.contains('?') {
         root
     } else {
@@ -327,6 +351,7 @@ mod tests {
         let c = geodesy::to_ecef(3.06, 50.63, 30.0);
         let child = |dx: f64, dy: f64, uri: &str| {
             let p = geodesy::to_ecef(3.06 + dx, 50.63 + dy, 30.0);
+
             format!(
                 r#"{{"boundingVolume":{{"sphere":[{},{},{},800]}},"geometricError":2,"content":{{"uri":"{uri}"}}}}"#,
                 p.x, p.y, p.z
@@ -346,19 +371,23 @@ mod tests {
         let root = tree
             .add(json.as_bytes(), "https://example.org/mesh/tileset.json?key=1", None)
             .unwrap();
+
         (tree, root)
     }
 
     pub(super) fn view(zoom: f64) -> View {
         let mut c = Camera::new(3.06, 50.63, zoom);
+
         c.width = 1200.0;
         c.height = 800.0;
+
         c.view()
     }
 
     #[test]
     fn parses_and_resolves_uris() {
         let (tree, root) = tree();
+
         assert_eq!(tree.nodes.len(), 5);
         assert_eq!(
             tree.nodes[root].content,
@@ -379,6 +408,7 @@ mod tests {
     /// A sphere tile at a longitude and latitude, as JSON
     pub(super) fn sphere_tile(lon: f64, lat: f64, radius: f64, error: f64, extra: &str) -> String {
         let p = geodesy::to_ecef(lon, lat, 30.0);
+
         format!(
             r#"{{"boundingVolume":{{"sphere":[{},{},{},{radius}]}},"geometricError":{error}{extra}}}"#,
             p.x, p.y, p.z
@@ -388,8 +418,10 @@ mod tests {
     pub(super) fn tileset(root: &str) -> Tree {
         let mut tree = Tree::default();
         let json = format!(r#"{{"asset":{{"version":"1.1"}},"geometricError":500,"root":{root}}}"#);
+
         tree.add(json.as_bytes(), "https://example.org/t/tileset.json", None)
             .unwrap();
+
         tree
     }
 
@@ -416,9 +448,12 @@ mod tests {
             p.x, p.y, p.z
         );
         let root = tree.add(json.as_bytes(), sub, Some(external)).unwrap();
+
         assert_eq!(tree.nodes[root].content, Content::Tileset(sub.into()));
+
         let before = tree.nodes.len();
         let err = tree.add(json.as_bytes(), sub, Some(root)).unwrap_err();
+
         assert!(err.contains("includes itself"), "{err}");
         // So is the root tileset, deeper down
         assert!(
@@ -445,9 +480,12 @@ mod tests {
     #[test]
     fn a_tree_stops_growing_at_its_limit() {
         let (mut tree, root) = tree();
+
         tree.max_nodes = 7;
+
         let json = |n: usize| {
             let children = vec![sphere_tile(3.06, 50.63, 100.0, 1.0, ""); n].join(",");
+
             format!(
                 r#"{{"asset":{{"version":"1.0"}},"geometricError":5,"root":{}}}"#,
                 sphere_tile(3.06, 50.63, 800.0, 2.0, &format!(r#","children":[{children}]"#))
@@ -457,6 +495,7 @@ mod tests {
         let err = tree
             .add(json(2).as_bytes(), "https://example.org/x.json", Some(root))
             .unwrap_err();
+
         assert!(err.contains("more than 7"), "{err}");
         assert_eq!(tree.nodes.len(), 5);
         assert!(

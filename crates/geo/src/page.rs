@@ -33,9 +33,11 @@ pub fn table(min: DVec2, max: DVec2, max_z: u8, tiles: impl Iterator<Item = (Til
             .saturating_sub(cell(min.x, level))
             .max(cell(max.y, level).saturating_sub(cell(min.y, level)))
     };
+
     while level > 0 && widest(level) >= MAX_SIDE {
         level -= 1;
     }
+
     let first = (cell(min.x, level), cell(min.y, level));
     let size = (
         cell(max.x, level).saturating_sub(first.0) + 1,
@@ -44,6 +46,7 @@ pub fn table(min: DVec2, max: DVec2, max_z: u8, tiles: impl Iterator<Item = (Til
     let mut cells = vec![[0u8; 4]; (size.0 * size.1) as usize];
     // Coarse tiles first, finer ones painted over them
     let mut tiles: Vec<(TileId, u16)> = tiles.filter(|(tile, _)| tile.z <= level).collect();
+
     tiles.sort_by_key(|(tile, _)| tile.z);
     for (tile, slot) in tiles {
         let Ok(slot) = u8::try_from(slot) else { continue };
@@ -52,13 +55,16 @@ pub fn table(min: DVec2, max: DVec2, max_z: u8, tiles: impl Iterator<Item = (Til
         let (x1, y1) = (x0.saturating_add(span), y0.saturating_add(span));
         let (cx0, cx1) = (x0.max(first.0), x1.min(first.0 + size.0));
         let (cy0, cy1) = (y0.max(first.1), y1.min(first.1 + size.1));
+
         for y in cy0..cy1 {
             let row = ((y - first.1) * size.0) as usize;
+
             for x in cx0..cx1 {
                 cells[row + (x - first.0) as usize] = [slot, tile.z, 1, 0];
             }
         }
     }
+
     Table {
         level,
         first,
@@ -80,6 +86,7 @@ mod tests {
             (TileId::new(12, (0.5001 * 4096.0) as u32, (0.3321 * 4096.0) as u32), 3),
         ];
         let t = table(min, max, 12, tiles.into_iter());
+
         assert_eq!(t.level, 12);
         assert_eq!(t.size, (4, 2));
         assert_eq!(t.cells[0], [3, 12, 1, 0]);
@@ -89,6 +96,7 @@ mod tests {
     #[test]
     fn wide_extents_take_coarser_levels() {
         let t = table(DVec2::new(0.4, 0.3), DVec2::new(0.6, 0.35), 15, std::iter::empty());
+
         assert!(t.size.0 <= MAX_SIDE && t.size.1 <= MAX_SIDE, "{:?}", t.size);
         assert!(t.level < 15);
         assert!(t.cells.iter().all(|c| c[2] == 0));
@@ -102,6 +110,7 @@ mod tests {
             15,
             [(TileId::new(15, 0, 0), 1u16)].into_iter(),
         );
+
         assert!(t.level < 15);
         assert!(t.cells.iter().all(|c| c[2] == 0));
     }
@@ -115,8 +124,11 @@ mod tests {
             40,
             [(TileId::new(0, 0, 0), 300u16)].into_iter(),
         );
+
         assert!(t.cells.iter().all(|c| c[2] == 0));
+
         let t = table(DVec2::NAN, DVec2::NAN, 12, std::iter::empty());
+
         assert_eq!(t.size, (1, 1));
     }
 }

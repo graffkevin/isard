@@ -139,7 +139,9 @@ impl Panorama {
         let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
         let vao = objects.vertex_array()?;
         let images = objects.texture()?;
+
         objects.keep();
+
         let uniforms = gl::uniforms(
             gl,
             program,
@@ -159,6 +161,7 @@ impl Panorama {
             ],
         );
         let loaded = vec![false; settings.cameras.len()];
+
         Ok(Self {
             settings,
             program,
@@ -192,6 +195,7 @@ impl Engine {
             (self.camera.width * self.pixel_ratio).round() as i32,
             (self.camera.height * self.pixel_ratio).round() as i32,
         );
+
         if panorama.loaded.iter().any(|&l| l)
             && let Ok((framebuffer, depth)) = panorama.depth.at(&self.gl, size)
         {
@@ -218,6 +222,7 @@ impl Engine {
         // Local offsets from the panorama to each camera: through east-north-up, the panorama frame, the camera
         let mut cameras = Vec::with_capacity(CAMERAS * 16);
         let (mut intrinsics, mut sizes, mut distortions, mut limits) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+
         for (layer, c) in s.cameras.iter().enumerate().take(CAMERAS) {
             let rotation = c.rotation * s.rotation.transpose();
             let offset = DMat4::from_mat3(DMat3::from_cols(
@@ -226,18 +231,22 @@ impl Engine {
                 to_enu.z_axis.truncate(),
             ));
             let m = DMat4::from_mat3(rotation) * DMat4::from_translation(-(s.rotation * c.position)) * offset;
+
             cameras.extend(m.to_cols_array().map(|v| v as f32));
             intrinsics.extend(c.intrinsics);
+
             // A camera whose image has not arrived: its layer -1, left out
             let image = if panorama.loaded.get(layer).copied().unwrap_or(false) {
                 layer as f32
             } else {
                 -1.0
             };
+
             sizes.extend([c.size[0], c.size[1], c.size[2], image]);
             distortions.extend(c.distortion);
             limits.extend(c.limits);
         }
+
         let count = s.cameras.len().min(CAMERAS);
         let [
             depth_u,
@@ -260,6 +269,7 @@ impl Engine {
             (REACH_FROM_ABOVE, 0.0)
         };
         let gl = &self.gl;
+
         // SAFETY: the pass over the default framebuffer, the state set back after
         unsafe {
             gl.use_program(Some(panorama.program));
@@ -318,9 +328,11 @@ impl Engine {
         opacity: f32,
     ) -> Result<(), JsValue> {
         let matrix = |m: &[f64]| DMat3::from_cols_array(&[m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
+
         if rotation.len() < 9 {
             return Err("setPanorama: a rotation of 9 numbers expected".into());
         }
+
         let cameras: Vec<Camera> = cameras
             .as_chunks::<CAMERA_NUMBERS>()
             .0
@@ -350,11 +362,13 @@ impl Engine {
             },
             opacity: opacity.clamp(0.0, 1.0),
         };
+
         if let Some(mut old) = self.panorama.take() {
             old.delete(&self.gl);
         }
         self.panorama = Some(Panorama::new(&self.gl, settings).map_err(|e| JsValue::from_str(&e))?);
         (self.redraw)();
+
         Ok(())
     }
 
@@ -364,20 +378,25 @@ impl Engine {
         let Some(panorama) = self.panorama.as_mut() else {
             return Ok(());
         };
+
         if index >= panorama.loaded.len() {
             return Ok(());
         }
+
         let (width, height) = if let Some(size) = panorama.image_size {
             size
         } else {
             {
                 let size = (image.width() as i32, image.height() as i32);
                 let layers = panorama.loaded.len().max(1) as i32;
+
                 // SAFETY: storage of the panorama's texture, on the live context
                 unsafe {
                     let gl = &self.gl;
+
                     gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(panorama.images));
                     gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, glow::RGBA8, size.0, size.1, layers);
+
                     for (name, value) in [
                         (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                         (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
@@ -388,9 +407,11 @@ impl Engine {
                     }
                 }
                 panorama.image_size = Some(size);
+
                 size
             }
         };
+
         // SAFETY: upload into a layer of the panorama's texture, on the live context
         unsafe {
             self.gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(panorama.images));
@@ -411,6 +432,7 @@ impl Engine {
         }
         panorama.loaded[index] = true;
         (self.redraw)();
+
         Ok(())
     }
 

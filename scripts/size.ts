@@ -77,6 +77,7 @@ const measure = (files: string[]): { raw: number; gzip: number } =>
   files.reduce(
     ({ raw, gzip }, file) => {
       const bytes = readFileSync(join(dist, file));
+
       return { raw: raw + bytes.length, gzip: gzip + Bun.gzipSync(bytes, { level: 9 }).length };
     },
     { raw: 0, gzip: 0 },
@@ -95,19 +96,25 @@ export const checkSizes = (): boolean => {
     'basemap.worker.js': ['basemap.worker.js'],
   };
   const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+
   console.log('size (gzipped, budget)');
+
   const overs = (Object.entries(groups) as [keyof typeof BUDGETS, string[]][]).map(([name, files]) => {
     const { raw, gzip } = measure(files);
     const budget = BUDGETS[name] * 1024;
     const over = gzip > budget;
     const label = name === 'modules' ? `${files.length} modules` : name;
+
     console.log(
       `  ${label.padEnd(20)} ${kb(raw).padStart(10)} raw ${kb(gzip).padStart(10)} gzip / ${kb(budget)}${over ? '  OVER BUDGET' : ''}`,
     );
+
     return over;
   });
   const ok = overs.every((over) => !over);
+
   if (!ok) console.error('A size is over its budget: see scripts/size.ts to raise it deliberately');
+
   return ok;
 };
 

@@ -20,6 +20,7 @@ class FakeWorker {
 const fetchMock = mock(async (url: string) => {
   if (url === 'https://tiles.example/planet.json')
     return Response.json({ tiles: ['https://tiles.example/{z}/{x}/{y}.pbf'], maxzoom: 13 });
+
   return new Response(null, { status: 404 });
 });
 const restore = setGlobals({ fetch: fetchMock });
@@ -29,9 +30,12 @@ afterAll(restore);
 const host = (workers: FakeWorker[] = []): GeoMap => {
   const pool = new BasemapWorkers(2, 'worker.js', () => {
     const w = new FakeWorker();
+
     workers.push(w);
+
     return w as unknown as PoolWorker;
   });
+
   return { basemapWorkers: () => ({ pool, own: true }) } as unknown as GeoMap;
 };
 
@@ -57,6 +61,7 @@ describe('VectorTiles.load', () => {
     const input = style();
     const layers = input.layers;
     const ready = await new VectorTiles(host(), { style: input }).ready;
+
     expect(ready.tiles).toBe('https://tiles.example/{z}/{x}/{y}.pbf');
     expect(ready.maxzoom).toBe(13);
     expect(ready.rasters).toEqual({
@@ -73,6 +78,7 @@ describe('VectorTiles.load', () => {
     const ready = await new VectorTiles(host(), {
       style: { version: 8, sources: { v: { type: 'vector', tiles: ['https://t/{z}/{x}/{y}'] } }, layers: [] },
     }).ready;
+
     expect(ready.tiles).toBe('https://t/{z}/{x}/{y}');
     expect(ready.maxzoom).toBe(14);
     expect(fetchMock.mock.calls.length).toBe(calls);
@@ -80,9 +86,11 @@ describe('VectorTiles.load', () => {
 
   test('a style without a vector source fails', async () => {
     const warn = console.warn;
+
     console.warn = () => undefined;
     try {
       const tiles = new VectorTiles(host(), { style: { version: 8, sources: {}, layers: [] } });
+
       await expect(tiles.ready).rejects.toThrow('no vector source');
     } finally {
       console.warn = warn;
@@ -95,9 +103,12 @@ describe('workers', () => {
     const workers: FakeWorker[] = [];
     const pool = new BasemapWorkers(3, 'worker.js', () => {
       const w = new FakeWorker();
+
       workers.push(w);
+
       return w as unknown as PoolWorker;
     });
+
     pool.broadcast({ type: 'init', key: 'v0:r0', tiles: 't', maxzoom: 14, layers: [] });
     pool.broadcast({ type: 'drop', key: 'v0:r0' });
     workers.forEach((w) => {

@@ -7,11 +7,14 @@ import { decode } from '../../src/basemap/mvt.ts';
 const varint = (value: number | bigint): number[] => {
   let v = BigInt.asUintN(64, BigInt(value));
   const out: number[] = [];
+
   do {
     const b = Number(v & 0x7fn);
+
     v >>= 7n;
     out.push(v > 0n ? b | 0x80 : b);
   } while (v > 0n);
+
   return out;
 };
 const zigzag = (n: number) => (n < 0 ? -2 * n - 1 : 2 * n);
@@ -21,7 +24,9 @@ const string = (field: number, s: string) => bytes(field, [...new TextEncoder().
 const uint = (field: number, v: number | bigint) => [...tag(field, 0), ...varint(v)];
 const double = (field: number, v: number) => {
   const b = new Uint8Array(8);
+
   new DataView(b.buffer).setFloat64(0, v, true);
+
   return [...tag(field, 1), ...b];
 };
 const command = (id: number, count: number) => varint((count << 3) | id);
@@ -51,6 +56,7 @@ describe('mvt', () => {
     // A field after the 10-byte varints: read right only if they were consumed whole
     const layer = [...string(1, 'places'), ...keys, ...values, ...bytes(2, feature), ...uint(5, 512)];
     const decoded = decode(tile(layer)).get('places');
+
     expect(decoded?.extent).toBe(512);
     expect(decoded?.features[0]?.properties).toEqual({
       name: 'Paris',
@@ -66,6 +72,7 @@ describe('mvt', () => {
 
   test('a 10-byte varint in an unknown field keeps the next fields in step', () => {
     const layer = [...uint(9, -5n), ...string(1, 'roads'), ...uint(5, 4096)];
+
     expect([...decode(tile(layer)).keys()]).toEqual(['roads']);
   });
 
@@ -91,6 +98,7 @@ describe('mvt', () => {
     ];
     const feature = [...uint(3, 3), ...bytes(4, geometry)];
     const decoded = decode(tile([...string(1, 'water'), ...bytes(2, feature)])).get('water');
+
     expect(decoded?.features[0]?.type).toBe(3);
     expect(decoded?.features[0]?.geometry).toEqual([
       [0, 0, 10, 0, 10, 10, 0, 0],
@@ -100,6 +108,7 @@ describe('mvt', () => {
 
   test('only the wanted layers', () => {
     const bytes = Uint8Array.from([...tile(string(1, 'a')), ...tile(string(1, 'b'))]);
+
     expect([...decode(bytes, new Set(['b'])).keys()]).toEqual(['b']);
   });
 
@@ -107,6 +116,7 @@ describe('mvt', () => {
     const geometry = [...command(2, 1000000), ...varint(zigzag(1))];
     const feature = [...uint(3, 2), ...bytes(4, geometry)];
     const full = tile([...string(1, 'lines'), ...double(3, 0), ...bytes(2, feature)]);
+
     Array.from({ length: full.length }, (_, n) => n).forEach((n) => {
       expect(() => decode(full.subarray(0, n))).not.toThrow();
     });

@@ -77,15 +77,19 @@ fn prism_range(body: &geo::geodesy::Body) -> (f64, f64) {
 /// Whether a point lies inside a polygon's rings, even-odd (the holes cut out)
 fn contains<'a>(rings: impl Iterator<Item = &'a [DVec2]>, p: DVec2) -> bool {
     let mut inside = false;
+
     for ring in rings {
         let n = ring.len();
+
         for i in 0..n {
             let (a, b) = (ring[i], ring[(i + 1) % n]);
+
             if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
                 inside = !inside;
             }
         }
     }
+
     inside
 }
 
@@ -108,6 +112,7 @@ fn picks_of(polygons: &Polygons, feature: &[u32]) -> Vec<Pick> {
                 .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(a, b), &q| {
                     (a.min(q), b.max(q))
                 });
+
             Pick {
                 feature: feature.get(p).copied().unwrap_or(u32::MAX),
                 min,
@@ -157,11 +162,14 @@ impl FillLayer {
         let vao = objects.vertex_array()?;
         let vertices = objects.buffer()?;
         let indices = objects.buffer()?;
+
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertices));
+
             let stride = size_of::<shapes::Vertex>() as i32;
+
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
             gl.enable_vertex_attrib_array(1);
@@ -173,8 +181,11 @@ impl FillLayer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
             gl.bind_vertex_array(None);
         }
+
         let features = Features::new(gl, feature_count, Layout::FILL)?;
+
         objects.keep();
+
         let mut layer = Self {
             features,
             program,
@@ -195,13 +206,16 @@ impl FillLayer {
             visible: Visible::default(),
             rest: Vec::new(),
         };
+
         layer.set_geometry(gl, polygons, feature);
+
         Ok(layer)
     }
 
     /// Replaces the polygons; `feature`: the feature of each polygon
     pub fn set_geometry(&mut self, gl: &glow::Context, polygons: &Polygons, feature: &[u32]) {
         let (min, max) = overlay::bounds(polygons.points).unwrap_or((DVec2::ZERO, DVec2::ZERO));
+
         self.square = shapes::square_for(min, max);
         self.polygons = OwnedPolygons::new(polygons);
         self.picks = picks_of(polygons, feature);
@@ -213,6 +227,7 @@ impl FillLayer {
         let square = self.square;
         let mut mesh: Mesh = shapes::triangulate_with(&self.polygons.as_polygons(), square, self.prism);
         let chunks = shapes::chunk(&mut mesh, square);
+
         // Polygon numbers to features
         for v in &mut mesh.vertices {
             v.feature = self.picks.get(v.feature as usize).map_or(u32::MAX, |p| p.feature);
@@ -246,6 +261,7 @@ impl FillLayer {
         let ((xh, xl), (yh, yl)) = (overlay::split(camera.center.x), overlay::split(camera.center.y));
         let exaggeration = relief.map_or(1.0, |(_, e)| e);
         let (bottom, top) = prism_range(&view.body);
+
         // SAFETY: uniforms on the program in use
         unsafe {
             gl.use_program(Some(self.program));
@@ -270,25 +286,33 @@ impl Layer for FillLayer {
         if self.all == 0 || !self.features.layer.shows(frame.camera.zoom) {
             return false;
         }
+
         let volume = frame.relief.is_some();
+
         if volume && !self.prism {
             self.prism = true;
             self.upload(frame.gl);
         }
+
         // The squares in view (the prisms of a volume reach through `prism_range`, and their faces past the far plane
         // still count: kept on it); the fills are drawn where they are, on no other copy of the world
         let heights = frame.relief.map_or((0.0, 0.0), |(_, e)| {
             let k = frame.view.vertical * f64::from(e.max(1.0));
             let (bottom, top) = prism_range(&frame.view.body);
+
             (bottom * k, top * k)
         });
         let mut visible = std::mem::take(&mut self.visible);
         let mut rest = std::mem::take(&mut self.rest);
+
         visible.update(&self.grid, &self.top_start, frame.view, (heights, 0.0, 0.0, !volume));
+
         let top = visible.ranges();
+
         if top.is_empty() {
             self.visible = visible;
             self.rest = rest;
+
             return false;
         }
         // The bottom caps and the walls too, in relief
@@ -297,6 +321,7 @@ impl Layer for FillLayer {
         } else {
             rest.clear();
         }
+
         let draw = |ranges: &[&[(u32, u32)]]| {
             for &(first, end) in ranges.iter().copied().flatten() {
                 // SAFETY: a draw of indices inside the index buffer, the vertex array bound by `set_uniforms`
@@ -311,6 +336,7 @@ impl Layer for FillLayer {
             }
         };
         let gl = frame.gl;
+
         self.set_uniforms(frame, volume);
         // SAFETY: state changes and draws on the live context, set back at the end
         unsafe {
@@ -344,6 +370,7 @@ impl Layer for FillLayer {
         }
         self.visible = visible;
         self.rest = rest;
+
         false
     }
 
@@ -355,9 +382,11 @@ impl Layer for FillLayer {
         if !self.features.layer.shows(zoom) {
             return None;
         }
+
         // The last polygon drawn is on top
         let polygons = self.polygons.as_polygons();
         let inside = |p: &Pick| m.x >= p.min.x && m.y >= p.min.y && m.x <= p.max.x && m.y <= p.max.y;
+
         self.picks
             .iter()
             .rev()
@@ -398,6 +427,7 @@ impl Engine {
             polygon_start,
         };
         let layer = FillLayer::new(&self.gl, &polygons, feature, feature_count)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -405,12 +435,14 @@ impl Engine {
     #[wasm_bindgen(js_name = setFills)]
     pub fn set_fills(&mut self, id: u32, points: &[f64], ring_start: &[u32], polygon_start: &[u32], feature: &[u32]) {
         let points = overlay::points(points);
+
         if let Some((layer, gl)) = self.layer_mut::<FillLayer>(id) {
             let polygons = Polygons {
                 points: &points,
                 ring_start,
                 polygon_start,
             };
+
             layer.set_geometry(gl, &polygons, feature);
         }
     }
@@ -425,7 +457,9 @@ mod tests {
     fn prisms_reach_through_the_relief_of_the_body() {
         // The Earth's from under the Dead Sea to above Everest; Mars's from under Hellas to above Olympus Mons
         assert_eq!(prism_range(&Body::EARTH), (-3250.0, 9400.0));
+
         let (bottom, top) = prism_range(&Body::MARS);
+
         assert!(bottom < -8201.0 - 2000.0 && top > 21_241.0, "{bottom} {top}");
     }
 
@@ -441,6 +475,7 @@ mod tests {
         };
         let rings = [square(0.0, 1.0), square(0.25, 0.5)];
         let inside = |p: DVec2| contains(rings.iter().map(Vec::as_slice), p);
+
         assert!(inside(DVec2::new(0.1, 0.1)));
         assert!(!inside(DVec2::new(0.5, 0.5)));
         assert!(!inside(DVec2::new(1.5, 0.5)));
@@ -457,20 +492,25 @@ mod tests {
             polygon_start: &[0, u32::MAX, 1, 0, u32::MAX],
         };
         let picks = picks_of(&polygons, &[3]);
+
         assert_eq!(picks.len(), 4);
         assert_eq!(picks[0].rings, 0..2);
+
         let rings: Vec<&[DVec2]> = polygons.rings(0..2).collect();
+
         assert!(rings[1].is_empty(), "the ring past the points is empty");
         assert!(contains(rings.into_iter(), DVec2::splat(0.5)));
         assert_eq!((picks[0].feature, picks[1].feature), (3, u32::MAX));
         for pick in &picks[1..] {
             assert!(pick.rings.is_empty() && !pick.min.is_finite());
         }
+
         let empty = Polygons {
             points: &[],
             ring_start: &[],
             polygon_start: &[],
         };
+
         assert!(picks_of(&empty, &[]).is_empty());
     }
 }

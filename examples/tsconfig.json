@@ -6,5 +6,5 @@
     "customConditions": ["isard-source"],
     "jsx": "react-jsx"
   },
-  "include": ["*/main.ts", "*/main.tsx", "shared"]
+  "include": ["*/main.ts", "react/*/main.tsx", "react/shared", "shared"]
 }

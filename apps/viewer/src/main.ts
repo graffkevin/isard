@@ -56,11 +56,13 @@ const layers = new Layers(map, report);
 
 const size = (): [number, number] => {
   const canvas = map.getCanvas();
+
   return [canvas.clientWidth, canvas.clientHeight];
 };
 
 const fit = (bounds: Bounds, padding = 40, duration = 0): void => {
   const camera = boundsCamera(bounds, size(), padding);
+
   if (duration > 0) map.easeTo({ ...camera, pitch: 0, bearing: 0 }, duration);
   else map.setCamera({ ...camera, pitch: 0, bearing: 0 });
 };
@@ -76,6 +78,7 @@ const apply = (message: HostMessage): void => {
           ...(message.pitch === undefined ? {} : { pitch: message.pitch }),
           ...(message.bearing === undefined ? {} : { bearing: message.bearing }),
         };
+
         if (message.duration) map.easeTo(camera, message.duration);
         else map.setCamera(camera);
         break;
@@ -119,6 +122,7 @@ map.on('moveend', () => {
   clearTimeout(moveTimer);
   moveTimer = window.setTimeout(() => {
     const { center: c, zoom: z, pitch, bearing } = map.getCamera();
+
     post({
       type: 'moveend',
       camera: { center: [c[0], c[1]], zoom: z, pitch, bearing },
@@ -132,14 +136,17 @@ map.on('click', ({ point, lonLat }) => {
   const entry = picked && layers.find(picked.layer);
   const hitOf = (): Extract<ViewerMessage, { type: 'click' }>['hit'] => {
     if (!picked || !entry) return null;
+
     const m = entry.message;
     const properties =
       m.type === 'addGeoJSON'
         ? (m.data.features[picked.index]?.properties ?? null)
         : ((picked.feature?.properties as Record<string, unknown> | undefined) ?? null);
+
     return { id: entry.id, index: picked.index, properties };
   };
   const hit = hitOf();
+
   post({ type: 'click', lonLat: lonLat ? [lonLat[0], lonLat[1]] : null, hit });
 });
 
@@ -148,15 +155,19 @@ map.on('click', ({ point, lonLat }) => {
 /** A layer id from a file name, unique */
 const idOf = (name: string): string => {
   let id = name;
+
   for (let n = 2; layers.entries.has(id); n += 1) id = `${name}-${n}`;
+
   return id;
 };
 
 /** A feature collection from parsed JSON: a collection, a feature, a geometry, or TopoJSON */
 const collection = (json: unknown): GeoJsonCollection => {
   const value = json as { type?: string; objects?: Record<string, unknown> };
+
   if (value?.type === 'Topology' && value.objects) {
     const name = Object.keys(value.objects)[0];
+
     return parseTopoJson(value as Topology, name) as unknown as GeoJsonCollection;
   }
   if (value?.type === 'FeatureCollection') return value as GeoJsonCollection;
@@ -170,6 +181,7 @@ const collection = (json: unknown): GeoJsonCollection => {
 
 const kindOf = (name: string) => {
   const lower = name.toLowerCase().replace(/[?#].*$/, '');
+
   if (lower.endsWith('.laz') || lower.endsWith('.las')) return 'pointcloud';
   if (lower.endsWith('.pmtiles')) return 'pmtiles';
   if (lower.endsWith('.glb') || lower.endsWith('.gltf')) return 'model';
@@ -177,6 +189,7 @@ const kindOf = (name: string) => {
   if (lower.endsWith('.gpx')) return 'gpx';
   if (lower.endsWith('.mbtiles')) return 'mbtiles';
   if (lower.endsWith('tileset.json')) return 'tiles3d';
+
   return 'json';
 };
 
@@ -187,6 +200,7 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
   const text = async () => (typeof source === 'string' ? (await fetchOk(source)).text() : source.text());
   const blobUrl = () => (typeof source === 'string' ? undefined : URL.createObjectURL(source));
   const url = () => (typeof source === 'string' ? source : (blobUrl() as string));
+
   try {
     switch (kind) {
       case 'json':
@@ -196,22 +210,26 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
         const parse = (): GeoJsonCollection => {
           if (kind === 'kml') return parseKml(body) as unknown as GeoJsonCollection;
           if (kind === 'gpx') return parseGpx(body) as unknown as GeoJsonCollection;
+
           return collection(JSON.parse(body));
         };
         const data = parse();
         const entry = layers.add({ type: 'addGeoJSON', id, name, data });
+
         if (entry.bounds) fit(entry.bounds);
         break;
       }
       case 'pmtiles': {
         const u = url();
         const header = await new PMTiles(u).header();
+
         layers.add({ type: 'addPmtiles', id, name, url: u }, typeof source === 'string' ? {} : { blob: u });
         fit(header.bounds);
         break;
       }
       case 'pointcloud': {
         const u = url();
+
         layers.add({ type: 'addPointCloud', id, name, url: u }, typeof source === 'string' ? {} : { blob: u });
         flyToCloud(id);
         break;
@@ -219,6 +237,7 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
       case 'model': {
         const u = url();
         const lonLat = at ?? (map.getCamera().center as LonLat);
+
         layers.add(
           { type: 'addModels', id, name, url: u, instances: [{ lonLat }] },
           typeof source === 'string' ? {} : { blob: u },
@@ -238,7 +257,9 @@ const addSource = async (name: string, source: File | string, at?: LonLat): Prom
 
 const fetchOk = async (url: string): Promise<Response> => {
   const response = await fetch(url);
+
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+
   return response;
 };
 
@@ -249,14 +270,19 @@ const flyToCloud = (id: string): void => {
     const entry = layers.entries.get(id);
     const cloud = entry?.handles[0];
     const info = cloud instanceof PointCloudLayer ? cloud.info() : undefined;
+
     if (info) {
       map.easeTo({ center: info.center, zoom: 16, pitch: 50 }, 800);
+
       const [lon, lat] = info.center;
+
       if (entry) entry.bounds = [lon - 0.005, lat - 0.005, lon + 0.005, lat + 0.005];
+
       return;
     }
     if (entry && !entry.error && Date.now() - start < 30_000) setTimeout(poll, 300);
   };
+
   poll();
 };
 
@@ -281,8 +307,10 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   depth = 0;
   document.body.classList.remove('dragging');
+
   const rect = map.getCanvas().getBoundingClientRect();
   const at = map.unproject([event.clientX - rect.left, event.clientY - rect.top]);
+
   addFiles(event.dataTransfer?.files ?? [], at ? [at[0], at[1]] : undefined);
 });
 const open = element<HTMLInputElement>('open');
@@ -297,6 +325,7 @@ const panel = element<HTMLElement>('panel');
 const collapse = element<HTMLButtonElement>('collapse');
 collapse.addEventListener('click', () => {
   const collapsed = panel.classList.toggle('collapsed');
+
   collapse.textContent = collapsed ? '+' : '–';
   collapse.setAttribute('aria-expanded', String(!collapsed));
   collapse.setAttribute('aria-label', collapsed ? 'Expand the panel' : 'Collapse the panel');
@@ -325,29 +354,39 @@ layers.onChange = () => {
   list.replaceChildren(
     ...[...layers.entries.values()].reverse().map((entry) => {
       const li = document.createElement('li');
+
       if (entry.error) li.className = 'error';
+
       const check = document.createElement('input');
+
       check.type = 'checkbox';
       check.checked = entry.visible;
       check.setAttribute('aria-label', `Show ${entry.id}`);
       check.addEventListener('change', () => layers.setVisible(entry.id, check.checked));
+
       const name = document.createElement('span');
+
       name.className = 'name';
       name.textContent = entry.message.name ?? entry.id;
       name.title = entry.error ?? 'Zoom to the layer';
       name.addEventListener('click', () => {
         if (entry.bounds) fit(entry.bounds, 40, 600);
       });
+
       const kind = document.createElement('span');
+
       kind.className = 'kind';
       kind.textContent = KINDS[entry.message.type];
+
       const remove = document.createElement('button');
+
       remove.type = 'button';
       remove.className = 'icon';
       remove.textContent = '×';
       remove.setAttribute('aria-label', `Remove ${entry.id}`);
       remove.addEventListener('click', () => layers.remove(entry.id));
       li.append(check, name, kind, remove);
+
       return li;
     }),
   );

@@ -88,8 +88,7 @@ const VIEWPORTS: Record<string, [number, number]> = {
  * fixtures in the repository. Its fixtures and baseline are not committed. Valles Marineris likewise (~4 MB more of Mars
  * tiles): the relief of Mars is tested over Olympus Mons. The viewshed too while it is a prototype (the relief and the
  * BD TOPO buildings of Montmartre), and the examples of external data heavy to record: the panoramas (iTowns' sample
- * images), the swipe (two orthophotos), the 3D Tiles features (Cesium's samples), the 3D panels, React (PLAN IGN's
- * vector tiles of Paris).
+ * images), the swipe (two orthophotos), the 3D Tiles features (Cesium's samples), the 3D panels.
  */
 const OPT_IN = new Set([
   'tiles3d',
@@ -100,7 +99,6 @@ const OPT_IN = new Set([
   'swipe',
   'tiles3d-features',
   'panels',
-  'react',
 ]);
 
 /**
@@ -120,6 +118,7 @@ const views = Object.entries(VIEWS)
 const examples = [...built, ...views]
   .filter((name) => {
     if (only.length === 0) return !OPT_IN.has(name);
+
     return only.includes(name) || (only.includes(VIEWS[name]?.[0] ?? '') && !OPT_IN.has(name));
   })
   .sort();
@@ -154,9 +153,12 @@ const server = Bun.serve({
       ['/data/', 'tests/visual/data/'],
     ];
     const mount = mounts.find(([prefix]) => path.startsWith(prefix));
+
     if (!mount) return new Response('Not found', { status: 404 });
+
     const local = mount[1] + path.slice(mount[0].length);
     const file = Bun.file(join(root, local.endsWith('/') ? `${local}index.html` : local));
+
     return (await file.exists()) ? new Response(file) : new Response('Not found', { status: 404 });
   },
 });
@@ -188,8 +190,10 @@ const bodyPath = (h: string) => join(fixtures, `${h}.gz`);
 const served = { requests: 0, bytes: 0 };
 session.on('Fetch.requestPaused', (event: Protocol.Fetch.RequestPausedEvent) => {
   const { requestId, request } = event;
+
   if (request.url.startsWith(origin) || request.url.startsWith('data:') || request.url.startsWith('blob:')) {
     session.send('Fetch.continueRequest', { requestId }).catch(() => {});
+
     return;
   }
   pending++;
@@ -209,13 +213,17 @@ const BUSY_ATTEMPTS = 6;
 const answer = async (requestId: string, request: Protocol.Network.Request): Promise<void> => {
   const range = request.headers.Range ?? request.headers.range;
   const h = key(range ? `${request.url}#${range}` : request.url);
+
   used.add(h);
+
   const cors = [
     { name: 'Access-Control-Allow-Origin', value: '*' },
     { name: 'Access-Control-Allow-Headers', value: '*' },
   ];
+
   if (request.method === 'OPTIONS') {
     await session.send('Fetch.fulfillRequest', { requestId, responseCode: 204, responseHeaders: cors });
+
     return;
   }
   if (record && !manifest[h]) {
@@ -225,11 +233,14 @@ const answer = async (requestId: string, request: Protocol.Network.Request): Pro
         ...(range ? { Range: range } : {}),
       };
       let response = await fetch(request.url, { headers });
+
       for (let attempt = 1; response.status === 429 && attempt < BUSY_ATTEMPTS; attempt += 1) {
         await sleep(1000 * attempt);
         response = await fetch(request.url, { headers });
       }
+
       const body = Buffer.from(await response.arrayBuffer());
+
       writeFileSync(bodyPath(h), Bun.gzipSync(body, { level: 9 }));
       manifest[h] = {
         url: request.url,
@@ -241,13 +252,18 @@ const answer = async (requestId: string, request: Protocol.Network.Request): Pro
       console.warn(`  ${request.url}: ${e}`);
     }
   }
+
   const fixture = manifest[h];
+
   if (!fixture || !existsSync(bodyPath(h))) {
     missing.add(request.url);
     await session.send('Fetch.fulfillRequest', { requestId, responseCode: 404, responseHeaders: cors, body: '' });
+
     return;
   }
+
   const body = Buffer.from(Bun.gunzipSync(readFileSync(bodyPath(h))));
+
   served.requests++;
   served.bytes += body.length;
   await session.send('Fetch.fulfillRequest', {
@@ -287,25 +303,34 @@ for (const name of examples) {
   const frozen = FROZEN.has(name);
   const page = await browser.newPage();
   const errors: string[] = [];
+
   page.on('pageerror', (e) => errors.push(String(e)));
+
   const [width, height] = VIEWPORTS[name] ?? [WIDTH, HEIGHT];
+
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(instrument(frozen));
   missing.clear();
   served.requests = 0;
   served.bytes = 0;
+
   const start = Date.now();
   const [example, view] = VIEWS[name] ?? [name, ''];
   const query = STILL.has(example) ? '?still' : (QUERIES[example] ?? '');
   const url = example === VIEWER ? VIEWER_URL : `/examples/${example}/${query}${view ? `#${view}` : ''}`;
+
   await page.goto(`${origin}${url}`, { waitUntil: 'load' });
   await page.waitForSelector('#map canvas', { timeout: TIMEOUT_MS });
+
   // Done: no request for QUIET_MS and, unless frozen, no frame asked for during the last second
   let frames = -1;
   let still = 0;
+
   while (Date.now() - start < TIMEOUT_MS) {
     await sleep(250);
+
     const now = (await page.evaluate('window.__frames')) as number;
+
     still = now === frames ? still + 250 : 0;
     frames = now;
     if (pending === 0 && Date.now() - lastActivity >= QUIET_MS && (frozen || still >= 1000)) break;
@@ -313,8 +338,10 @@ for (const name of examples) {
   if (frozen) await sleep(1000);
   // Two more frames, the last one composited
   await page.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+
   const canvas = await page.$('#map canvas');
   const shot = Buffer.from((await canvas?.screenshot({ type: 'png' })) ?? []);
+
   await page.close();
 
   const timedOut = Date.now() - start >= TIMEOUT_MS;
@@ -325,6 +352,7 @@ for (const name of examples) {
     errors.length ? `page errors: ${errors[0]}` : '',
   ].filter(Boolean);
   const baseline = join(baselines, `${name}.png`);
+
   if (update) {
     writeFileSync(baseline, shot);
     console.log(`${name}: baseline written ${notes.join('; ')}`);
@@ -335,18 +363,23 @@ for (const name of examples) {
     failed++;
     continue;
   }
+
   const a = PNG.sync.read(readFileSync(baseline));
   const b = PNG.sync.read(shot);
   const compare = (): number => {
     if (a.width !== b.width || a.height !== b.height) return 1;
+
     const diff = new PNG({ width: a.width, height: a.height });
     const count = pixelmatch(a.data, b.data, diff.data, a.width, a.height, { threshold: THRESHOLD });
     const ratio = count / (a.width * a.height);
+
     if (ratio > 0) writeFileSync(join(out, `${name}.diff.png`), PNG.sync.write(diff));
+
     return ratio;
   };
   const ratio = compare();
   const ok = ratio <= MAX_DIFF;
+
   // Shown on the run's summary in CI: fixtures to record if it keeps coming back
   if (missing.size && process.env.GITHUB_ACTIONS) {
     console.log(`::warning title=${name}: requests without fixture::${[...missing].join(' ')}`);
@@ -366,7 +399,9 @@ if (record) {
       rmSync(bodyPath(h), { force: true });
     }
   });
+
   const sorted = Object.fromEntries(Object.entries(manifest).sort(([, x], [, y]) => x.url.localeCompare(y.url)));
+
   writeFileSync(manifestPath, `${JSON.stringify(sorted, null, 2)}\n`);
 }
 

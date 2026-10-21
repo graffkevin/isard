@@ -233,7 +233,9 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
         .min(boxes.len() / 4)
         .min(styles.len() / LABEL_FLOATS);
     let mut merc = overlay::points(anchors);
+
     merc.truncate(n);
+
     let (min, max) = overlay::bounds(&merc).unwrap_or((DVec2::ZERO, DVec2::ZERO));
     let origin = (min + max) / 2.0;
     let labels = merc
@@ -241,6 +243,7 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
         .enumerate()
         .map(|(i, &m)| {
             let s = &styles[i * LABEL_FLOATS..(i + 1) * LABEL_FLOATS];
+
             Label {
                 merc: m,
                 rect: [boxes[i * 4], boxes[i * 4 + 1], boxes[i * 4 + 2], boxes[i * 4 + 3]],
@@ -256,15 +259,18 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
     // Per label: offset, fill, halo, halo width, icon color
     let rows = gl::table_rows(n * TEXELS);
     let mut table = vec![0f32; rows * WIDTH * 4];
+
     for (i, m) in merc.iter().enumerate() {
         let o = (*m - origin).as_vec2();
         let s = &styles[i * LABEL_FLOATS..(i + 1) * LABEL_FLOATS];
         let t = i * TEXELS * 4;
+
         table[t..t + 2].copy_from_slice(&[o.x, o.y]);
         table[t + 4..t + 12].copy_from_slice(&s[..8]);
         table[t + 12] = s[8];
         table[t + 16..t + 20].copy_from_slice(&s[24..28]);
     }
+
     let data: Vec<Quad> = quads
         .as_chunks::<QUAD_FLOATS>()
         .0
@@ -278,6 +284,7 @@ fn build(anchors: &[f64], boxes: &[f32], styles: &[f32], quads: &[f32]) -> Built
             angle: q[10],
         })
         .collect();
+
     Built {
         labels,
         table,
@@ -325,14 +332,19 @@ impl SymbolLayer {
         let vao = objects.vertex_array()?;
         let quads = objects.buffer()?;
         let labels_table = Table::new(gl, glow::RGBA32F, 0)?;
+
         objects.adopt_texture(labels_table.texture);
+
         let visible_table = Table::new(gl, glow::RGBA32F, 0)?;
+
         objects.adopt_texture(visible_table.texture);
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(quads));
+
             let stride = size_of::<Quad>() as i32;
+
             gl.enable_vertex_attrib_array(0);
             gl.vertex_attrib_pointer_i32(0, 1, glow::UNSIGNED_INT, stride, 0);
             gl.enable_vertex_attrib_array(1);
@@ -349,7 +361,9 @@ impl SymbolLayer {
             gl.bind_vertex_array(None);
         }
         objects.keep();
+
         let uniforms = gl::uniforms(gl, program, UNIFORMS);
+
         gl::sampler_units(
             gl,
             program,
@@ -360,6 +374,7 @@ impl SymbolLayer {
                 (uniforms[7].as_ref(), ICONS_UNIT),
             ],
         );
+
         Ok(Self {
             style: SymbolStyle {
                 size: [[0.0; 4], [1.0; 4]],
@@ -416,9 +431,11 @@ impl SymbolLayer {
                     // SAFETY: a texture just made, not used
                     unsafe { gl.delete_texture(texture) };
                 }
+
                 return Err(e);
             }
         };
+
         self.labels_table.replace(gl, labels_table);
         self.visible_table.replace(gl, visible_table);
         // SAFETY: uploads into objects owned by this layer
@@ -436,6 +453,7 @@ impl SymbolLayer {
         self.quad_count = data.len() as i32;
         self.drape.delete(gl);
         self.drape = Drape::new();
+
         Ok(())
     }
 
@@ -457,6 +475,7 @@ struct PlaceKey {
 impl PlaceKey {
     fn new(frame: &Frame, style: &SymbolStyle, grid: &collision::Grid) -> Self {
         let c = frame.camera;
+
         Self {
             camera: [
                 c.center.x,
@@ -495,17 +514,21 @@ fn label_box(at: DVec2, rect: [f32; 4], scale: f64, angle: f64) -> collision::Re
     let r = rect.map(|v| f64::from(v) * scale);
     let (cs, sn) = (angle.cos(), angle.sin());
     let (mut lo, mut hi) = (DVec2::INFINITY, DVec2::NEG_INFINITY);
+
     for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
         let p = DVec2::new(x * cs - y * sn, x * sn + y * cs);
+
         lo = lo.min(p);
         hi = hi.max(p);
     }
+
     [at.x + lo.x, at.y + lo.y, at.x + hi.x, at.y + hi.y]
 }
 
 /// Angle on screen of a line from `at` to `ahead` (radians, clockwise)
 fn angle_of(at: DVec2, ahead: DVec2) -> f64 {
     let d = ahead - at;
+
     d.y.atan2(d.x)
 }
 
@@ -516,6 +539,7 @@ fn keep_upright(mut angle: f64) -> f64 {
     } else if angle < -std::f64::consts::FRAC_PI_2 {
         angle += std::f64::consts::PI;
     }
+
     angle
 }
 
@@ -537,17 +561,20 @@ fn place_label(
     let mut bits = 0;
     let text_angle = if f & flag::TEXT_ALONG != 0 {
         bits |= shown::TURN_TEXT;
+
         angle
     } else {
         0.0
     };
     let icon_angle = if f & flag::ICON_ALONG != 0 {
         bits |= shown::TURN_ICON;
+
         // Upside down: half a turn more than the upright angle
         if f & flag::ICON_UPRIGHT != 0 || raw.abs() <= std::f64::consts::FRAC_PI_2 {
             angle
         } else {
             bits |= shown::FLIP;
+
             raw
         }
     } else {
@@ -557,17 +584,20 @@ fn place_label(
     let icon_box = label_box(at, label.icon, icon_scale, icon_angle);
     // A part shrunk to nothing at this zoom is none
     let mut parts = f;
+
     if scale <= 0.0 {
         parts &= !flag::TEXT;
     }
     if icon_scale <= 0.0 {
         parts &= !flag::ICON;
     }
+
     let (text, icon) = decide(
         parts,
         f & flag::TEXT_ALLOW_OVERLAP != 0 || !grid.collides(&text_box),
         f & flag::ICON_ALLOW_OVERLAP != 0 || !grid.collides(&icon_box),
     );
+
     for (part, ignore, r) in [
         (text, flag::TEXT_IGNORE_PLACEMENT, text_box),
         (icon, flag::ICON_IGNORE_PLACEMENT, icon_box),
@@ -577,8 +607,10 @@ fn place_label(
             boxes.push(r);
         }
     }
+
     (text || icon).then(|| {
         bits |= (u32::from(text) * shown::TEXT) | (u32::from(icon) * shown::ICON);
+
         [bits as f32, angle as f32, scale as f32, icon_scale as f32]
     })
 }
@@ -591,6 +623,7 @@ fn decide(flags: u32, text_fits: bool, icon_fits: bool) -> (bool, bool) {
     let (mut text, mut icon) = (has_text && text_fits, has_icon && icon_fits);
     let icon_alone = flags & flag::TEXT_OPTIONAL != 0 || !has_text;
     let text_alone = flags & flag::ICON_OPTIONAL != 0 || !has_icon;
+
     if !icon_alone && !text_alone {
         text &= icon;
         icon = text;
@@ -599,6 +632,7 @@ fn decide(flags: u32, text_fits: bool, icon_fits: bool) -> (bool, bool) {
     } else if !icon_alone {
         icon &= text;
     }
+
     (text, icon)
 }
 
@@ -610,24 +644,31 @@ impl Layer for SymbolLayer {
                 self.visible.fill(0.0);
                 self.uploaded = false;
             }
+
             return;
         }
+
         // Nothing changed since the last placement: the same boxes again, the same states
         let key = PlaceKey::new(frame, &self.style, grid);
+
         if let Some((last, boxes)) = &self.placed
             && *last == key
         {
             for &r in boxes {
                 grid.insert(r);
             }
+
             return;
         }
         // The states of the last placement kept aside, its buffer reused for the new ones
         std::mem::swap(&mut self.visible, &mut self.previous);
         self.visible.clear();
         self.visible.resize(self.previous.len(), 0.0);
+
         let mut boxes = self.placed.take().map(|(_, b)| b).unwrap_or_default();
+
         boxes.clear();
+
         let (camera, view) = (frame.camera, frame.view);
         let layer_scale = stops(&self.style.size, camera.zoom);
         // Screen point and distance to the eye (pixels of the local frame); none past the horizon of the globe, hidden
@@ -635,22 +676,27 @@ impl Layer for SymbolLayer {
         let screen = |m: DVec2, altitude: f64| -> Option<(DVec2, f64)> {
             let shift = -(m.x - camera.center.x).round();
             let ground = view.position(m, shift);
+
             if view.globe.factor > 0.0 && !view.faces_camera(ground) {
                 return None;
             }
+
             let p = ground + glam::DVec3::Z * altitude * view.vertical;
             let clip = view.view_proj * DVec4::new(p.x, p.y, p.z, 1.0);
+
             (clip.w > 0.0)
                 .then(|| {
                     let at = DVec2::new(
                         f64::midpoint(clip.x / clip.w, 1.0) * camera.width,
                         f64::midpoint(-clip.y / clip.w, 1.0) * camera.height,
                     );
+
                     (at, clip.w)
                 })
                 // An anchor that is not a number is nowhere
                 .filter(|(at, _)| at.is_finite())
         };
+
         for (label, state) in self.labels.iter().zip(self.visible.as_chunks_mut::<4>().0) {
             let altitude = frame
                 .relief
@@ -659,23 +705,30 @@ impl Layer for SymbolLayer {
             let Some((at, distance)) = screen(label.merc, altitude) else {
                 continue;
             };
+
             if at.x < -MARGIN || at.y < -MARGIN || at.x > camera.width + MARGIN || at.y > camera.height + MARGIN {
                 continue;
             }
+
             // Smaller further away, as MapLibre's perspective ratio: a tilted view keeps its far labels sparse
             let perspective = (0.5 + 0.5 * view.center_distance / distance).clamp(0.5, 1.5);
             let scale = layer_scale * stops(&label.size, camera.zoom) * perspective;
             let icon_scale = layer_scale * stops(&label.icon_size, camera.zoom) * perspective;
+
             if scale <= 0.0 && icon_scale <= 0.0 {
                 continue;
             }
+
             // The angle of its line on screen
             let mut line = None;
+
             if label.direction != DVec2::ZERO && label.flags & (flag::TEXT_ALONG | flag::ICON_ALONG) != 0 {
                 // A step of one pixel along the line
                 let step = label.direction.normalize() / view.world_size;
+
                 line = screen(label.merc + step, altitude).map(|(ahead, _)| angle_of(at, ahead));
             }
+
             if let Some(placed) = place_label(label, at, (scale, icon_scale), line, grid, &mut boxes) {
                 *state = placed;
             }
@@ -694,11 +747,13 @@ impl Layer for SymbolLayer {
             icons,
             ..
         } = frame;
+
         if (glyphs.is_none() && icons.is_none()) || !self.shows(camera.zoom) {
             return false;
         }
         if let Some((source, _)) = relief {
             let pad = DVec2::splat(1e-6);
+
             self.drape.update(gl, self.min - pad, self.max + pad, source);
         }
         if !self.uploaded {
@@ -708,9 +763,11 @@ impl Layer for SymbolLayer {
             gl::upload_table(gl, bytes(&self.visible), self.labels.len(), glow::RGBA, glow::FLOAT, 16);
             self.uploaded = true;
         }
+
         let [ratio, atlas_size_u, _, _, _, opacity, icon_size_u, _] = &self.uniforms;
         let atlas_size = glyphs.map_or((1, 1), |g| g.1);
         let icon_size = icons.map_or((1, 1), |i| i.1);
+
         self.overlay.begin(frame, self.origin, DEPTH_BIAS, &self.drape);
         // SAFETY: draw with objects owned by this layer and the engine's glyph atlas
         unsafe {
@@ -729,11 +786,14 @@ impl Layer for SymbolLayer {
                 gl.bind_texture(target, texture);
             }
             gl.active_texture(glow::TEXTURE0);
+
             let _depth = DepthState::over_ground(gl, relief.is_some());
+
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, self.quad_count);
             gl.bind_vertex_array(None);
         }
+
         false
     }
 
@@ -773,6 +833,7 @@ impl Engine {
     #[wasm_bindgen(js_name = addSymbols)]
     pub fn add_symbols(&mut self) -> Result<u32, JsValue> {
         let layer = SymbolLayer::new(&self.gl)?;
+
         Ok(self.add_layer(Box::new(layer)))
     }
 
@@ -791,6 +852,7 @@ impl Engine {
         if let Some((layer, gl)) = self.layer_mut::<SymbolLayer>(id) {
             layer.set_labels(gl, anchors, boxes, styles, quads)?;
         }
+
         Ok(())
     }
 
@@ -828,6 +890,7 @@ impl Engine {
         if let Some(data) = data {
             self.update_glyph_page(0, 0, 0, width, height, &data);
         }
+
         Ok(())
     }
 
@@ -842,10 +905,13 @@ impl Engine {
         // SAFETY: (re)allocation of the atlas on the live context
         unsafe {
             let gl = &self.gl;
+
             if let Some(old) = self.glyphs.take() {
                 gl.delete_texture(old.texture);
             }
+
             let texture = gl.create_texture()?;
+
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(texture));
             gl.tex_storage_3d(glow::TEXTURE_2D_ARRAY, 1, glow::R8, width, height, pages);
             for (key, value) in [
@@ -862,6 +928,7 @@ impl Engine {
                 pages,
             });
         }
+
         Ok(())
     }
 
@@ -875,10 +942,13 @@ impl Engine {
         // SAFETY: (re)allocation of the atlas on the live context
         unsafe {
             let gl = &self.gl;
+
             if let Some(old) = self.icons.take() {
                 gl.delete_texture(old.texture);
             }
+
             let texture = gl.create_texture()?;
+
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, width, height);
             for (key, value) in [
@@ -894,6 +964,7 @@ impl Engine {
                 size: (width, height),
             });
         }
+
         Ok(())
     }
 
@@ -906,12 +977,15 @@ impl Engine {
         let Some(len) = gl::area(width, height).and_then(|a| a.checked_mul(4)) else {
             return;
         };
+
         if data.len() < len || !gl::region_fits(x, y, width, height, atlas.size) {
             return;
         }
+
         // SAFETY: upload inside the atlas
         unsafe {
             let gl = &self.gl;
+
             gl.bind_texture(glow::TEXTURE_2D, Some(atlas.texture));
             gl.tex_sub_image_2d(
                 glow::TEXTURE_2D,
@@ -942,12 +1016,15 @@ impl Engine {
         let Some(len) = gl::area(width, height) else {
             return;
         };
+
         if data.len() < len || !(0..atlas.pages).contains(&page) || !gl::region_fits(x, y, width, height, atlas.size) {
             return;
         }
+
         // SAFETY: upload inside a page of the atlas
         unsafe {
             let gl = &self.gl;
+
             gl.bind_texture(glow::TEXTURE_2D_ARRAY, Some(atlas.texture));
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             gl.tex_sub_image_3d(
@@ -978,11 +1055,14 @@ mod tests {
         let at = DVec2::new(100.0, 50.0);
         let rect = [-20.0, -5.0, 20.0, 5.0];
         let flat = label_box(at, rect, 1.0, 0.0);
+
         assert_eq!(flat, [80.0, 45.0, 120.0, 55.0]);
         // Twice as large
         assert_eq!(label_box(at, rect, 2.0, 0.0), [60.0, 40.0, 140.0, 60.0]);
+
         // A quarter turn: the box stands up
         let turned = label_box(at, rect, 1.0, FRAC_PI_2);
+
         for (a, b) in turned.iter().zip([95.0, 30.0, 105.0, 70.0]) {
             assert!((a - b).abs() < 1e-9, "{turned:?}");
         }
@@ -992,6 +1072,7 @@ mod tests {
     fn text_along_a_line_stays_upright() {
         let upright = |at, ahead| keep_upright(angle_of(at, ahead));
         let o = DVec2::ZERO;
+
         assert_eq!(upright(o, DVec2::new(1.0, 0.0)), 0.0);
         // Running right to left: turned half a turn, read left to right
         assert!(upright(o, DVec2::new(-1.0, 0.0)).abs() < 1e-12);
@@ -1004,6 +1085,7 @@ mod tests {
     fn text_and_icon_show_together_unless_optional() {
         use flag::{ICON, ICON_OPTIONAL, TEXT, TEXT_OPTIONAL};
         let both = TEXT | ICON;
+
         // Neither optional: both or nothing
         assert_eq!(decide(both, true, true), (true, true));
         assert_eq!(decide(both, true, false), (false, false));
@@ -1014,8 +1096,10 @@ mod tests {
         // The icon optional: the text alone
         assert_eq!(decide(both | ICON_OPTIONAL, true, false), (true, false));
         assert_eq!(decide(both | ICON_OPTIONAL, false, true), (false, false));
+
         // Both optional: each on its own
         let either = both | TEXT_OPTIONAL | ICON_OPTIONAL;
+
         assert_eq!(decide(either, false, true), (false, true));
         assert_eq!(decide(either, true, false), (true, false));
         // Only a text, only an icon
@@ -1033,20 +1117,27 @@ mod tests {
         let icon = label_box(at, [-8.0, -8.0, 8.0, 8.0], 1.0, 0.0);
         let text = label_box(at, [-30.0, 10.0, 30.0, 24.0], 1.0, 0.0);
         let (t, i) = decide(flag::TEXT | flag::ICON, !grid.collides(&text), !grid.collides(&icon));
+
         assert!(t && i);
         grid.insert(text);
         grid.insert(icon);
+
         // Its text over the first text, its icon clear of both: with an optional text, its icon alone shows
         let other = DVec2::new(410.0, 345.0);
         let icon2 = label_box(other, [-8.0, -8.0, 8.0, 8.0], 1.0, 0.0);
         let text2 = label_box(other, [-30.0, -30.0, 30.0, -16.0], 1.0, 0.0);
+
         assert!(grid.collides(&text2) && !grid.collides(&icon2));
+
         let flags = flag::TEXT | flag::ICON | flag::TEXT_OPTIONAL;
+
         assert_eq!(decide(flags, false, true), (false, true));
         // A box between the icon and the text of the first label is free: they are not one box
         assert!(!grid.collides(&[440.0, 290.0, 450.0, 300.0]));
+
         // An icon twice as large, turned with its line: its box scales and turns
         let turned = label_box(at, [-10.0, -2.0, 10.0, 2.0], 2.0, FRAC_PI_2);
+
         for (a, b) in turned.iter().zip([396.0, 280.0, 404.0, 320.0]) {
             assert!((a - b).abs() < 1e-9, "{turned:?}");
         }
@@ -1071,43 +1162,57 @@ mod tests {
         let line = 0.75 * PI;
         let state = place_label(&arrow, at, (1.0, 1.0), Some(line), &mut grid, &mut boxes).unwrap();
         let bits = state[0] as u32;
+
         assert_eq!(bits, shown::ICON | shown::TURN_ICON | shown::FLIP);
         assert!((f64::from(state[1]) + PI / 4.0).abs() < 1e-6);
+
         // A shield stretched around its text turns with it, upright
         let mut grid = collision::Grid::new(800.0, 600.0);
         let shield = label(flag::TEXT | flag::ICON | flag::TEXT_ALONG | flag::ICON_ALONG | flag::ICON_UPRIGHT);
         let state = place_label(&shield, at, (1.0, 1.0), Some(line), &mut grid, &mut boxes).unwrap();
+
         assert_eq!(
             state[0] as u32,
             shown::TEXT | shown::ICON | shown::TURN_TEXT | shown::TURN_ICON
         );
+
         // A horizontal label: nothing turns; its icon ignoring the placement takes no room, its text does
         let mut grid = collision::Grid::new(800.0, 600.0);
+
         boxes.clear();
+
         let poi = label(flag::TEXT | flag::ICON | flag::ICON_IGNORE_PLACEMENT);
         let state = place_label(&poi, at, (1.0, 2.0), None, &mut grid, &mut boxes).unwrap();
+
         assert_eq!(state, [(shown::TEXT | shown::ICON) as f32, 0.0, 1.0, 2.0]);
         assert_eq!(boxes, [[80.0, 95.0, 120.0, 105.0]]);
         // The same label again over it: its text does not fit, and its icon needs its text
         assert!(place_label(&poi, at, (1.0, 2.0), None, &mut grid, &mut boxes).is_none());
+
         // Shrunk to nothing, the text is none: the icon shows alone
         let mut grid = collision::Grid::new(800.0, 600.0);
         let state = place_label(&poi, at, (0.0, 2.0), None, &mut grid, &mut boxes).unwrap();
+
         assert_eq!(state[0] as u32, shown::ICON);
     }
 
     #[test]
     fn labels_read_their_icons() {
         let mut style = [0f32; LABEL_FLOATS];
+
         style[9] = (flag::TEXT | flag::ICON | flag::ICON_ALONG) as f32;
         style[20..24].copy_from_slice(&[-6.0, -6.0, 6.0, 6.0]);
         style[24..28].copy_from_slice(&[0.2, 0.4, 0.6, 0.5]);
         style[28..36].copy_from_slice(&[0.0, 10.0, 20.0, 30.0, 1.0, 1.0, 2.0, 2.0]);
+
         let mut quad = [0f32; QUAD_FLOATS];
+
         quad[9] = -2.0;
         quad[10] = 1.5;
+
         let built = build(&[0.5, 0.5], &[0.0; 4], &style, &quad);
         let label = &built.labels[0];
+
         assert_eq!(label.flags, flag::TEXT | flag::ICON | flag::ICON_ALONG);
         assert_eq!(label.icon, [-6.0, -6.0, 6.0, 6.0]);
         assert_eq!(label.icon_size, [[0.0, 10.0, 20.0, 30.0], [1.0, 1.0, 2.0, 2.0]]);
@@ -1131,18 +1236,25 @@ mod tests {
             &[style, style].concat(),
             &[],
         );
+
         assert_eq!(built.labels.len(), 1);
         assert_eq!(built.table.len(), gl::table_rows(TEXELS) * WIDTH * 4);
         assert!(built.origin.is_finite());
+
         // Quads of no label (past it, negative, not a number: 0 as usize, the first) and a partial one
         let mut quads = vec![0f32; QUAD_FLOATS * 4 + 3];
+
         quads[QUAD_FLOATS] = 1.0;
         quads[QUAD_FLOATS * 2] = -5.0;
         quads[QUAD_FLOATS * 3] = f32::NAN;
+
         let built = build(&[0.5, 0.5], &[0.0; 4], &style, &quads);
+
         assert_eq!(built.quads.len(), 3);
         assert!(built.quads.iter().all(|q| q.label == 0));
+
         let none = build(&[], &[], &[], &quads);
+
         assert!(none.labels.is_empty() && none.quads.is_empty());
     }
 }

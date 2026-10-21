@@ -70,6 +70,7 @@ impl Mesh {
     #[must_use]
     pub fn image(&self, primitive: &Primitive) -> Option<(&[u8], &str)> {
         let (bytes, mime) = self.images.get(primitive.image?)?;
+
         Some((bytes, mime))
     }
 }
@@ -111,7 +112,9 @@ pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometr
     if bytes.get(..4) == Some(b"pnts") {
         let (world, mut points) = pnts::decode(bytes, transform, draco)?;
         let anchor = center(&world).unwrap_or_else(|| transform.transform_point3(DVec3::ZERO));
+
         points.positions = relative(&world, anchor);
+
         return Ok(Mesh {
             anchor,
             primitives: Vec::new(),
@@ -120,17 +123,21 @@ pub fn decode(bytes: &[u8], transform: &DMat4, y_up: bool, draco: &[DracoGeometr
             properties: None,
         });
     }
+
     let (glb, rtc, batch) = split(bytes)?;
+
     decode_glb(glb, transform, y_up, rtc, draco, batch.as_ref())
 }
 
 /// The center of the bounds of positions, None if there is none (or one is not finite)
 fn center(positions: &[DVec3]) -> Option<DVec3> {
     let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+
     for p in positions {
         min = min.min(*p);
         max = max.max(*p);
     }
+
     (min.is_finite() && max.is_finite()).then(|| (min + max) / 2.0)
 }
 
@@ -147,19 +154,24 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
     if bytes.get(..4) == Some(b"pnts") {
         return Ok(pnts::draco_request(bytes)?.into_iter().collect());
     }
+
     let (glb, _, _) = split(bytes)?;
     let (json, bin) = parse_glb(glb)?;
     let gltf = Gltf::new(&json, bin, &[]);
     let mut out = Vec::new();
+
     for (m, mesh) in json["meshes"].as_array().into_iter().flatten().enumerate() {
         for (p, primitive) in mesh["primitives"].as_array().into_iter().flatten().enumerate() {
             let ext = &primitive["extensions"]["KHR_draco_mesh_compression"];
+
             if !ext.is_object() {
                 continue;
             }
+
             let view = index(&ext["bufferView"]).ok_or("Draco extension without bufferView")?;
             let attribute = |name: &str| ext["attributes"][name].as_u64().and_then(|v| u32::try_from(v).ok());
             let points = primitive["mode"].as_u64() == Some(0);
+
             out.push(DracoRequest {
                 mesh: m,
                 primitive: p,
@@ -176,6 +188,7 @@ pub fn draco_requests(bytes: &[u8]) -> Result<Vec<DracoRequest>, String> {
             });
         }
     }
+
     Ok(out)
 }
 
@@ -192,16 +205,23 @@ mod tests {
     #[test]
     fn decodes_a_lille_tile() {
         let mesh = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
+
         assert_eq!(mesh.primitives.len(), 1);
+
         let p = &mesh.primitives[0];
+
         assert_eq!(p.positions.len(), 59 * 3);
         assert_eq!(p.uvs.len(), 59 * 2);
         assert_eq!(p.indices.len(), 171);
+
         let (bytes, mime) = mesh.image(p).unwrap();
+
         assert_eq!(mime, "image/jpeg");
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
+
         // Near Lille, close to the ellipsoid
         let g = geodesy::from_ecef(mesh.anchor);
+
         assert!(
             (g.x - 2.9).abs() < 0.5 && (g.y - 50.6).abs() < 0.3 && g.z.abs() < 1000.0,
             "{g}"
@@ -213,8 +233,10 @@ mod tests {
         // With the y-up rotation the vertices hug the ellipsoid; without it they would be kilometres off
         let mesh = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         let p = &mesh.primitives[0].positions;
+
         for &[x, y, z] in p.as_chunks::<3>().0 {
             let ecef = mesh.anchor + DVec3::new(f64::from(x), f64::from(y), f64::from(z));
+
             assert!(geodesy::from_ecef(ecef).z.abs() < 500.0);
         }
     }
@@ -225,6 +247,7 @@ mod tests {
     fn meshopt_variants_decode_like_the_original() {
         let original = decode(LILLE, &DMat4::IDENTITY, true, &[]).unwrap();
         let o = &original.primitives[0];
+
         for (name, bytes, tolerance) in [
             ("noq", &include_bytes!("../../tests/data/lille_noq.glb")[..], 0.01),
             ("q", &include_bytes!("../../tests/data/lille_q.glb")[..], 0.6),
@@ -238,17 +261,21 @@ mod tests {
             ));
             let mesh = decode(bytes, &rtc, true, &[]).unwrap();
             let p = &mesh.primitives[0];
+
             assert_eq!(p.indices.len(), o.indices.len());
             assert!(p.image.is_some());
+
             let shift = mesh.anchor - original.anchor;
             let at = |positions: &[f32], i: u32| {
                 let i = i as usize * 3;
+
                 DVec3::new(
                     f64::from(positions[i]),
                     f64::from(positions[i + 1]),
                     f64::from(positions[i + 2]),
                 )
             };
+
             // Every decoded triangle has a counterpart in the original within the quantization step
             for t in p.indices.as_chunks::<3>().0 {
                 let corners = t.map(|i| at(&p.positions, i) + shift);
@@ -257,18 +284,22 @@ mod tests {
                         .iter()
                         .all(|c| u.iter().any(|&j| (at(&o.positions, j) - *c).length() < tolerance))
                 });
+
                 if !matched {
                     let nearest = corners.map(|c| {
                         (0..o.positions.len() as u32 / 3)
                             .map(|j| (at(&o.positions, j) - c).length())
                             .fold(f64::MAX, f64::min)
                     });
+
                     panic!("{name}: triangle {t:?} without counterpart, nearest original vertices {nearest:?}");
                 }
             }
+
             // Same texture coordinates range once the texture transform is applied
             let range = |uvs: &[f32]| uvs.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
             let (a, b) = (range(&p.uvs), range(&o.uvs));
+
             assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "{a:?} vs {b:?}");
         }
     }
@@ -278,12 +309,16 @@ mod tests {
     fn draco_primitives_are_requested_then_used() {
         let bytes = include_bytes!("../../tests/data/lille_draco.glb");
         let requests = draco_requests(bytes).unwrap();
+
         assert_eq!(requests.len(), 1);
+
         let r = &requests[0];
+
         assert_eq!((r.mesh, r.primitive, r.position, r.uv), (0, 0, 0, Some(1)));
         assert!(r.data.len() > 100);
         // Without the decoded geometry, the tile cannot be built
         assert!(decode(bytes, &DMat4::IDENTITY, true, &[]).is_err());
+
         // With it (here a single triangle standing in for the Draco output), the usual path applies
         let geometry = DracoGeometry {
             mesh: 0,
@@ -294,6 +329,7 @@ mod tests {
             ..DracoGeometry::default()
         };
         let mesh = decode(bytes, &DMat4::IDENTITY, true, &[geometry]).unwrap();
+
         assert_eq!(*mesh.primitives[0].indices, [0, 1, 2]);
         assert!(mesh.primitives[0].image.is_some());
     }
@@ -309,6 +345,7 @@ mod tests {
         )
         .unwrap();
         let (bytes, mime) = mesh.image(&mesh.primitives[0]).unwrap();
+
         assert_eq!(mime, "image/ktx2");
         assert_eq!(&bytes[..12], b"\xabKTX 20\xbb\r\n\x1a\n");
     }
@@ -322,15 +359,20 @@ mod tests {
     /// A glTF binary from its JSON and binary chunk
     pub(super) fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
         let mut text = serde_json::to_vec(json).unwrap();
+
         while !text.len().is_multiple_of(4) {
             text.push(b' ');
         }
+
         let mut bin = bin.to_vec();
+
         while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
+
         let total = 20 + text.len() + if bin.is_empty() { 0 } else { 8 + bin.len() };
         let mut out = Vec::new();
+
         for v in [0x4654_6C67, 2, total, text.len(), JSON_CHUNK] {
             out.extend((v as u32).to_le_bytes());
         }
@@ -340,6 +382,7 @@ mod tests {
             out.extend((BIN_CHUNK as u32).to_le_bytes());
             out.extend(bin);
         }
+
         out
     }
 
@@ -355,6 +398,7 @@ mod tests {
     /// Vertex `i` of the first primitive, ECEF
     pub(super) fn vertex(mesh: &Mesh, i: usize) -> DVec3 {
         let p = &mesh.primitives[0].positions[i * 3..i * 3 + 3];
+
         mesh.anchor + DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
     }
 
@@ -366,6 +410,7 @@ mod tests {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
+
             self.0
         }
 
@@ -430,6 +475,7 @@ mod tests {
             json!(5125),
             json!(5126),
         ];
+
         values[r.below(values.len())].clone()
     }
 
@@ -451,6 +497,7 @@ mod tests {
 
     fn try_all(bytes: &[u8]) {
         let _ = decode(bytes, &DMat4::IDENTITY, true, &[]);
+
         if let Ok(requests) = draco_requests(bytes) {
             // Stand-in geometry for the Draco primitives, possibly inconsistent
             let draco: Vec<DracoGeometry> = requests
@@ -482,15 +529,18 @@ mod tests {
             include_bytes!("../../tests/data/lille_ktx2.glb"),
         ];
         let mut r = Random(0x9E37_79B9_7F4A_7C15);
+
         for fixture in fixtures {
             // Bytes
             for _ in 0..300 {
                 let mut bytes = fixture.to_vec();
+
                 match r.below(3) {
                     0 => bytes.truncate(r.below(fixture.len())),
                     1 => {
                         for _ in 0..=r.below(8) {
                             let i = r.below(bytes.len());
+
                             bytes[i] ^= 1 << r.below(8);
                         }
                     }
@@ -498,20 +548,26 @@ mod tests {
                         // A header or chunk length overwritten
                         let i = r.below(40);
                         let v = [0u32, 1, 0xffff_fff0, u32::MAX, fixture.len() as u32][r.below(5)];
+
                         bytes[i..i + 4].copy_from_slice(&v.to_le_bytes());
                     }
                 }
                 try_all(&bytes);
             }
+
             // JSON fields
             let (glb_bytes, _, _) = split(fixture).unwrap();
             let (json, bin) = parse_glb(glb_bytes).unwrap();
             let mut paths = Vec::new();
+
             pointers(&json, String::new(), &mut paths);
+
             for _ in 0..1000 {
                 let mut json = json.clone();
+
                 for _ in 0..=r.below(3) {
                     let path = &paths[r.below(paths.len())];
+
                     if r.below(4) == 0 {
                         if let Some(Value::Object(o)) = json.pointer_mut(path) {
                             o.insert(KEYS[r.below(KEYS.len())].to_owned(), odd_value(&mut r));

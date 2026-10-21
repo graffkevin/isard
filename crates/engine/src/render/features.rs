@@ -64,11 +64,13 @@ impl Layout {
     /// A style as given (`FLOATS` per feature) in this layout
     fn pack(self, style: &[f32]) -> Vec<f32> {
         let mut packed = Vec::with_capacity(style.len() / FLOATS * self.0 * 4);
+
         for s in style.as_chunks::<FLOATS>().0 {
             for &k in &ORDER[..self.0] {
                 packed.extend_from_slice(&s[k * 4..k * 4 + 4]);
             }
         }
+
         packed
     }
 }
@@ -125,15 +127,18 @@ float layer_opacity() { return stops(u_opacity_zooms, u_opacity_values); }
 #[must_use]
 pub fn stops([z, v]: &[[f32; 4]; 2], zoom: f64) -> f64 {
     let zoom = zoom as f32;
+
     if zoom <= z[0] {
         return f64::from(v[0]);
     }
     for k in 1..4 {
         if zoom <= z[k] {
             let t = (zoom - z[k - 1]) / (z[k] - z[k - 1]).max(1e-6);
+
             return f64::from(v[k - 1] + (v[k] - v[k - 1]) * t);
         }
     }
+
     f64::from(v[3])
 }
 
@@ -141,6 +146,7 @@ pub fn stops([z, v]: &[[f32; 4]; 2], zoom: f64) -> f64 {
 #[must_use]
 pub fn stops_of(s: &[f32]) -> Option<[[f32; 4]; 2]> {
     let s: &[f32; 8] = s.get(..8)?.try_into().ok()?;
+
     Some([[s[0], s[1], s[2], s[3]], [s[4], s[5], s[6], s[7]]])
 }
 
@@ -214,6 +220,7 @@ impl FeatureUniforms {
                 "u_pixel_ratio",
             ],
         );
+
         gl::sampler_units(
             gl,
             program,
@@ -224,6 +231,7 @@ impl FeatureUniforms {
                 (uniforms[3].as_ref(), unit::RAMP),
             ],
         );
+
         Self(uniforms)
     }
 }
@@ -241,10 +249,12 @@ impl Features {
         let values = objects.adopt_texture(gl::table_texture(gl, glow::R32F, count)?);
         let mask = objects.adopt_texture(gl::table_texture(gl, glow::R8, count)?);
         let ramp = objects.texture()?;
+
         // SAFETY: storage and parameters of a texture just created on a live context
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
             gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP as i32, 1);
+
             for (key, value) in [
                 (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
@@ -255,6 +265,7 @@ impl Features {
             }
         }
         objects.keep();
+
         let mut features = Self {
             count,
             layout,
@@ -267,9 +278,11 @@ impl Features {
             translucent_ramp: false,
             layer: LayerStyle::default(),
         };
+
         features.set_style(gl, &default_style(count));
         features.set_values(gl, &vec![NO_VALUE; count]);
         features.set_mask(gl, &vec![255u8; count]);
+
         Ok(features)
     }
 
@@ -279,8 +292,11 @@ impl Features {
         let n = (style.len() / FLOATS).min(self.count) * FLOATS;
         // The features past the style given keep theirs, and whether one of them was translucent
         let translucent = style_translucent(&style[..n]);
+
         self.translucent_style = translucent || (n < self.count * FLOATS && self.translucent_style);
+
         let packed = self.layout.pack(&style[..n]);
+
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.style)) };
         gl::upload_table(gl, gl::bytes(&packed), packed.len() / 4, glow::RGBA, glow::FLOAT, 16);
@@ -293,6 +309,7 @@ impl Features {
             .iter()
             .map(|&v| if v.is_nan() { NO_VALUE } else { v.min(NO_VALUE) })
             .collect();
+
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.values)) };
         gl::upload_table(gl, gl::bytes(&clean), n, glow::RED, glow::FLOAT, 4);
@@ -301,6 +318,7 @@ impl Features {
     /// One byte per feature: 0 hides it
     pub fn set_mask(&self, gl: &glow::Context, mask: &[u8]) {
         let n = mask.len().min(self.count);
+
         // SAFETY: binding a texture owned by this layer, for the upload inside its storage
         unsafe { gl.bind_texture(glow::TEXTURE_2D, Some(self.mask)) };
         gl::upload_table(gl, &mask[..n], n, glow::RED, glow::UNSIGNED_BYTE, 1);
@@ -309,14 +327,18 @@ impl Features {
     /// Colors of the values from `min` to `max`: 256 RGBA texels; None: features keep their own colors
     pub fn set_ramp(&mut self, gl: &glow::Context, ramp: Option<(&[u8], f32, f32)>) {
         self.ramp_range = ramp.map(|(_, min, max)| (min, max));
+
         let Some((rgba, _, _)) = ramp else {
             return;
         };
+
         if rgba.len() < RAMP * 4 {
             self.ramp_range = None;
+
             return;
         }
         self.translucent_ramp = ramp_translucent(&rgba[..RAMP * 4]);
+
         // SAFETY: upload of the whole ramp texture
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.ramp));
@@ -351,6 +373,7 @@ impl Features {
     pub fn bind(&self, gl: &glow::Context, uniforms: &FeatureUniforms, zoom: f64, pixel_ratio: f64) {
         let [_, _, _, _, range, zoom_u, opacity_zooms, opacity_values, ratio] = &uniforms.0;
         let (lo, hi, on) = self.ramp_range.map_or((0.0, 1.0, 0.0), |(lo, hi)| (lo, hi, 1.0));
+
         // SAFETY: uniforms and bindings on the program in use (its sampler units set once, by `FeatureUniforms::new`)
         unsafe {
             for (unit, texture) in [
@@ -385,7 +408,9 @@ impl Features {
 /// exact up to 2^24 features
 pub fn index_texture(gl: &glow::Context, entries: &[f32]) -> Result<glow::Texture, String> {
     let texture = gl::table_texture(gl, glow::RG32F, entries.len() / 2)?;
+
     gl::upload_table(gl, gl::bytes(entries), entries.len() / 2, glow::RG, glow::FLOAT, 8);
+
     Ok(texture)
 }
 
@@ -403,12 +428,14 @@ fn ramp_translucent(rgba: &[u8]) -> bool {
 /// The style of `count` features before any is given: opaque black, sizes 1 at every zoom
 fn default_style(count: usize) -> Vec<f32> {
     let mut style = vec![0f32; count * FLOATS];
+
     for s in style.as_chunks_mut::<FLOATS>().0 {
         s[3] = 1.0;
         s[7] = 1.0;
         s[12..16].fill(1.0);
         s[20..24].fill(1.0);
     }
+
     style
 }
 
@@ -458,8 +485,10 @@ impl Engine {
     #[allow(clippy::needless_pass_by_value)]
     pub fn set_feature_ramp(&mut self, id: u32, rgba: Option<Box<[u8]>>, min: f32, max: f32) {
         let ramp = rgba.as_deref().map(|r| (r, min, max));
+
         if let Some((layer, gl)) = self.layer_mut::<ExtrusionLayer>(id) {
             layer.set_ramp(gl, ramp);
+
             return;
         }
         self.with_features(id, None, |features, gl| features.set_ramp(gl, ramp));
@@ -475,11 +504,13 @@ impl Engine {
             visible,
             ..LayerStyle::default()
         };
+
         if let Some(stops) = stops_of(opacity) {
             style.opacity = stops;
         }
         if let Some((layer, _)) = self.layer_mut::<ExtrusionLayer>(id) {
             layer.layer = style;
+
             return;
         }
         self.with_features(id, None, |features, _| features.layer = style);
@@ -493,13 +524,16 @@ mod tests {
     #[test]
     fn stops_interpolate_linearly_and_hold_outside() {
         let s = [[10.0, 12.0, 14.0, 16.0], [1.0, 3.0, 3.0, 0.0]];
+
         assert_eq!(stops(&s, 5.0), 1.0);
         assert_eq!(stops(&s, 11.0), 2.0);
         assert_eq!(stops(&s, 13.0), 3.0);
         assert_eq!(stops(&s, 15.0), 1.5);
         assert_eq!(stops(&s, 20.0), 0.0);
+
         // Equal zooms: a step, no division by zero
         let step = [[10.0, 10.0, 10.0, 10.0], [0.0, 1.0, 1.0, 1.0]];
+
         assert_eq!(stops(&step, 9.0), 0.0);
         assert_eq!(stops(&step, 11.0), 1.0);
     }
@@ -507,6 +541,7 @@ mod tests {
     #[test]
     fn stops_of_reads_eight_floats() {
         let f = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+
         assert_eq!(stops_of(&f), Some([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]));
         assert_eq!(stops_of(&f[..7]), None);
     }
@@ -514,6 +549,7 @@ mod tests {
     #[test]
     fn the_default_style_is_black_and_sizes_one() {
         let s = default_style(2);
+
         assert_eq!(s.len(), 2 * FLOATS);
         assert_eq!(&s[FLOATS..FLOATS + 8], &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
         // Zooms 0, sizes 1
@@ -524,17 +560,22 @@ mod tests {
     #[test]
     fn layouts_keep_the_texels_their_layer_reads() {
         let mut style = default_style(2);
+
         for (k, v) in style.iter_mut().enumerate() {
             *v = k as f32;
         }
+
         // A line: color, width zooms, width values (texels 0, 2, 3 of each feature)
         let line = Layout::LINE.pack(&style);
+
         assert_eq!(line.len(), 2 * 3 * 4);
         assert_eq!(&line[..4], &[0.0, 1.0, 2.0, 3.0]);
         assert_eq!(&line[4..12], &[8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
         assert_eq!(line[12], 32.0);
+
         // A circle: its second color last; a fill: its color only
         let circle = Layout::CIRCLE.pack(&style);
+
         assert_eq!(circle.len(), 2 * 6 * 4);
         assert_eq!(&circle[20..24], &[4.0, 5.0, 6.0, 7.0]);
         assert_eq!(Layout::FILL.pack(&style), [0.0, 1.0, 2.0, 3.0, 32.0, 33.0, 34.0, 35.0]);
@@ -552,6 +593,7 @@ mod tests {
             max_zoom: 14.0,
             ..LayerStyle::default()
         };
+
         assert!(!style.shows(9.99) && style.shows(10.0) && style.shows(13.9) && !style.shows(14.0));
         assert!(
             !LayerStyle {
@@ -565,22 +607,29 @@ mod tests {
     #[test]
     fn translucent_colors_are_noticed() {
         let mut style = default_style(3);
+
         assert!(!style_translucent(&style));
         // The second color (a stroke) does not count, the first does
         style[FLOATS + 7] = 0.5;
         assert!(!style_translucent(&style));
         style[2 * FLOATS + 3] = 0.99;
         assert!(style_translucent(&style));
+
         let mut ramp = vec![255u8; RAMP * 4];
+
         assert!(!ramp_translucent(&ramp));
         ramp[RAMP * 4 - 1] = 128;
         assert!(ramp_translucent(&ramp));
+
         let opaque = LayerStyle::default();
+
         assert!(!opaque.translucent());
+
         let fading = LayerStyle {
             opacity: [[10.0, 12.0, 12.0, 12.0], [0.0, 1.0, 1.0, 1.0]],
             ..opaque
         };
+
         assert!(fading.translucent());
     }
 }

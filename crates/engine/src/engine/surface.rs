@@ -42,8 +42,11 @@ impl Probe {
         let mut objects = Objects::new(gl);
         let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
         let vao = objects.vertex_array()?;
+
         objects.keep();
+
         let [depth_u] = gl::uniforms(gl, program, ["u_depth"]);
+
         Ok(Self {
             program,
             depth_u,
@@ -75,6 +78,7 @@ impl Engine {
             let pick = self.pick_target(size).ok()?;
             let gl = &self.gl;
             let mut pixel = [0u8; 4];
+
             // SAFETY: offscreen passes on the live context, the default framebuffer bound again after
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
@@ -106,9 +110,12 @@ impl Engine {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             }
             gl::reset_state(gl);
+
             (pixel[3] != 0).then(|| unpack_depth(pixel))
         });
+
         self.surface = Some(probe);
+
         read
     }
 }
@@ -140,6 +147,7 @@ impl Engine {
         };
         let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
         let at = camera::lon_lat(m);
+
         js::triple(at.x, at.y, altitude - ground)
     }
 
@@ -152,9 +160,11 @@ impl Engine {
         let Some(view) = self.drawn.clone() else {
             return JsValue::UNDEFINED;
         };
+
         if !lon.is_finite() || !lat.is_finite() {
             return JsValue::UNDEFINED;
         }
+
         let m = camera::mercator(lon, lat);
         let ground = super::ground_elevation(self.terrain.as_ref(), m).unwrap_or(0.0);
         let k = view.pixels_per_metre(lat);
@@ -166,6 +176,7 @@ impl Engine {
         };
         let p = down.inverse * glam::DVec4::new(0.0, 0.0, 2.0 * depth - 1.0, 1.0);
         let altitude = Camera::altitude_of(&view, p.truncate() / p.w);
+
         JsValue::from_f64(altitude - ground)
     }
 }

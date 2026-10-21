@@ -31,7 +31,9 @@ impl Grid {
             boxes: Vec::new(),
             hash: FNV_OFFSET,
         };
+
         grid.reset(width, height);
+
         grid
     }
 
@@ -58,6 +60,7 @@ impl Grid {
     /// Cells a box touches, clamped to the screen
     fn span(&self, r: &Rect) -> (usize, usize, usize, usize) {
         let clamp = |v: f64, n: usize| ((v / self.cell).floor().max(0.0) as usize).min(n - 1);
+
         (
             clamp(r[0], self.cols),
             clamp(r[1], self.rows),
@@ -70,10 +73,12 @@ impl Grid {
     #[must_use]
     pub fn collides(&self, r: &Rect) -> bool {
         let (i0, j0, i1, j1) = self.span(r);
+
         (j0..=j1).any(|j| {
             (i0..=i1).any(|i| {
                 self.cells[j * self.cols + i].iter().any(|&k| {
                     let b = &self.boxes[k];
+
                     r[0] < b[2] && b[0] < r[2] && r[1] < b[3] && b[1] < r[3]
                 })
             })
@@ -84,12 +89,14 @@ impl Grid {
     pub fn insert(&mut self, r: Rect) {
         let (i0, j0, i1, j1) = self.span(&r);
         let k = self.boxes.len();
+
         self.boxes.push(r);
         for v in r {
             for byte in v.to_bits().to_le_bytes() {
                 self.hash = (self.hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME);
             }
         }
+
         for j in j0..=j1 {
             for i in i0..=i1 {
                 self.cells[j * self.cols + i].push(k);
@@ -103,6 +110,7 @@ impl Grid {
             return false;
         }
         self.insert(r);
+
         true
     }
 }
@@ -114,6 +122,7 @@ mod tests {
     #[test]
     fn overlapping_boxes_are_refused_in_order() {
         let mut g = Grid::new(800.0, 600.0);
+
         assert!(g.place([10.0, 10.0, 110.0, 30.0]));
         // Overlaps the first: refused, and takes nothing
         assert!(!g.place([100.0, 20.0, 200.0, 40.0]));
@@ -128,8 +137,11 @@ mod tests {
     fn a_reset_grid_is_empty_and_resized() {
         let mut g = Grid::new(800.0, 600.0);
         let empty = g.fingerprint();
+
         assert!(g.place([10.0, 10.0, 110.0, 30.0]));
+
         let one = g.fingerprint();
+
         assert_ne!(one, empty);
         // A refused box takes nothing: the fingerprint holds
         assert!(!g.place([20.0, 20.0, 30.0, 25.0]));

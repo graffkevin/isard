@@ -26,8 +26,10 @@ const FRANCE: [number, number, number, number] = [-5.5, 41, 10, 51.5];
 export const lambert93Grid = (name: string, min: number, max: number): TileGrid => {
   const matrices = Array.from({ length: Math.max(0, max - min + 1) }, (_, i): TileMatrix => {
     const level = min + i;
+
     return { id: level, resolution: 209715.2 / 2 ** level, origin: [0, 12000000] };
   });
+
   return { crs: 'EPSG:2154', matrices, bounds: FRANCE, name };
 };
 
@@ -45,10 +47,12 @@ export const geoplateformeWmts = (
   const { format = 'image/png', style = 'normal', matrixSet, ...raster } = options;
   const set = (typeof raster.grid === 'object' ? raster.grid.name : undefined) ?? matrixSet ?? 'PM';
   const lambert = /^2154_(?:5|10)cm_(\d+)_(\d+)$/.exec(set);
+
   if (lambert && raster.grid === undefined) raster.grid = lambert93Grid(set, Number(lambert[1]), Number(lambert[2]));
   else if (set !== 'PM' && raster.grid === undefined) {
     throw new Error(`isard: the grid of the matrix set ${set}: wmtsGrid(capabilities, '${layer}', '${set}')`);
   }
+
   return {
     ...(raster.grid === undefined ? { maxZoom: 19 } : {}),
     attribution: IGN_ATTRIBUTION,
@@ -74,6 +78,7 @@ export const geoplateformeWms = (
   const projected = crs !== 'EPSG:3857';
   // WMS 1.3 puts the latitude first in EPSG:4326; {bbox} is x, y
   const asked = crs === 'EPSG:4326' ? 'CRS:84' : crs;
+
   return {
     maxZoom: 20,
     attribution: IGN_ATTRIBUTION,
@@ -107,6 +112,7 @@ export const geoplateformeWfs = async <P = Properties>(
   const limit = Math.max(1, options.count ?? 50_000);
   const page = async (start: number, count: number) => {
     const url = new URL('https://data.geopf.fr/wfs/ows');
+
     url.search = new URLSearchParams({
       SERVICE: 'WFS',
       VERSION: '2.0.0',
@@ -120,14 +126,19 @@ export const geoplateformeWfs = async <P = Properties>(
       // The first page as a single request always was
       ...(start > 0 ? { STARTINDEX: String(start) } : {}),
     }).toString();
+
     const response = await fetch(url, withHeaders(url, options.signal ? { signal: options.signal } : {}));
+
     if (!response.ok) throw new Error(`isard: ${typeName}: ${response.status}`);
+
     return response.json() as Promise<FeatureCollection<P> & { numberMatched?: number | string }>;
   };
   const first = await page(0, Math.min(WFS_PAGE, limit));
   const matched = Number(first.numberMatched);
   const total = Math.min(Number.isFinite(matched) ? matched : 0, limit);
+
   if (first.features.length < WFS_PAGE || total <= first.features.length) return first;
+
   const starts = Array.from(
     { length: Math.ceil((total - first.features.length) / WFS_PAGE) },
     (_, i) => first.features.length + i * WFS_PAGE,
@@ -138,6 +149,7 @@ export const geoplateformeWfs = async <P = Properties>(
   const features = [first, ...rest]
     .flatMap((r) => r.features)
     .filter((f) => f.id === undefined || (!seen.has(f.id) && seen.add(f.id) !== undefined));
+
   return { ...first, features };
 };
 
@@ -182,5 +194,6 @@ export const bdtopoBuildings = async (
 ): Promise<ExtrusionOptions<BdTopoBuilding>> => {
   const { defaultHeight = 6, signal, ...style } = options;
   const data = await geoplateformeWfs<BdTopoBuilding>('BDTOPO_V3:batiment', box, signal ? { signal } : {});
+
   return { data, height: (p) => p.hauteur ?? defaultHeight, color: '#e4e1d8', ...style };
 };

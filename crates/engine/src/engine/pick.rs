@@ -61,10 +61,13 @@ impl FeaturePass {
     fn hit(&self, pixels: &[u8]) -> Option<(u32, u32)> {
         let [r, g, b, layer] = nearest(pixels, self.block, self.cursor, self.radius)?;
         let id = u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16;
+
         if layer == 0 || id == 0 {
             return None;
         }
+
         let layer_id = self.pickable.get(usize::from(layer) - 1)?;
+
         Some((*layer_id, id - 1))
     }
 }
@@ -77,13 +80,16 @@ fn nearest(pixels: &[u8], block: (i32, i32, i32, i32), cursor: (i32, i32), radiu
     // Squared distances in i64: a radius of 50 000 pixels squared is past i32
     let radius = i64::from(radius);
     let mut best: Option<(i64, [u8; 4])> = None;
+
     for (k, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let (i, j) = (k as i64 % w + i64::from(x0), k as i64 / w + i64::from(y0));
         let d = (i - i64::from(cursor.0)).pow(2) + (j - i64::from(cursor.1)).pow(2);
+
         if pixel[3] != 0 && d <= radius * radius && best.is_none_or(|(b, _)| d < b) {
             best = Some((d, *pixel));
         }
     }
+
     best.map(|(_, pixel)| pixel)
 }
 
@@ -98,6 +104,7 @@ fn block_around(cursor: (i32, i32), radius: f64, size: (i32, i32)) -> ((i32, i32
         px.saturating_add(r).min(size.0 - 1),
         py.saturating_add(r).min(size.1 - 1),
     );
+
     ((x0, y0, x1 - x0 + 1, y1 - y0 + 1), r)
 }
 
@@ -150,6 +157,7 @@ impl Engine {
         let hit = self
             .pick_feature(x, y, radius.unwrap_or(0.0), only)
             .or_else(|| self.pick_fill(x, y, only));
+
         hit_value(hit)
     }
 
@@ -169,6 +177,7 @@ impl Engine {
             // SAFETY: a fence of this context, not used afterwards
             unsafe { self.gl.delete_sync(fence) };
         }
+
         let only = only.map(Vec::from);
         let feature = self.feature_pass(x, y, radius.unwrap_or(0.0), only.as_deref());
         // The relief's depth under the cursor: for the fills and the position
@@ -184,6 +193,7 @@ impl Engine {
             camera: self.camera.clone(),
             drawn: self.drawn.clone(),
         };
+
         if self.ensure_async_pick().is_err() {
             return false;
         }
@@ -196,6 +206,7 @@ impl Engine {
         if let Some(pick) = &mut self.async_pick {
             pick.pending = Some(pending);
         }
+
         true
     }
 
@@ -210,6 +221,7 @@ impl Engine {
             return JsValue::UNDEFINED;
         };
         let lost = self.raw.is_context_lost();
+
         if let Some(fence) = pending.fence
             && !lost
         {
@@ -218,14 +230,17 @@ impl Engine {
                 return JsValue::UNDEFINED;
             }
         }
+
         let Some(pending) = pick.pending.take() else {
             return JsValue::UNDEFINED;
         };
         let mut bytes =
             vec![0u8; pending.feature.as_ref().map_or(0, FeaturePass::bytes) + 4 * usize::from(pending.depth)];
+
         // SAFETY: the fence is signaled: the buffer holds the pixels, read without a stall; deleted after
         unsafe {
             let gl = &self.gl;
+
             if let Some(fence) = pending.fence {
                 if !lost && !bytes.is_empty() {
                     gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pick.buffer));
@@ -238,6 +253,7 @@ impl Engine {
         if lost {
             return JsValue::UNDEFINED;
         }
+
         self.resolve(&pending, &bytes)
     }
 }
@@ -275,10 +291,12 @@ impl Engine {
         if !x.is_finite() || !y.is_finite() {
             return None;
         }
+
         let (px, py) = (
             (x * self.pixel_ratio) as i32,
             size.1 - 1 - (y * self.pixel_ratio) as i32,
         );
+
         (px >= 0 && py >= 0 && px < size.0 && py < size.1).then_some((px, py))
     }
 
@@ -289,6 +307,7 @@ impl Engine {
             return;
         };
         let gl = &self.gl;
+
         gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after
         unsafe {
@@ -310,14 +329,17 @@ impl Engine {
     /// packed in the color, clipped to that pixel, and the pixel read back.
     pub(super) fn pick_altitude(&mut self, x: f64, y: f64) -> Option<f64> {
         self.terrain.as_ref()?;
+
         let view = self.drawn.clone()?;
         let size = self.canvas_size();
         let cursor = self.device_point(x, y, size)?;
         let target = self.pick_target(size).ok()?;
         let mut pixel = [0u8; 4];
+
         // SAFETY: offscreen pass on the live context, default framebuffer restored after
         unsafe {
             let gl = &self.gl;
+
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
             gl.viewport(0, 0, size.0, size.1);
             self.draw_ground_depth(&view, cursor);
@@ -332,6 +354,7 @@ impl Engine {
             );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
+
         altitude_of_depth(&self.camera, &view, x, y, pixel)
     }
 
@@ -341,8 +364,10 @@ impl Engine {
         if !self.picks_ground(only) {
             return None;
         }
+
         let altitude = self.pick_altitude(x, y).unwrap_or(self.camera.elevation);
         let m = self.camera.ground_at(&self.camera.view(), x, y, altitude)?;
+
         self.fill_at(m, only)
     }
 
@@ -356,6 +381,7 @@ impl Engine {
     /// The topmost layer picked on the ground holding a Mercator position, and its feature there
     fn fill_at(&self, m: DVec2, only: Option<&[u32]>) -> Option<(u32, u32)> {
         let zoom = self.camera.zoom;
+
         self.layers.iter().rev().find_map(|(id, slot)| match slot {
             Slot::Layer(layer) if only.is_none_or(|o| o.contains(id)) => {
                 layer.pick_ground(m, zoom).map(|index| (*id, index))
@@ -376,14 +402,17 @@ impl Engine {
             })
             .map(|(i, (id, _))| (*id, i))
             .unzip();
+
         // Their ordinal goes in the alpha channel
         if pickable.is_empty() || pickable.len() > 255 {
             return None;
         }
+
         let size = self.canvas_size();
         let (px, py) = self.device_point(x, y, size)?;
         // The block of pixels around the cursor, inside the canvas
         let (block, radius) = block_around((px, py), radius * self.pixel_ratio, size);
+
         Some(FeaturePass {
             pickable,
             slots,
@@ -406,6 +435,7 @@ impl Engine {
         };
         let (x0, y0, w, h) = pass.block;
         let gl = &self.gl;
+
         gl::reset_state(gl);
         // SAFETY: offscreen pass on the live context, the state set back after
         unsafe {
@@ -423,7 +453,9 @@ impl Engine {
                 gl.disable(glow::DEPTH_TEST);
                 gl.color_mask(true, true, true, true);
             }
+
             let frame = self.frame_state(&view);
+
             for (ordinal, &index) in pass.slots.iter().enumerate() {
                 if let Some((_, Slot::Layer(layer))) = self.layers.get(index) {
                     layer.draw_pick(&frame, (ordinal + 1) as u8);
@@ -440,9 +472,11 @@ impl Engine {
         let target = self.pick_target(size).ok()?;
         let mut pixels = vec![0u8; pass.bytes()];
         let (x0, y0, w, h) = pass.block;
+
         // SAFETY: offscreen pass on the live context, default framebuffer restored after
         unsafe {
             let gl = &self.gl;
+
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target));
             gl.viewport(0, 0, size.0, size.1);
             self.draw_feature_pass(&pass);
@@ -457,6 +491,7 @@ impl Engine {
             );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
+
         pass.hit(&pixels)
     }
 
@@ -465,10 +500,13 @@ impl Engine {
         if let Some(pick) = &self.async_pick {
             return Ok(pick.buffer);
         }
+
         let mut objects = Objects::new(&self.gl);
         let buffer = objects.buffer()?;
+
         objects.keep();
         self.async_pick = Some(AsyncPick { buffer, pending: None });
+
         Ok(buffer)
     }
 
@@ -480,9 +518,11 @@ impl Engine {
         let buffer = self.ensure_async_pick()?;
         let feature_bytes = pending.feature.as_ref().map_or(0, FeaturePass::bytes);
         let bytes = feature_bytes + 4 * usize::from(pending.depth);
+
         // SAFETY: offscreen passes on the live context; the pack buffer and the default framebuffer unbound after
         unsafe {
             let gl = &self.gl;
+
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(buffer));
             // Allocated again at each request: the reads of the one replaced may still be under way
             gl.buffer_data_size(glow::PIXEL_PACK_BUFFER, bytes as i32, glow::STREAM_READ);
@@ -490,7 +530,9 @@ impl Engine {
             gl.viewport(0, 0, size.0, size.1);
             if let Some(pass) = &pending.feature {
                 self.draw_feature_pass(pass);
+
                 let (x0, y0, w, h) = pass.block;
+
                 gl.read_pixels(
                     x0,
                     y0,
@@ -516,9 +558,12 @@ impl Engine {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             // A pack buffer left bound would turn the next `pick` read into an error
             gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+
             let fence = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0)?;
+
             // Sent to the GPU now, so that the fence can signal without waiting for the next frame
             gl.flush();
+
             Ok(fence)
         }
     }
@@ -533,6 +578,7 @@ impl Engine {
             let pixel = bytes
                 .get(feature_bytes..feature_bytes + 4)
                 .and_then(|p| <[u8; 4]>::try_from(p).ok());
+
             pending
                 .drawn
                 .as_ref()
@@ -554,6 +600,7 @@ impl Engine {
                     .and_then(|m| self.fill_at(m, only))
             });
         let lon_lat = m.map(camera::lon_lat);
+
         js::object(&[
             ("x", x.into()),
             ("y", y.into()),
@@ -573,12 +620,14 @@ impl Engine {
             // SAFETY: the previous target, replaced
             unsafe { old.delete(&self.gl) };
         }
+
         let gl = &self.gl;
         // Everything created is deleted again if a step fails
         let mut objects = Objects::new(gl);
         let texture = objects.texture()?;
         let framebuffer = objects.framebuffer()?;
         let depth = objects.renderbuffer()?;
+
         objects.keep();
         // SAFETY: storage and attachments of objects just created on the live context
         unsafe {
@@ -609,6 +658,7 @@ impl Engine {
             depth,
             size,
         });
+
         Ok(framebuffer)
     }
 }
@@ -619,6 +669,7 @@ fn altitude_of_depth(camera: &Camera, view: &View, x: f64, y: f64, pixel: [u8; 4
     if pixel[3] == 0 {
         return None;
     }
+
     let depth = unpack_depth(pixel);
     let ndc = glam::DVec4::new(
         2.0 * x / camera.width - 1.0,
@@ -627,6 +678,7 @@ fn altitude_of_depth(camera: &Camera, view: &View, x: f64, y: f64, pixel: [u8; 4
         1.0,
     );
     let p = view.inverse * ndc;
+
     Some(Camera::altitude_of(view, p.truncate() / p.w))
 }
 
@@ -638,12 +690,14 @@ mod tests {
     fn the_nearest_hit_within_the_radius_wins() {
         // A 3 × 3 block from (10, 20), the cursor in its middle
         let mut pixels = vec![0u8; 9 * 4];
+
         // A corner (distance² 2) and the pixel right of the cursor (distance² 1)
         pixels[0..4].copy_from_slice(&[1, 0, 0, 1]);
         pixels[5 * 4..6 * 4].copy_from_slice(&[2, 0, 0, 1]);
         assert_eq!(nearest(&pixels, (10, 20, 3, 3), (11, 21), 1), Some([2, 0, 0, 1]));
         // Radius 0: the cursor's pixel only, empty
         assert_eq!(nearest(&pixels, (10, 20, 3, 3), (11, 21), 0), None);
+
         let pass = FeaturePass {
             pickable: vec![7, 9],
             slots: vec![0, 1],
@@ -651,6 +705,7 @@ mod tests {
             block: (10, 20, 3, 3),
             radius: 1,
         };
+
         // Feature 2 (id 2 = index 1) of the first layer drawn
         assert_eq!(pass.hit(&pixels), Some((7, 1)));
         assert_eq!(pass.bytes(), 36);
@@ -662,18 +717,22 @@ mod tests {
     #[test]
     fn the_radius_stays_within_the_canvas() {
         let size = (300, 200);
+
         assert_eq!(block_around((10, 20), 2.0, size), ((8, 18, 5, 5), 2));
         // Clipped at the edges of the canvas
         assert_eq!(block_around((0, 199), 3.0, size), ((0, 196, 4, 4), 3));
         // Infinite, huge, negative or not a number: at most the diagonal, the block the canvas at most
         for radius in [f64::INFINITY, 1e12, 50_000.0] {
             let ((x0, y0, w, h), r) = block_around((150, 100), radius, size);
+
             assert_eq!((x0, y0, w, h, r), (0, 0, 300, 200, 361), "{radius}");
         }
         assert_eq!(block_around((10, 20), f64::NAN, size), ((10, 20, 1, 1), 0));
         assert_eq!(block_around((10, 20), -4.0, size), ((10, 20, 1, 1), 0));
+
         // A radius whose square is past i32 still finds the pixel
         let mut pixels = vec![0u8; 4];
+
         pixels[3] = 1;
         assert_eq!(
             nearest(&pixels, (0, 0, 1, 1), (40_000, 40_000), 60_000),

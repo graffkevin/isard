@@ -14,6 +14,7 @@ export const mercatorX = (lon: number): number => {
 /** Mercator y of a latitude (degrees), clamped to the edges of the map */
 export const mercatorY = (lat: number): number => {
   const phi = (Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * Math.PI) / 180;
+
   return 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI);
 };
 

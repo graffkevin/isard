@@ -84,6 +84,7 @@ impl<M: Resident> States<M> {
     /// New nodes in the tree (an external tileset grafted): unloaded, or empty when `empty` says they have no content
     pub fn grow(&mut self, nodes: usize, empty: impl Fn(usize) -> bool) {
         let first = self.tiles.len();
+
         for i in first..nodes {
             self.tiles.push(if empty(i) { State::Empty } else { State::Unloaded });
         }
@@ -92,6 +93,7 @@ impl<M: Resident> States<M> {
     /// Sets the state of a tile, the counts following; the previous state
     pub fn replace(&mut self, tile: usize, state: State<M>) -> Option<State<M>> {
         let slot = self.tiles.get_mut(tile)?;
+
         match &state {
             State::Loading(_) => {
                 self.loading.insert(tile);
@@ -102,7 +104,9 @@ impl<M: Resident> States<M> {
             }
             _ => {}
         }
+
         let old = std::mem::replace(slot, state);
+
         match &old {
             State::Loading(_) => {
                 if !matches!(self.tiles[tile], State::Loading(_)) {
@@ -117,6 +121,7 @@ impl<M: Resident> States<M> {
             }
             _ => {}
         }
+
         Some(old)
     }
 
@@ -161,12 +166,14 @@ impl<M: Resident> States<M> {
     pub fn take_stale(&mut self, visible: &[usize], out: &mut Vec<Loading>) {
         self.visible.clear();
         self.visible.extend(visible.iter().copied());
+
         let stale: Vec<usize> = self
             .loading
             .iter()
             .copied()
             .filter(|i| !self.visible.contains(i))
             .collect();
+
         for i in stale {
             if let Some(State::Loading(loading)) = self.replace(i, State::Unloaded) {
                 out.push(loading);
@@ -191,29 +198,36 @@ impl<M: Resident> States<M> {
         if self.gpu_bytes >= budget {
             return;
         }
+
         let mut in_flight = self.loading.len();
+
         for &i in request {
             if in_flight >= max_requests {
                 break;
             }
+
             if self.requestable(i) {
                 out.push(i);
                 in_flight += 1;
             }
         }
+
         // Siblings out of view: only with the visible tiles all requested, a few at a time (bandwidth stays for what
         // is on screen)
         let room = self.gpu_bytes < budget / 10 * PREFETCH_TENTHS;
+
         if room && request.iter().all(|i| !self.requestable(*i) || out.contains(i)) {
             let prefetching = prefetch.iter().filter(|&&i| self.is_loading(i)).count();
             let free = PREFETCH_REQUESTS
                 .saturating_sub(prefetching)
                 .min(max_requests.saturating_sub(in_flight));
             let first = out.len();
+
             for &i in prefetch {
                 if out.len() - first >= free {
                     break;
                 }
+
                 if matches!(self.tiles.get(i), Some(State::Unloaded)) && !out.contains(&i) {
                     out.push(i);
                 }
@@ -227,6 +241,7 @@ impl<M: Resident> States<M> {
         if self.gpu_bytes <= budget {
             return Vec::new();
         }
+
         // Only the tiles on the GPU are looked at, not every node of the tree
         let mut candidates: Vec<(u64, usize, usize)> = self
             .ready
@@ -236,13 +251,16 @@ impl<M: Resident> States<M> {
                 _ => None,
             })
             .collect();
+
         if candidates.is_empty() {
             // Everything on the GPU is on screen: nothing to unload
             return Vec::new();
         }
         candidates.sort_unstable();
+
         let mut bytes = self.gpu_bytes;
         let mut out = Vec::new();
+
         for (_, i, size) in candidates {
             if bytes <= budget * 9 / 10 {
                 break;
@@ -250,6 +268,7 @@ impl<M: Resident> States<M> {
             bytes -= size;
             out.push(i);
         }
+
         out
     }
 
@@ -258,6 +277,7 @@ impl<M: Resident> States<M> {
         self.loading.clear();
         self.ready.clear();
         self.gpu_bytes = 0;
+
         std::mem::take(&mut self.tiles)
     }
 }
@@ -295,13 +315,16 @@ mod tests {
 
     fn states(n: usize) -> States<Mesh> {
         let mut s = States::default();
+
         s.grow(n, |_| false);
+
         s
     }
 
     #[test]
     fn counts_follow_the_states() {
         let mut s = states(4);
+
         s.grow(6, |i| i == 5);
         assert_eq!(s.len(), 6);
         assert_eq!(s.readiness(5, 0.0), Readiness::Empty);
@@ -327,12 +350,17 @@ mod tests {
     #[test]
     fn stale_requests_are_taken_out() {
         let mut s = states(4);
+
         for i in 0..3 {
             s.replace(i, loading(i as u32 + 1));
         }
+
         let mut out = Vec::new();
+
         s.take_stale(&[1], &mut out);
+
         let mut ids: Vec<u32> = out.iter().map(|l| l.id).collect();
+
         ids.sort_unstable();
         assert_eq!(ids, [1, 3]);
         assert_eq!(s.counts().0, 1);
@@ -342,8 +370,11 @@ mod tests {
     #[test]
     fn requests_stay_within_the_limit_and_prefetch_last() {
         let mut s = states(10);
+
         s.replace(0, loading(1));
+
         let mut out = Vec::new();
+
         // One loading, three more allowed: tiles 1 to 3; tile 4 waits, so no prefetch
         s.plan_requests(&[1, 2, 3, 4], &[8, 9], 4, usize::MAX, &mut out);
         assert_eq!(out, [1, 2, 3]);
@@ -359,6 +390,7 @@ mod tests {
     #[test]
     fn the_least_recently_drawn_go_first_beyond_the_budget() {
         let mut s = states(4);
+
         for (i, used) in [(0, 5), (1, 2), (2, 9), (3, 1)] {
             s.replace(i, State::Ready(Mesh { bytes: 100, used }));
         }
@@ -381,8 +413,11 @@ mod tests {
     #[test]
     fn nothing_is_asked_past_the_budget() {
         let mut s = states(10);
+
         s.replace(0, State::Ready(Mesh { bytes: 100, used: 0 }));
+
         let mut out = Vec::new();
+
         s.plan_requests(&[1, 2], &[7], 4, 100, &mut out);
         assert_eq!(out, [] as [usize; 0]);
         s.plan_requests(&[1, 2], &[7], 4, 101, &mut out);
@@ -392,8 +427,11 @@ mod tests {
     #[test]
     fn no_prefetch_near_the_budget() {
         let mut s = states(10);
+
         s.replace(0, State::Ready(Mesh { bytes: 85, used: 0 }));
+
         let mut out = Vec::new();
+
         // 85 bytes of 100: past the share for prefetching; the tiles in view are still asked
         s.plan_requests(&[1], &[7, 8], 4, 100, &mut out);
         assert_eq!(out, [1]);
@@ -410,10 +448,13 @@ mod tests {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
+
             seed
         };
+
         for frame in 1..2000u64 {
             let tile = (next() % 64) as usize;
+
             match next() % 5 {
                 0 => drop(s.replace(tile, loading(frame as u32))),
                 1 | 2 => drop(s.replace(
@@ -429,8 +470,10 @@ mod tests {
             for i in s.over_budget(500, frame) {
                 assert!(matches!(s.replace(i, State::Unloaded), Some(State::Ready(_))));
             }
+
             let (loading, ready, bytes) = s.counts();
             let (mut l, mut r, mut b) = (0, 0, 0);
+
             for i in 0..s.len() {
                 match s.get(i) {
                     Some(State::Loading(_)) => l += 1,

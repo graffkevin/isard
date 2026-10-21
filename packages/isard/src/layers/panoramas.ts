@@ -91,6 +91,7 @@ const RAD = Math.PI / 180;
 const times = (a: number[], b: number[]): number[] =>
   Array.from({ length: 9 }, (_, i) => {
     const [r, c] = [Math.floor(i / 3), i % 3];
+
     return [0, 1, 2].reduce((sum, k) => sum + (a[r * 3 + k] ?? 0) * (b[k * 3 + c] ?? 0), 0);
   });
 
@@ -106,6 +107,7 @@ const rotZ = (t: number) => [Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos
 export const panoramaRotation = (attitude: Attitude, lon: number, lambert93: boolean): number[] => {
   const vehicle = times(times(rotY(-attitude.roll * RAD), rotX(-attitude.pitch * RAD)), rotZ(-attitude.heading * RAD));
   const convergence = lambert93 ? Math.sin(46.5 * RAD) * (3 - lon) * RAD : 0;
+
   return times(rotZ(convergence), vehicle);
 };
 
@@ -113,6 +115,7 @@ export const panoramaRotation = (attitude: Attitude, lon: number, lambert93: boo
 const cameraNumbers = (c: Calibration): number[] => {
   const p = c.projection;
   const d = c.distortion;
+
   return [
     ...c.rotation.slice(0, 9),
     ...c.position.slice(0, 3),
@@ -151,9 +154,11 @@ export class Panoramas {
   /** The panorama nearest to a position */
   nearest(lonLat: LonLat): Panorama | undefined {
     const cos = Math.cos(lonLat[1] * RAD);
+
     return this.list.reduce<{ best?: Panorama; distance: number }>(
       (nearest, p) => {
         const d = ((p.lonLat[0] - lonLat[0]) * cos) ** 2 + (p.lonLat[1] - lonLat[1]) ** 2;
+
         return d < nearest.distance ? { best: p, distance: d } : nearest;
       },
       { distance: Number.POSITIVE_INFINITY },
@@ -164,11 +169,16 @@ export class Panoramas {
   async show(index: number): Promise<void> {
     const pano = this.list[index];
     const attitude = this.attitudes[index];
+
     if (!pano || !attitude) return;
+
     const shown = ++this.shown;
+
     this.current = pano;
+
     const rotation = panoramaRotation(attitude, pano.lonLat[0], this.lambert93);
     const { url, backgroundDistance, opacity } = this.options;
+
     this.host.setPanorama(
       pano.lonLat[0],
       pano.lonLat[1],
@@ -182,8 +192,11 @@ export class Panoramas {
       this.cameras.map(async (camera, k) => {
         const src = url.replaceAll('{cameraId}', String(camera.id)).replaceAll('{panoId}', String(pano.id));
         const response = await fetch(src, withHeaders(src));
+
         if (!response.ok) throw new Error(`isard: panorama image ${src}: ${response.status}`);
+
         const image = await createImageBitmap(await response.blob(), { premultiplyAlpha: 'none' });
+
         // Another panorama shown since: this image is not its
         if (shown === this.shown) this.host.setPanoramaImage(k, image);
         image.close();
@@ -209,14 +222,17 @@ export class Panoramas {
    */
   async enter(start: { index?: number; near?: LonLat } = {}): Promise<void> {
     const first = start.index ?? (start.near && this.nearest(start.near)?.index) ?? 0;
+
     this.stopWalking?.();
     this.stopWalking = this.host.listen(
       (lonLat) => {
         const target = lonLat && this.nearest(lonLat);
+
         if (target && target !== this.current) void this.go(target.index);
       },
       (e) => {
         const step = { z: 1, Z: 1, PageUp: 1, s: -1, S: -1, PageDown: -1 }[e.key];
+
         if (!step || !this.current) return;
         e.preventDefault();
         void this.go((this.current.index + step + this.list.length) % this.list.length);
@@ -224,7 +240,9 @@ export class Panoramas {
       (e) => {
         // One step per notch, the next ones once it is shown
         if (this.moving || e.deltaY === 0) return;
+
         const target = this.ahead(e.deltaY < 0);
+
         if (target) {
           this.moving = true;
           void this.go(target.index).finally(() => {
@@ -243,15 +261,20 @@ export class Panoramas {
   ahead(forward = true): Panorama | undefined {
     const eye = this.host.firstPerson();
     const here = this.current;
+
     if (!eye || !here) return undefined;
+
     const cos = Math.cos(here.lonLat[1] * RAD);
     const look = (eye.bearing + (forward ? 0 : 180)) * RAD;
+
     return this.list.reduce<{ best?: Panorama; distance: number }>(
       (nearest, p) => {
         if (p === here) return nearest;
+
         const [east, north] = [(p.lonLat[0] - here.lonLat[0]) * cos, p.lonLat[1] - here.lonLat[1]];
         const d = Math.hypot(east, north);
         const off = Math.acos(Math.max(-1, Math.min(1, (east * Math.sin(look) + north * Math.cos(look)) / (d || 1))));
+
         return off < 60 * RAD && d < nearest.distance ? { best: p, distance: d } : nearest;
       },
       { distance: Number.POSITIVE_INFINITY },
@@ -261,10 +284,13 @@ export class Panoramas {
   /** Goes to a panorama during the walk, the eye looking the same way (or `bearing`) */
   async go(index: number, bearing?: number): Promise<void> {
     const pano = this.list[index];
+
     if (!pano) return;
+
     const eye = this.host.firstPerson();
     // The eye at the panorama's cameras, above the ground there
     const ground = this.host.elevationAt(pano.lonLat);
+
     this.host.setFirstPerson({
       lonLat: pano.lonLat,
       height: ground === undefined ? 2.5 : Math.max(0.5, pano.height - ground),
@@ -287,7 +313,9 @@ export class Panoramas {
 export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions): Promise<Panoramas> => {
   const json = async <T>(src: string) => {
     const response = await fetch(src, withHeaders(src));
+
     if (!response.ok) throw new Error(`isard: ${src}: ${response.status}`);
+
     return (await response.json()) as T;
   };
   const [orientations, cameras] = await Promise.all([
@@ -303,11 +331,13 @@ export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions
   const geoid = options.geoid ?? lambert93;
   const list: Panorama[] = [];
   const attitudes: Attitude[] = [];
+
   orientations.features.forEach((feature) => {
     const [x = 0, y = 0, z = 0] = feature.geometry.coordinates;
     const [lon = 0, lat = 0] = crs.inverse([x, y]);
     const p = feature.properties;
     const number = (key: string) => (typeof p[key] === 'number' ? (p[key] as number) : 0);
+
     attitudes.push({ heading: number('heading'), pitch: number('pitch'), roll: number('roll') });
     list.push({
       index: list.length,
@@ -317,6 +347,7 @@ export const loadPanoramas = async (host: PanoramaHost, options: PanoramaOptions
       heading: number('heading'),
     });
   });
+
   return new Panoramas(
     host,
     {

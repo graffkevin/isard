@@ -66,16 +66,21 @@ impl GlobeBase {
         );
         let pi = std::f32::consts::PI;
         let mut patches = Vec::with_capacity(LON * LAT * 4);
+
         for j in 0..LAT {
             for i in 0..LON {
                 let lon = |i: usize| -pi + 2.0 * pi * i as f32 / LON as f32;
                 let lat = |j: usize| pi / 2.0 - pi * j as f32 / LAT as f32;
+
                 patches.extend_from_slice(&[lon(i), lat(j), lon(i + 1), lat(j + 1)]);
             }
         }
+
         let vao = objects.vertex_array()?;
         let buffer = objects.buffer()?;
+
         objects.keep();
+
         // SAFETY: state setup of objects just created on a live context
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -86,6 +91,7 @@ impl GlobeBase {
             gl.vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, 16, 0);
             gl.vertex_attrib_divisor(1, 1);
             gl.bind_vertex_array(None);
+
             Ok(Self {
                 program,
                 uniforms,
@@ -108,10 +114,13 @@ impl GlobeBase {
     /// `depth`: how far under the datum it lies (pixels, `depth`)
     pub fn draw(&self, gl: &glow::Context, view: &View, depth: f64) {
         let g = &view.globe;
+
         if g.factor <= 0.0 {
             return;
         }
+
         let [matrix, radius, depth_at, east, north, up, color] = &self.uniforms;
+
         // SAFETY: draw with objects owned by this base
         unsafe {
             gl.use_program(Some(self.program));
@@ -121,7 +130,9 @@ impl GlobeBase {
             for (location, axis) in [(east, g.east), (north, g.north), (up, g.up)] {
                 gl.uniform_3_f32(location.as_ref(), axis.x as f32, axis.y as f32, axis.z as f32);
             }
+
             let [r, gr, b] = self.color;
+
             gl.uniform_4_f32(color.as_ref(), r, gr, b, g.factor as f32);
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_elements_instanced(glow::TRIANGLES, Grid::FULL, glow::UNSIGNED_SHORT, 0, (LON * LAT) as i32);

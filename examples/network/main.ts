@@ -24,10 +24,14 @@ const nodes: number[] = [];
 const node = ([lon, lat]: number[]) => {
   const key = `${lon?.toFixed(7)},${lat?.toFixed(7)}`;
   const known = index.get(key);
+
   if (known !== undefined) return known;
+
   const i = nodes.length / 2;
+
   index.set(key, i);
   nodes.push(lon ?? 0, lat ?? 0);
+
   return i;
 };
 const edges: number[] = [];
@@ -36,12 +40,15 @@ const points: number[] = [];
 const lengths: number[] = [];
 const metres = (a: number[], b: number[]) => {
   const k = Math.cos(((a[1] ?? 0) * Math.PI) / 180);
+
   return Math.hypot(((b[0] ?? 0) - (a[0] ?? 0)) * k, (b[1] ?? 0) - (a[1] ?? 0)) * 111_320;
 };
 roads.features.forEach((f) => {
   if (f.geometry?.type !== 'LineString') return;
+
   const line = f.geometry.coordinates;
   const [first, last] = [line[0], line.at(-1)];
+
   if (!first || !last) return;
   edges.push(node(first), node(last));
   line.forEach((p) => {
@@ -80,22 +87,30 @@ for (let e = 0; e < edges.length / 2; e += 1) {
 const times = (lon: number, lat: number): Float32Array => {
   let source = 0;
   let best = Number.POSITIVE_INFINITY;
+
   for (let i = 0; i < count; i += 1) {
     const d = metres([lon, lat], [nodes[i * 2] ?? 0, nodes[i * 2 + 1] ?? 0]);
+
     if (d < best) [best, source] = [d, i];
   }
+
   const t = new Float32Array(count).fill(Number.POSITIVE_INFINITY);
+
   t[source] = best / WALK;
+
   const heap: [number, number][] = [[t[source] ?? 0, source]];
+
   while (heap.length) {
     const top = heap[0];
     const last = heap.pop();
+
     if (!top || !last) break;
     if (heap.length) {
       heap[0] = last;
       for (let i = 0; ; ) {
         const [l, r] = [2 * i + 1, 2 * i + 2];
         let m = i;
+
         if ((heap[l]?.[0] ?? Infinity) < (heap[m]?.[0] ?? Infinity)) m = l;
         if ((heap[r]?.[0] ?? Infinity) < (heap[m]?.[0] ?? Infinity)) m = r;
         if (m === i) break;
@@ -103,16 +118,20 @@ const times = (lon: number, lat: number): Float32Array => {
         i = m;
       }
     }
+
     const [time, n] = top;
+
     if (time > (t[n] ?? 0)) continue;
     for (const e of around[n] ?? []) {
       const other = edges[e * 2] === n ? (edges[e * 2 + 1] ?? 0) : (edges[e * 2] ?? 0);
       const next = time + (costs[e * 2] ?? 0);
+
       if (next < (t[other] ?? 0)) {
         t[other] = next;
         heap.push([next, other]);
         for (let i = heap.length - 1; i > 0; ) {
           const p = (i - 1) >> 1;
+
           if ((heap[p]?.[0] ?? 0) <= next) break;
           [heap[i], heap[p]] = [heap[p] as [number, number], heap[i] as [number, number]];
           i = p;
@@ -120,12 +139,15 @@ const times = (lon: number, lat: number): Float32Array => {
       }
     }
   }
+
   return t;
 };
 
 map.on('hover', ({ lonLat }) => {
   if (!lonLat) return;
+
   const t0 = performance.now();
+
   network.setValues(times(lonLat[0], lonLat[1]));
   element('ms').textContent = `${(performance.now() - t0).toFixed(1)} ms`;
 });

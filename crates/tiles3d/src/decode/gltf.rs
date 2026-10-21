@@ -21,6 +21,7 @@ pub(super) fn offset(v: &Value) -> Result<usize, String> {
     if v.is_null() {
         return Ok(0);
     }
+
     index(v).ok_or_else(|| "bad byteOffset".into())
 }
 
@@ -32,6 +33,7 @@ fn material<'a>(json: &'a Value, primitive: &Value) -> &'a Value {
 /// `KHR_texture_transform`)
 pub(super) fn uv_set(json: &Value, primitive: &Value) -> u64 {
     let base = &material(json, primitive)["pbrMetallicRoughness"]["baseColorTexture"];
+
     base["extensions"]["KHR_texture_transform"]["texCoord"]
         .as_u64()
         .or(base["texCoord"].as_u64())
@@ -44,9 +46,11 @@ fn numbers<const N: usize>(value: &Value, default: [f64; N]) -> Result<[f64; N],
         Value::Null => Ok(default),
         Value::Array(a) if a.len() == N => {
             let mut out = [0.0; N];
+
             for (o, v) in out.iter_mut().zip(a) {
                 *o = v.as_f64().ok_or("bad glTF node transform")?;
             }
+
             Ok(out)
         }
         _ => Err("bad glTF node transform".into()),
@@ -62,12 +66,15 @@ pub(super) fn decode_glb(
     batch: Option<&(Value, usize)>,
 ) -> Result<Mesh, String> {
     let (json, bin) = parse_glb(bytes)?;
+
     for required in json["extensionsRequired"].as_array().into_iter().flatten() {
         let name = required.as_str().unwrap_or("");
+
         if !SUPPORTED.contains(&name) {
             return Err(format!("glTF extension {name} unsupported"));
         }
     }
+
     let gltf = Gltf::new(&json, bin, draco);
     // glTF y-up → z-up: +90° about x
     let axis = if y_up {
@@ -84,6 +91,7 @@ pub(super) fn decode_glb(
     } else {
         // No scene: the nodes no other node holds
         let mut child = vec![false; nodes.len()];
+
         for c in nodes
             .iter()
             .flat_map(|n| n["children"].as_array().into_iter().flatten())
@@ -92,11 +100,14 @@ pub(super) fn decode_glb(
                 *slot = true;
             }
         }
+
         (0..nodes.len()).filter(|&n| !child[n]).collect()
     };
+
     for node in roots {
         gltf.node(node, &to_world, &mut out, 0)?;
     }
+
     // Anchor: center of the positions' bounds
     let corners: Vec<DVec3> = out
         .triangles
@@ -112,6 +123,7 @@ pub(super) fn decode_glb(
         .into_iter()
         .map(|(mut primitive, world)| {
             primitive.positions = relative(&world, anchor);
+
             primitive
         })
         .collect();
@@ -120,6 +132,7 @@ pub(super) fn decode_glb(
         .into_iter()
         .map(|(mut points, world)| {
             points.positions = relative(&world, anchor);
+
             points
         })
         .collect();
@@ -135,6 +148,7 @@ pub(super) fn decode_glb(
         Some(table) => super::metadata::property_table(&gltf, table)?,
         None => batch.and_then(|(table, count)| super::metadata::batch_table(table, *count)),
     };
+
     Ok(Mesh {
         anchor,
         primitives,
@@ -152,10 +166,12 @@ pub(super) fn decode_glb(
 /// The corners of the bounds of positions, None if not finite
 fn bounds(positions: &[DVec3]) -> Option<[DVec3; 2]> {
     let (mut min, mut max) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+
     for p in positions {
         min = min.min(*p);
         max = max.max(*p);
     }
+
     (min.is_finite() && max.is_finite()).then_some([min, max])
 }
 
@@ -216,6 +232,7 @@ pub(super) struct Gltf<'a> {
 impl<'a> Gltf<'a> {
     pub(super) fn new(json: &'a Value, bin: &'a [u8], draco: &'a [DracoGeometry]) -> Self {
         let nodes = json["nodes"].as_array().map_or(0, Vec::len);
+
         Self {
             json,
             bin,
@@ -233,7 +250,9 @@ impl<'a> Gltf<'a> {
     /// Takes `count` values from the tile's budget, before they are handed over: an error past `MAX_VALUES`
     pub(super) fn spend(&self, count: usize) -> Result<(), String> {
         let left = self.within(count)?;
+
         self.values.set(left);
+
         Ok(())
     }
 
@@ -249,20 +268,25 @@ impl<'a> Gltf<'a> {
         if depth > MAX_DEPTH {
             return Err("glTF node hierarchy too deep".into());
         }
+
         let Some(visits) = self.visits.get().checked_sub(1) else {
             return Err("glTF nodes shared too often (not a tree)".into());
         };
+
         self.visits.set(visits);
+
         let node = &self.json["nodes"][index];
         let local = if node["matrix"].is_null() {
             let t = numbers(&node["translation"], [0.0; 3])?;
             let r = numbers(&node["rotation"], [0.0, 0.0, 0.0, 1.0])?;
             let s = numbers(&node["scale"], [1.0; 3])?;
+
             DMat4::from_scale_rotation_translation(DVec3::from(s), DQuat::from_array(r), DVec3::from(t))
         } else {
             DMat4::from_cols_array(&numbers(&node["matrix"], [0.0; 16])?)
         };
         let world = *parent * local;
+
         if let Some(mesh) = self::index(&node["mesh"]) {
             for (index, primitive) in self.json["meshes"][mesh]["primitives"]
                 .as_array()
@@ -287,6 +311,7 @@ impl<'a> Gltf<'a> {
         {
             self.node(child, &world, out, depth + 1)?;
         }
+
         Ok(())
     }
 
@@ -299,14 +324,18 @@ impl<'a> Gltf<'a> {
                 .find(|g| g.mesh == mesh && g.primitive == index)
                 .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
             let count = g.positions.len() / 3;
+
             self.spend(count.saturating_mul(5).saturating_add(g.indices.len()))?;
+
             let uvs: Rc<[f32]> = if g.uvs.is_empty() {
                 vec![0.0; count * 2].into()
             } else {
                 g.uvs.as_slice().into()
             };
+
             return Ok(Some((g.positions.as_slice().into(), uvs, g.indices.as_slice().into())));
         }
+
         let Some(position) = self::index(&primitive["attributes"]["POSITION"]) else {
             return Ok(None);
         };
@@ -320,7 +349,9 @@ impl<'a> Gltf<'a> {
             Some(i) => self.indices(i)?.len(),
             None => count,
         };
+
         self.spend(count.saturating_mul(5).saturating_add(index_count))?;
+
         let uvs = match uv {
             Some(uv) => self.floats(uv)?,
             None => vec![0.0; count * 2].into(),
@@ -329,12 +360,14 @@ impl<'a> Gltf<'a> {
             self.indices(i)?
         } else {
             let n = u32::try_from(count).map_err(|_| "too many vertices")?;
+
             self.sequences
                 .borrow_mut()
                 .entry(count)
                 .or_insert_with(|| (0..n).collect())
                 .clone()
         };
+
         Ok(Some((positions, uvs, indices)))
     }
 
@@ -348,6 +381,7 @@ impl<'a> Gltf<'a> {
         if primitive["mode"].as_u64().unwrap_or(4) != 4 {
             return Ok(None);
         }
+
         let Some((positions, uvs, indices)) = self.geometry(key, primitive)? else {
             return Ok(None);
         };
@@ -361,14 +395,17 @@ impl<'a> Gltf<'a> {
         let features = match self::index(&primitive["attributes"][attribute]) {
             Some(accessor) if !primitive["extensions"]["KHR_draco_mesh_compression"].is_object() => {
                 self.spend(count)?;
+
                 Some(self.floats(accessor)?).filter(|f| f.len() == count)
             }
             _ => None,
         };
+
         if !positions.len().is_multiple_of(3) || uvs.len() != count * 2 || indices.iter().any(|&i| i as usize >= count)
         {
             return Err("inconsistent glTF primitive".into());
         }
+
         let world_positions: Vec<DVec3> = positions
             .as_chunks::<3>()
             .0
@@ -388,17 +425,21 @@ impl<'a> Gltf<'a> {
             let mut uvs = uvs.to_vec();
             let pair = |key: &str, default: f64| {
                 let v = &transform[key];
+
                 DVec2::new(v[0].as_f64().unwrap_or(default), v[1].as_f64().unwrap_or(default))
             };
             let (offset, scale) = (pair("offset", 0.0), pair("scale", 1.0));
             let (sin, cos) = transform["rotation"].as_f64().unwrap_or(0.0).sin_cos();
+
             for uv in uvs.as_chunks_mut::<2>().0 {
                 let (u, v) = (f64::from(uv[0]) * scale.x, f64::from(uv[1]) * scale.y);
+
                 *uv = [
                     (cos * u + sin * v + offset.x) as f32,
                     (-sin * u + cos * v + offset.y) as f32,
                 ];
             }
+
             uvs.into()
         } else {
             uvs
@@ -407,8 +448,10 @@ impl<'a> Gltf<'a> {
         let image = texture.and_then(|t| {
             let texture = &self.json["textures"][t];
             let source = index(&texture["extensions"]["KHR_texture_basisu"]["source"]).or(index(&texture["source"]))?;
+
             self.image(source)
         });
+
         Ok(Some((
             Primitive {
                 positions: Vec::new(),
@@ -438,7 +481,9 @@ impl<'a> Gltf<'a> {
                     .iter()
                     .find(|g| g.mesh == mesh && g.primitive == index)
                     .ok_or("Draco geometry not decoded (Draco needs the decoding workers)")?;
+
                 self.spend((g.positions.len() / 3).saturating_mul(5))?;
+
                 [
                     g.positions.as_slice().into(),
                     g.colors.as_slice().into(),
@@ -449,21 +494,26 @@ impl<'a> Gltf<'a> {
                     return Ok(None);
                 };
                 let positions = self.floats(position)?;
+
                 self.spend((positions.len() / 3).saturating_mul(5))?;
+
                 let optional = |name: &str| match self::index(&attributes[name]) {
                     Some(a) => self.floats(a),
                     None => Ok(Rc::from(Vec::new())),
                 };
+
                 [positions, optional("COLOR_0")?, optional("NORMAL")?]
             };
         let count = positions.len() / 3;
         let colored = colors.len() == count * 3 || colors.len() == count * 4;
+
         if !positions.len().is_multiple_of(3)
             || !(colors.is_empty() || colored)
             || !(normals.is_empty() || normals.len() == count * 3)
         {
             return Err("inconsistent glTF points".into());
         }
+
         let factor = numbers(
             &material(self.json, primitive)["pbrMetallicRoughness"]["baseColorFactor"],
             [1.0; 4],
@@ -497,6 +547,7 @@ impl<'a> Gltf<'a> {
                     .to_array()
             })
             .collect();
+
         Ok(Some((
             Points {
                 positions: Vec::new(),
@@ -512,6 +563,7 @@ impl<'a> Gltf<'a> {
         if let Some(view) = self.views.borrow().get(&index) {
             return Ok(view.clone());
         }
+
         let view = &self.json["bufferViews"][index];
         let ext = &view["extensions"]["EXT_meshopt_compression"];
         let field = |v: &Value, name: &str| self::index(&v[name]).ok_or(format!("buffer view without {name}"));
@@ -519,11 +571,14 @@ impl<'a> Gltf<'a> {
             if ext["buffer"].as_u64().unwrap_or(0) != 0 {
                 return Err("meshopt data outside the binary chunk".into());
             }
+
             let (count, stride) = (field(ext, "count")?, field(ext, "byteStride")?);
+
             // The decoded size is the view's
             if count.checked_mul(stride) != Some(field(view, "byteLength")?) {
                 return Err("meshopt view of the wrong size".into());
             }
+
             let decoded = meshopt::decode(&meshopt::View {
                 data: slice(self.bin, offset(&ext["byteOffset"])?, field(ext, "byteLength")?)
                     .ok_or("meshopt view out of the binary chunk")?,
@@ -532,16 +587,20 @@ impl<'a> Gltf<'a> {
                 mode: meshopt::Mode::parse(ext["mode"].as_str().unwrap_or(""))?,
                 filter: meshopt::Filter::parse(ext["filter"].as_str())?,
             })?;
+
             decoded.into()
         } else {
             if view["buffer"].as_u64().unwrap_or(0) != 0 {
                 return Err("buffer view outside the binary chunk".into());
             }
+
             slice(self.bin, offset(&view["byteOffset"])?, field(view, "byteLength")?)
                 .ok_or("buffer view out of the binary chunk")?
                 .into()
         };
+
         self.views.borrow_mut().insert(index, bytes.clone());
+
         Ok(bytes)
     }
 
@@ -551,11 +610,14 @@ impl<'a> Gltf<'a> {
         if let Some(k) = self.images.borrow().iter().position(|(i, _, _)| *i == index) {
             return Some(k);
         }
+
         let image = &self.json["images"][index];
         let bytes = self.view(self::index(&image["bufferView"])?).ok()?;
         let mime = image["mimeType"].as_str().unwrap_or("image/jpeg").to_owned();
         let mut images = self.images.borrow_mut();
+
         images.push((index, bytes, mime));
+
         Some(images.len() - 1)
     }
 }
@@ -587,11 +649,14 @@ mod tests {
         });
         let mesh = triangle(&json, &bin).unwrap();
         let p = &mesh.primitives[0];
+
         assert_eq!(*p.uvs, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
         assert_eq!(*p.indices, [0, 1, 2]);
         assert!((vertex(&mesh, 1) - DVec3::X).length() < 1e-6);
+
         // A stride smaller than an element is refused
         let mut bad = json;
+
         bad["bufferViews"][0]["byteStride"] = json!(8);
         assert!(triangle(&bad, &bin).is_err());
     }
@@ -599,8 +664,10 @@ mod tests {
     #[test]
     fn the_texture_coordinate_set_of_the_material_is_used() {
         let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+
         bin.extend(f32s(&[9.0; 6]));
         bin.extend(f32s(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+
         let json = json!({
             "asset": {"version": "2.0"},
             "buffers": [{"byteLength": 84}],
@@ -618,6 +685,7 @@ mod tests {
             "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2}, "material": 0}]}],
             "nodes": [{"mesh": 0}]
         });
+
         assert_eq!(
             *triangle(&json, &bin).unwrap().primitives[0].uvs,
             [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
@@ -636,6 +704,7 @@ mod tests {
             "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
             "nodes": [{"mesh": 0}]
         });
+
         assert_eq!(triangle(&json, &bin).unwrap().primitives[0].color, [0.8, 0.1, 0.2, 0.5]);
         // Without material, or a factor of the wrong size: white; out of range: clamped
         json["meshes"][0]["primitives"][0]["material"] = Value::Null;
@@ -658,9 +727,11 @@ mod tests {
             "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
             "nodes": nodes
         });
+
         if let Some(scenes) = scenes {
             json["scenes"] = scenes.clone();
         }
+
         triangle(&json, &bin)
     }
 
@@ -670,7 +741,9 @@ mod tests {
         assert!(with_nodes(&json!([{"mesh": 0, "rotation": [0.0, 0.0, 1.0]}]), None).is_err());
         assert!(with_nodes(&json!([{"mesh": 0, "scale": "big"}]), None).is_err());
         assert!(with_nodes(&json!([{"mesh": 0, "matrix": vec![1.0; 15]}]), None).is_err());
+
         let moved = with_nodes(&json!([{"mesh": 0, "translation": [10.0, 0.0, 0.0]}]), None).unwrap();
+
         assert!((moved.anchor.x - 10.5).abs() < 1e-9);
     }
 
@@ -684,19 +757,24 @@ mod tests {
             )
             .is_err()
         );
+
         // 40 levels, each node holding the next twice: 2^40 paths
         let nodes: Vec<Value> = (0..40)
             .map(|i| json!({"mesh": 0, "children": [i + 1, i + 1]}))
             .collect();
+
         assert!(with_nodes(&json!(nodes), Some(&json!([{"nodes": [0]}]))).is_err());
+
         // Without scenes, the roots are the nodes no other holds: a child is not drawn twice
         let mesh = with_nodes(&json!([{"children": [1]}, {"mesh": 0}]), None).unwrap();
+
         assert_eq!(mesh.primitives.len(), 1);
     }
 
     #[test]
     fn huge_counts_are_errors_not_allocations() {
         let bin = f32s(&[0.0; 9]);
+
         for count in [u64::from(u32::MAX), u64::MAX, 1 << 40, 4] {
             let json = json!({
                 "asset": {"version": "2.0"},
@@ -706,8 +784,11 @@ mod tests {
                 "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
                 "nodes": [{"mesh": 0}]
             });
+
             assert!(triangle(&json, &bin).is_err(), "{count}");
+
             let mut no_view = json;
+
             no_view["accessors"][0].as_object_mut().unwrap().remove("bufferView");
             assert!(triangle(&no_view, &bin).is_err() || count == 4, "{count}");
         }
@@ -717,8 +798,10 @@ mod tests {
     fn instances_share_their_accessors_and_images() {
         // One textured mesh used by three nodes, moved apart; the image bytes after the positions and uv
         let mut bin = f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+
         bin.extend(f32s(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
         bin.extend([0xFF, 0xD8, 0xFF, 0xE0]);
+
         let json = json!({
             "asset": {"version": "2.0"},
             "buffers": [{"byteLength": 64}],
@@ -745,6 +828,7 @@ mod tests {
         let [a, b, c] = &mesh.primitives[..] else {
             panic!("three primitives expected");
         };
+
         assert!(Rc::ptr_eq(&a.uvs, &b.uvs) && Rc::ptr_eq(&a.uvs, &c.uvs));
         assert!(Rc::ptr_eq(&a.indices, &c.indices));
         assert_ne!(a.positions, c.positions);
@@ -765,17 +849,24 @@ mod tests {
             &[],
         )
         .unwrap();
+
         assert!(plain.primitives.is_empty());
+
         let p = &plain.points[0];
+
         assert_eq!((p.positions.len(), p.colors.len(), p.normals.len()), (6000, 2000, 2000));
+
         let at = |mesh: &Mesh, i: usize| {
             let q = &mesh.points[0].positions[i * 3..i * 3 + 3];
+
             mesh.anchor + DVec3::new(f64::from(q[0]), f64::from(q[1]), f64::from(q[2]))
         };
+
         // The node's translation applied: the first point at (110, 0, 0)
         assert!((at(&plain, 0) - DVec3::new(110.0, 0.0, 0.0)).length() < 1e-4);
         assert_eq!(p.colors[0], [254, 0, 200, 255]);
         assert!((DVec3::from(p.normals[0].map(f64::from)) - DVec3::X).length() < 1e-6);
+
         let packed = super::super::decode(
             include_bytes!("../../tests/data/helix_points_meshopt.glb"),
             &DMat4::IDENTITY,
@@ -784,7 +875,9 @@ mod tests {
         )
         .unwrap();
         let q = &packed.points[0];
+
         assert_eq!(q.colors.len(), 2000);
+
         // gltfpack reorders the points: each has its counterpart within 2 mm (14-bit positions over 30 m), with its
         // color and its normal (8 bits)
         for i in (0..2000).step_by(37) {
@@ -796,12 +889,15 @@ mod tests {
                         .total_cmp(&(at(&plain, b) - target).length())
                 })
                 .unwrap();
+
             assert!((at(&plain, j) - target).length() < 2e-3, "{i}");
             assert_eq!(q.colors[i], p.colors[j]);
+
             let (a, b) = (
                 DVec3::from(p.normals[j].map(f64::from)),
                 DVec3::from(q.normals[i].map(f64::from)),
             );
+
             assert!(a.dot(b) > 0.999, "{i}");
         }
     }
@@ -819,6 +915,7 @@ mod tests {
             "nodes": [{"mesh": 0}]
         });
         let mesh = triangle(&json, &bin).unwrap();
+
         assert_eq!(mesh.points[0].colors, [[255, 128, 0, 255]; 2]);
         assert_eq!(mesh.points[0].normals.len(), 0);
         // Colors of the wrong count: an error
@@ -830,7 +927,9 @@ mod tests {
         assert!(triangle(&json, &bin).is_err());
         // Lines and strips are left out
         json["meshes"][0]["primitives"][0]["mode"] = json!(1);
+
         let mesh = triangle(&json, &bin).unwrap();
+
         assert!(mesh.points.is_empty() && mesh.primitives.is_empty());
     }
 
@@ -854,14 +953,17 @@ mod tests {
         let bytes = super::super::tests::glb(&json, &bin);
         let requests = super::super::draco_requests(&bytes).unwrap();
         let r = &requests[0];
+
         assert!(r.points);
         assert_eq!((r.position, r.color, r.normal, r.uv), (3, Some(5), None, None));
+
         let geometry = DracoGeometry {
             positions: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0],
             colors: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             ..DracoGeometry::default()
         };
         let mesh = super::super::decode(&bytes, &DMat4::IDENTITY, false, &[geometry]).unwrap();
+
         assert_eq!(mesh.points[0].colors, [[255, 0, 0, 255], [0, 255, 0, 255]]);
         assert!((mesh.anchor - DVec3::X).length() < 1e-9);
     }
@@ -879,6 +981,7 @@ mod tests {
             "nodes": nodes
         });
         let bytes = super::super::tests::glb(&json, &[]);
+
         assert!(bytes.len() < 4096);
         assert_eq!(
             super::super::decode(&bytes, &DMat4::IDENTITY, false, &[])
@@ -886,8 +989,10 @@ mod tests {
                 .as_deref(),
             Some("glTF tile too large")
         );
+
         // The same accessor once fits
         let mut once = json;
+
         once["meshes"][0]["primitives"] = json!([{"attributes": {"POSITION": 0}}]);
         once["nodes"] = json!([{"mesh": 0}]);
         assert!(triangle(&once, &[]).is_ok());

@@ -37,7 +37,9 @@ const SLIDERS: [keyof ObserverSettings, string, number, number, number, string][
 
 const line = (...children: (Node | string)[]) => {
   const p = document.createElement('p');
+
   p.append(...children);
+
   return p;
 };
 
@@ -60,6 +62,7 @@ export const observers = (
   /** What an observer stands on, if anything above the relief */
   const under = (o: Observer) => {
     if (!options.surfaces) return options.standOn?.(o.pin.getLonLat());
+
     return o.base > 0.5 ? { metres: o.base, what: 'a surface' } : undefined;
   };
   const base = (o: Observer) => under(o)?.metres ?? 0;
@@ -69,7 +72,9 @@ export const observers = (
       all.map((o): ViewshedOptions => {
         // The pin raised to the eye, on what it stands on
         const height = base(o) + o.height;
+
         o.pin.setHeight(height, base(o));
+
         return {
           position: o.pin.getLonLat(),
           height,
@@ -86,7 +91,9 @@ export const observers = (
 
   const add = (at: LonLat, settings: Partial<ObserverSettings> = {}, standing = 0) => {
     const form = document.createElement('div');
+
     form.className = 'observer';
+
     const popup = new Popup({ offset: [0, -34], maxWidth: '220px', closeOnClick: false }).setDOMContent(form);
     const pin = new Marker({ draggable: true }).setLonLat(at).setPopup(popup).addTo(map);
     const observer: Observer = {
@@ -103,44 +110,62 @@ export const observers = (
       ...options.defaults,
       ...settings,
     };
+
     all.push(observer);
     named += 1;
 
     const name = document.createElement('strong');
+
     name.textContent = `Observer ${named}`;
+
     const where = document.createElement('span');
+
     form.append(line(name, where));
+
     const slider = ([key, label, min, max, step, unit]: (typeof SLIDERS)[number]) => {
       const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step });
+
       input.value = String(observer[key]);
+
       const value = document.createElement('span');
       const read = () => {
         (observer[key] as number) = Number(input.value);
         value.textContent = `${input.value}${unit}`;
       };
+
       read();
       input.addEventListener('input', () => {
         read();
         show();
       });
+
       const labelled = document.createElement('label');
+
       labelled.append(label, ' ', value, input);
+
       return line(labelled);
     };
     const oneWay = Object.assign(document.createElement('input'), { type: 'checkbox', checked: observer.oneWay });
+
     oneWay.addEventListener('input', () => {
       observer.oneWay = oneWay.checked;
       show();
     });
+
     const oneWayLabel = document.createElement('label');
+
     oneWayLabel.append(oneWay, ' One way, as a camera');
+
     const remove = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove' });
+
     remove.addEventListener('click', () => {
       pin.remove();
       all.splice(all.indexOf(observer), 1);
       show();
     });
+
     const [height, ...cone] = SLIDERS;
+
     form.append(slider(height as (typeof SLIDERS)[number]), line(oneWayLabel), ...cone.map(slider), line(remove));
 
     // One popup open at a time
@@ -149,12 +174,16 @@ export const observers = (
         if (other !== observer) other.popup.remove();
       });
     });
+
     // What it stands on, as the pin moves
     const stand = () => {
       const on = under(observer);
+
       where.textContent = on ? ` · on ${on.what}, ${Math.round(on.metres)} m` : '';
     };
+
     stand();
+
     // The pin follows the pointer at once; what it stands on and the viewshed follow a few times a second, and at
     // the release (each costs a frame of the scene)
     let pending = 0;
@@ -164,6 +193,7 @@ export const observers = (
       stand();
       show();
     };
+
     pin.on('drag', () => {
       pending ||= window.setTimeout(follow, 200);
     });
@@ -177,6 +207,7 @@ export const observers = (
 
   map.on('click', ({ point, lonLat }) => {
     const hit = options.surfaces ? map.pickSurface(point) : undefined;
+
     if (hit) add(hit.lonLat, {}, hit.height);
     else if (lonLat) add(lonLat);
   });
@@ -187,5 +218,6 @@ export const observers = (
     });
     show();
   });
+
   return add;
 };
