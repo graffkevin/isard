@@ -4,6 +4,19 @@ Everything is typed: the declarations ship with the package, under `strict` and 
 page is an overview; the [reference](/reference/) lists every class, option and type, generated from those
 declarations.
 
+## Entry points
+
+| Import | |
+|---|---|
+| `isard` | `GeoMap`, the layers' handles, markers, popups, panels, controls, and everything below |
+| `isard/react` | `IsardMap`, `Layer`, `CustomLayer`, `Marker`, `Popup`, `Panel`, `Control`, `Viewshed`, `Swipe`, `useMap`, `useMapEvent` ([React](./react/)) |
+| `isard/vite` | the Vite plugin serving the engines and workers ([with a bundler](./guide/getting-started#with-a-bundler)) |
+| `isard/formats` | `parseKml`, `parseGpx`, `parseTopoJson` |
+| `isard/projections` | `getCrs`, `registerCrs`, `lambertConformalConic`, `transverseMercator`, `reproject`, `wmtsGrid`, `parseWmtsGrid`, the `Crs` and `TileGrid` types |
+| `isard/geoplateforme` | `geoplateformeWmts`, `geoplateformeWms`, `geoplateformeWfs`, `lambert93Grid`, `IGN_ATTRIBUTION` |
+
+The helpers of `isard/formats`, `isard/projections` and `isard/geoplateforme` are also exported by `isard` itself.
+
 ## `GeoMap.create(container, options)`
 
 | Option | Default | |
@@ -118,16 +131,6 @@ configuration](./layers/#from-a-configuration)).
 | `getContainer()`, `getCanvas()`, `destroy()` | |
 
 ## Data and helpers
-
-Grouped by theme in entry points of their own (each also exported by `isard` itself, as before):
-
-| Import | |
-|---|---|
-| `isard/formats` | `parseKml`, `parseGpx`, `parseTopoJson` |
-| `isard/projections` | `getCrs`, `registerCrs`, `lambertConformalConic`, `transverseMercator`, `reproject`, `wmtsGrid`, `parseWmtsGrid`, the `Crs` and `TileGrid` types |
-| `isard/geoplateforme` | `geoplateformeWmts`, `geoplateformeWms`, `geoplateformeWfs`, `lambert93Grid`, `IGN_ATTRIBUTION` |
-| `isard/react` | `IsardMap`, `Layer`, `Marker`, `Popup`, `Panel`, `Viewshed`, `Swipe`, `useMap`, `useMapEvent` ([React](./react/)) |
-| `isard/vite` | the Vite plugin serving the engines and workers ([with a bundler](./guide/getting-started#with-a-bundler)) |
 
 | | |
 |---|---|
