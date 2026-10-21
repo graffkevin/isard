@@ -31,6 +31,16 @@ declarations.
 | `basemapTileSize` | 512 | texture size of the vector basemap's tiles; 256: a quarter of the work and memory, lines a little softer |
 | `decoders`, `glyphs` | official builds, OpenFreeMap's fonts | to self-host them |
 
+## Grouped methods
+
+The map's methods are also grouped by theme, for a shorter completion list; each is the same as the map's own:
+
+| | |
+|---|---|
+| `map.camera` | `get`, `set`, `easeTo`, `flyTo`, `bounds`, `firstPerson`, `setFirstPerson`, `project`, `unproject` |
+| `map.query` | `feature` (`pickFeature`), `surface` (`pickSurface`), `surfaceAt`, `elevationAt`, `metersPerPixel` |
+| `map.effects` | `viewshed` (`setViewshed`), `swipe` (`setSwipe`) |
+
 ## Camera
 
 | Method | |

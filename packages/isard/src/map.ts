@@ -602,6 +602,41 @@ export class GeoMap {
 
   // ── Camera ──
 
+  /**
+   * The camera's methods together: `get`, `set`, `easeTo`, `flyTo`, `bounds`, `firstPerson` and `setFirstPerson`
+   * (street level), `project`, `unproject`; the same as the map's own (`getCamera`, `setCamera`…)
+   */
+  readonly camera = {
+    get: (): Camera => this.getCamera(),
+    set: (camera: Partial<Camera>): void => this.setCamera(camera),
+    easeTo: (camera: Partial<Camera>, options?: number | AnimationOptions): void => this.easeTo(camera, options),
+    flyTo: (camera: Partial<Camera>, options?: FlyToOptions): void => this.flyTo(camera, options),
+    bounds: (): [west: number, south: number, east: number, north: number] => this.getBounds(),
+    firstPerson: (): Readonly<Required<FirstPersonView>> | undefined => this.firstPerson,
+    setFirstPerson: (view: FirstPersonView | undefined): void => this.setFirstPerson(view),
+    project: (lonLat: LonLat, height?: number): Point | undefined => this.project(lonLat, height),
+    unproject: (point: Point): LonLat | undefined => this.unproject(point),
+  } as const;
+
+  /**
+   * What lies under a point or at a position, together: `feature` (`pickFeature`), `surface` (`pickSurface`),
+   * `surfaceAt`, `elevationAt`, `metersPerPixel`
+   */
+  readonly query = {
+    feature: (point: Point, options?: { radius?: number; layers?: readonly Layer[] }): FeatureHit | undefined =>
+      this.pickFeature(point, options),
+    surface: (point: Point): { lonLat: LonLat; height: number } | undefined => this.pickSurface(point),
+    surfaceAt: (lonLat: LonLat): number | undefined => this.surfaceAt(lonLat),
+    elevationAt: (lonLat: LonLat): number | undefined => this.elevationAt(lonLat),
+    metersPerPixel: (point?: Point): number | undefined => this.metersPerPixel(point),
+  } as const;
+
+  /** What is drawn over the scene, together: `viewshed` (`setViewshed`), `swipe` (`setSwipe`) */
+  readonly effects = {
+    viewshed: (options: ViewshedOptions | readonly ViewshedOptions[] | undefined): void => this.setViewshed(options),
+    swipe: (options: SwipeOptions | undefined): void => this.setSwipe(options),
+  } as const;
+
   getCamera(): Camera {
     return this.frameCamera ?? this.engine.camera();
   }

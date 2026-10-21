@@ -17,6 +17,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - `map.add({ type, ...options })`: a layer from a configuration (`LayerSpec`: `lines`, `circles`, `fills`, `symbols`,
   `extrusions`, `raster`, `ground`, `network`, `tiles3d`, `pointcloud`, `models`); `layer.ready`, resolved once the
   map has drawn the layer.
+- The map's methods grouped by theme, the same as its own: `map.camera` (`get`, `set`, `easeTo`, `flyTo`, `bounds`,
+  `firstPerson`, `setFirstPerson`, `project`, `unproject`), `map.query` (`feature`, `surface`, `surfaceAt`,
+  `elevationAt`, `metersPerPixel`), `map.effects` (`viewshed`, `swipe`).
 
 ## [0.8.0] - 2026-10-21
 

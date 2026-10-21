@@ -877,6 +877,16 @@ describe('layers', () => {
     expect(() => map.add({ type: 'nothing' } as never)).toThrow('no layer of type nothing');
   });
 
+  test("the grouped methods: map.camera, map.query, map.effects are the map's own", async () => {
+    const { map, engine } = await create();
+    map.camera.set({ zoom: 9, pitch: 30 });
+    expect(engine.last('setCamera')?.slice(2)).toEqual([9, 30, 0]);
+    expect(map.camera.get()).toEqual(map.getCamera());
+    map.effects.viewshed(undefined);
+    expect(engine.args('clearViewshed').length).toBe(1);
+    expect(map.query.elevationAt([2.35, 48.85])).toBe(map.elevationAt([2.35, 48.85]));
+  });
+
   test('a preset under the options given', async () => {
     const { map, engine } = await create({ preset: 'ign-3d', pitch: 20 });
     expect(map.getCamera().pitch).toBe(20);
