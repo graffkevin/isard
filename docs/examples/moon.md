@@ -6,7 +6,7 @@ page into Web Mercator tiles (`grid: 'equirectangular'`), over the relief of LOL
 the Moon); the Apollo landing sites are circles and labels. The buttons fly to pitched views of the craters Tycho and
 Copernicus, 4 to 5 km deep (`#tycho`, `#copernicus` in the URL open them). A click flies to the point.
 
-The same in [React](./react/moon).
+The same in [React](../react/examples/moon).
 
 <LiveExample slug="moon" height="520px" />
 

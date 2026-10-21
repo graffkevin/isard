@@ -6,7 +6,7 @@ Mercator grid, to compare: the two match to a twentieth of a pixel); the arrondi
 EPSG:2154, reprojected by the layer since the collection names its CRS; a GPX file, a boat trip down the Seine with
 its bridges, parsed by `parseGpx`. See [Projections](../guide/projections).
 
-The same in [React](./react/lambert93).
+The same in [React](../react/examples/lambert93).
 
 <LiveExample slug="lambert93" height="520px" />
 

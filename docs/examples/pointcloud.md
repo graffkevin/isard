@@ -5,7 +5,7 @@ Ouverte): its COPC file read by range requests on the Géoplateforme, the nodes 
 over the orthophotos and the IGN relief. Colored by class, altitude or intensity, with Eye-Dome Lighting; the point
 under the cursor is picked. See [point clouds](../layers/pointclouds).
 
-The same in [React](./react/pointcloud).
+The same in [React](../react/examples/pointcloud).
 
 <LiveExample slug="pointcloud" height="520px" />
 

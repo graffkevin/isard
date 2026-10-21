@@ -6,7 +6,7 @@ colors its street. The page starts in the street, the eye at the cameras: drag t
 along the street (or click it), Z and S for the next and the previous panoramas; **Leave** goes back above. See [panoramas and the
 street-level view](../../guide/streetview).
 
-In React (`isard/react`); the same in [TypeScript](../panoramas).
+In React (`isard/react`); the same in [TypeScript](../../examples/panoramas).
 
 <LiveExample slug="react/panoramas" height="560px" />
 

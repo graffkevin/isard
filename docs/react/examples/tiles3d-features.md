@@ -5,7 +5,7 @@ its tile's batch table (`pickFeature` on a 3D Tiles layer; in 3D Tiles 1.1, the 
 `EXT_structural_metadata`, as the IGN's Bâtiments 3D give their BD TOPO attributes). The color tints the layer
 (`setStyle({ color })`).
 
-In React (`isard/react`); the same in [TypeScript](../tiles3d-features).
+In React (`isard/react`); the same in [TypeScript](../../examples/tiles3d-features).
 
 <LiveExample slug="react/tiles3d-features" height="520px" />
 

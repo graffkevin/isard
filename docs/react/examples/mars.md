@@ -7,7 +7,7 @@ landing sites are circles and labels, hidden past the horizon. MOLA's terrain mo
 on Mars): the buttons fly to Olympus Mons, 21 km high, and down the canyons of Valles Marineris (`#olympus-mons`,
 `#valles-marineris` in the URL open them). A click flies to the point.
 
-In React (`isard/react`); the same in [TypeScript](../mars).
+In React (`isard/react`); the same in [TypeScript](../../examples/mars).
 
 <LiveExample slug="react/mars" height="520px" />
 

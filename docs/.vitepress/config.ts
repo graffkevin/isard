@@ -118,21 +118,22 @@ export default defineConfig({
             { text: 'Viewsheds and swipe', link: '/react/effects' },
           ],
         },
+        {
+          text: 'Examples',
+          items: [
+            { text: 'All React examples', link: '/react/examples/' },
+            { text: 'Stops on a line', link: '/react/examples/stops' },
+            ...examples.map(([text, slug]) => ({ text, link: `/react/examples/${slug}` })),
+          ],
+        },
       ],
       '/reference/': [{ text: 'Reference', link: '/reference/', items: reference }],
       '/examples/': [
-        { text: 'Examples', items: [{ text: 'All examples', link: '/examples/' }] },
         {
-          text: 'TypeScript',
-          collapsed: false,
-          items: examples.map(([text, slug]) => ({ text, link: `/examples/${slug}` })),
-        },
-        {
-          text: 'React',
-          collapsed: false,
+          text: 'Examples',
           items: [
-            { text: 'Stops on a line', link: '/examples/react/stops' },
-            ...examples.map(([text, slug]) => ({ text, link: `/examples/react/${slug}` })),
+            { text: 'All examples', link: '/examples/' },
+            ...examples.map(([text, slug]) => ({ text, link: `/examples/${slug}` })),
           ],
         },
       ],

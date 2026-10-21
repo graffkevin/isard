@@ -2,7 +2,7 @@
 
 The communes around Paris (ADMIN EXPRESS) as fills colored by their population through a ramp, their outlines and their names; the commune under the cursor is picked and outlined through a filter.
 
-The same in [React](./react/geojson).
+The same in [React](../react/examples/geojson).
 
 <LiveExample slug="geojson" height="520px" />
 

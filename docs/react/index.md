@@ -94,4 +94,4 @@ function Coordinates() {
 ## See also
 
 [Layers](./layers), [markers, popups, panels](./overlays), [viewsheds and swipe](./effects), and the
-[React examples](../examples/react/stops).
+[React examples](./examples/).
