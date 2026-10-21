@@ -27,6 +27,7 @@ const examples = [
   ['Swipe', 'swipe'],
   ['3D panels', 'panels'],
   ['three.js in the map', 'threejs'],
+  ['React', 'react'],
   ['Vector basemaps', 'vector'],
   ['Lambert-93 data', 'lambert93'],
   ['The Moon', 'moon'],
@@ -49,6 +50,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started', activeMatch: '/guide/' },
       { text: 'Layers', link: '/layers/', activeMatch: '/layers/' },
+      { text: 'React', link: '/react/', activeMatch: '/react/' },
       { text: 'Examples', link: '/examples/', activeMatch: '/examples/' },
       {
         text: 'API',
@@ -104,6 +106,17 @@ export default defineConfig({
             { text: 'glTF models', link: '/layers/models' },
             { text: 'Point clouds', link: '/layers/pointclouds' },
             { text: 'Custom layers, three.js', link: '/layers/custom' },
+          ],
+        },
+      ],
+      '/react/': [
+        {
+          text: 'React',
+          items: [
+            { text: 'The map, hooks', link: '/react/' },
+            { text: 'Layers', link: '/react/layers' },
+            { text: 'Markers, popups, panels', link: '/react/overlays' },
+            { text: 'Viewsheds and swipe', link: '/react/effects' },
           ],
         },
       ],

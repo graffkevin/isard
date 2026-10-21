@@ -23,6 +23,7 @@ Mars's come from NASA, no key needed.
 | [Swipe](./swipe) | the orthophotos of 1950-1965 against today's, either side of a line |
 | [3D panels](./panels) | elements of the page standing in 3D, raised markers |
 | [three.js in the map](./threejs) | a custom layer sharing the depth of the buildings |
+| [React](./react) | the map, a line and markers with their popups as components (`isard/react`) |
 | [Vector basemaps](./vector) | OpenFreeMap's styles, a restyled subset |
 | [Lambert-93 data](./lambert93) | PLAN IGN reprojected from Lambert-93, a WFS in EPSG:2154, a GPX file |
 | [The Moon](./moon) | another body: the LRO mosaic reprojected over LOLA's relief, the Apollo sites, its craters in 3D |

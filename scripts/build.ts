@@ -127,7 +127,7 @@ const bundles: Promise<void>[] = [
   bundle(['apps/demo/src/main.ts'], 'apps/demo/dist'),
   buildViewer(),
   // The examples together: each page loads its own entry, the package's code and the engine once for all of them
-  bundle([...new Bun.Glob('examples/*/main.ts').scanSync(root)], 'examples/dist', { split: true }),
+  bundle([...new Bun.Glob('examples/*/main.{ts,tsx}').scanSync(root)], 'examples/dist', { split: true }),
 ];
 if (process.argv.includes('--bench')) {
   const pages = ['runner', 'itowns', 'isard', 'tiles-renderer'].map((page) => `apps/bench/src/${page}.ts`);

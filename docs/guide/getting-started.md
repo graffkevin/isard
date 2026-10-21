@@ -73,31 +73,20 @@ which wins over `assetsUrl`; given `wasmUrl` without `coreWasmUrl`, the map load
 
 ## In React
 
-The map is created once per component and destroyed with it. `create` is asynchronous: a component unmounted before
-it resolves destroys the map at once.
+`isard/react` gives the map, its layers, markers, popups and panels as components:
 
 ```tsx
-function Map({ onReady }: { onReady: (map: GeoMap) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let map: GeoMap | undefined;
-    let gone = false;
-    GeoMap.create(ref.current!).then((m) => {
-      if (gone) return m.destroy();
-      map = m;
-      onReady(m);
-    });
-    return () => {
-      gone = true;
-      map?.destroy();
-    };
-  }, []);
-  return <div ref={ref} className="map" />;
-}
+import { IsardMap, Layer, Marker, Popup } from 'isard/react';
+
+<IsardMap preset="ign-3d" center={[2.3499, 48.8566]} zoom={15} style={{ height: 480 }}>
+  <Layer type="lines" data={routes} color="#0057b8" width={3} />
+  <Marker lonLat={[2.3499, 48.853]}>
+    <Popup offset={[0, -34]}>Notre-Dame</Popup>
+  </Marker>
+</IsardMap>
 ```
 
-Later props go through refs and the map's methods, not new maps. A destroyed map ignores late calls (labels being
-shaped, tiles arriving), so React's double mount in development is harmless.
+See [React](../react/).
 
 ## Next
 

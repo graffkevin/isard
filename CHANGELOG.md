@@ -5,6 +5,17 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 
 ## [Unreleased]
 
+### Added
+
+- `isard/react`: the map and what it shows as components, for React 18 and 19 (optional peer dependencies).
+  `<IsardMap>` creates the map when it mounts and destroys it when it unmounts (StrictMode and the asynchronous
+  creation handled), its options as props (the basemap, the relief, the zoom range… taken again when they change; a
+  camera followed with `camera`), its events as `onClick`, `onMoveEnd`…; `<Layer type … />` takes the options of
+  `map.add`, a change of its data or style sent by `setData` / `setStyle`, the layer made anew in its place when what
+  changed is set at creation, the layers in their mounting order or by `order`; `<Marker>`, `<Popup>` and `<Panel>`
+  of JSX content (portals); `<Viewshed>` (several drawn together) and `<Swipe>` (the layers in it); `useMap()` and
+  `useMapEvent()`. A React section in the docs, and its example.
+
 ### Changed
 
 - The package's sources in folders by theme (`engine/`, `layers/`, `basemap/`, `data/`, `ui/`, `util/`, `workers/`),

@@ -1125,6 +1125,16 @@ export class GeoMap {
     }
   }
 
+  /** @internal A layer made anew from its description, in the place of `old` in the drawing order (old removed) */
+  rebuildLayer<P = Record<string, unknown>>(old: Layer, spec: LayerSpec<P>): Layer {
+    const index = this.layers.indexOf(old);
+    const above = index >= 0 ? this.layers[index + 1] : undefined;
+    const layer = this.add(spec);
+    if (!('before' in spec && spec.before) && index >= 0) this.moveLayer(layer, above);
+    old.remove();
+    return layer;
+  }
+
   /** @internal Resolves once the map is idle (everything in view loaded and drawn) */
   whenIdle(): Promise<void> {
     if (this.gone) return Promise.resolve();

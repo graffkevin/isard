@@ -88,7 +88,8 @@ const VIEWPORTS: Record<string, [number, number]> = {
  * fixtures in the repository. Its fixtures and baseline are not committed. Valles Marineris likewise (~4 MB more of Mars
  * tiles): the relief of Mars is tested over Olympus Mons. The viewshed too while it is a prototype (the relief and the
  * BD TOPO buildings of Montmartre), and the examples of external data heavy to record: the panoramas (iTowns' sample
- * images), the swipe (two orthophotos), the 3D Tiles features (Cesium's samples), the 3D panels.
+ * images), the swipe (two orthophotos), the 3D Tiles features (Cesium's samples), the 3D panels, React (PLAN IGN's
+ * vector tiles of Paris).
  */
 const OPT_IN = new Set([
   'tiles3d',
@@ -99,6 +100,7 @@ const OPT_IN = new Set([
   'swipe',
   'tiles3d-features',
   'panels',
+  'react',
 ]);
 
 /**

@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": [],
-    "customConditions": ["isard-source"]
+    "customConditions": ["isard-source"],
+    "jsx": "react-jsx"
   },
-  "include": ["*/main.ts", "shared"]
+  "include": ["*/main.ts", "*/main.tsx", "shared"]
 }
