@@ -3,7 +3,9 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
-## [Unreleased]
+## [1.0.0] - 2026-10-21
+
+The first stable version: its API is kept until 2.0 (additions only in between).
 
 ### Removed
 
