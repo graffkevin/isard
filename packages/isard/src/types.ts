@@ -118,6 +118,8 @@ export interface GeoMapOptions extends Partial<Camera> {
   keyboard?: boolean;
   /** Accessible name of the map, read by screen readers (default 'Map') */
   ariaLabel?: string;
+  /** A preset of map options (`IGN_PRESETS`: `'ign'`, `'ign-3d'`, `'ign-ortho-3d'`), the other options over it */
+  preset?: 'ign' | 'ign-3d' | 'ign-ortho-3d';
   /** The folder isard's files are served from (its engines, `isard_bg.wasm`, `isard_core_bg.wasm`,
    * `isard_points_bg.wasm`, and its workers, `decoder.worker.js`, `basemap.worker.js`): one option for a bundler that
    * moves them, the `…Url` options below for each one. `isard/vite` sets it for the whole page; default next to the

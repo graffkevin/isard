@@ -29,6 +29,7 @@ import {
   type LineOptions,
   lineStyle,
 } from './features.ts';
+import { IGN_PRESETS } from './geoplateforme.ts';
 import { Glyphs } from './glyphs.ts';
 import { equirectangularGrid, gridLoader, gridZooms, type RemoteReprojection, resolveGrid } from './grid.ts';
 import { Icons, type ImageOptions, type Pixels, readPixels } from './icons.ts';
@@ -231,7 +232,9 @@ export class GeoMap {
   private readonly terrainLoaders = new Map<string, TerrainLoader>();
 
   /** Loads the engine (once per page) and creates a map filling `container` */
-  static async create(container: HTMLElement, options: GeoMapOptions = {}): Promise<GeoMap> {
+  static async create(container: HTMLElement, given: GeoMapOptions = {}): Promise<GeoMap> {
+    // A preset under the options given
+    const options: GeoMapOptions = given.preset ? { ...IGN_PRESETS[given.preset], ...given } : given;
     // With 3D Tiles from the start when asked, or when only that engine's URL is given (as before the core engine)
     const full = options.tiles3d === true || (options.wasmUrl !== undefined && options.coreWasmUrl === undefined);
     // Before anything is created

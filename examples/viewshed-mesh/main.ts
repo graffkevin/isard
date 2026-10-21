@@ -15,9 +15,7 @@ const map = await GeoMap.create(element('map'), {
   zoom: 17,
   pitch: 60,
   bearing: 70,
-  basemap: 'ign-ortho',
-  terrain: { model: 'ign' },
-  projection: 'mercator',
+  preset: 'ign-ortho-3d',
   // 3D Tiles at once: the engine that draws them from the start, not after the one without them
   tiles3d: true,
 });

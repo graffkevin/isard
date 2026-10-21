@@ -8,6 +8,7 @@ declarations.
 
 | Option | Default | |
 |---|---|---|
+| `preset` | none | `'ign'`, `'ign-3d'`, `'ign-ortho-3d'`: the IGN's data in a word, the other options over it ([IGN data](./guide/geoplateforme#in-a-word)) |
 | `body` | `'earth'` | `'moon'`, `'mars'`, or `{ radius, flattening, atmosphere, color, relief }` ([other bodies](./guide/basemaps#the-moon-mars-and-other-bodies)) |
 | `center`, `zoom`, `pitch`, `bearing` | Saint-Mandé, 13, 0, 0 | the camera, MapLibre's conventions |
 | `projection` | `'globe'` | or `'mercator'` |
@@ -117,6 +118,7 @@ Grouped by theme in entry points of their own (each also exported by `isard` its
 | | |
 |---|---|
 | `geoplateformeWmts(layer, options)`, `geoplateformeWms(layers, options)` | raster options of the Géoplateforme's layers, crediting the IGN; `matrixSet: '2154_10cm_6_20'` (WMTS) or `crs: 'EPSG:2154'` (WMS) for Lambert-93 |
+| `bdtopoBuildings(box, { defaultHeight, color })`, `batiments3d(options)` | the options of the BD TOPO buildings of a box (`addExtrusions`) and of the IGN's Bâtiments 3D (`addTiles3d`, `geoid` set) |
 | `geoplateformeWfs(typeName, [west, south, east, north], { count, signal, srsName })` | the Géoplateforme's features in a box, as GeoJSON (in `srsName` if given, reprojected by the layers) |
 | `wmtsGrid(capabilitiesUrl, layer, matrixSet)`, `parseWmtsGrid(xml, layer, matrixSet)` | the `TileGrid` of a WMTS layer, for `addRaster({ url, grid })` |
 | `getCrs(crs)`, `registerCrs(name, crs)`, `lambertConformalConic(…)`, `transverseMercator(…)` | CRSs: built in (EPSG:4326, 3857, 2154, 3942-3950, UTM), proj4's converters, or yours ([projections](./guide/projections)) |

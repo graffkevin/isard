@@ -3,10 +3,12 @@
  * GeoJSON. Its basemaps, hillshade, terrain model and vector styles are named options of the map (`'ign-plan'`,
  * `hillshade`, `terrain: 'ign'`, `PLAN_STYLES`); the rasters credit the IGN by themselves.
  */
+
+import type { ExtrusionOptions } from './extrusions.ts';
 import type { FeatureCollection, Properties } from './features.ts';
 import type { TileGrid, TileMatrix } from './grid.ts';
 import { withHeaders } from './requests.ts';
-import type { RasterOptions } from './types.ts';
+import type { GeoMapOptions, RasterOptions, Tiles3dOptions } from './types.ts';
 
 /** Credits of the Géoplateforme's data: its basemaps, hillshade, terrain model, rasters and features */
 export const IGN_ATTRIBUTION =
@@ -135,4 +137,48 @@ export async function geoplateformeWfs<P = Properties>(
     .flatMap((r) => r.features)
     .filter((f) => f.id === undefined || (!seen.has(f.id) && seen.add(f.id) !== undefined));
   return { ...first, features };
+}
+
+/** Map presets over France, the IGN's data in a word: spread into `GeoMap.create`'s options or named by `preset` */
+export const IGN_PRESETS = {
+  /** PLAN IGN (vector, grey) seen from above */
+  ign: { basemap: 'ign-plan-grey-vector', projection: 'mercator' },
+  /** PLAN IGN over the IGN relief (RGE ALTI), for 3D: buildings, meshes, viewsheds */
+  'ign-3d': { basemap: 'ign-plan-grey-vector', terrain: { model: 'ign' }, projection: 'mercator', pitch: 55 },
+  /** The IGN orthophotos over the IGN relief */
+  'ign-ortho-3d': { basemap: 'ign-ortho', terrain: { model: 'ign' }, projection: 'mercator', pitch: 55 },
+} as const satisfies Record<string, GeoMapOptions>;
+
+/** A preset of `IGN_PRESETS` by name */
+export type IgnPreset = keyof typeof IGN_PRESETS;
+
+/** The IGN's Bâtiments 3D (France, 3D Tiles 1.1): its tileset */
+export const BATIMENTS_3D_URL = 'https://prd-ign-mut-bat3.s3.sbg.io.cloud.ovh.net/tileset.json';
+
+/**
+ * The IGN's Bâtiments 3D as a 3D Tiles layer, ready for `map.addTiles3d`: their heights are altitudes (NGF-IGN69),
+ * raised by the geoid onto the IGN relief; untextured, colored and shaded; picked with their BD TOPO attributes
+ * (`cleabs`, `hauteur`, `nature`, `usage_1`…). Its server sends no CORS headers yet: from a page of another origin,
+ * through a proxy (`url`)
+ */
+export function batiments3d(options: Partial<Tiles3dOptions> = {}): Tiles3dOptions {
+  return { url: BATIMENTS_3D_URL, geoid: true, color: '#e4e1d8', maxScreenSpaceError: 16, ...options };
+}
+
+/** What a building of the BD TOPO gives its extrusion */
+export interface BdTopoBuilding {
+  hauteur: number | null;
+}
+
+/**
+ * The BD TOPO buildings of a box (west, south, east, north, degrees) as an extrusion layer, ready for
+ * `map.addExtrusions`: from the Géoplateforme's WFS, raised to their `hauteur` (`defaultHeight` without one)
+ */
+export async function bdtopoBuildings(
+  box: [number, number, number, number],
+  options: Partial<ExtrusionOptions<BdTopoBuilding>> & { defaultHeight?: number; signal?: AbortSignal } = {},
+): Promise<ExtrusionOptions<BdTopoBuilding>> {
+  const { defaultHeight = 6, signal, ...style } = options;
+  const data = await geoplateformeWfs<BdTopoBuilding>('BDTOPO_V3:batiment', box, signal ? { signal } : {});
+  return { data, height: (p) => p.hauteur ?? defaultHeight, color: '#e4e1d8', ...style };
 }

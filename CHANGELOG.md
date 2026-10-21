@@ -11,6 +11,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   dependency pre-bundling and allowed to the development server; in a build, the engines and workers copied to
   `dist/isard/` and the maps of the page told where they are, the engines not copied twice).
 - `assetsUrl`: the one folder isard's five files are served from, instead of five URLs.
+- IGN presets: `preset: 'ign' | 'ign-3d' | 'ign-ortho-3d'` (`IGN_PRESETS`), the other options over them;
+  `bdtopoBuildings(box)` (the BD TOPO buildings of a box, raised to their height) and `batiments3d()` (the IGN's
+  Bâtiments 3D, `geoid` set, colored), the options of their layers in a call.
 
 ## [0.8.0] - 2026-10-21
 

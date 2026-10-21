@@ -5,10 +5,8 @@
  * nearest panorama ahead (or behind), a click on the street to the one nearest to the point clicked, Z and S to the
  * next and the previous ones.
  */
-import { GeoMap, geoplateformeWfs } from 'isard';
+import { bdtopoBuildings, GeoMap } from 'isard';
 import { element } from '../shared/page.ts';
-
-type Building = { hauteur: number | null };
 
 const SAMPLE = 'https://raw.githubusercontent.com/iTowns/iTowns2-sample-data/master/immersive/exampleParis1';
 
@@ -17,13 +15,9 @@ const map = await GeoMap.create(element('map'), {
   zoom: 18.6,
   pitch: 60,
   bearing: 176,
-  basemap: 'ign-plan-grey-vector',
-  terrain: { model: 'ign' },
-  projection: 'mercator',
+  preset: 'ign-3d',
 });
-
-const buildings = await geoplateformeWfs<Building>('BDTOPO_V3:batiment', [2.331, 48.847, 2.338, 48.853]);
-map.addExtrusions({ data: buildings, height: (p) => p.hauteur ?? 10, color: '#e4e1d8' });
+map.addExtrusions(await bdtopoBuildings([2.331, 48.847, 2.338, 48.853], { defaultHeight: 10 }));
 
 const panoramas = await map.addPanoramas({
   url: 'https://www.itowns-project.org/itowns-sample-data-small/images/140616/Paris-140616_0740-{cameraId}-00001_0000{panoId}.jpg',

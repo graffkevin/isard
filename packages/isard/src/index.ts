@@ -54,7 +54,18 @@ export type {
   Styled,
 } from './features.ts';
 export { CircleLayer, FeatureLayer, FillLayer, interpolate, LineLayer, parseColor } from './features.ts';
-export { geoplateformeWfs, geoplateformeWms, geoplateformeWmts, IGN_ATTRIBUTION } from './geoplateforme.ts';
+export {
+  BATIMENTS_3D_URL,
+  type BdTopoBuilding,
+  batiments3d,
+  bdtopoBuildings,
+  geoplateformeWfs,
+  geoplateformeWms,
+  geoplateformeWmts,
+  IGN_ATTRIBUTION,
+  IGN_PRESETS,
+  type IgnPreset,
+} from './geoplateforme.ts';
 export type { TextPart } from './glyphs.ts';
 export { DEFAULT_FONT, GLYPHS_URL } from './glyphs.ts';
 export { parseGpx } from './gpx.ts';

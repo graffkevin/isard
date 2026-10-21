@@ -5,6 +5,27 @@ orthophotos, relief, buildings, roads, administrative units. Isard takes all of 
 credits the IGN by itself wherever its rasters are shown (`IGN_ATTRIBUTION`). The helpers of this page are also
 gathered in their own entry point: `import { geoplateformeWfs, geoplateformeWmts } from 'isard/geoplateforme'`.
 
+## In a word
+
+```ts
+import { batiments3d, bdtopoBuildings, GeoMap } from 'isard';
+
+const map = await GeoMap.create(container, { preset: 'ign-3d', center: [2.3431, 48.8858], zoom: 16 });
+map.addExtrusions(await bdtopoBuildings([2.332, 48.877, 2.356, 48.893])); // the BD TOPO buildings of a box
+map.addTiles3d(batiments3d()); // the Bâtiments 3D, in altitudes: raised by the geoid, colored, picked
+```
+
+| Preset | |
+|---|---|
+| `'ign'` | PLAN IGN (vector, grey) |
+| `'ign-3d'` | PLAN IGN over the IGN relief, pitched: for buildings, meshes, viewsheds |
+| `'ign-ortho-3d'` | the orthophotos over the IGN relief, pitched |
+
+The options given win over the preset's (`IGN_PRESETS` to spread or read them). `bdtopoBuildings(box, { defaultHeight,
+color })` gives the options of an extrusion layer, from the WFS (each building at its `hauteur`);
+`batiments3d(options)` those of the IGN's Bâtiments 3D (`geoid: true`: their heights are altitudes). Their server
+sends no CORS headers yet: a page of another origin loads them through a proxy (`batiments3d({ url })`).
+
 ## Basemaps
 
 ```ts

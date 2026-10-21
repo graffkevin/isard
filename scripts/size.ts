@@ -53,7 +53,9 @@ const BUDGETS = {
   // plain style of vector archives, the raster loader), about 5.5 KB here (its comments included), in a bundle only
   // when used; 118 until the request headers, the swipe, the 3D panels (Panel) and the surface queries, about 1 KB;
   // 120 until the panoramas (their positions, attitudes and calibrations read), about 1.3 KB
-  modules: 124,
+  // 124 until the presets and helpers of the IGN's data, the assets' folder, the declarative layers and the grouped
+  // methods, about 3 KB (the deprecated forms removed at 1.0 take some back)
+  modules: 128,
   /** The engines' JavaScript bindings (wasm-bindgen) */
   // 38 until the icon atlas, about 0.2 KB
   // 39 until the point clouds: their methods and the point cloud module's bindings, about 2.5 KB; 44 until the
