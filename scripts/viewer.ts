@@ -18,6 +18,7 @@ import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { basename, extname, join, normalize, resolve } from 'node:path';
+import { collectionBounds } from '../apps/viewer/src/bounds.ts';
 import type { AddMessage, Bounds, GeoJsonCollection, HostMessage, ViewerMessage } from '../apps/viewer/src/protocol.ts';
 import { parseHeader } from '../packages/isard/src/basemap/pmtiles.ts';
 
@@ -273,29 +274,6 @@ export class MbTiles {
   }
 }
 
-/** The bounds of GeoJSON, undefined if it has no position */
-export function geoJsonBounds(data: GeoJsonCollection): Bounds | undefined {
-  const b: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
-  const visit = (c: unknown): void => {
-    if (!Array.isArray(c)) return;
-    if (typeof c[0] === 'number' && typeof c[1] === 'number') {
-      b[0] = Math.min(b[0], c[0]);
-      b[1] = Math.min(b[1], c[1]);
-      b[2] = Math.max(b[2], c[0]);
-      b[3] = Math.max(b[3], c[1]);
-      return;
-    }
-    for (const child of c) visit(child);
-  };
-  const geometry = (g: GeoJsonCollection['features'][number]['geometry']): void => {
-    if (!g) return;
-    visit(g.coordinates);
-    for (const child of g.geometries ?? []) geometry(child as typeof g);
-  };
-  for (const f of data.features) geometry(f.geometry);
-  return b[0] <= b[2] ? b : undefined;
-}
-
 /** GeoJSON of any kind (a collection, a feature, a geometry) as a collection in longitudes and latitudes */
 export async function featureCollection(json: unknown): Promise<GeoJsonCollection> {
   const value = json as { type?: string };
@@ -340,7 +318,7 @@ export async function fileMessages(
       if (json.type === 'Topology') data = parseTopoJson(json, Object.keys(json.objects ?? {})[0]);
       else data = await featureCollection(json);
     }
-    return { messages: [{ type: 'addGeoJSON', ...named, data }], bounds: geoJsonBounds(data) };
+    return { messages: [{ type: 'addGeoJSON', ...named, data }], bounds: collectionBounds(data) };
   }
   if (ext === '.laz' || ext === '.las') {
     return { messages: [{ type: 'addPointCloud', ...named, url }], bounds: undefined };

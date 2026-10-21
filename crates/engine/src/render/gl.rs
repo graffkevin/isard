@@ -133,6 +133,66 @@ impl<'a> Objects<'a> {
     }
 }
 
+/// The vertex shader of the passes over the whole screen: one triangle covering it, drawn with 3 vertices and no
+/// attribute (an empty vertex array); `v_ndc` the normalized device coordinates of the pixel
+pub const FULL_SCREEN_VERTEX: &str = r"#version 300 es
+out vec2 v_ndc;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
+  v_ndc = p;
+  gl_Position = vec4(p, 0.0, 1.0);
+}";
+
+/// A depth (and stencil) texture the size of the canvas and its framebuffer, made again when the canvas changes size:
+/// the scene's depth drawn again for a pass over the screen (the viewshed, panoramas, the surface under a point)
+#[derive(Default)]
+pub struct DepthTarget(Option<(glow::Texture, glow::Framebuffer, (i32, i32))>);
+
+impl DepthTarget {
+    /// The framebuffer and its texture at `size`, made (or made again) if needed
+    pub fn at(&mut self, gl: &glow::Context, size: (i32, i32)) -> Result<(glow::Framebuffer, glow::Texture), String> {
+        if let Some((texture, framebuffer, at)) = self.0
+            && at == size
+        {
+            return Ok((framebuffer, texture));
+        }
+        self.delete(gl);
+        let mut objects = Objects::new(gl);
+        let texture = objects.texture()?;
+        let framebuffer = objects.framebuffer()?;
+        objects.keep();
+        // SAFETY: storage and attachment of objects just created on the live context
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH24_STENCIL8, size.0, size.1);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::DEPTH_STENCIL_ATTACHMENT,
+                glow::TEXTURE_2D,
+                Some(texture),
+                0,
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        self.0 = Some((texture, framebuffer, size));
+        Ok((framebuffer, texture))
+    }
+
+    pub fn delete(&mut self, gl: &glow::Context) {
+        if let Some((texture, framebuffer, _)) = self.0.take() {
+            // SAFETY: objects owned by the target, not used afterwards
+            unsafe {
+                gl.delete_texture(texture);
+                gl.delete_framebuffer(framebuffer);
+            }
+        }
+    }
+}
+
 impl Drop for Objects<'_> {
     fn drop(&mut self) {
         let gl = self.gl;

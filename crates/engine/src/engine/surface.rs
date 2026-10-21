@@ -13,13 +13,6 @@ use glam::DVec3;
 use glow::HasContext;
 use wasm_bindgen::prelude::*;
 
-const VERTEX: &str = r"#version 300 es
-void main() {
-  // One triangle covering the screen
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
-  gl_Position = vec4(p, 0.0, 1.0);
-}";
-
 /// The depth at the pixel, packed as `DEPTH_FRAGMENT` packs the ground's; alpha 0 where nothing was drawn
 const FRAGMENT: &str = r"#version 300 es
 precision highp float;
@@ -41,13 +34,13 @@ pub(super) struct Probe {
     program: glow::Program,
     depth_u: Option<glow::UniformLocation>,
     vao: glow::VertexArray,
-    target: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
+    target: gl::DepthTarget,
 }
 
 impl Probe {
     fn new(gl: &glow::Context) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
-        let program = objects.program(VERTEX, FRAGMENT)?;
+        let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
         let vao = objects.vertex_array()?;
         objects.keep();
         let [depth_u] = gl::uniforms(gl, program, ["u_depth"]);
@@ -55,7 +48,7 @@ impl Probe {
             program,
             depth_u,
             vao,
-            target: None,
+            target: gl::DepthTarget::default(),
         })
     }
 
@@ -64,50 +57,8 @@ impl Probe {
         unsafe {
             gl.delete_program(self.program);
             gl.delete_vertex_array(self.vao);
-            if let Some((texture, framebuffer, _)) = self.target.take() {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
-            }
         }
-    }
-
-    /// The depth target and its texture, (re)created at the canvas size
-    fn target(&mut self, gl: &glow::Context, size: (i32, i32)) -> Result<(glow::Framebuffer, glow::Texture), String> {
-        if let Some((texture, framebuffer, at)) = self.target
-            && at == size
-        {
-            return Ok((framebuffer, texture));
-        }
-        if let Some((texture, framebuffer, _)) = self.target.take() {
-            // SAFETY: the previous target, replaced
-            unsafe {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
-            }
-        }
-        let mut objects = Objects::new(gl);
-        let texture = objects.texture()?;
-        let framebuffer = objects.framebuffer()?;
-        objects.keep();
-        // SAFETY: storage and attachment of objects just created on the live context
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH24_STENCIL8, size.0, size.1);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::DEPTH_STENCIL_ATTACHMENT,
-                glow::TEXTURE_2D,
-                Some(texture),
-                0,
-            );
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
-        self.target = Some((texture, framebuffer, size));
-        Ok((framebuffer, texture))
+        self.target.delete(gl);
     }
 }
 
@@ -120,7 +71,7 @@ impl Engine {
             Some(probe) => probe,
             None => Probe::new(&self.gl).ok()?,
         };
-        let read = probe.target(&self.gl, size).ok().and_then(|(framebuffer, texture)| {
+        let read = probe.target.at(&self.gl, size).ok().and_then(|(framebuffer, texture)| {
             let pick = self.pick_target(size).ok()?;
             let gl = &self.gl;
             let mut pixel = [0u8; 4];

@@ -41,14 +41,7 @@ pub async fn fetch_bitmap(
     reload: bool,
     priority: &str,
 ) -> Result<web_sys::ImageBitmap, Fetch> {
-    let response = fetch_response(url, signal, reload, priority)
-        .await
-        .map_err(|_| Fetch::Transient)?;
-    match response.status() {
-        204 | 404 | 410 => return Err(Fetch::Missing),
-        200..=299 => {}
-        _ => return Err(Fetch::Transient),
-    }
+    let response = fetched(url, signal, reload, priority).await?;
     decode(&response, size).await.map_err(|_| Fetch::Transient)
 }
 
@@ -60,21 +53,7 @@ pub async fn draw_tile(
     size: i32,
     signal: &web_sys::AbortSignal,
 ) -> Result<web_sys::ImageBitmap, Fetch> {
-    let promise = loader
-        .call4(
-            &JsValue::NULL,
-            &tile.z.into(),
-            &tile.x.into(),
-            &tile.y.into(),
-            signal.as_ref(),
-        )
-        .map_err(|_| Fetch::Transient)?;
-    let value = JsFuture::from(js_sys::Promise::resolve(&promise))
-        .await
-        .map_err(|_| Fetch::Transient)?;
-    if value.is_null() || value.is_undefined() {
-        return Err(Fetch::Missing);
-    }
+    let value = call_loader(loader, tile, signal).await?;
     let bitmap: web_sys::ImageBitmap = value.dyn_into().map_err(|_| Fetch::Transient)?;
     if bitmap.width() == size as u32 && bitmap.height() == size as u32 {
         return Ok(bitmap);
@@ -112,21 +91,7 @@ pub async fn draw_heights(
     no_data: f32,
     signal: &web_sys::AbortSignal,
 ) -> Result<Vec<f32>, Fetch> {
-    let promise = loader
-        .call4(
-            &JsValue::NULL,
-            &tile.z.into(),
-            &tile.x.into(),
-            &tile.y.into(),
-            signal.as_ref(),
-        )
-        .map_err(|_| Fetch::Transient)?;
-    let value = JsFuture::from(js_sys::Promise::resolve(&promise))
-        .await
-        .map_err(|_| Fetch::Transient)?;
-    if value.is_null() || value.is_undefined() {
-        return Err(Fetch::Missing);
-    }
+    let value = call_loader(loader, tile, signal).await?;
     let grid: js_sys::Float32Array = value.dyn_into().map_err(|_| Fetch::Transient)?;
     if grid.length() != (TILE * TILE) as u32 {
         return Err(Fetch::Transient);
@@ -152,14 +117,7 @@ pub async fn fetch_heights(
     reload: bool,
     priority: &str,
 ) -> Result<Vec<f32>, Fetch> {
-    let response = fetch_response(url, signal, reload, priority)
-        .await
-        .map_err(|_| Fetch::Transient)?;
-    match response.status() {
-        204 | 404 | 410 => return Err(Fetch::Missing),
-        200..=299 => {}
-        _ => return Err(Fetch::Transient),
-    }
+    let response = fetched(url, signal, reload, priority).await?;
     let buffer = JsFuture::from(response.array_buffer().map_err(|_| Fetch::Transient)?)
         .await
         .map_err(|_| Fetch::Transient)?;
@@ -184,6 +142,45 @@ pub async fn fetch_heights(
         to_ellipsoid(tile, &mut heights);
     }
     Ok(heights)
+}
+
+/// The response of a tile's request: missing (204, 404, 410: no tile there) or failed (another status, the network)
+/// apart
+async fn fetched(
+    url: &str,
+    signal: &web_sys::AbortSignal,
+    reload: bool,
+    priority: &str,
+) -> Result<web_sys::Response, Fetch> {
+    let response = fetch_response(url, signal, reload, priority)
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    match response.status() {
+        204 | 404 | 410 => Err(Fetch::Missing),
+        200..=299 => Ok(response),
+        _ => Err(Fetch::Transient),
+    }
+}
+
+/// What the page's loader gives for a tile (`loader(z, x, y, signal)`, a promise or a value): missing when null or
+/// undefined
+async fn call_loader(loader: &js_sys::Function, tile: TileId, signal: &web_sys::AbortSignal) -> Result<JsValue, Fetch> {
+    let promise = loader
+        .call4(
+            &JsValue::NULL,
+            &tile.z.into(),
+            &tile.x.into(),
+            &tile.y.into(),
+            signal.as_ref(),
+        )
+        .map_err(|_| Fetch::Transient)?;
+    let value = JsFuture::from(js_sys::Promise::resolve(&promise))
+        .await
+        .map_err(|_| Fetch::Transient)?;
+    if value.is_null() || value.is_undefined() {
+        return Err(Fetch::Missing);
+    }
+    Ok(value)
 }
 
 async fn fetch_response(

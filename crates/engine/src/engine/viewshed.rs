@@ -26,15 +26,6 @@ use wasm_bindgen::prelude::*;
 /// Pixels of a face of the cube
 const CUBE: i32 = 1024;
 
-const VERTEX: &str = r"#version 300 es
-out vec2 v_ndc;
-void main() {
-  // One triangle covering the screen
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
-  v_ndc = p;
-  gl_Position = vec4(p, 0.0, 1.0);
-}";
-
 /// Observers at most
 const OBSERVERS: usize = 16;
 
@@ -204,8 +195,8 @@ pub(super) struct Viewshed {
 impl Viewshed {
     fn new(gl: &glow::Context, settings: Settings) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
-        let program = objects.program(VERTEX, &fragment())?;
-        let tint = objects.program(VERTEX, TINT)?;
+        let program = objects.program(gl::FULL_SCREEN_VERTEX, &fragment())?;
+        let tint = objects.program(gl::FULL_SCREEN_VERTEX, TINT)?;
         let vao = objects.vertex_array()?;
         let cube = objects.texture()?;
         let cube_target = objects.framebuffer()?;

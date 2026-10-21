@@ -5,7 +5,6 @@
  */
 import {
   basicStyle,
-  type Feature,
   type FeatureCollection,
   type GeoMap,
   type Layer,
@@ -14,6 +13,7 @@ import {
   type Style,
   VectorTiles,
 } from 'isard';
+import { collectionBounds } from './bounds.ts';
 import type { AddMessage, Bounds, GeoJsonCollection, GeoJsonStyle, HostMessage } from './protocol.ts';
 
 type Handle = Layer | VectorTiles;
@@ -34,29 +34,6 @@ export interface Entry {
 
 const COLOR = '#2f6fd1';
 const HIGHLIGHT = '#ff8c00';
-
-/** The bounds of a feature collection's coordinates */
-export function collectionBounds(data: GeoJsonCollection): Bounds | undefined {
-  const b: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
-  const visit = (c: unknown): void => {
-    if (!Array.isArray(c)) return;
-    if (typeof c[0] === 'number' && typeof c[1] === 'number') {
-      b[0] = Math.min(b[0], c[0]);
-      b[1] = Math.min(b[1], c[1]);
-      b[2] = Math.max(b[2], c[0]);
-      b[3] = Math.max(b[3], c[1]);
-      return;
-    }
-    for (const x of c) visit(x);
-  };
-  const geometry = (g: Feature['geometry'] | GeoJsonCollection['features'][number]['geometry']): void => {
-    if (!g) return;
-    if ('coordinates' in g) visit(g.coordinates);
-    if ('geometries' in g && Array.isArray(g.geometries)) for (const x of g.geometries) geometry(x as typeof g);
-  };
-  for (const f of data.features ?? []) geometry(f.geometry);
-  return Number.isFinite(b[0]) ? b : undefined;
-}
 
 /** The names of a vector tile's layers (protobuf: field 3, a layer; its field 1, the name) */
 export function tileLayerNames(bytes: Uint8Array): string[] {

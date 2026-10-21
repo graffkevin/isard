@@ -20,15 +20,6 @@ const REACH_FROM_ABOVE: f64 = 40.0;
 /// skew, image width and height, principal point of the distortion x and y, its three coefficients, its limit
 const CAMERA_NUMBERS: usize = 25;
 
-const VERTEX: &str = r"#version 300 es
-out vec2 v_ndc;
-void main() {
-  // One triangle covering the screen
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
-  v_ndc = p;
-  gl_Position = vec4(p, 0.0, 1.0);
-}";
-
 const FRAGMENT: &str = r"#version 300 es
 precision highp float;
 precision highp sampler2DArray;
@@ -139,13 +130,13 @@ pub(super) struct Panorama {
     image_size: Option<(i32, i32)>,
     /// Images received, by camera
     loaded: Vec<bool>,
-    depth: Option<(glow::Texture, glow::Framebuffer, (i32, i32))>,
+    depth: gl::DepthTarget,
 }
 
 impl Panorama {
     fn new(gl: &glow::Context, settings: Settings) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
-        let program = objects.program(VERTEX, FRAGMENT)?;
+        let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
         let vao = objects.vertex_array()?;
         let images = objects.texture()?;
         objects.keep();
@@ -176,7 +167,7 @@ impl Panorama {
             images,
             image_size: None,
             loaded,
-            depth: None,
+            depth: gl::DepthTarget::default(),
         })
     }
 
@@ -186,54 +177,8 @@ impl Panorama {
             gl.delete_program(self.program);
             gl.delete_vertex_array(self.vao);
             gl.delete_texture(self.images);
-            if let Some((texture, framebuffer, _)) = self.depth.take() {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
-            }
         }
-    }
-
-    /// The screen's depth target, (re)created at the canvas size
-    fn depth_target(
-        &mut self,
-        gl: &glow::Context,
-        size: (i32, i32),
-    ) -> Result<(glow::Framebuffer, glow::Texture), String> {
-        if let Some((texture, framebuffer, at)) = self.depth
-            && at == size
-        {
-            return Ok((framebuffer, texture));
-        }
-        if let Some((texture, framebuffer, _)) = self.depth.take() {
-            // SAFETY: the previous target, replaced
-            unsafe {
-                gl.delete_texture(texture);
-                gl.delete_framebuffer(framebuffer);
-            }
-        }
-        let mut objects = Objects::new(gl);
-        let texture = objects.texture()?;
-        let framebuffer = objects.framebuffer()?;
-        objects.keep();
-        // SAFETY: storage and attachment of objects just created on the live context
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::DEPTH24_STENCIL8, size.0, size.1);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
-            gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::DEPTH_STENCIL_ATTACHMENT,
-                glow::TEXTURE_2D,
-                Some(texture),
-                0,
-            );
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        }
-        self.depth = Some((texture, framebuffer, size));
-        Ok((framebuffer, texture))
+        self.depth.delete(gl);
     }
 }
 
@@ -248,7 +193,7 @@ impl Engine {
             (self.camera.height * self.pixel_ratio).round() as i32,
         );
         if panorama.loaded.iter().any(|&l| l)
-            && let Ok((framebuffer, depth)) = panorama.depth_target(&self.gl, size)
+            && let Ok((framebuffer, depth)) = panorama.depth.at(&self.gl, size)
         {
             // SAFETY: offscreen pass on the live context, the default framebuffer bound again after
             unsafe {
