@@ -15,8 +15,6 @@ docs/.vitepress/dist/
 docs/reference/
 # Visual tests: the screenshots and diffs of a failed run
 tests/visual/out/
-# Worktrees of local agent sessions
-.claude/worktrees/
 # The QGIS plugin: the viewer copied in and the archive, by scripts/qgis.ts
 integrations/qgis/isard_viewer/viewer/
 integrations/qgis/dist/
