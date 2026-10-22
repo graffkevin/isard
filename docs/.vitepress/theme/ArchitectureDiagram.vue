@@ -602,11 +602,7 @@ const select = (part: Part) => {
           </marker>
         </defs>
 
-        <g v-for="lane in LANES" :key="lane.label">
-          <rect class="lane" x="20" :y="lane.y" width="970" :height="lane.h" rx="12" />
-          <text class="lane-label" x="34" :y="lane.y + 18">{{ lane.label }}</text>
-        </g>
-        <text class="lane-label" x="1014" y="240">Network</text>
+        <rect v-for="lane in LANES" :key="lane.label" class="lane" x="20" :y="lane.y" width="970" :height="lane.h" rx="12" />
 
         <path
           v-for="a in ARROWS"
@@ -615,6 +611,10 @@ const select = (part: Part) => {
           :class="['link', { on: activeArrows.has(a.id), faint: scenario !== 'parts' && !activeArrows.has(a.id) }]"
           :marker-end="activeArrows.has(a.id) ? 'url(#arrow-on)' : 'url(#arrow)'"
         />
+
+        <!-- The lanes' titles over the arrows that cross them -->
+        <text v-for="lane in LANES" :key="`label-${lane.label}`" class="lane-label" x="34" :y="lane.y + 18">{{ lane.label }}</text>
+        <text class="lane-label" x="1014" y="98">Network</text>
 
         <g
           v-for="p in PARTS"

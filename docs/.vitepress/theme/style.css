@@ -41,8 +41,9 @@
   }
 }
 
-/* The architecture page: the diagram takes the width of the page */
-.wide-page .VPDoc .container,
-.wide-page .VPDoc .content {
-  max-width: 1200px !important;
+/* The architecture page: the diagram takes the width of the page (`:root` outweighs the theme's own widths) */
+:root .wide-page .VPDoc .container,
+:root .wide-page .VPDoc .content,
+:root .wide-page .VPDoc .content-container {
+  max-width: 1200px;
 }
