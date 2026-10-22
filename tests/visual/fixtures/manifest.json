@@ -1,4 +1,9 @@
 {
+  "fadce9d805ce1fbeba75": {
+    "url": "https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/Source%20Sans%20Pro%20Bold/0-255.pbf",
+    "status": 200,
+    "type": "application/octet-stream"
+  },
   "f9895099077ac5696450": {
     "url": "https://data.geopf.fr/annexes/ressources/vectorTiles/fonts/Source%20Sans%20Pro%20Italic/0-255.pbf",
     "status": 200,
@@ -53,6 +58,16 @@
     "status": 206,
     "type": "application/octet-stream"
   },
+  "e70914241b593d46d7c4": {
+    "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/10/518/352.pbf",
+    "status": 200,
+    "type": "application/x-protobuf"
+  },
+  "961d18f051f79a758dbd": {
+    "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/12/2075/1409.pbf",
+    "status": 200,
+    "type": "application/x-protobuf"
+  },
   "8b47d483e051e00e063e": {
     "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/13/4150/2818.pbf",
     "status": 200,
@@ -80,6 +95,16 @@
   },
   "8821f0fe208f3d7c2ad4": {
     "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/14/8302/5637.pbf",
+    "status": 200,
+    "type": "application/x-protobuf"
+  },
+  "b145630334cf1cf71127": {
+    "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/8/129/88.pbf",
+    "status": 200,
+    "type": "application/x-protobuf"
+  },
+  "4a7a40b211554872688a": {
+    "url": "https://data.geopf.fr/tms/1.0.0/PLAN.IGN/9/259/176.pbf",
     "status": 200,
     "type": "application/x-protobuf"
   },

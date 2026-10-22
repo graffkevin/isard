@@ -3,6 +3,14 @@
 Every notable change of `isard` (published as `@ign-junn/isard` up to 0.1.1). The format follows [Keep a Changelog](https://keepachangelog.com), the
 versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor version may change an API).
 
+## [Unreleased]
+
+### Changed
+
+- The repository that publishes and builds the docs chosen by its variables (`RELEASE`, `DOCS_BASE`); a contributing
+  guide, a security policy, a code of conduct and the templates of issues and pull requests; the PLAN IGN tiles of
+  two visual tests recorded, which no longer reach the network.
+
 ## [1.2.0] - 2026-10-22
 
 ### Added

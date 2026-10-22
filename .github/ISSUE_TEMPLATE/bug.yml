@@ -1,0 +1,29 @@
+name: Bug
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what was expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest code or example page that shows it, the data or URLs it uses
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version of isard
+      placeholder: "1.2.0"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser, system and GPU
+      placeholder: Chrome 140, Windows 11, Intel Iris Xe

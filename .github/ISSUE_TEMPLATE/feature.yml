@@ -1,0 +1,15 @@
+name: Feature
+description: Something isard should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: The need
+      description: What you are trying to do, for which data or application
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: An idea of the API or of the behaviour
