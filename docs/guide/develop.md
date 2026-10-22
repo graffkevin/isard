@@ -14,10 +14,10 @@ crates/pointcloud/ point clouds: COPC (LAS header, octree hierarchy, LAZ chunks)
                    decoder is built apart, the point cloud module of the workers
 crates/engine/     the WebAssembly core: the engine, the ground, the layers (render/), picking; built twice, with and
                    without the 3D Tiles (its `tiles3d` feature)
-packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers
+packages/isard/    the npm package isard: GeoMap, layer handles, overlays, workers, isard/react
 apps/demo/         the demo; apps/bench/: isard, iTowns and 3DTilesRendererJS on the same scenario; apps/viewer/: the
                    viewer of local files and its bridge (bun scripts/viewer.ts serves it)
-examples/          one page per example, as an application would write it
+examples/          one page per example, as an application would write it; examples/react/: the same in React
 docs/              this site (VitePress)
 scripts/           build (and its size budget), dev server, release
 ```

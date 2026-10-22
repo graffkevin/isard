@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "isard"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "isard-geo"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "isard-pointcloud"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "glam",
  "isard-geo",
@@ -299,7 +299,7 @@ dependencies = [
 
 [[package]]
 name = "isard-tiles3d"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "criterion",
  "glam",

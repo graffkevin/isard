@@ -45,7 +45,7 @@ The 3D Tiles code is a third of the engine: maps load the engine without it, and
 [model](./models), which shares its decoders, or [point cloud](./pointclouds)) loads the full one (the layer shows once it is there, `stats()` is
 undefined until then). The map then moves onto it: a
 new engine on the same canvas, the camera, settings and every layer created again in it, in order, with the same
-handles. That costs a download (some 385 KB gzipped, compiled off the main thread) and, once it is there, a stall
+handles. That costs a download (some 416 KB gzipped, compiled off the main thread) and, once it is there, a stall
 of a frame or two while the map is rebuilt (shaders, the layers' buffers, the raster tiles fetched again): the
 view may hold or flash once. The rebuild runs in a task of its own, after the one that instantiated the engine.
 
