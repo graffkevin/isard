@@ -10,12 +10,12 @@ mod viewshed;
 
 use crate::js;
 use crate::layer::{Frame, Layer, Loading};
+use crate::render::backdrop::globe::{self, GlobeBase};
+use crate::render::backdrop::sky::{self, Atmosphere, Sky};
 use crate::render::gl::{self, Grid};
-use crate::render::globe::{self, GlobeBase};
 use crate::render::raster::{
     DrawContext, RasterOptions, RasterPass, RasterSource, STACK, terrain_geoid, terrain_levels,
 };
-use crate::render::sky::{self, Atmosphere, Sky};
 use geo::camera::{self, Camera, View};
 use glam::DVec2;
 use glow::HasContext;
@@ -119,9 +119,9 @@ pub struct Engine {
     /// included): the next move from that point keeps the same ground point under the cursor
     grab: Option<(DVec2, f64)>,
     /// Glyphs of the symbol layers
-    pub(crate) glyphs: Option<crate::render::symbols::GlyphAtlas>,
+    pub(crate) glyphs: Option<crate::render::symbols::atlas::GlyphAtlas>,
     /// Icons of the symbol layers (RGBA, premultiplied)
-    pub(crate) icons: Option<crate::render::symbols::IconAtlas>,
+    pub(crate) icons: Option<crate::render::symbols::atlas::IconAtlas>,
     /// The user moved the camera (drag, zoom, turn) since it was last set: finer relief then keeps the eye in place
     /// (`Camera::settle_elevation`); a camera set by the application keeps its center instead
     handled: bool,

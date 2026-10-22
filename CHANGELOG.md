@@ -25,6 +25,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
   of a frame, a tile's arrival or a request split into named steps, the lint exceptions as `#[expect(…, reason)]`, one
   module layout (no `mod.rs`), the crates' shared fields in `[workspace.package]`; an Architecture page in the guide
   (the engines, the SDK, the workers, a frame, a tile).
+- The Rust files grouped and split by subject: `render/features/` (lines, circles, fills), `render/backdrop/` (globe,
+  sky), the camera, the shapes, the labels and the COPC point clouds in submodules, meshopt under `decode/`; the few
+  duplicated blocks as shared helpers (0.41 % of the lines duplicated to 0.03 %).
 
 ### Fixed
 

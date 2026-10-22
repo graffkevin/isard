@@ -6,6 +6,7 @@
 
 use crate::copc::{Content, Hierarchy};
 use geo::camera::View;
+use geo::tiles::frustum_planes;
 use glam::{DVec3, DVec4};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -78,7 +79,7 @@ pub fn select(
     out.visible.clear();
     out.points = 0;
 
-    let planes = frustum(view);
+    let planes = frustum_planes(view);
     let mut queue = BinaryHeap::new();
 
     if let Some((_, priority)) = measure(tree, 0, view, &planes) {
@@ -190,14 +191,6 @@ fn measure(tree: &Hierarchy, i: usize, view: &View, planes: &[DVec4; 6]) -> Opti
         .acos();
 
     Some((error, error / (1.0 + 2.0 * angle)))
-}
-
-/// Frustum planes (local frame, normalized, inside when `dot(n, p) + w >= 0`)
-fn frustum(view: &View) -> [DVec4; 6] {
-    let m = view.view_proj.transpose();
-    let (r0, r1, r2, r3) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);
-
-    [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2].map(|p| p / p.truncate().length())
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use crate::engine::Engine;
 use crate::js;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::Drape;
-use crate::render::features::{stops, stops_of};
+use crate::render::features::{self, stops, stops_of};
 use crate::render::gl::{self, DepthState, Objects, RAMP_TEXELS, bytes as as_bytes, unit};
 use crate::render::overlay::{
     self, LINE, LINE_DEPTH_BIAS, Overlay, PIECE_ATTRIBUTES, PIECE_STRIDE as STRIDE, RELIEF_SEGMENTS,
@@ -152,18 +152,9 @@ fn setup_ramp_and_pieces(
     (vao, buffer): (glow::VertexArray, glow::Buffer),
     pieces: &[geo::pieces::Piece],
 ) {
-    // SAFETY: storage, parameters and uploads of objects just created on a live WebGL2 context
+    features::ramp_storage(gl, ramp);
+    // SAFETY: state setup and uploads of objects just created on a live WebGL2 context
     unsafe {
-        gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
-        gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP_TEXELS as i32, 1);
-        for (key, value) in [
-            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
-            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
-            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-        ] {
-            gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
-        }
         gl.bind_vertex_array(Some(vao));
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, as_bytes(pieces), glow::STATIC_DRAW);

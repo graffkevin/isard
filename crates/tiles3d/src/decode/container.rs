@@ -2,6 +2,7 @@
 //! binary. Every length is checked against the bytes before it is read.
 
 use super::gltf::index;
+use crate::bytes::trim_padding;
 use glam::DVec3;
 use serde_json::Value;
 
@@ -30,16 +31,6 @@ pub(super) fn u32_at(bytes: &[u8], offset: usize) -> Result<usize, String> {
 /// `length` bytes from `start`, None if out of `bytes` (overflow included)
 pub(super) fn slice(bytes: &[u8], start: usize, length: usize) -> Option<&[u8]> {
     bytes.get(start..start.checked_add(length)?)
-}
-
-/// A JSON chunk without the padding some writers leave (spaces, zeros)
-fn trim_padding(text: &[u8]) -> &[u8] {
-    let end = text
-        .iter()
-        .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
-        .map_or(0, |i| i + 1);
-
-    &text[..end]
 }
 
 /// The glTF binary inside a b3dm, after its 28-byte header, feature table and batch table; with the feature table's
@@ -134,17 +125,7 @@ mod tests {
     #[test]
     fn rtc_center_may_be_binary() {
         // A b3dm whose feature table gives RTC_CENTER in its binary body
-        let inner = glb(
-            &json!({
-                "asset": {"version": "2.0"},
-                "buffers": [{"byteLength": 36}],
-                "bufferViews": [{"buffer": 0, "byteLength": 36}],
-                "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
-                "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
-                "nodes": [{"mesh": 0}]
-            }),
-            &f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
-        );
+        let inner = with_nodes_glb();
         let table = br#"{"BATCH_LENGTH":0,"RTC_CENTER":{"byteOffset":0}}    "#;
         let binary = f32s(&[1000.0, 2000.0, 3000.0]);
         let mut b3dm = b"b3dm".to_vec();
@@ -198,6 +179,7 @@ mod tests {
         );
     }
 
+    /// A glb of one triangle, its mesh used by a node
     fn with_nodes_glb() -> Vec<u8> {
         glb(
             &json!({

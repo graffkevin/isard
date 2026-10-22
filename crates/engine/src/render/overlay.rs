@@ -150,6 +150,16 @@ impl Overlay {
         self.projection.set(gl, view);
         drape.bind(gl, &self.drape, relief);
     }
+
+    /// Deletes the program and the vertex array and buffer a layer draws it with (the layer's `Layer::delete`)
+    pub fn delete(&self, gl: &glow::Context, vao: glow::VertexArray, buffer: glow::Buffer) {
+        // SAFETY: objects owned by the layer, not used afterwards
+        unsafe {
+            gl.delete_program(self.program);
+            gl.delete_vertex_array(vao);
+            gl.delete_buffer(buffer);
+        }
+    }
 }
 
 /// Mercator points of interleaved coordinates

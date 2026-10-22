@@ -5,6 +5,7 @@
 use super::json::ImplicitJson;
 use super::volume::Volume;
 use super::{Base, Content, Tree, classify, resolve};
+use crate::bytes::trim_padding;
 use glam::{DMat4, DVec3};
 use serde_json::Value;
 use std::rc::Rc;
@@ -164,16 +165,6 @@ pub(super) struct Placeholder {
     tile: Coord,
     /// The subtree holding `tile`, None while its file is to download
     pub(super) subtree: Option<Rc<Subtree>>,
-}
-
-/// A JSON chunk without its padding (spaces, zeros)
-fn trim_padding(text: &[u8]) -> &[u8] {
-    let end = text
-        .iter()
-        .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
-        .map_or(0, |i| i + 1);
-
-    &text[..end]
 }
 
 /// The little-endian u64 at `at`, None past the end
@@ -521,6 +512,24 @@ mod tests {
         out
     }
 
+    /// Subtree 0/0/0 of `implicit()`: the root (no content), tiles 1/0/0 and 1/1/1 (with content), subtree 2/0/0 below
+    fn root_subtree() -> Vec<u8> {
+        let mut binary = vec![0u8; 24];
+
+        binary[0] = 0b1_0011;
+        binary[8] = 0b1_0010;
+        binary[16] = 0b1;
+
+        subtree_file(
+            r#"{"buffers":[{"byteLength":24}],"bufferViews":[
+                {"buffer":0,"byteOffset":0,"byteLength":1},{"buffer":0,"byteOffset":8,"byteLength":1},
+                {"buffer":0,"byteOffset":16,"byteLength":2}],
+                "tileAvailability":{"bitstream":0},"contentAvailability":[{"bitstream":1}],
+                "childSubtreeAvailability":{"bitstream":2}}"#,
+            &binary,
+        )
+    }
+
     #[test]
     fn implicit_tiling_grows_from_its_subtrees() {
         let mut tree = implicit();
@@ -531,21 +540,7 @@ mod tests {
 
         assert_eq!(tree.nodes[0].content, Content::Tileset(url("subtrees/0/0/0.subtree")));
 
-        // Subtree 0/0/0: the root (no content), tiles 1/0/0 and 1/1/1 (with content), subtree 2/0/0 below
-        let mut binary = vec![0u8; 24];
-
-        binary[0] = 0b1_0011;
-        binary[8] = 0b1_0010;
-        binary[16] = 0b1;
-
-        let file = subtree_file(
-            r#"{"buffers":[{"byteLength":24}],"bufferViews":[
-                {"buffer":0,"byteOffset":0,"byteLength":1},{"buffer":0,"byteOffset":8,"byteLength":1},
-                {"buffer":0,"byteOffset":16,"byteLength":2}],
-                "tileAvailability":{"bitstream":0},"contentAvailability":[{"bitstream":1}],
-                "childSubtreeAvailability":{"bitstream":2}}"#,
-            &binary,
-        );
+        let file = root_subtree();
 
         assert!(!tree.expandable(0));
 
@@ -699,20 +694,7 @@ mod tests {
 
     #[test]
     fn mutated_subtrees_never_panic() {
-        let mut binary = vec![0u8; 24];
-
-        binary[0] = 0b1_0011;
-        binary[8] = 0b1_0010;
-        binary[16] = 0b1;
-
-        let file = subtree_file(
-            r#"{"buffers":[{"byteLength":24}],"bufferViews":[
-                {"buffer":0,"byteOffset":0,"byteLength":1},{"buffer":0,"byteOffset":8,"byteLength":1},
-                {"buffer":0,"byteOffset":16,"byteLength":2}],
-                "tileAvailability":{"bitstream":0},"contentAvailability":[{"bitstream":1}],
-                "childSubtreeAvailability":{"bitstream":2}}"#,
-            &binary,
-        );
+        let file = root_subtree();
         let mut r = 0x2545_F491_4F6C_DD1Du64;
         let mut next = move |n: usize| {
             r ^= r << 13;

@@ -3,8 +3,8 @@
 //! from the binary chunk or decompressed by meshopt).
 
 use super::container::{parse_glb, slice};
+use super::meshopt;
 use super::{DracoGeometry, Mesh, Points, Primitive, Properties, center, relative};
-use crate::meshopt;
 use glam::{DMat4, DQuat, DVec2, DVec3};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};

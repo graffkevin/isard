@@ -8,7 +8,7 @@
 //! same code serves both projections.
 
 use crate::camera::View;
-use glam::{DVec2, DVec3};
+use glam::{DVec2, DVec3, DVec4};
 
 /// A Web Mercator tile (XYZ scheme): level `z`, column `x` from the west, row `y` from the north
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -275,6 +275,16 @@ fn nearest_on_plane(view: &View, min: DVec2, max: DVec2, shift: f64) -> f64 {
 /// Conservative test of sample points against the frustum: out only if all are beyond the same plane
 pub(crate) fn in_frustum(view: &View, points: &[DVec3]) -> bool {
     in_planes(view, points, ALL_PLANES)
+}
+
+/// The frustum's planes in the view's local frame, normalized, inside when `dot(n, p) + w >= 0`: left, right,
+/// bottom, top, near, far (what the 3D Tiles and point cloud traversals test bounding spheres against)
+#[must_use]
+pub fn frustum_planes(view: &View) -> [DVec4; 6] {
+    let m = view.view_proj.transpose();
+    let (r0, r1, r2, r3) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);
+
+    [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2].map(|p| p / p.truncate().length())
 }
 
 /// The six planes of the frustum (`in_planes`): left, right, bottom, top, near, far

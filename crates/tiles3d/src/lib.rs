@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+mod bytes;
 pub mod decode;
-pub mod meshopt;
 pub mod tileset;
+
+pub use decode::meshopt;

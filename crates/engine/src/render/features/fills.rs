@@ -175,14 +175,7 @@ impl FillLayer {
 
             let stride = size_of::<shapes::Vertex>() as i32;
 
-            gl.enable_vertex_attrib_array(0);
-            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
-            gl.enable_vertex_attrib_array(1);
-            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
-            gl.enable_vertex_attrib_array(2);
-            gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, stride, 16);
-            gl.enable_vertex_attrib_array(3);
-            gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
+            shape_attributes(gl, stride);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));
             gl.bind_vertex_array(None);
         }
@@ -474,6 +467,23 @@ impl Engine {
 
             layer.set_geometry(gl, &polygons, feature);
         }
+    }
+}
+
+/// The four vertex attributes a fill's vertex (`shapes::Vertex`) and an extrusion's (`shapes::Block`) begin with, read
+/// from the bound `ARRAY_BUFFER` into the bound vertex array, `stride` bytes per vertex: two vec2 (bytes 0 and 8), the
+/// feature (uint, 16) and a float (20)
+pub(crate) fn shape_attributes(gl: &glow::Context, stride: i32) {
+    // SAFETY: attribute pointers into the buffer and vertex array the caller bound, on a live context
+    unsafe {
+        gl.enable_vertex_attrib_array(0);
+        gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+        gl.enable_vertex_attrib_array(1);
+        gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
+        gl.enable_vertex_attrib_array(2);
+        gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, stride, 16);
+        gl.enable_vertex_attrib_array(3);
+        gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
     }
 }
 

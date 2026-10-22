@@ -212,20 +212,24 @@ pub fn upload(
     Ok(gpu)
 }
 
+/// The vertices of a primitive as the GPU and the workers take them: x, y, z, u, v
+pub(crate) fn interleaved_vertices(p: &tiles3d::decode::Primitive) -> Vec<f32> {
+    p.positions
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(p.uvs.as_chunks::<2>().0)
+        .flat_map(|(&[x, y, z], &[u, v])| [x, y, z, u, v])
+        .collect()
+}
+
 fn upload_primitive(
     gl: &glow::Context,
     p: &tiles3d::decode::Primitive,
     texture: Option<glow::Texture>,
     gpu: &mut GpuMesh,
 ) -> Result<(), String> {
-    let vertices: Vec<f32> = p
-        .positions
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .zip(p.uvs.as_chunks::<2>().0)
-        .flat_map(|(&[x, y, z], &[u, v])| [x, y, z, u, v])
-        .collect();
+    let vertices = interleaved_vertices(p);
     let (vao, buffers, features_buffer) = primitive_arrays(
         gl,
         |target| {

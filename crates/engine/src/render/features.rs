@@ -11,14 +11,23 @@
 //! - A visibility mask (R8): the filter.
 //!
 //! Layer-wide: an opacity given as zoom stops (a layer fading in past a zoom), and a zoom range.
+//!
+//! The three layers, one submodule each:
+//! - `lines`: polylines with round caps and joins, dashes (rivers, outlines, routes);
+//! - `circles`: points drawn as discs with a stroke (gauges, stations);
+//! - `fills`: polygons, holes included, lying on the relief as shadow volumes.
+
+pub(crate) mod circles;
+pub(crate) mod fills;
+pub(crate) mod lines;
 
 use crate::engine::Engine;
-use crate::render::circles::CircleLayer;
 use crate::render::extrusions::ExtrusionLayer;
-use crate::render::fills::FillLayer;
 use crate::render::gl::{self, Objects, RAMP_TEXELS as RAMP, unit};
-use crate::render::lines::LineLayer;
+use circles::CircleLayer;
+use fills::FillLayer;
 use glow::HasContext;
+use lines::LineLayer;
 use wasm_bindgen::prelude::*;
 
 /// Texels per feature in the style given to `Features::set_style`: color, second color, size 0 (zooms, values), size
@@ -256,20 +265,7 @@ impl Features {
         let mask = objects.adopt_texture(gl::table_texture(gl, glow::R8, count)?);
         let ramp = objects.texture()?;
 
-        // SAFETY: storage and parameters of a texture just created on a live context
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
-            gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP as i32, 1);
-
-            for (key, value) in [
-                (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
-                (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
-                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-            ] {
-                gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
-            }
-        }
+        ramp_storage(gl, ramp);
         objects.keep();
 
         let mut features = Self {
@@ -524,6 +520,24 @@ impl Engine {
             return;
         }
         self.with_features(id, None, |features, _| features.layer = style);
+    }
+}
+
+/// The storage of a ramp texture just created: `RAMP` RGBA8 texels in a row, linear, clamped (left bound to
+/// `TEXTURE_2D`); the feature layers' and the network layer's
+pub(crate) fn ramp_storage(gl: &glow::Context, ramp: glow::Texture) {
+    // SAFETY: storage and parameters of a texture just created on a live context
+    unsafe {
+        gl.bind_texture(glow::TEXTURE_2D, Some(ramp));
+        gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, RAMP as i32, 1);
+        for (key, value) in [
+            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, key, value as i32);
+        }
     }
 }
 

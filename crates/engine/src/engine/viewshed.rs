@@ -31,10 +31,22 @@ const OBSERVERS: usize = 16;
 
 /// The comparing pass, after the cube's size
 fn fragment() -> String {
-    format!("#version 300 es\nprecision highp float;\nconst float CUBE = {CUBE:?}.0;\n{FRAGMENT}")
+    format!("#version 300 es\nprecision highp float;\nconst float CUBE = {CUBE:?}.0;\n{UNIFORMS}{UNPROJECT}{MAIN}")
 }
 
-const FRAGMENT: &str = r"precision highp float;
+/// The screen passes' input and output, and `unproject`: the point of the local frame at an NDC depth of the pixel,
+/// through `u_inverse` (declared by the pass before it). The panorama's pass shares it
+pub(super) const UNPROJECT: &str = r"in vec2 v_ndc;
+out vec4 color;
+
+vec3 unproject(float z) {
+  vec4 p = u_inverse * vec4(v_ndc, z, 1.0);
+  return p.xyz / p.w;
+}
+";
+
+/// The comparing pass's uniforms
+const UNIFORMS: &str = r"precision highp float;
 precision highp sampler2D;
 precision highp samplerCubeShadow;
 uniform sampler2D u_depth;
@@ -48,14 +60,10 @@ uniform float u_flat;
 // The cone: its axes (right, up, forward), the tangents of its half angles across and up, 1 if there is one
 uniform mat3 u_axes;
 uniform vec3 u_cone;
-in vec2 v_ndc;
-out vec4 color;
+";
 
-vec3 unproject(float z) {
-  vec4 p = u_inverse * vec4(v_ndc, z, 1.0);
-  return p.xyz / p.w;
-}
-
+/// The comparing pass after `UNPROJECT`
+const MAIN: &str = r"
 void main() {
   float depth = texture(u_depth, v_ndc * 0.5 + 0.5).r;
   vec3 p;

@@ -15,7 +15,7 @@
 use crate::engine::Engine;
 use crate::layer::{Frame, Layer};
 use crate::render::drape::{self, Drape, DrapeUniforms};
-use crate::render::features::{FeatureUniforms, Features, LayerStyle, Layout};
+use crate::render::features::{FeatureUniforms, Features, LayerStyle, Layout, fills};
 use crate::render::gl::{self, DepthState, Objects, Projection, bytes, unit};
 use crate::render::network::NetworkLayer;
 use crate::render::overlay::{self, ANCHOR, Anchor};
@@ -162,14 +162,8 @@ fn upload_blocks(
 
         let stride = size_of::<shapes::Block>() as i32;
 
-        gl.enable_vertex_attrib_array(0);
-        gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
-        gl.enable_vertex_attrib_array(1);
-        gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, 8);
-        gl.enable_vertex_attrib_array(2);
-        gl.vertex_attrib_pointer_i32(2, 1, glow::UNSIGNED_INT, stride, 16);
-        gl.enable_vertex_attrib_array(3);
-        gl.vertex_attrib_pointer_f32(3, 1, glow::FLOAT, false, stride, 20);
+        // The attributes of a fill's vertex, then the shade
+        fills::shape_attributes(gl, stride);
         gl.enable_vertex_attrib_array(4);
         gl.vertex_attrib_pointer_f32(4, 1, glow::FLOAT, false, stride, 24);
         gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(indices));

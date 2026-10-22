@@ -6,6 +6,7 @@
 //! is taken on a sphere of that radius around the panorama: the images as a backdrop.
 
 use super::Engine;
+use super::viewshed::UNPROJECT;
 use crate::render::gl::{self, Objects};
 use geo::camera::View;
 use glam::{DMat3, DMat4, DVec3};
@@ -20,7 +21,13 @@ const REACH_FROM_ABOVE: f64 = 40.0;
 /// skew, image width and height, principal point of the distortion x and y, its three coefficients, its limit
 const CAMERA_NUMBERS: usize = 25;
 
-const FRAGMENT: &str = r"#version 300 es
+/// The pass over the screen: its uniforms, `unproject` (the viewshed's), its main
+fn fragment() -> String {
+    format!("{UNIFORMS}{UNPROJECT}{MAIN}")
+}
+
+/// The pass's uniforms
+const UNIFORMS: &str = r"#version 300 es
 precision highp float;
 precision highp sampler2DArray;
 const int CAMERAS = 8;
@@ -43,14 +50,10 @@ uniform vec4 u_sizes[CAMERAS];
 uniform vec4 u_distortions[CAMERAS];
 uniform vec2 u_limits[CAMERAS];
 uniform float u_opacity;
-in vec2 v_ndc;
-out vec4 color;
+";
 
-vec3 unproject(float z) {
-  vec4 p = u_inverse * vec4(v_ndc, z, 1.0);
-  return p.xyz / p.w;
-}
-
+/// The pass after `UNPROJECT`
+const MAIN: &str = r"
 void main() {
   float depth = texture(u_depth, v_ndc * 0.5 + 0.5).r;
   vec3 near = unproject(-1.0);
@@ -140,7 +143,7 @@ impl Panorama {
     /// Compiles the pass and creates the images' texture (its storage comes with the first image)
     fn new(gl: &glow::Context, settings: Settings) -> Result<Self, String> {
         let mut objects = Objects::new(gl);
-        let program = objects.program(gl::FULL_SCREEN_VERTEX, FRAGMENT)?;
+        let program = objects.program(gl::FULL_SCREEN_VERTEX, &fragment())?;
         let vao = objects.vertex_array()?;
         let images = objects.texture()?;
 

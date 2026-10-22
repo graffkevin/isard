@@ -358,13 +358,9 @@ impl Layer for LineLayer {
     }
 
     fn delete(&mut self, gl: &glow::Context) {
-        // SAFETY: objects owned by this layer, not used afterwards
-        unsafe {
-            gl.delete_program(self.overlay.program);
-            gl.delete_vertex_array(self.vao);
-            gl.delete_buffer(self.buffer);
-            gl.delete_texture(self.lines);
-        }
+        self.overlay.delete(gl, self.vao, self.buffer);
+        // SAFETY: a texture owned by this layer, not used afterwards
+        unsafe { gl.delete_texture(self.lines) };
         self.features.delete(gl);
         self.drape.delete(gl);
     }

@@ -3,6 +3,7 @@
 
 use super::{Content, Tree};
 use geo::camera::View;
+use geo::tiles::frustum_planes;
 use glam::DVec4;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -125,7 +126,7 @@ pub fn select_into(
     scratch.measures.clear();
     scratch.seen.clear();
 
-    let planes = frustum(view);
+    let planes = frustum_planes(view);
     let mut traversal = Traversal {
         tree,
         view,
@@ -158,7 +159,7 @@ pub fn select_into(
 struct Traversal<'a> {
     tree: &'a Tree,
     view: &'a View,
-    /// The view's frustum (`frustum`)
+    /// The view's frustum (`frustum_planes`)
     planes: [DVec4; 6],
     /// Screen-space error threshold, CSS pixels
     max_error: f64,
@@ -324,14 +325,6 @@ impl<'a> Traversal<'a> {
     }
 }
 
-/// Frustum planes (local frame, normalized, inside when `dot(n, p) + w >= 0`)
-fn frustum(view: &View) -> [DVec4; 6] {
-    let m = view.view_proj.transpose();
-    let (r0, r1, r2, r3) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);
-
-    [r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2].map(|p| p / p.truncate().length())
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::tests::{sphere_tile, tileset, tree, view};
@@ -432,7 +425,7 @@ mod tests {
         c.height = 800.0;
 
         let view = c.view();
-        let planes = frustum(&view);
+        let planes = frustum_planes(&view);
         let culled: Vec<usize> = tree.nodes[root]
             .children
             .iter()

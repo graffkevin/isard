@@ -2,6 +2,7 @@
 //! shared), which fetch and decode the 3D Tiles content off the main thread. The results are typed arrays ready for
 //! the GPU, transferred to the main thread without copy.
 
+use crate::render::tiles3d::gpu::interleaved_vertices;
 use glam::DMat4;
 use js_sys::{Array, Float32Array, Float64Array, Object, Reflect, Uint8Array, Uint32Array};
 use tiles3d::decode;
@@ -236,14 +237,7 @@ pub fn decode_tile(
     let primitives = Array::new();
 
     for p in &mesh.primitives {
-        let vertices: Vec<f32> = p
-            .positions
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .zip(p.uvs.as_chunks::<2>().0)
-            .flat_map(|(&[x, y, z], &[u, v])| [x, y, z, u, v])
-            .collect();
+        let vertices = interleaved_vertices(p);
         let primitive = Object::new();
 
         set(&primitive, "vertices", &Float32Array::from(&vertices[..]))?;

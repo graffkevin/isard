@@ -10,13 +10,15 @@
 //! allocated, so a malformed tile is an error, never a panic.
 //!
 //! `container` opens the b3dm and glb containers, `gltf` walks the scene and builds the primitives, `accessor` reads
-//! their values, `pnts` reads the point clouds of 3D Tiles 1.0.
+//! their values, `meshopt` decompresses the `EXT_meshopt_compression` buffer views, `pnts` reads the point clouds of
+//! 3D Tiles 1.0.
 
 #![forbid(unsafe_code)]
 
 mod accessor;
 mod container;
 mod gltf;
+pub mod meshopt;
 mod metadata;
 mod pnts;
 

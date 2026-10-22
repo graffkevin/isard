@@ -357,12 +357,7 @@ impl Layer for CircleLayer {
     }
 
     fn delete(&mut self, gl: &glow::Context) {
-        // SAFETY: objects owned by this layer, not used afterwards
-        unsafe {
-            gl.delete_program(self.overlay.program);
-            gl.delete_vertex_array(self.vao);
-            gl.delete_buffer(self.buffer);
-        }
+        self.overlay.delete(gl, self.vao, self.buffer);
         self.features.delete(gl);
         self.drape.delete(gl);
     }
