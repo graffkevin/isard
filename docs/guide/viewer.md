@@ -58,7 +58,7 @@ printed on its output, one JSON object per line.
 ## The protocol
 
 Plain JSON messages, the same over every transport. Their TypeScript types are in
-[`apps/viewer/src/protocol.ts`](https://github.com/graffkevin/isard/blob/main/apps/viewer/src/protocol.ts) (version 1).
+`apps/viewer/src/protocol.ts` (version 1).
 Unknown message types and fields are ignored: hosts and viewers may add some.
 
 ### Transports

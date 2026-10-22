@@ -2,7 +2,7 @@
 # version (packages/isard/package.json, the crates, a changelog section) and pushing it to main is the release. The
 # commit is then tagged v<version> with a GitHub release of its changelog section. With provenance: npm's trusted
 # publishing authenticates this workflow (configured once on npmjs.com, in the settings of the package isard: publisher
-# GitHub Actions, repository graffkevin/isard, workflow release.yml), no token is stored anywhere
+# GitHub Actions, the repository that publishes, workflow release.yml), no token is stored anywhere
 name: Release
 
 on:
@@ -23,7 +23,8 @@ concurrency:
 jobs:
   # Most pushes do not raise the version: a quick look at npm before building anything
   version:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    # Only the repository that publishes (its variable RELEASE set to true): a mirror runs the checks, not the release
+    if: vars.RELEASE == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

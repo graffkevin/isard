@@ -40,6 +40,10 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run docs:build
+        env:
+          # The repository's variable: `/` for a private site, served at the root of its own domain
+          DOCS_BASE: ${{ vars.DOCS_BASE }}
+          DOCS_REPO: ${{ github.server_url }}/${{ github.repository }}
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.vitepress/dist

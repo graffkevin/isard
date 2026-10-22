@@ -1,6 +1,6 @@
 # Examples
 
-Each example is a page of [`examples/`](https://github.com/graffkevin/isard/tree/main/examples) in the repository: an
+Each example is a page of `examples/` in the repository: an
 `index.html` and its `main.ts`, importing `isard` as an application does. Each one is also written
 in React, with components ([React examples](../react/examples/)). The basemap is
 OpenFreeMap's (OpenStreetMap data); the French examples take the IGN's data from the Géoplateforme, the Moon's and

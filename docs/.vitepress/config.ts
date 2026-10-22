@@ -6,6 +6,13 @@ const referenceSidebar = new URL('../reference/typedoc-sidebar.json', import.met
 const reference = existsSync(referenceSidebar) ? JSON.parse(readFileSync(referenceSidebar, 'utf8')) : [];
 
 /** The version of the package, shown at the right of the navigation */
+/** Where the site is served: `/isard/` on GitHub Pages under the repository's name, `DOCS_BASE` elsewhere (`/` for a
+ * private site, served at the root of its own domain) */
+const base = process.env.DOCS_BASE || '/isard/';
+
+/** The repository the site links to (its sources, its release notes): `DOCS_REPO` where it is built from another */
+const repo = process.env.DOCS_REPO || 'https://github.com/graffkevin/isard';
+
 const { version } = JSON.parse(readFileSync(new URL('../../packages/isard/package.json', import.meta.url), 'utf8')) as {
   version: string;
 };
@@ -36,15 +43,16 @@ const examples = [
 export default defineConfig({
   title: 'Isard',
   description: 'A WebGL2 map engine for large, interactive data layers: Rust core in WebAssembly, small TypeScript API',
-  // Served by GitHub Pages under the repository's name
-  base: '/isard/',
+  base,
   cleanUrls: true,
   lastUpdated: true,
   head: [
-    ['link', { rel: 'icon', href: '/isard/logo.svg', type: 'image/svg+xml' }],
+    ['link', { rel: 'icon', href: `${base}logo.svg`, type: 'image/svg+xml' }],
     ['meta', { name: 'theme-color', content: '#2f6fd1' }],
   ],
   themeConfig: {
+    // Read by the theme's components (the architecture diagram's links to the sources)
+    repo,
     logo: '/logo.svg',
     nav: [
       { text: 'Guide', link: '/guide/getting-started', activeMatch: '/guide/' },
@@ -66,7 +74,7 @@ export default defineConfig({
         items: [
           { text: 'Changelog', link: '/changelog' },
           { text: 'npm', link: `https://www.npmjs.com/package/isard/v/${version}` },
-          { text: 'Release notes', link: `https://github.com/graffkevin/isard/releases/tag/v${version}` },
+          { text: 'Release notes', link: `${repo}/releases/tag/v${version}` },
         ],
       },
     ],
@@ -140,7 +148,7 @@ export default defineConfig({
       ],
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/graffkevin/isard' },
+      { icon: 'github', link: repo },
       { icon: 'npm', link: 'https://www.npmjs.com/package/isard' },
     ],
     search: { provider: 'local' },

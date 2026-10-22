@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useData } from 'vitepress';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
 /** The architecture of isard as a diagram: its parts in lanes (the page, its workers, the engine, the GPU, the
@@ -28,7 +29,9 @@ interface Step {
   text: string;
 }
 
-const REPO = 'https://github.com/graffkevin/isard/tree/main/';
+/** The sources' folder of the repository the site is built from (`DOCS_REPO`) */
+const { theme } = useData();
+const REPO = `${theme.value.repo}/tree/main/`;
 
 const LANES = [
   { label: 'Your application', y: 10, h: 84 },

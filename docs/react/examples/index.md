@@ -2,7 +2,7 @@
 
 The examples written with [`isard/react`](../): each one shows the same map as its
 [TypeScript twin](../../examples/), with components, state and hooks. Their sources are in
-[`examples/react/`](https://github.com/graffkevin/isard/tree/main/examples/react).
+`examples/react/` in the repository.
 
 | | |
 |---|---|
