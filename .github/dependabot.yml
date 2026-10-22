@@ -4,7 +4,9 @@
 #   of the CI and of every machine must match (scripts/build.ts), raised by hand;
 # - puppeteer-core: it goes with the Chrome revision pinned in checks.yml and with the visual baselines;
 # - the Rust toolchain (rust-toolchain.toml), raised by hand;
-# - TypeScript's next major version, until TypeDoc supports it.
+# - TypeScript's next major version, until TypeDoc supports it;
+# - iTowns, measured by the benchmark (apps/bench): a fixed version to compare against, raised by hand with new
+#   measurements.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -34,6 +36,8 @@ updates:
       interval: weekly
     ignore:
       - dependency-name: puppeteer-core
+      # The benchmark's reference: raised by hand, with new measurements
+      - dependency-name: itowns
       # TypeScript 7 (the native compiler) is not supported by TypeDoc 0.28 yet: the API reference fails to build
       - dependency-name: typescript
         update-types: [version-update:semver-major]
