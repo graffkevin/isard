@@ -51,6 +51,7 @@ export default defineConfig({
       { text: 'Layers', link: '/layers/', activeMatch: '/layers/' },
       { text: 'React', link: '/react/', activeMatch: '/react/' },
       { text: 'Examples', link: '/examples/', activeMatch: '/examples/' },
+      { text: 'Architecture', link: '/architecture' },
       {
         text: 'API',
         activeMatch: '/(api|reference/)',
@@ -85,7 +86,6 @@ export default defineConfig({
             { text: 'Performance', link: '/guide/performance' },
             { text: 'The viewer', link: '/guide/viewer' },
             { text: 'QGIS plugin', link: '/guide/qgis' },
-            { text: 'Architecture', link: '/guide/architecture' },
             { text: 'Develop and release', link: '/guide/develop' },
           ],
         },

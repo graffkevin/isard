@@ -37,6 +37,8 @@ jobs:
       # The QGIS plugin's server and conversions (the runner's python3, no QGIS)
       - run: bun run test:qgis
       - run: bun run docs:check
+      # The crates' dependencies: known vulnerabilities (RustSec), licences, sources (deny.toml)
+      - uses: EmbarkStudios/cargo-deny-action@v2
 
   # Visual regression tests: the examples rendered by headless Chrome (SwiftShader), the network answered from
   # tests/visual/fixtures, compared with tests/visual/baseline. The Chrome of puppeteer-core's revision, pinned.

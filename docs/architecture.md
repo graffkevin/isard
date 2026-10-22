@@ -1,24 +1,17 @@
+---
+aside: false
+pageClass: wide-page
+---
+
 # Architecture
+
+<ArchitectureDiagram />
 
 Isard is a map engine in two halves: a **Rust core compiled to WebAssembly**, which owns the GPU (WebGL2), the camera
 and every layer's state, and a **TypeScript SDK**, which owns the page (the canvas, events, overlays, workers,
 network) and hands the core what it needs. This page follows the pieces from the outside in, then a frame and a tile
-through them. The [layout of the repository](./develop#layout) lists the folders.
+through them. The [layout of the repository](./guide/develop#layout) lists the folders.
 
-```
- application ─────────────┐
-   │ isard (TypeScript)    │  isard/react: components over the same API
-   ▼                       ▼
- GeoMap ── layers' handles, overlays, controls, events          packages/isard/src
-   │ calls (wasm-bindgen)          ▲ tile requests, picks, frames
-   ▼                               │
- Engine (Rust → WebAssembly) ── camera, ground, layers, passes   crates/engine
-   │ uses                                                         crates/geo, tiles3d, pointcloud
-   ▼
- WebGL2 (the canvas)
-
- workers: basemap.worker (vector basemaps, relief, reprojection), decoder.worker (3D Tiles, point clouds)
-```
 
 ## The engines
 
@@ -116,7 +109,7 @@ Nothing is drawn while nothing changes: the map is idle once every tile in view 
 (wasm-bindgen), optimises them (wasm-opt), compiles the package's TypeScript, bundles the two workers on their own, and
 checks the gzipped sizes against their budgets (`scripts/size.ts`): a build over budget fails. The npm package
 ships the modules, the workers and the ES modules side by side; `engine-loader.ts` finds them next to itself, at the
-`assetsUrl` given, or where the [Vite plugin](./getting-started#with-a-bundler) copied them.
+`assetsUrl` given, or where the [Vite plugin](./guide/getting-started#with-a-bundler) copied them.
 
-The [develop guide](./develop) has the commands, the tests (Rust natively, TypeScript with `bun test`, the examples
+The [develop guide](./guide/develop) has the commands, the tests (Rust natively, TypeScript with `bun test`, the examples
 in a headless browser against recorded data) and the release.

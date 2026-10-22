@@ -1,0 +1,23 @@
+# cargo-deny (the checks): the crates' dependencies vetted on every push. Known vulnerabilities and unmaintained crates
+# (the RustSec advisory database), licences compatible with the MIT licence, crates from crates.io only
+[graph]
+targets = ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of a crate: worth knowing (size of the module), not an error
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

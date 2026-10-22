@@ -2,7 +2,7 @@
 
 ## Layout
 
-The repository holds a Rust workspace (`Cargo.toml`: the crates) and a Bun workspace (`package.json`: the package,
+The [architecture](../architecture) shows how the parts work together. The repository holds a Rust workspace (`Cargo.toml`: the crates) and a Bun workspace (`package.json`: the package,
 the demo, the benchmark, the examples, these docs), side by side at the root, with their tools: `rustfmt.toml` for
 Rust, `biome.json` (format and lint) and `tsconfig.base.json` for TypeScript.
 

@@ -28,6 +28,9 @@ versions [Semantic Versioning](https://semver.org) (before 1.0.0, a minor versio
 - The Rust files grouped and split by subject: `render/features/` (lines, circles, fills), `render/backdrop/` (globe,
   sky), the camera, the shapes, the labels and the COPC point clouds in submodules, meshopt under `decode/`; the few
   duplicated blocks as shared helpers (0.41 % of the lines duplicated to 0.03 %).
+- The crates' dependencies vetted by the checks (`cargo-deny`: known vulnerabilities, licences, sources); the
+  Architecture page of its own, its diagram played step by step (a frame, a raster tile, a vector basemap tile, 3D
+  Tiles), each part's role and files on click.
 
 ### Fixed
 
