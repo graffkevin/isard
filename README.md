@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> **This repository has moved to [IGNF/isard](https://github.com/IGNF/isard).** It is archived and no longer maintained; its documentation site is closed.
+
 <div align="center">
 
 <img src="docs/public/logo.svg" width="96" alt="" />
@@ -10,7 +13,6 @@ A WebGL2 map engine for large, interactive data layers, labels and 3D Tiles.<br 
 Rust core in WebAssembly, a small TypeScript API.
 
 [![npm](https://img.shields.io/npm/v/isard?color=2f6fd1)](https://www.npmjs.com/package/isard)
-[![Documentation](https://img.shields.io/badge/docs-graffkevin.github.io%2Fisard-2f6fd1)](https://graffkevin.github.io/isard/)
 [![Checks](https://github.com/graffkevin/isard/actions/workflows/checks.yml/badge.svg)](https://github.com/graffkevin/isard/actions/workflows/checks.yml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
